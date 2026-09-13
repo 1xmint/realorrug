@@ -2106,7 +2106,7 @@ mod tests {
         // Re-apply by deleting the `!` in the filter and the last assertion
         // fails: "" enters the set and `is_operator("")` becomes true.
         assert_eq!(
-            operator_ids_from("111", Some(" 222 , , @thecabalhunter , 333 ")),
+            operator_ids_from("111", Some(" 222 , , @realorrug , 333 ")),
             vec!["111".to_owned(), "222".to_owned(), "333".to_owned()]
         );
         assert!(

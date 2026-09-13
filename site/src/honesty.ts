@@ -313,7 +313,8 @@ export function summonIntent(handle: string, mint: string): string | null {
 /**
  * The account's handle, from the build environment, or `null`.
  *
- * **The handle is `thecabalhunter`** — confirmed by the operator on 2026-09-06.
+ * **The handle is `realorrug`** — renamed from `thecabalhunter`, confirmed by the
+ * operator on 2026-09-13.
  * It is deliberately *not* hard-coded here anyway, and that is the point of
  * this function rather than an omission.
  *
