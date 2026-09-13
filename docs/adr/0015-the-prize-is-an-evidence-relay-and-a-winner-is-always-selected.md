@@ -7,14 +7,14 @@ recorded. The code it describes lives in
 [`crates/realorrug-contest`](../../crates/realorrug-contest) and
 [`crates/realorrug-analyst`](../../crates/realorrug-analyst) and still implements the
 rule this ADR supersedes; the branches that change it are items 6 and 7 of
-[plan 0010](../plans/0010-radar-actualization.md).
+[plan 0010](https://github.com/1xmint/theradar/blob/main/docs/plans/0010-radar-actualization.md).
 **Decides:** what a contest entry is, how a week is scored when the engagement
 data are incomplete, and what happens when no evidence arrives at all.
 **Supersedes:** the entry mechanism of
 [ADR 0013](0013-a-community-token-exists-and-radar-holds-none-of-it.md)
 constraint 4 ("anyone who mentions the bot is entered") and the weighted
 engagement formula of
-[design 0007](../design/0007-the-end-to-end-plan.md) §6.2. Constraint 4's
+[design 0007](https://github.com/1xmint/theradar/blob/main/docs/design/0007-the-end-to-end-plan.md) §6.2. Constraint 4's
 substance — **entry is free and never requires holding the token** — is kept
 exactly. Constraint 3 — **100% of the creator fee is the prize** — is untouched.
 
@@ -36,7 +36,7 @@ walk never reached keeps `verified: None`, which
 some entries by distinct accounts and others by raw counts, in the same list.
 That inequality is documented and it is real — but a ranking is not sound
 because its units are ordered, it is sound because they are the same unit.
-[Research 0031](../research/0031-radar-handoff-inspection.md).
+[Research 0031](https://github.com/1xmint/theradar/blob/main/docs/research/0031-radar-handoff-inspection.md).
 
 **2. The owner has decided that incomplete evidence must not withhold a
 winner.** Asked directly, Josh rejected a no-winner outcome for a tied week, an

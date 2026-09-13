@@ -8,7 +8,7 @@ Nothing is built, bought or launched by this ADR.
 **Amends:** [ADR 0013](0013-a-community-token-exists-and-radar-holds-none-of-it.md):
 the venue, the fee currency, the payout, and its "When" section.
 Its six constraints stand.
-**Supersedes:** [design 0010](../design/0010-close-the-remainder-then-raise-the-ceiling.md)
+**Supersedes:** [design 0010](https://github.com/1xmint/theradar/blob/main/docs/design/0010-close-the-remainder-then-raise-the-ceiling.md)
 row V7's "no second chain", for the token and the bot only. The trading lane
 is untouched.
 **Reasoning:** [design 0019](../design/0019-realorrug-on-robinhood-chain.md).

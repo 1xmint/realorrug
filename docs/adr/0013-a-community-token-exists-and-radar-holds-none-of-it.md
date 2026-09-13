@@ -3,7 +3,7 @@
 
 **Date:** 2026-09-04
 **Status:** accepted. **This is Josh's decision, recorded**, and it reverses
-[GOAL.md](../../GOAL.md)'s "Radar will not launch one, ever" — written
+[GOAL.md](https://github.com/1xmint/theradar/blob/main/GOAL.md)'s "Radar will not launch one, ever" — written
 2026-09-03 and edited in the same commit as this file.
 **Constraint 4's entry mechanism is superseded by
 [ADR 0015](0015-the-prize-is-an-evidence-relay-and-a-winner-is-always-selected.md)**
@@ -17,7 +17,7 @@ where the money goes, and what the analyst may say about it.
 
 The public analyst's credibility rests on one measured fact: capital committed
 *before* a token existed is visible in its launch block, and
-[`0024`](../research/0024-the-spike-became-a-hump-and-the-signal-moved.md)
+[`0024`](https://github.com/1xmint/theradar/blob/main/docs/research/0024-the-spike-became-a-hump-and-the-signal-moved.md)
 measures the distribution. So the standing argument against Radar launching a
 token was structural rather than about intent, and it was right on its own
 terms:
@@ -54,11 +54,11 @@ not make.
    the token the same way it states it about any other.
 2. **The operator holds zero tokens.** The only flow to the operator is
    pump.fun's **creator fee — 30 bps of volume, in SOL**, read off the on-chain
-   `FeeConfig` ([`0023`](../research/0023-the-fee-is-a-schedule-and-the-published-interface-is-incomplete.md)).
+   `FeeConfig` ([`0023`](https://github.com/1xmint/theradar/blob/main/docs/research/0023-the-fee-is-a-schedule-and-the-published-interface-is-incomplete.md)).
    That is the curve. After graduation the same fee program keeps a second
    schedule for the AMM, by market cap — 30 bps below 420 SOL, 95 from there
    to 1,470, stepping down to 5 above 98,240 — measured 2026-09-05 in
-   [`0028`](../research/0028-the-fee-after-graduation-is-a-ladder.md). The
+   [`0028`](https://github.com/1xmint/theradar/blob/main/docs/research/0028-the-fee-after-graduation-is-a-ladder.md). The
    flow is still to the prize, not the operator; only its rate moves.
 3. **100% of the creator fee is paid out as a public weekly prize**, to the
    person whose summoned roast travelled furthest that week. The operator keeps
@@ -96,7 +96,7 @@ it**, and accepting this ADR is not accepting that it has been cleared.
 is roughly **$30**; at $1M it is roughly **$3,000**. This paragraph said $3
 and $300 until 2026-09-05 — 30 bps read as 0.03% rather than 0.30%, wrong by
 10× in the direction that understates; corrected by
-[design 0009](../design/0009-three-loops-and-no-formula.md) §1, and the pool
+[design 0009](https://github.com/1xmint/theradar/blob/main/docs/design/0009-three-loops-and-no-formula.md) §1, and the pool
 page carries the same correction in a follow-up. A token that oversells its
 own economics is the thing the analyst exists to expose.
 
@@ -107,9 +107,9 @@ own economics is the thing the analyst exists to expose.
   and [`sheet.rs`](../../crates/realorrug-roast/src/sheet.rs); constraints 3 and 4
   in the contest crate and its payout policy.
 - The payout key is **not** the trading signer, does not touch
-  [`crates/radar-risk`](../../crates/radar-risk), and never holds customer
+  [`crates/radar-risk`](https://github.com/1xmint/theradar/blob/main/crates/radar-risk), and never holds customer
   funds. Its blast radius is one week of creator fees.
-- `GOAL.md`'s "What Radar will not become" keeps a token bullet, rewritten to
+- Radar's `theradar:GOAL.md`, "What Radar will not become" keeps a token bullet, rewritten to
   the thing that is actually forbidden: **holding** a token it comments on.
 
 ## What this does not decide

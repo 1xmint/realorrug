@@ -10,7 +10,7 @@ launched.
 the shared crates are copied into this repository, not consumed from Radar at a
 git tag.
 **Date:** 2026-09-13.
-**Reopens:** [design 0010](0010-close-the-remainder-then-raise-the-ceiling.md)
+**Reopens:** [design 0010](https://github.com/1xmint/theradar/blob/main/docs/design/0010-close-the-remainder-then-raise-the-ceiling.md)
 V7 and §9.3, "no second chain", at Josh's request.
 **Facts from:** [research 0035](../research/0035-robinhood-chain-read-from-its-own-pages.md).
 Every price and chain fact below is cited there with its source and date; this
@@ -94,7 +94,7 @@ tooling. Research 0035 §2.
 - **Gas sponsorship.** Alchemy's Gas Manager is live on the chain, so a winner
   or an agent can act without holding ETH.
 - **Agent wallets are not a difference.** Privy, already in use
-  ([ADR 0007](../adr/0007-the-privy-authorization-key-lives-in-the-signer-process.md)),
+  ([Radar ADR 0007](https://github.com/1xmint/theradar/blob/main/docs/adr/0007-the-privy-authorization-key-lives-in-the-signer-process.md)),
   serves both.
 - **Robinhood's audience and brand** are specific to this chain rather than to
   Base or Arbitrum, and for a meme that has to become famous, that counts.
@@ -102,7 +102,7 @@ tooling. Research 0035 §2.
 ### 4.2 For
 
 - A less crowded launch surface than pump.fun's ~41,000 launches a day
-  ([ADR 0002](../adr/0002-historical-data-comes-from-cryptohouse-not-a-vendor-archive.md)).
+  ([Radar ADR 0002](https://github.com/1xmint/theradar/blob/main/docs/adr/0002-historical-data-comes-from-cryptohouse-not-a-vendor-archive.md)).
 - DEX volume of the same order as Solana's ($1.50B against $1.74B, 24h,
   2026-09-13), though not split by asset.
 - The rewards contract ADR 0013 deferred is cheaper to build safely.
