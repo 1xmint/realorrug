@@ -17,9 +17,9 @@ this is what follows it, in order, each with what proves it.
 ## Next, in order
 
 1. ~~**Own-name mask in the banned-words check.**~~ Done; see the table above.
-   The live handle is still `@thecabalhunter` and the site `cabalhunter.org`;
-   when a new handle is chosen, a spelling other than `realorrug` must be added
-   to `OWN_NAMES`.
+   The handle is `@realorrug` (renamed 2026-09-13), which the mask covers. The
+   site is still `cabalhunter.org`, which stays in `OWN_NAMES` until the new
+   domain is bought; a domain not spelled `realorrug` must be added there.
 2. **Deploy `realorrug-serve` beside Radar's server** (`deploy/README.md`), and
    point the site's `VITE_API_BASE` at it. *Proof:* `/health`'s `build` equals
    the release artifact's `BUILD-INFO.txt` commit, and the site's five pages load.
@@ -50,3 +50,21 @@ this is what follows it, in order, each with what proves it.
   red on one missing semicolon in `realorrug-analyst/src/daemon.rs`, which also
   stopped clippy before it reached `realorrug-cli` and `realorrug-serve`. Fixed
   in the pull request that adds this file, with the test floor raised to 968.
+- 2026-09-13, second session:
+  - **Step 1 done**, PR #2, CI green. The new test fails at its first
+    assertion with `realorrug` removed from `OWN_NAMES` (run locally).
+  - **Step 4 built**, PR #3. `repo-conformance` (19 tests) found 17 links, 3
+    ADR numbers and 3 deploy-guide paths pointing at Radar files that were
+    never copied; all fixed. It adds a check that no model-side crate reaches
+    `realorrug-payout`. **`realorrug-cli` is the named exception**: the
+    operator's binary holds both `roast` and the payout fallback. The first
+    mutation run caught one survivor in the new crate, fixed and re-pushed;
+    read PR #3's `mutants` result before merging.
+  - **Handle renamed to `@realorrug`**, PR #4 (comments and fixtures; no code
+    holds the handle). **Josh to change `VITE_X_HANDLE` in Cloudflare Pages.**
+    The "Automated by" label was confirmed as `@thecabalhunter` and has not
+    been re-read since the rename.
+  - **Step 2 not started**: it deploys to production and waits for Josh.
+    Steps 3, 5 and 6 not started.
+  - *Next:* merge #2, #3, #4 once green. Then step 2 on Josh's yes; if it is
+    not given, step 5 (the Pons v2 launch capture) does not depend on it.
