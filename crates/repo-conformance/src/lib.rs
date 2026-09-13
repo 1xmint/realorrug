@@ -395,7 +395,16 @@ mod tests {
         // The check that would have caught three empty scaffolds sitting in
         // crates/ looking like work in progress, one of which was this crate.
         let members = workspace_members();
-        let missing: Vec<String> = crate_directories()
+        let directories = crate_directories();
+        // A reader that finds no directories passes the rule below for any
+        // tree. In Radar a dependency check also read this list and caught
+        // that; it stayed behind, and CI's first mutation run here reported the
+        // gap.
+        assert!(
+            directories.contains("repo-conformance") && directories.contains("realorrug-payout"),
+            "crates/ was read as {directories:?}, so the check below would pass vacuously"
+        );
+        let missing: Vec<String> = directories
             .into_iter()
             .filter(|name| !members.contains(name))
             .collect();
