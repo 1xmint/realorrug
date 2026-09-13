@@ -23,8 +23,9 @@
 //!   `<lead> · <status>`, and `the_lead_survives_every_branch` asserts it. The
 //!   lead is where the automation disclosure goes when the account does not
 //!   carry X's own automated label -- and where the account's own words go when
-//!   it does, which is the case here: `@thecabalhunter` carries
-//!   `Automated by @1xmint_`, confirmed on 2026-09-07.
+//!   it does, which is the case here: the account carried `Automated by
+//!   @1xmint_` as `@thecabalhunter`, confirmed on 2026-09-07. It was renamed
+//!   `@realorrug` on 2026-09-13 and the label has not been re-read since.
 //!
 //! # Every number goes through the same two checks a reply does
 //!
