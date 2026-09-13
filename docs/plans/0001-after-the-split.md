@@ -12,14 +12,14 @@ this is what follows it, in order, each with what proves it.
 | repository created, public, `1xmint/realorrug` | first commit `c13a6ec` |
 | builds, tests, lint, fmt, licence headers, site, cargo-deny, MSRV in CI | the `ci` run on `c13a6ec`; see the handback below for its result |
 | release binaries on push to `main` | `release-linux` workflow |
+| step 1, own-name mask: `realorrug` masked beside `cabalhunter.org` | `the_account_can_say_its_own_name_and_every_other_rug_is_still_refused` in `forbidden.rs`, which failed at its first assertion with the name removed from `OWN_NAMES` |
 
 ## Next, in order
 
-1. **Own-name mask in the banned-words check.** `crates/realorrug-roast/src/forbidden.rs`
-   matches by substring, so "rug" refuses every reply containing "realorrug".
-   `OWN_DOMAIN` is still `cabalhunter.org`. Add the bot's own name and handle to
-   the mask, with a test that fails when the mask is removed.
-   *Proof:* the test, re-applied.
+1. ~~**Own-name mask in the banned-words check.**~~ Done; see the table above.
+   The live handle is still `@thecabalhunter` and the site `cabalhunter.org`;
+   when a new handle is chosen, a spelling other than `realorrug` must be added
+   to `OWN_NAMES`.
 2. **Deploy `realorrug-serve` beside Radar's server** (`deploy/README.md`), and
    point the site's `VITE_API_BASE` at it. *Proof:* `/health`'s `build` equals
    the release artifact's `BUILD-INFO.txt` commit, and the site's five pages load.

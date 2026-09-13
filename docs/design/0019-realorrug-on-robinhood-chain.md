@@ -193,9 +193,11 @@ as open, not solved.
 
 - **The banned-words check refuses the bot's own name.**
   [`forbidden.rs`](../../crates/realorrug-roast/src/forbidden.rs) line 314 matches
-  by substring, so "rug" (line 60) fires on "realorrug", and on "drug" or
-  "struggle". Line 311 already masks `OWN_DOMAIN`, which is still
-  `cabalhunter.org` (line 289). The own-name mask follows that pattern.
+  by substring, so "rug" fires on "realorrug", and on "drug" or "struggle".
+  *Fixed 2026-09-13:* `OWN_NAMES` now masks `realorrug` beside
+  `cabalhunter.org`, and a test fails if the name is taken back out. "drug" and
+  "struggle" are still refused; that is the blunt trade the file's header
+  argues for, and the cost is the template shipping instead.
 - **The rule stays.** It is Radar's rule, not a chain rule, and it exists
   because calling a named project a "rug" in public accuses identifiable people
   of fraud. The meme and the rule fit together: the brand asks "real or rug?",

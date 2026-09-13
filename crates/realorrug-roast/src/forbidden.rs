@@ -273,26 +273,39 @@ pub const RULES: &[Rule] = &[
     },
 ];
 
-/// The account's own site, which the "cabal" rule would otherwise refuse.
+/// The account's own names, which the rules would otherwise refuse. Lowercase.
 ///
-/// The rule refuses "cabal" because a reply must not imply an identity the
-/// recipient count cannot see (research 0012), and it is right to. The side
-/// effect was that **no post could carry its own address**: the weekly result
-/// ended "Rule and leaderboard: on the site" with no link, and a reader who
-/// wanted to check the rule had to go and find it.
+/// **`cabalhunter.org`**, the site. The rule refuses "cabal" because a reply
+/// must not imply an identity the recipient count cannot see (research 0012),
+/// and it is right to. The side effect was that **no post could carry its own
+/// address**: the weekly result ended "Rule and leaderboard: on the site" with
+/// no link, and a reader who wanted to check the rule had to go and find it.
 ///
-/// Masked before the scan rather than added as an exception to the rule, which
-/// is the difference between "this exact domain is allowed" and "any 'cabal'
-/// near a dot is allowed". Every other use of the word is still refused,
-/// including `cabalhunter.org.evil.example` -- the mask consumes the literal
-/// and the surrounding text is scanned as it stands.
-const OWN_DOMAIN: &str = "cabalhunter.org";
+/// **`realorrug`**, the bot's and the token's name (design 0019 §5.4). The
+/// "rug" rule matches by substring, so without this every reply that names the
+/// account -- `@realorrug`, `$REALORRUG`, a `realorrug.` address -- was refused.
+/// The bare name covers all three spellings; a handle spelled differently
+/// (`real_or_rug`) is not covered and would need adding here.
+///
+/// Masked before the scan rather than added as an exception to a rule, which
+/// is the difference between "this exact name is allowed" and "any 'rug' inside
+/// a longer word is allowed". Every other use of the word is still refused,
+/// including `cabalhunter.org.evil.example` and "realorrug is a rug" -- the
+/// mask consumes the literal and the surrounding text is scanned as it stands.
+const OWN_NAMES: &[&str] = &["cabalhunter.org", "realorrug"];
 
-/// What the domain becomes for the scan.
+/// What each own name becomes for the scan.
 ///
-/// Same length, so a violation's position in the text is unchanged, and made
-/// of characters no rule contains.
-const MASK: &str = "...............";
+/// One per byte of the name, so a violation's position in the text is
+/// unchanged, and a character no rule contains.
+const MASK: char = '.';
+
+/// The reply, lowercased, with the account's own names masked out.
+fn masked(reply: &str) -> String {
+    OWN_NAMES.iter().fold(reply.to_lowercase(), |text, name| {
+        text.replace(name, &MASK.to_string().repeat(name.len()))
+    })
+}
 
 /// A phrase that must not be published, found in a reply.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -308,7 +321,7 @@ pub struct Violation {
 /// Case-insensitive, because a capitalised accusation is the same accusation.
 #[must_use]
 pub fn check(reply: &str) -> Vec<Violation> {
-    let lower = reply.to_lowercase().replace(OWN_DOMAIN, MASK);
+    let lower = masked(reply);
     RULES
         .iter()
         .filter(|r| lower.contains(r.phrase))
@@ -329,8 +342,8 @@ mod tests {
         // effect was that no post could carry its own address -- the weekly
         // result ended "Rule and leaderboard: on the site" with no link.
         //
-        // Re-apply by deleting the mask in : the first two assertions
-        // fail. The rest are what stops the mask being a hole.
+        // Re-apply by deleting "cabalhunter.org" from `OWN_NAMES`: the first
+        // two assertions fail. The rest are what stops the mask being a hole.
         assert!(check("Rule and leaderboard: cabalhunter.org/history").is_empty());
         assert!(check("CabalHunter.org/leaderboard").is_empty());
 
@@ -341,6 +354,26 @@ mod tests {
         assert!(!check("the cabal is cabalhunter.org").is_empty());
         assert!(!check("cabalhunters.org").is_empty());
         assert_eq!(check("a cabal ran it")[0].phrase, "cabal");
+    }
+
+    #[test]
+    fn the_account_can_say_its_own_name_and_every_other_rug_is_still_refused() {
+        // "rug" matches by substring, so before the mask every reply naming
+        // the account was refused and the template shipped instead. Design
+        // 0019 §5.4.
+        //
+        // Re-apply by deleting "realorrug" from `OWN_NAMES`: the first four
+        // assertions fail. The rest are what stops the mask being a hole.
+        assert!(check("Summoned by @realorrug").is_empty());
+        assert!(check("$REALORRUG has no price on this sheet").is_empty());
+        assert!(check("RealOrRug.com/history").is_empty());
+        assert!(check("Rule and leaderboard: cabalhunter.org -- ask @realorrug").is_empty());
+
+        // The mask consumes only the name, so a verdict beside it is found.
+        assert_eq!(check("realorrug says: rug")[0].phrase, "rug");
+        assert_eq!(check("@realorrug calls it a RUG")[0].phrase, "rug");
+        assert!(!check("real or rug? a rug.").is_empty());
+        assert!(!check("realorrug: scam").is_empty());
     }
 
     #[test]
