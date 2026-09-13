@@ -1002,6 +1002,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "repo-conformance"
+version = "0.0.1"
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"

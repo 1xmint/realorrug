@@ -26,6 +26,8 @@ installed on any server.
 | `crates/realorrug-payout` | the week's payout, under three refusals |
 | `crates/realorrug-serve` | the public site's documents |
 | `crates/realorrug-cli` | `realorrug dossier`, `roast`, `analyst`, `contest`, `audit`, `model-prices` |
+| `crates/realorrug-agent`, `crates/realorrug-model`, `crates/realorrug-provider` | the boundary a model sits behind, the model client, the spend meter |
+| `crates/realorrug-types`, `crates/realorrug-decode`, `crates/realorrug-pumpfun`, `crates/realorrug-journal` | shared vocabulary, Solana decoding, pump.fun, the hash-chained journal |
 | `site/` | the public site |
 | `deploy/` | systemd units and the runbook |
 
