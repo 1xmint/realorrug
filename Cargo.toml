@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+[workspace]
+resolver = "3"
+members = [
+    "crates/realorrug-types",
+    "crates/realorrug-provider",
+    "crates/realorrug-agent",
+    "crates/realorrug-model",
+    "crates/realorrug-decode",
+    "crates/realorrug-pumpfun",
+    "crates/realorrug-onchain",
+    "crates/realorrug-roast",
+    "crates/realorrug-contest",
+    "crates/realorrug-journal",
+    "crates/realorrug-analyst",
+    "crates/realorrug-payout",
+    "crates/realorrug-cli",
+    "crates/realorrug-serve",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+repository = "https://github.com/1xmint/realorrug"
+homepage = "https://github.com/1xmint/realorrug"
+authors = ["The Radar Authors"]
+
+[workspace.dependencies]
+realorrug-types = { path = "crates/realorrug-types", version = "0.0.1" }
+realorrug-provider = { path = "crates/realorrug-provider", version = "0.0.1" }
+realorrug-agent = { path = "crates/realorrug-agent", version = "0.0.1" }
+realorrug-model = { path = "crates/realorrug-model", version = "0.0.1" }
+realorrug-decode = { path = "crates/realorrug-decode", version = "0.0.1" }
+realorrug-pumpfun = { path = "crates/realorrug-pumpfun", version = "0.0.1" }
+realorrug-onchain = { path = "crates/realorrug-onchain", version = "0.0.1" }
+realorrug-roast = { path = "crates/realorrug-roast", version = "0.0.1" }
+realorrug-contest = { path = "crates/realorrug-contest", version = "0.0.1" }
+realorrug-journal = { path = "crates/realorrug-journal", version = "0.0.1" }
+realorrug-analyst = { path = "crates/realorrug-analyst", version = "0.0.1" }
+realorrug-payout = { path = "crates/realorrug-payout", version = "0.0.1" }
+
+# Kept deliberately small. The payout binary holds a key, so every dependency
+# here is one more thing that can be compromised into a process that moves money.
+blake3 = "1.5"
+ed25519-dalek = "3.0"
+# OAuth 1.0a request signing, the only way to post as an account on X. SHA-1 is
+# broken for collision resistance and must never be used for anything else; its
+# use is confined to `realorrug_analyst::oauth`.
+hmac = "0.13"
+sha1 = "0.11"
+base64 = "0.23"
+rand = "0.9"
+bs58 = { version = "0.5", default-features = false, features = ["alloc"] }
+schemars = "1.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pedantic wants every product name in backticks. Rendering a product name as
+# code in prose is worse documentation, not better.
+doc_markdown = "allow"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

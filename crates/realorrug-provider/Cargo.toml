@@ -1,0 +1,23 @@
+[package]
+name = "realorrug-provider"
+description = "Radar's spend meter. Pure policy: no HTTP, no clock, no async."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+realorrug-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The ledger round-trips through JSON in its tests; nothing in the shipped
+# code serialises anything here.
+serde_json.workspace = true
+
+[lints]
+workspace = true

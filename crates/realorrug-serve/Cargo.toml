@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "realorrug-serve"
+description = "The public site's documents: population stats, the leaderboard, the weeks, the hunters and the pool. Reads published files, never a store."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "realorrug-serve"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"] }
+# The reply log's type, the contest ledger, and the base-rate and population
+# files the documents are built from. Read-only: this server runs neither the
+# analyst nor the payout, it shows what they wrote.
+realorrug-analyst.workspace = true
+realorrug-contest.workspace = true
+realorrug-roast.workspace = true
+realorrug-types.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+http-body-util = "0.1"
+
+[lints]
+workspace = true

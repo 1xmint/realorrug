@@ -1,0 +1,296 @@
+{
+  "source": "CryptoHouse (crypto-clickhouse.clickhouse.com), solana.instructions",
+  "program": "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+  "windows": [
+    {
+      "from": "2026-08-21 06:00:00",
+      "to": "2026-08-21 08:00:00"
+    },
+    {
+      "from": "2026-08-20 18:00:00",
+      "to": "2026-08-20 20:00:00"
+    },
+    {
+      "from": "2026-08-19 12:00:00",
+      "to": "2026-08-19 14:00:00"
+    }
+  ],
+  "note": "Names recovered by brute-forcing sha256('global:'+name)[..8], not read from documentation. A null anchor_name means the name is not in the candidate list; the instruction is real and must decode to Unknown.",
+  "instructions": {
+    "38fc74089edfcd5f": {
+      "discriminator": "38fc74089edfcd5f",
+      "anchor_name": "buy_exact_sol_in",
+      "kind": "instruction",
+      "observed_count": 2700690,
+      "sample_data_b58": "PvwdRapqdNv7KFUmC8CpgSb7d1vSyQiNsa",
+      "min_data_len": 24,
+      "max_data_len": 32,
+      "example_signature": "2wbxvGzRpR5NihnuapaaK7Qy4FpnMWRFwvimBeWaGPLcUfpXW9onET34gLjFhLPer2Tn4SZfPe5YxmZTEgCFUUqY",
+      "example_slot": 440523573
+    },
+    "e445a52e51cb9a1d": {
+      "discriminator": "e445a52e51cb9a1d",
+      "anchor_name": null,
+      "kind": "anchor_event_cpi",
+      "observed_count": 382285,
+      "sample_data_b58": "2ytdt8TmtejZES5wWFDuEAwpKq1UxRuFoyo4uwgYfXeEc1vvWFuJWgeU1cRXkNP8BynUGYsv11GyRbuHaT2S7rUemcske3Jh8cUypUYTM3HvRfT8g1AfDyaW9LwUzeqHHEW3fUDPPYVsiD7h8Egjo2VqAQd4GPqTRNKK58f5rMMtB4EHT8xKAfuyEUzM8ZQadFJCEgZLHpHaMVgRjoMow6aQnt23ATHZRWBfEtJZXjWeZ3tnunaFV36ZVRnH1eLn1JtJFTJg4Ypj1zPzHFyHfr6fa6aUgFTk9jmCaTStAbXnqx1c3yDmMzZ3zA92daEQaxmLuDoARbxpHnq39y81rsR6MpW35gAc9xjp2F8dpaS8G3nhpeFkuCwmwey9bRFtiDPKgNxAMaN69m5opkfS3ouCN574bPLtWXcUsrqA8JLkKRcwAmEAoMf1gfj9mDttai1kqPrDsVFYMkpv8FbnFF6fy97sbc7iugCATjehVZUHZVfaXN2fUK",
+      "min_data_len": 80,
+      "max_data_len": 707,
+      "example_signature": "262T88LDJBq9WAvnmuHSMdkUGeKoZshxgrxwhYEW3ew4hFaxjUgoEwFWuP9X1k8SYphc5K6e9SsCBaLbC3xvbUKk",
+      "example_slot": 440523573
+    },
+    "33e685a4017f83ad": {
+      "discriminator": "33e685a4017f83ad",
+      "anchor_name": "sell",
+      "kind": "instruction",
+      "observed_count": 180684,
+      "sample_data_b58": "5jRcjdixRUDHJEqfQz5kFe3yuALV8R959",
+      "min_data_len": 24,
+      "max_data_len": 26,
+      "example_signature": "ygAQcdTcEqaxNP6seytE9amYLApEn6LkFXBzcfv5JW8QyP9zXRuSDPm7Xq9FdTPkrDd5ngXCyKUbtrzbGqeH4PG",
+      "example_slot": 440267325
+    },
+    "66063d1201daebea": {
+      "discriminator": "66063d1201daebea",
+      "anchor_name": "buy",
+      "kind": "instruction",
+      "observed_count": 113210,
+      "sample_data_b58": "48CS5rNxJb97ANg1ZjmzUUA1zvuLdEYmvXzx",
+      "min_data_len": 24,
+      "max_data_len": 26,
+      "example_signature": "3KPpmuQ2g34GPtAdEx2ADBuFXmUEFWRbaknVMxGYtkiJvMyu1boJXzB5KGo7ye5KB7CnFYL72GGXbFnoDpRtRknZ",
+      "example_slot": 440267326
+    },
+    "c2ab1c46684d5b2f": {
+      "discriminator": "c2ab1c46684d5b2f",
+      "anchor_name": "buy_exact_quote_in_v2",
+      "kind": "instruction",
+      "observed_count": 67470,
+      "sample_data_b58": "JkK5BJGr6ZHHNWB8D9U67Vq9gCgb7tNn3",
+      "min_data_len": 24,
+      "max_data_len": 25,
+      "example_signature": "2GnpApYJdQyfu45LEJPTtxorxs13SCqDxQztTsTbwMzBb6mPyxhJR4SqKD3BxV8VmbEgDnZqcWNaH7xiTX96KMGj",
+      "example_slot": 440523574
+    },
+    "5df6823ce7e940b2": {
+      "discriminator": "5df6823ce7e940b2",
+      "anchor_name": "sell_v2",
+      "kind": "instruction",
+      "observed_count": 42842,
+      "sample_data_b58": "9Zq9ZwMbe2brzihvxSTgrKoTTcKDzNfQT",
+      "min_data_len": 24,
+      "max_data_len": 26,
+      "example_signature": "5Dt8zNXTuMGYmYy47m9NA6XU2VvedGrAUt58GQ1kActJsayyWpZEW4Dt8HS6HHSGQYyRyFEpjyYySju7z28T2X9X",
+      "example_slot": 440523573
+    },
+    "f945a4da9667548a": {
+      "discriminator": "f945a4da9667548a",
+      "anchor_name": "close_user_volume_accumulator",
+      "kind": "instruction",
+      "observed_count": 37030,
+      "sample_data_b58": "ihFZiQrP7CM",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "3nAsEgi9ppCBq8JosSRGvxjqPnfGWT1UVC6xPykPi4Bnf1gkewoReJGSpRpmGw7Q4M3hzEjANdWVHDBaj9w3PKKa",
+      "example_slot": 440267326
+    },
+    "7af3cc415e741d37": {
+      "discriminator": "7af3cc415e741d37",
+      "anchor_name": "claim_cashback_v2",
+      "kind": "instruction",
+      "observed_count": 14342,
+      "sample_data_b58": "MZnvBLgK1Tt",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "26ZEwQdCcMXNjVA84uPGPUXPerMRYUa1Gs2zo3Czk2a4uRA6YEw14VoWees7Mw7oZiLtCVwFZsZD1PsZyDQhXF3F",
+      "example_slot": 440523573
+    },
+    "b817ee6167c5d33d": {
+      "discriminator": "b817ee6167c5d33d",
+      "anchor_name": "buy_v2",
+      "kind": "instruction",
+      "observed_count": 11498,
+      "sample_data_b58": "HnQ14hy6fxGCdcQEp6qCENG22w5zFSUfq",
+      "min_data_len": 24,
+      "max_data_len": 26,
+      "example_signature": "2SfFuQbp8ow1TQApGGGD2sra3MHCTubRETNXfz9j3uL9fq1vqNDSZ6wRda3YGWgd5QvfiMt65fKkVuLb1xHGDyxd",
+      "example_slot": 440523575
+    },
+    "5e06ca73ff60e8b7": {
+      "discriminator": "5e06ca73ff60e8b7",
+      "anchor_name": "init_user_volume_accumulator",
+      "kind": "instruction",
+      "observed_count": 8781,
+      "sample_data_b58": "GjBA1Qzhrva",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "4umtDToAKHbwnEDM9QqW27fjXk1DWwDP77MZENYRB1yp2qpUGLByRrcXG9QQwdFpf81CrCTcpbStMbRVowYovDQX",
+      "example_slot": 440523573
+    },
+    "253a237ebe35e4c5": {
+      "discriminator": "253a237ebe35e4c5",
+      "anchor_name": "claim_cashback",
+      "kind": "instruction",
+      "observed_count": 7464,
+      "sample_data_b58": "7E9g4XZrCjE",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "n39pE9hGhZ4CEnb2pD3HcmkvKPjHZVjZLoejtW72AVyV2TnZbyAf29h8wULxt5BQDoG9KDfVyHaUpJ5fJMyisBR",
+      "example_slot": 440523575
+    },
+    "d6904cec5f8b31b4": {
+      "discriminator": "d6904cec5f8b31b4",
+      "anchor_name": "create_v2",
+      "kind": "instruction",
+      "observed_count": 4680,
+      "sample_data_b58": "Bw9mRuhxGqD7jwDrm2VtWDn8hoehozN2ziNy6foxh9HjjaNoRMCAMt4KxhHqbib5W1EVVb1jYRdWceRuoKKZDpzxqdEXyYMAS9vphKM5BD2eivw2PrgKQGARBGaMdHMfAtSda7bijxt2PsNiV5X2RNVD5kXiDD6u5G9ZoGFMBCevAHnZwjCG6j",
+      "min_data_len": 92,
+      "max_data_len": 250,
+      "example_signature": "5vXh17Tcq8VnKHJnARdG94gKUMkV6keK6jwog7yK2nBEjZ8tdZfAU1wdTiddSXs26pPSQep7A6qkqaz5xNkjb1it",
+      "example_slot": 440267329
+    },
+    "ea66c2cb96483ee5": {
+      "discriminator": "ea66c2cb96483ee5",
+      "anchor_name": "extend_account",
+      "kind": "instruction",
+      "observed_count": 2012,
+      "sample_data_b58": "gCzGGoTR6NG",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "4Arjkifz87VWe4JKuxyb59xzguutUshD9MrXf5GB8uUkzWxKfKHru3dCtD4bhSYzFXDRPvbHrifJ8WTmiEpFpSrC",
+      "example_slot": 440267358
+    },
+    "66063d1201daebe6": {
+      "discriminator": "66063d1201daebe6",
+      "anchor_name": null,
+      "kind": "instruction",
+      "observed_count": 1170,
+      "sample_data_b58": "AJTQ2h9DXr9ShePdWHBKU841icD2tSrXR",
+      "min_data_len": 24,
+      "max_data_len": 24,
+      "example_signature": "4mmwRLkf2S8ncdYaMQY4f2EWRc6BzNqjXswHvdF6P5PLENipijPEbw5jGu4maq9srtNAE5gViQyF6bgNaeT9Yph3",
+      "example_slot": 440267327
+    },
+    "1416567bc61cdb84": {
+      "discriminator": "1416567bc61cdb84",
+      "anchor_name": "collect_creator_fee",
+      "kind": "instruction",
+      "observed_count": 831,
+      "sample_data_b58": "4MsYv8onxfd",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "5KyPB3r8g32uks4DFbepCbZnrZNkFhe9d3rNtQiTCKVgk5Mr74pC17SWCxGLjA5XoFD9zvs1BcnAn8Z7H74FmEEV",
+      "example_slot": 440627950
+    },
+    "cf118af204221338": {
+      "discriminator": "cf118af204221338",
+      "anchor_name": "collect_creator_fee_v2",
+      "kind": "instruction",
+      "observed_count": 746,
+      "sample_data_b58": "bdpoExJbbLb",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "3cT7ufh4TvpzXQyruw8X4R9BH9NJZhEMAdR8zQSwyne3Tmt5vFjuoZo6ebLFk59EmnaMpcEAzgCKPrwrE22feHUb",
+      "example_slot": 440627942
+    },
+    "a572670079cef751": {
+      "discriminator": "a572670079cef751",
+      "anchor_name": "distribute_creator_fees",
+      "kind": "instruction",
+      "observed_count": 559,
+      "sample_data_b58": "Ug3SNLp8V8c",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "2zdS5LUaaEJnGEwtetoa5UjQShrYYQ2wnm4eWSTFPqo5nJJ2KS8bUN5iN4zaCMvUhHuP937gzSYkSJMTzoeaAArB",
+      "example_slot": 440627939
+    },
+    "ffcb134ff444089f": {
+      "discriminator": "ffcb134ff444089f",
+      "anchor_name": "distribute_creator_fees_v2",
+      "kind": "instruction",
+      "observed_count": 525,
+      "sample_data_b58": "4FqtrqK5vNWnc",
+      "min_data_len": 9,
+      "max_data_len": 9,
+      "example_signature": "2HJ5WzVGKjnMz4UwSfpFB7DSUZCf7bavszQKCjLguZH6RJ6ZQzxYR82BYLLBmxuw8DbhrPBirwc5yQWMNcBboo8q",
+      "example_slot": 440267335
+    },
+    "577c34bf3426d6e8": {
+      "discriminator": "577c34bf3426d6e8",
+      "anchor_name": null,
+      "kind": "instruction",
+      "observed_count": 277,
+      "sample_data_b58": "FdiX4bwE4K1",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "4z7J1jLmBofQcUwMMSMNz8jSPH7qzgKTJq3WYCPtGQMLfp64U4orjA6wesSmLFq9bW1CiyqGGbFbApcU6jHFRWUz",
+      "example_slot": 440267426
+    },
+    "bbcb121fceedfe29": {
+      "discriminator": "bbcb121fceedfe29",
+      "anchor_name": "migrate_v2",
+      "kind": "instruction",
+      "observed_count": 122,
+      "sample_data_b58": "YQq8B6nbicx",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "5HYSqJvVaZoVEGEZSfVyeCAtJ1g8sRYS2TnPJ19EZNa9S3NAuijo7yJbLoiv8JeVDJ76BWQuiEtdt4hgNP9TjKdo",
+      "example_slot": 440523616
+    },
+    "561fc057a3574fee": {
+      "discriminator": "561fc057a3574fee",
+      "anchor_name": "sync_user_volume_accumulator",
+      "kind": "instruction",
+      "observed_count": 109,
+      "sample_data_b58": "FQWdsh8JfTT",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "5Eqac3oVoG3iGoqvXoPSJjUABivqSrPspB9HhcEVYK11ANoXnjCerm9JVhXqvmcD4HJG2ficLK1wTj7CDbhNsh8k",
+      "example_slot": 440524153
+    },
+    "181ec828051c0777": {
+      "discriminator": "181ec828051c0777",
+      "anchor_name": "create",
+      "kind": "instruction",
+      "observed_count": 42,
+      "sample_data_b58": "5PFXUyLae2q76vhpq3tMQSk3M8y7ujJGtdooepxPMYHzPEvyQjxtAbWKUTcB9CnVc29bjr2Y8bPpCTNrjzPLJ4wdTkBFopPJrSc3Yin9vJiEay7xnawPAwt9TK3bR15QTGSvcBuqFCCKpzX2ewssWetqvtrcKky95msbTe9YTvAedtitK6hDDRwox3C59vBiTZscVBSnfDMCDGYQX",
+      "min_data_len": 106,
+      "max_data_len": 161,
+      "example_signature": "3RRB8ZRQiWTVy1HfE98SejSZDyJaVx6QkUYkWNFZPShYuY3Zwf7MmfxVWaeQaEAVRrcjEQNhkc7hdPdAWBsD3Lgp",
+      "example_slot": 440524063
+    },
+    "9beae792ec9ea21e": {
+      "discriminator": "9beae792ec9ea21e",
+      "anchor_name": "migrate",
+      "kind": "instruction",
+      "observed_count": 15,
+      "sample_data_b58": "T5bZvAk4s5f",
+      "min_data_len": 8,
+      "max_data_len": 8,
+      "example_signature": "c1gg3cMxqntCoSXjsjz2pRd37Shac6F5cBuyXDNJ6XA2AYXLiTD7SFpu4B9AdD1Sudh6PCc3U2MZpC8WQoTQf7P",
+      "example_slot": 440628291
+    },
+    "a9bee3f2670af88e": {
+      "discriminator": "a9bee3f2670af88e",
+      "anchor_name": null,
+      "kind": "instruction",
+      "observed_count": 5,
+      "sample_data_b58": "GUXsiebLnTWw1hNGEm3A13ToZfMVQeLMM",
+      "min_data_len": 24,
+      "max_data_len": 24,
+      "example_signature": "3qFXT3tK2N24rsA3wXn6g7dPPUWXZvrXQSZtYVXJjso9AZN8aUbUWi5SXJ5UjCahCV5gNFQbcszG6UQvYsYgVnsp",
+      "example_slot": 440278194
+    },
+    "4519ab8e39ef0d04": {
+      "discriminator": "4519ab8e39ef0d04",
+      "anchor_name": "admin_set_creator",
+      "kind": "instruction",
+      "observed_count": 1,
+      "sample_data_b58": "4S92BcxaKWK8fBTHwE4unE1RJ1JY13DU3ix4ExmwHXLW5uVNNRQinds",
+      "min_data_len": 40,
+      "max_data_len": 40,
+      "example_signature": "9P5wF8aw8z2LcRXSQpRuEm3GL9zYVTerSxYkPT7Un8noyjU53mdip2TBJAMc21PcWfD7SyAE5fDgN6czrBcw5kU",
+      "example_slot": 440627396
+    }
+  }
+}

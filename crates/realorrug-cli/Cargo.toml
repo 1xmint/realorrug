@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "realorrug-cli"
+description = "The operator's commands: dossier, roast, the dry-run analyst loop, the contest's payout fallback, the journal audit and model prices."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "realorrug"
+path = "src/main.rs"
+
+[dependencies]
+# The on-demand chain read behind `realorrug dossier`. Read-only: it holds no
+# key and cannot reach a signer.
+realorrug-onchain.workspace = true
+# The reply pipeline behind `realorrug roast`. Prints only: it holds no
+# credential and cannot post.
+realorrug-roast.workspace = true
+# The mention parser, the admission gate and the reply log. Cannot post.
+realorrug-analyst.workspace = true
+realorrug-journal.workspace = true
+realorrug-contest.workspace = true
+realorrug-payout.workspace = true
+realorrug-pumpfun.workspace = true
+realorrug-model.workspace = true
+realorrug-types.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

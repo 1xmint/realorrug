@@ -1,0 +1,20 @@
+/target
+/data
+*.log
+.env
+/dist
+
+mutants.out/
+mutants.out.old/
+
+# The creator index is a measurement built where the data is, not a source file.
+# Radar's creator-index job writes it on the box; the bot reads it.
+docs/research/data/creator-index.json
+docs/research/data/population.json
+
+site/dist/
+site/node_modules/
+site/tsconfig.tsbuildinfo
+
+.claude/worktrees/
+.orchestrator/

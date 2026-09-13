@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The public site's documents. Read-only: it reads the contest ledger, the reply
+# log, the base rates and the population summary, and writes nothing.
+[Unit]
+Description=realorrug public documents — stats, leaderboard, weeks, hunters, pool
+Documentation=https://github.com/1xmint/realorrug
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=guardian
+Group=guardian
+# The base-rate and population files are read relative to this directory, where
+# Radar's creator-index job publishes them.
+WorkingDirectory=/home/guardian/radar
+ExecStart=/usr/local/bin/realorrug-serve
+Environment=REALORRUG_BIND=127.0.0.1:8090
+Environment=RADAR_CONTEST_DIR=/home/guardian/radar/data/contest
+Environment=RADAR_ANALYST_DIR=/home/guardian/radar/data/analyst
+# Set to the site's origin to let a browser read these; unset sends no CORS header.
+EnvironmentFile=-/etc/realorrug/serve.env
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+MemoryMax=128M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

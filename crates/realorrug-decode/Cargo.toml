@@ -1,0 +1,26 @@
+[package]
+name = "realorrug-decode"
+description = "Local decoding of Solana program instructions. Discriminator bytes, never logged names; unknown is a value, never a guess."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+realorrug-types.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Test-only. The crate itself computes no hashes: the discriminator table is
+# constant bytes captured from mainnet, and sha2 is here purely so a test can
+# prove those constants match the Anchor naming convention they claim to follow.
+bs58.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+sha2 = "0.11"
+
+[lints]
+workspace = true

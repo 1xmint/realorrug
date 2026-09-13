@@ -1,0 +1,3 @@
+# Unix line endings everywhere, matching rustfmt.toml, so a Windows checkout
+# does not make every file fail `cargo fmt --check`.
+* text=auto eol=lf
