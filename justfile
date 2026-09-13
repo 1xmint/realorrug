@@ -22,7 +22,7 @@ cargo := env("REALORRUG_CARGO", "cargo")
 # A floor, not a target. `cargo test` exits zero when a whole crate's tests are
 # skipped, so the count is checked rather than trusted. Raise it as the suite
 # grows; never lower it to make a run pass.
-export MIN_TESTS := "960"
+export MIN_TESTS := "968"
 
 # The public site's test floor.
 export MIN_SITE_TESTS := "58"

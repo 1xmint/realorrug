@@ -895,7 +895,7 @@ fn announce_week(
                 }
             }
             Err(_) => {
-                eprintln!("realorrug-analyst: no teardown, the winning mint is not an address")
+                eprintln!("realorrug-analyst: no teardown, the winning mint is not an address");
             }
         }
     }
