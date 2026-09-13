@@ -3,10 +3,12 @@
 
 **Date:** 2026-09-13
 **Status:** read, not captured. Every fact here comes from a page, read on the
-date above, and **no transaction on Robinhood Chain has been read by this
-repository yet**. AGENTS.md §1 applies: a reference proposes, a capture
+date above, and **when this was written, no transaction on Robinhood Chain had been read by
+this repository**. AGENTS.md §1 applies: a reference proposes, a capture
 disposes. The launcher facts in §3 are the ones a capture must settle before
-anything is launched. Prices go stale monthly.
+anything is launched; for Pons v2, [research 0036](0036-pons-v2-read-from-a-real-launch.md)
+settled them from a real launch on 2026-09-13, and corrects §3's Pons row.
+Prices go stale monthly.
 **Feeds:** [design 0019](../design/0019-realorrug-on-robinhood-chain.md) and
 [ADR 0023](../adr/0023-realorrug-lives-on-robinhood-chain-and-the-bot-moves-with-it.md).
 **Corrects:** [design 0010](https://github.com/1xmint/theradar/blob/main/docs/design/0010-close-the-remainder-then-raise-the-ceiling.md)
@@ -56,7 +58,7 @@ so that is the column that matters.
 | launcher | creator fee | paid in | supply | source | verified? |
 |---|---|---|---|---|---|
 | **Bankr** (Doppler, Uniswap v4) | 0.665% of volume (95% of a 0.7% pool fee); traders pay 1.75% all-in | **"your token and WETH"** | 15% vests to the fee recipient by default; "you can turn vesting off" | [docs.bankr.bot overview](https://docs.bankr.bot/token-launching/overview/), [FAQ](https://docs.bankr.bot/faq/token-launching/) | first-party docs |
-| **Pons v2** | not found | "the pairing asset (which is ETH by default)" | "Full supply mints to a bonding curve"; graduates to a Uniswap v4 pool with locked liquidity | [cryptonomist, 2026-07-23](https://en.cryptonomist.ch/2026/07/23/pons-v2-upgrade-eth-bonding-curve/); launch fee 0.0005 ETH per [launchpad.family](https://www.launchpad.family/) ("checked on-chain, 2026-09-08") | **no: trade press and a third party** |
+| **Pons v2** | not found | "the pairing asset (which is ETH by default)" | "Full supply mints to a bonding curve"; graduates to a Uniswap v4 pool with locked liquidity | [cryptonomist, 2026-07-23](https://en.cryptonomist.ch/2026/07/23/pons-v2-upgrade-eth-bonding-curve/); launch fee 0.0005 ETH per [launchpad.family](https://www.launchpad.family/) ("checked on-chain, 2026-09-08") | **no: trade press and a third party.** Captured in [0036](0036-pons-v2-read-from-a-real-launch.md): the creator gets 70 bps of curve volume plus a chosen 0–1,000 bps tax, in the pair asset; launch fee 0.0005 ETH confirmed |
 | pump.fun (Solana, for comparison) | 30 bps on the curve; a ladder after graduation | SOL | full supply to the curve | [research 0023](https://github.com/1xmint/theradar/blob/main/docs/research/0023-the-fee-is-a-schedule-and-the-published-interface-is-incomplete.md), [0028](https://github.com/1xmint/theradar/blob/main/docs/research/0028-the-fee-after-graduation-is-a-ladder.md) | captured |
 
 Bankr also says: the fee recipient "is locked when the token is created and
@@ -98,8 +100,9 @@ only on a third-party summary, not on Alchemy's page, so it is not relied on.
 
 ## 6. Not established
 
-- Pons v2's creator fee rate, fee currency and zero allocation, from its
-  contract or a real launch. **Launch-blocking.**
+- ~~Pons v2's creator fee rate, fee currency and zero allocation, from its
+  contract or a real launch.~~ Settled on the curve by [research 0036](0036-pons-v2-read-from-a-real-launch.md);
+  the fee after graduation is still unread.
 - Who receives Bankr's launch-window fee.
 - Robinhood Chain's memecoin share of volume.
 - Dune's price for this use.
