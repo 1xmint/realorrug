@@ -9,7 +9,7 @@ disposes. The launcher facts in §3 are the ones a capture must settle before
 anything is launched. Prices go stale monthly.
 **Feeds:** [design 0019](../design/0019-realorrug-on-robinhood-chain.md) and
 [ADR 0023](../adr/0023-realorrug-lives-on-robinhood-chain-and-the-bot-moves-with-it.md).
-**Corrects:** [design 0010](../design/0010-close-the-remainder-then-raise-the-ceiling.md)
+**Corrects:** [design 0010](https://github.com/1xmint/theradar/blob/main/docs/design/0010-close-the-remainder-then-raise-the-ceiling.md)
 §1.4 carried Robinhood Chain facts from trade press, unverified. §1 confirms
 them from first-party pages, except "four memecoin launch routes", which no
 first-party page states.
@@ -57,7 +57,7 @@ so that is the column that matters.
 |---|---|---|---|---|---|
 | **Bankr** (Doppler, Uniswap v4) | 0.665% of volume (95% of a 0.7% pool fee); traders pay 1.75% all-in | **"your token and WETH"** | 15% vests to the fee recipient by default; "you can turn vesting off" | [docs.bankr.bot overview](https://docs.bankr.bot/token-launching/overview/), [FAQ](https://docs.bankr.bot/faq/token-launching/) | first-party docs |
 | **Pons v2** | not found | "the pairing asset (which is ETH by default)" | "Full supply mints to a bonding curve"; graduates to a Uniswap v4 pool with locked liquidity | [cryptonomist, 2026-07-23](https://en.cryptonomist.ch/2026/07/23/pons-v2-upgrade-eth-bonding-curve/); launch fee 0.0005 ETH per [launchpad.family](https://www.launchpad.family/) ("checked on-chain, 2026-09-08") | **no: trade press and a third party** |
-| pump.fun (Solana, for comparison) | 30 bps on the curve; a ladder after graduation | SOL | full supply to the curve | [research 0023](0023-the-fee-is-a-schedule-and-the-published-interface-is-incomplete.md), [0028](0028-the-fee-after-graduation-is-a-ladder.md) | captured |
+| pump.fun (Solana, for comparison) | 30 bps on the curve; a ladder after graduation | SOL | full supply to the curve | [research 0023](https://github.com/1xmint/theradar/blob/main/docs/research/0023-the-fee-is-a-schedule-and-the-published-interface-is-incomplete.md), [0028](https://github.com/1xmint/theradar/blob/main/docs/research/0028-the-fee-after-graduation-is-a-ladder.md) | captured |
 
 Bankr also says: the fee recipient "is locked when the token is created and
 can't be reassigned"; the swap fee "starts at 80%" at launch and decays over
@@ -91,7 +91,7 @@ a memecoin number. No memecoin share was measured.
 | Alchemy (Robinhood Chain) | 30M compute units a month, 25 requests a second, 5 webhooks; Token/Transfers/Portfolio APIs **not** free | pay as you go, $0.525 per million units | [alchemy.com/pricing](https://www.alchemy.com/pricing) |
 | Helius (Solana) | 1M credits a month, 10 requests a second, webhooks, DAS at 2/s | Developer $49 a month, 10M credits; LaserStream gRPC from Business, $499 | [helius.dev/pricing](https://www.helius.dev/pricing) |
 | Dune (Robinhood Chain history) | raw tables, decoded logs and traces, `erc20_robinhood.evt_*` | **price not read** | [Dune docs](https://docs.dune.com/data-catalog/evm/robinhood/overview) |
-| CryptoHouse (Solana history) | free, in use | — | [ADR 0002](../adr/0002-historical-data-comes-from-cryptohouse-not-a-vendor-archive.md) |
+| CryptoHouse (Solana history) | free, in use | — | [Radar ADR 0002](https://github.com/1xmint/theradar/blob/main/docs/adr/0002-historical-data-comes-from-cryptohouse-not-a-vendor-archive.md) |
 
 A per-method compute-unit table (for example `eth_getLogs` at 60 units) was seen
 only on a third-party summary, not on Alchemy's page, so it is not relied on.

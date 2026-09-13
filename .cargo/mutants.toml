@@ -1,0 +1,359 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Mutants that survive for a reason other than a missing test.
+#
+# Two categories, and they are not the same claim:
+#
+#   1. **Equivalent** -- the mutation cannot change behaviour. Most of this file.
+#   2. **Unreachable in the mutation sandbox** -- the mutation *would* change
+#      behaviour, and a test does cover it, but `cargo mutants` works in a copy
+#      of the sources with no `.git`, so the code path is dead there whatever its
+#      body says. Marked explicitly, because calling one of these "equivalent"
+#      would be exactly the wrong claim the paragraph below warns about.
+#
+# This file is the place where "we looked and it does not matter" is written
+# down. It has to stay short. Every entry is a claim that a mutation cannot
+# change behaviour, and a wrong claim here is indistinguishable from a missing
+# test — which is the whole failure mode `just mutants` exists to catch.
+#
+# The rule for adding one: apply the mutation by hand, run the suite, and work
+# out *why* it passes. If the answer is "no test covers it", write the test. Only
+# if the answer is "both versions do the same thing" does it belong here, with
+# the reason.
+#
+# Patterns match the mutant names `cargo mutants --list` prints, which read
+# "delete ! in known_files" -- the operation first and the function second. Two
+# runs were spent on regexes written the other way round, which failed silently
+# by excluding nothing, and a third on one written `replace . with .` which
+# failed the other way: it quietly excluded every arithmetic mutant in the
+# function rather than the one that had been examined.
+#
+# Entries are TOML *literal* strings (single quotes) so that `\+` reaches the
+# regex engine as an escaped plus rather than being eaten as a string escape.
+# A pattern that is too broad is worse than no pattern, because it removes
+# coverage without removing the line that says coverage exists.
+#
+# Carried from Radar on 2026-09-13 (ADR 0024). Only entries whose function was
+# copied here unchanged were kept, so each verdict below was reached against the
+# same code. Radar-only entries were dropped rather than left to match nothing.
+
+exclude_re = [
+    # `known_files`: inverting the emptiness guard makes a successful
+    # `git ls-files` fall through to walking the tree instead of returning what
+    # git said. Both produce a usable list. The branches differ only in
+    # *provenance* — tracked versus merely present — and inside a checkout where
+    # everything present is also tracked, nothing can observe the difference.
+    # Verified by hand: the suite passes either way.
+    'delete ! in known_files',
+
+    # `code_span_paths`: advancing by `end` rather than `end + 1` leaves the
+    # closing backtick at the front of the remaining text, where the next
+    # iteration immediately consumes it as the *opening* delimiter. With balanced
+    # backticks the spans re-pair and the extracted set is identical. Verified by
+    # hand, after an argument that it should fail turned out to have dropped an
+    # iteration.
+    'replace \+ with \* in code_span_paths',
+    # `compact_u16`: the continuation bit cannot be toggled by `^` rather than
+    # set by `|`, because the value it is applied to has already been masked.
+    # `byte` is `remaining & 0x7f`, so bit 7 is provably clear on every path that
+    # reaches this line -- and against a clear bit, `|`, `^` and `+` all produce
+    # the same byte.
+    #
+    # So this is arithmetic that cannot differ, not a length prefix nobody
+    # tests. `compact_u16_matches_solanas_encoding` sweeps 0, 127, 128 and
+    # 16,384 -- the two single-byte cases and the two multi-byte ones -- and
+    # `the_account_ceiling_is_where_a_one_byte_index_runs_out` builds a real
+    # 255-account message, so a genuinely wrong continuation byte fails
+    # immediately.
+    #
+    # Verified by hand: applying `^` and running the crate's suite passes.
+    'replace \| with \^ in compact_u16',
+
+    # `encode_url`: the three bytes are packed into disjoint ranges of one
+    # `u32` -- bits 16-23, 8-15 and 0-7 -- so no two of them share a set bit and
+    # `|` and `^` produce the same value. There is nothing for a test to
+    # distinguish.
+    #
+    # Not the same claim as the two `compact_u16` entries above, which turn on a
+    # mask; this one turns on the shifts. Both were verified by applying the
+    # mutation and running the crate's suite, and `realorrug-types` covers this
+    # function at every length class and round-trips all 256 byte values.
+    'replace \| with \^ in encode_url',
+    # `realorrug-onchain`'s `decode_base64`: the accumulator is
+    # `buffer = (buffer << 6) | value`, where `value` is a position in a
+    # 64-character alphabet and so is always under 64. Shifting left by six
+    # leaves the low six bits of `buffer` zero, and `value` sets only those six
+    # bits, so the two operands share no set bit and `|` and `^` are the same
+    # value. Nothing a test could distinguish.
+    #
+    # Same argument as `encode_url` above, and verified the same way: the
+    # mutation was applied by hand and the crate's suite -- which round-trips
+    # all 256 byte values through the decoder and sweeps every padding class --
+    # passes identically, because the two expressions are equal rather than
+    # because the tests are weak.
+    'replace \| with \^ in decode_base64',
+    # `realorrug-roast`'s `round_to`: `(v * factor).round() / factor` mutated to
+    # `... * factor`. Its only caller compares two of its results for equality:
+    #
+    #     round_to(*a, decimals) == round_to(value, decimals)
+    #
+    # Both sides go through the same transform, and multiplying by a positive
+    # finite `factor` is strictly monotone, so
+    #
+    #     (a*f).round()/f == (v*f).round()/f   <=>   (a*f).round() == (v*f).round()
+    #     (a*f).round()*f == (v*f).round()*f   <=>   (a*f).round() == (v*f).round()
+    #
+    # The two forms decide the same question. They differ in the *value*
+    # returned, which nothing reads -- `round_to` is private and has exactly one
+    # call site, checked above. If a second caller ever wants the rounded number
+    # itself, this entry stops being true and must come out.
+    #
+    # Applied by hand and the crate's suite passes identically, including the two
+    # tests added on 2026-09-03 that pin the epsilon branch either side of its
+    # boundary. It passes because the expressions agree, not because the tests
+    # are weak.
+    'replace / with \* in round_to',
+
+    # `X::from_env` reads two environment variables and hands them to
+    # `configured`, which decides. The decision is tested directly and
+    # thoroughly -- both halves present, each half missing, both missing, and
+    # whitespace counting as absent.
+    #
+    # What is left is the reading, and it cannot be tested here: setting an
+    # environment variable is process-global, this workspace runs its tests in
+    # parallel threads, and `std::env::set_var` is `unsafe` in edition 2024
+    # while the workspace sets `unsafe_code = "forbid"`. So a test that made
+    # this mutant fail cannot be written without turning off the lint that
+    # keeps the signer's process honest, which is a bad trade for a wrapper.
+    #
+    # The mutation's effect is also the safe direction rather than the dangerous
+    # one: `None` means "no credential", which means the binary falls back to
+    # the dry run and posts nothing. It is caught by the first live run.
+    'replace X::from_env -> Option<Self> with None',
+
+    # `Credentials::from_env` is the same shape and the same argument: it reads
+    # four environment variables and hands them to `from_vars`, which decides.
+    # The decision is tested at every combination -- all four present, each one
+    # missing in turn, and a blank value counting as absent.
+    #
+    # The reading is what is left, and it cannot be tested for the reason above:
+    # `std::env::set_var` is `unsafe` in edition 2024 against a workspace that
+    # forbids unsafe, and these tests run in parallel threads where process-wide
+    # state is a race with unrelated tests.
+    #
+    # The mutation's effect is the safe direction, and unlike `X::from_env` it is
+    # now **said out loud**: `None` means the instance can read and cannot post,
+    # which `daemon::posture` names on every start --
+    #
+    #   "RADAR_X_PUBLISH=on but there is no signing credential, so every reply
+    #    will be answered and none delivered."
+    #
+    # -- and `the_three_states_are_told_apart_in_words` pins that sentence. So a
+    # daemon in the mutated state announces it at startup rather than being
+    # discovered on the first real reply.
+    'replace Credentials::from_env -> Option<Self> with None',
+
+    # A third category, and it is neither of the two above, so it says so rather
+    # than borrowing a word that would not be true.
+    #
+    # `extensions` walks a Token-2022 account's extension list, and every path
+    # out of the loop returns. The `Err` after it computes `data.len() - at` for
+    # a `remaining` field, and it is reachable only if the walk stopped
+    # advancing -- which the arithmetic in the loop cannot do, because the walk
+    # is bounded and `at` strictly increases. It is written as a refusal rather
+    # than `unreachable!` on purpose: the one thing worse than a parser that
+    # gives up on a token account is one that panics on it.
+    #
+    # So the mutation is not equivalent -- `+` and `/` genuinely compute
+    # something else -- and it is not dead in the sandbox either. It is dead
+    # everywhere, and the line exists so that a future change which *does* make
+    # the walk stall reports a length instead of aborting. Deleting the line to
+    # satisfy the mutant would remove that, which is the wrong trade.
+    #
+    # Applied by hand, both operators: the suite passes unchanged, because no
+    # input reaches the line to observe the difference.
+    #
+    # The `+` is escaped because these are regexes, and an unescaped one is a
+    # quantifier meaning "one or more spaces" -- so `replace - with + in
+    # extensions` matches nothing and excludes nothing, silently. The `/` line
+    # worked on the first attempt and the `+` line did not, which is what made
+    # the cause obvious. That is the fourth run this file's header has now paid
+    # for on pattern syntax; the header's warning about `replace . with .` is
+    # the same mistake in the other direction.
+    'replace - with \+ in extensions',
+    'replace - with / in extensions',
+
+    # `Telegram::from_env` is the third of the shape, and the same argument: it
+    # reads `RADAR_TELEGRAM_BOT_TOKEN`, `RADAR_TELEGRAM_API_BASE` and
+    # `RADAR_TELEGRAM_CHANNEL` and hands them to `from_vars`, which is tested
+    # with the token present, absent and blank, the base defaulted and
+    # overridden, and the channel present and blank. The reading cannot be
+    # tested without `std::env::set_var`, for the reason above.
+    #
+    # The mutation's effect is the safe direction and is said out loud:
+    # `None` means the lane is off, and `telegram::posture` prints "telegram
+    # off -- no RADAR_TELEGRAM_BOT_TOKEN" on every start.
+    'replace Telegram::from_env -> Option<Self> with None',
+
+    # The daemon's two thinnest wrappers, and neither is equivalent -- each is
+    # **unreachable by a test in this workspace**, which is a different and more
+    # honest claim.
+    #
+    # `daemon::env` is `std::env::var(key).ok()` and `daemon::now` is the clock.
+    # Faking either means process-wide state, and this workspace runs its tests
+    # in parallel threads where that is a race between unrelated tests --
+    # `std::env::set_var` is also `unsafe` in edition 2024 against a workspace
+    # that forbids unsafe.
+    #
+    # So the *rules* that read them are what is tested, and they are tested
+    # thoroughly: `budget_from`, `limits_from` and `Prices::from_vars` all take a
+    # getter and are exercised at every combination, precisely so that only these
+    # two-line wrappers are left here.
+    #
+    # A clock has no value a test can distinguish -- `0` and `1` are each "some
+    # fixed instant", and the only thing separating them from the truth is the
+    # truth, which is the thing being faked. Written as a pattern so a third
+    # replacement value does not reopen it.
+    #
+    # These names are unqualified because that is how `cargo mutants` renders
+    # them; an earlier version wrote `daemon::now` and matched nothing at all,
+    # which CI reported as a survivor twice. The signatures are what keep them
+    # narrow: nothing else in this workspace is a `now -> u64` or an
+    # `env -> Option<String>`.
+    'replace now -> u64 with \d+',
+    'replace env -> Option<String> with None',
+    'replace env -> Option<String> with Some\(String::new\(\)\)',
+    'replace env -> Option<String> with Some\("xyzzy"\.into\(\)\)',
+
+    # `main` is four lines: it calls `daemon::run`, which loops forever. A test
+    # that ran it would not return, and there is nothing in it to assert --
+    # every decision it could make was moved into `daemon` for exactly this
+    # reason, which is why that module exists at all.
+    'replace main with \(\)',
+
+    # `creator_index::build` keeps the latest measurement of a mint:
+    #
+    #     if outcome.measured_at > held.measured_at { *held = outcome; }
+    #
+    # `>` to `>=` changes only what happens at a **tie**, and a tie means two
+    # rows measuring the same mint at the same slot -- the outcome pass having
+    # written twice. Those rows describe one measurement, so which of them is
+    # kept does not change any count this function produces.
+    #
+    # Written down rather than tested because a test would have to assert one of
+    # two equally correct answers, and pinning an arbitrary tiebreak is exactly
+    # the "test that asserted an implementation detail it had guessed" LEARNINGS
+    # 2 records. The other two mutations of this comparison -- `<` and `==` --
+    # are real and are caught by
+    # `the_latest_measurement_of_a_mint_is_the_one_that_counts`.
+    'replace > with >= in build',
+
+    # The public site's route handlers -- `weeks` and `hunters` -- replaced with
+    # `Default::default()`, which is an empty 200.
+    #
+    # Category 1 by the same argument as `X::from_env` above, and it is worth
+    # being precise about *which* part is untestable. Each handler is three
+    # lines: read `Paths::from_env()`, call the `_in` twin, wrap the answer in
+    # `respond`. The decision is entirely in the twin, and the twins are tested
+    # directly -- `weeks_in` at five states of a week, `hunters_in` at the empty
+    # board and a written one. That split is why the `_in` twins exist at all,
+    # and `public.rs`'s own module comment says so.
+    #
+    # What is left is `Paths::from_env`, which reads process-wide variables. A
+    # test that made these mutants fail would have to set them, and
+    # `std::env::set_var` is `unsafe` in edition 2024 against a workspace that
+    # forbids unsafe -- while these tests run in parallel threads where
+    # process-wide state is a race with unrelated tests.
+    #
+    # Narrow on purpose: these two names and this one replacement. The three
+    # older handlers of the same shape are not listed, because `just mutants
+    # origin/main` only mutates changed lines and they have never been
+    # reported -- adding them would be a claim nobody has checked.
+    'replace weeks -> Response with Default::default\(\)',
+    'replace hunters -> Response with Default::default\(\)',
+    # `realorrug_types::build_sha` replaced with `None`.
+    #
+    # It is `option_env!("RADAR_BUILD_SHA")`, and **in every test build that is
+    # already `None`** -- only the one release-CI step that produces the
+    # artifact sets the variable, and `option_env!` is resolved when the crate
+    # is compiled, which `cargo mutants` does without it. The mutation and the
+    # original are the same value under any test that could run here.
+    #
+    # Neither category above, and worth saying exactly rather than filing it
+    # under the nearest one. It is not *equivalent* -- in a release build the
+    # mutation would erase the commit from `/health`, from the analyst's start
+    # line, and from `radar brief`'s reading. It is not unreachable for want of
+    # a `.git` either. It is unobservable because the input is fixed at compile
+    # time and no test compiles the crate twice.
+    #
+    # The other four mutants of this pair are caught, and that is what makes
+    # this entry narrow rather than a hole: `Some("")`, `Some("xyzzy")`, `""`
+    # and `"xyzzy"` all fail
+    # `a_build_outside_release_ci_says_unknown_rather_than_a_blank_or_a_hash`,
+    # which pins the value an operator actually reads off a hand-built binary.
+    'replace build_sha -> Option<&.static str> with None',
+
+    # --- category 2: unreachable in the mutation sandbox ---------------------
+    #
+    # `untracked_documents` shells out to `git ls-files --others`. It is covered
+    # by the probe in `no_markdown_document_is_invisible_to_these_checks`, which
+    # writes an untracked markdown file, asserts the function reports it, and
+    # removes it again -- and that probe runs in `just tests` and in CI, where
+    # there is a git directory.
+    #
+    # `cargo mutants` copies the sources to a scratch tree with no `.git`, so
+    # `git ls-files` fails there and the function returns empty whatever its body
+    # says. Both mutations below are therefore invisible to a mutation run and
+    # visible to the test suite. They are **not equivalent** -- each one disables
+    # the rule that a new markdown document is checked before it is committed.
+    #
+    # If `cargo mutants` ever runs against a real checkout, delete these two
+    # lines first and confirm the probe kills them.
+    'replace untracked_documents -> Vec<String> with vec!\[\]',
+    'delete ! in untracked_documents',
+
+    # `Gate::burst` and `Gate::per_hour`: `<` widened to `<=`.
+    #
+    # Both are of the shape `if x < K { a } else { b }`, and at the only input
+    # where the two versions take different branches, **the branches return the
+    # same value**:
+    #
+    #   burst:    `if global_daily < 10 { global_daily } else { 10 }`
+    #             at 10 the then-branch yields 10 and the else-branch yields 10.
+    #   per_hour: `if global_daily < 24 { 1 } else { global_daily / 24 }`
+    #             at 24 the then-branch yields 1 and 24 / 24 is 1.
+    #
+    # So no input distinguishes them. Applied by hand, both at once, on
+    # 2026-09-07: the suite passes, and it passes because there is nothing to
+    # catch rather than because nothing looks.
+    # `the_burst_is_the_smaller_of_ten_and_the_day` and
+    # `the_refill_is_the_day_spread_over_a_day_and_never_zero` walk both
+    # boundaries, so the `==` and `>` mutants on the same lines are caught --
+    # which is what makes this a claim about these two and not about the
+    # comparison being untested.
+    'replace < with <= in Gate::burst',
+    'replace < with <= in Gate::per_hour',
+
+    # `Gate::refill_to`: the clock-went-backwards guard, `<` widened to `<=`.
+    #
+    #   `if now < self.refilled_at { self.refilled_at = now; return; }`
+    #
+    # They differ only at `now == refilled_at`. Taking the branch assigns `now`
+    # to a field that already equals `now` and returns; falling through computes
+    # `elapsed = 0`, then `earned = 0`, and returns at the `earned == 0` guard
+    # two lines later. Neither path touches `tokens`, and both leave
+    # `refilled_at` at the same value.
+    #
+    # Applied by hand on 2026-09-07. `a_clock_that_went_backwards_re_bases_rather_than_freezing`
+    # covers the branch itself, and the `==` mutant on this line is caught, so
+    # the guard is not merely untested.
+    'replace < with <= in Gate::refill_to',
+]
+
+# A note on what does NOT belong here, learned on 2026-09-03 and worth the four
+# lines. A `git_is_usable()` helper was added so the probe above could skip
+# itself where there is no git directory. CI immediately reported
+# `replace git_is_usable -> bool with false` as a survivor, and it was right: a
+# function whose only job is to gate a test is a function whose mutation skips
+# the test, and nothing can ever kill it. The gate is inline now. Do not add a
+# helper here to silence a mutant -- it adds one that cannot be silenced.

@@ -55,6 +55,13 @@ the failure. Say whether you are recommending or recording.
 - Enforce a property at the cheapest level that holds it: a type, then one
   check, then a test, then prose.
 - A test that cannot fail is not a test. Verify a fix by re-applying the bug.
+  The `mutants` check runs that on every pull request's changed lines; when a
+  survivor cannot change behaviour, apply it by hand and record why in
+  `.cargo/mutants.toml`.
+- `repo-conformance` holds the documents to the tree: links, named paths, ADR
+  numbers, a status on every numbered document, and no path from a model-side
+  crate to the payout. A citation of Radar's record says "Radar ADR" and links
+  github.com/1xmint/theradar.
 - Comments explain *why*, especially why the obvious alternative is wrong.
 
 ## 5. The machine and the repository

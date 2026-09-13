@@ -16,6 +16,7 @@ members = [
     "crates/realorrug-payout",
     "crates/realorrug-cli",
     "crates/realorrug-serve",
+    "crates/repo-conformance",
 ]
 
 [workspace.package]

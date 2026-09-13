@@ -7,7 +7,7 @@ Three processes, each its own unit. **None of them is installed on the box as of
 | unit | binary | what it does | writes |
 |---|---|---|---|
 | `realorrug-analyst.service` | `realorrug-analyst` | answers summoned mentions on X with measured facts | `data/analyst`, `data/contest` |
-| `realorrug-payout.service` + `.timer` | `realorrug-payout --due` | pays a claimed, unpaid week under three refusals | `data/contest` |
+| `realorrug-payout.service` + `realorrug-payout.timer` | `realorrug-payout --due` | pays a claimed, unpaid week under three refusals | `data/contest` |
 | `realorrug-serve.service` | `realorrug-serve` | the public site's five documents | nothing |
 
 ## What it reads from Radar, and how
@@ -16,7 +16,7 @@ The bot does not import Radar. It reads **two files Radar publishes**, at paths
 relative to its working directory:
 
 - `docs/research/data/creator-index.json` and `population.json`, written every
-  six hours by Radar's `radar-creator-index.timer`.
+  six hours by Radar's `theradar:deploy/radar-creator-index.timer`.
 - `docs/research/data/0024-base-rates.json`, a dated snapshot. A copy is
   committed here, so the bot runs without Radar; the box's copy wins when the
   working directory is Radar's.
@@ -33,7 +33,7 @@ Radar's store and writes the file the daily post reads.
 ```bash
 # Built by CI on a push to main; download the artifact, then:
 sudo install -m 0755 realorrug-analyst realorrug-payout realorrug-serve /usr/local/bin/
-sudo install -m 0644 deploy/realorrug-*.service deploy/realorrug-payout.timer /etc/systemd/system/
+sudo install -m 0644 deploy/realorrug-analyst.service deploy/realorrug-payout.service deploy/realorrug-payout.timer deploy/realorrug-serve.service /etc/systemd/system/
 sudo install -m 0640 -o root -g guardian deploy/analyst.env.example /etc/radar/analyst.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now realorrug-serve realorrug-analyst
