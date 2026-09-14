@@ -26,7 +26,7 @@
 
 use std::fmt::Write as _;
 
-use realorrug_contest::Vault;
+use realorrug_contest::{Balance, Vault};
 use realorrug_types::civil::{date_from_days, timestamp_from_seconds};
 use serde::{Deserialize, Serialize};
 
@@ -196,19 +196,22 @@ pub fn render(rows: &Rows, vault: Option<&Vault>) -> Rendered {
             held.len()
         );
     }
-    match vault {
-        Some(v) => {
-            let sol = v.lamports as f64 / 1_000_000_000.0;
+    match vault.map(|v| (&v.balance, v.measured_at)) {
+        Some((Balance::Sol { lamports }, measured_at)) => {
+            let sol = *lamports as f64 / 1_000_000_000.0;
             let rendered = format!("{sol:.3}");
             authorised.push(sol);
             if let Ok(r) = rendered.parse::<f64>() {
                 authorised.push(r);
             }
-            let at = timestamp_from_seconds(v.measured_at);
+            let at = timestamp_from_seconds(measured_at);
             authorised.extend(at[..10].split('-').filter_map(|p| p.parse::<f64>().ok()));
             authorised.extend(at[11..19].split(':').filter_map(|p| p.parse::<f64>().ok()));
             let _ = write!(text, " Pool: {rendered} SOL at {at}.");
         }
+        // Silent for an ETH pool until plan 0001 step 6d renders it: "no token
+        // yet" would be false, and a wei figure quoted as SOL is a wrong one.
+        Some((Balance::Eth { .. }, _)) => {}
         None => text.push_str(" Pool: no token yet."),
     }
 
@@ -332,7 +335,9 @@ mod tests {
         ]);
         let vault = Vault {
             address: "V".to_owned(),
-            lamports: 500_000_000,
+            balance: Balance::Sol {
+                lamports: 500_000_000,
+            },
             measured_at: 1_788_600_000,
         };
         let Rendered::Post(post) = render(&day, Some(&vault)) else {

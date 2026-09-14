@@ -32,7 +32,7 @@ use axum::Json;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use realorrug_analyst::log::Entry;
-use realorrug_contest::ledger::Vault;
+use realorrug_contest::ledger::{Balance, Paid, Payout, Vault};
 use realorrug_contest::{Record, Week};
 use realorrug_roast::baserates::BaseRates;
 use realorrug_roast::creator::Summary;
@@ -470,6 +470,39 @@ fn claim_doc(record: &Record, now: u64) -> Value {
     })
 }
 
+/// A payout's amount and transactions, with **both chains' fields always
+/// present** and the other chain's `null`.
+///
+/// Added beside `lamports` and `signature` rather than renaming them, so the
+/// public JSON only gains fields and a reader written for Solana still reads a
+/// Solana week. `wei` is a decimal string: a JSON number above 2^53 is inexact
+/// in the browser, and 2^53 wei is under 0.01 ETH.
+fn paid_fields(payout: &Payout) -> Value {
+    match &payout.paid {
+        Paid::Eth {
+            wei,
+            claim_tx,
+            transfer_tx,
+        } => json!({
+            "wei": wei.0.to_string(),
+            "claim_tx": claim_tx,
+            "transfer_tx": transfer_tx,
+            "lamports": null,
+            "signature": null,
+        }),
+        Paid::Sol {
+            lamports,
+            signature,
+        } => json!({
+            "wei": null,
+            "claim_tx": null,
+            "transfer_tx": null,
+            "lamports": lamports,
+            "signature": signature,
+        }),
+    }
+}
+
 /// Whether the prize was paid, or the reason it was not.
 ///
 /// Never a bare absence. "Not paid" has four causes and they say very different
@@ -479,13 +512,11 @@ fn claim_doc(record: &Record, now: u64) -> Value {
 /// page exists to avoid.
 fn payout_doc(record: &Record, now: u64) -> Value {
     if let Some(payout) = record.payout.as_ref() {
-        return json!({
-            "state": "paid",
-            "lamports": payout.lamports,
-            "recipient": payout.recipient,
-            "signature": payout.signature,
-            "at": timestamp_from_seconds(payout.at),
-        });
+        let mut doc = paid_fields(payout);
+        doc["state"] = json!("paid");
+        doc["recipient"] = json!(payout.recipient);
+        doc["at"] = json!(timestamp_from_seconds(payout.at));
+        return doc;
     }
     // Voided first, and deliberately: a voided week pays nobody whatever the
     // claim says, so a winner who had already claimed must not read as "owed".
@@ -573,23 +604,27 @@ pub fn pool_in(paths: &Paths) -> Value {
         .filter_map(|record| {
             let payout = record.payout.as_ref()?;
             let winner = record.winner.as_ref()?;
-            Some((
-                record.week.0,
-                json!({
-                    "week": monday_of(record.week),
-                    "summoner": winner.summoner,
-                    "handle": winner.handle,
-                    "lamports": payout.lamports,
-                    "signature": payout.signature,
-                }),
-            ))
+            let mut doc = paid_fields(payout);
+            doc["week"] = json!(monday_of(record.week));
+            doc["summoner"] = json!(winner.summoner);
+            doc["handle"] = json!(winner.handle);
+            Some((record.week.0, doc))
         })
         .collect();
     // Newest first; a reader wants the last winner, not the first.
     winners.sort_by_key(|(week, _)| std::cmp::Reverse(*week));
     json!({
         "vault": vault.as_ref().map(|v| v.address.clone()),
-        "lamports": vault.as_ref().map(|v| v.lamports),
+        "lamports": vault.as_ref().and_then(|v| match v.balance {
+            Balance::Sol { lamports } => Some(lamports),
+            Balance::Eth { .. } => None,
+        }),
+        // Beside `lamports`, never instead of it, and a string for the reason
+        // `paid_fields` gives.
+        "wei": vault.as_ref().and_then(|v| match &v.balance {
+            Balance::Eth { wei, .. } => Some(wei.0.to_string()),
+            Balance::Sol { .. } => None,
+        }),
         "measured_at": vault.as_ref().map(|v| timestamp_from_seconds(v.measured_at)),
         "winners": winners.into_iter().map(|(_, w)| w).collect::<Vec<_>>(),
     })
@@ -680,7 +715,7 @@ fn respond(paths: &Paths, status: StatusCode, doc: Value) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use realorrug_contest::ledger::{Claim, Payout};
+    use realorrug_contest::ledger::{Claim, Wei};
     use realorrug_contest::score::{Entry as ContestEntry, Metrics, Ranked, Ranking};
 
     const SNAPSHOT: &str = include_str!("../../../docs/research/data/0024-base-rates.json");
@@ -884,8 +919,10 @@ mod tests {
         });
         record.payout = Some(Payout {
             recipient: "So11111111111111111111111111111111111111112".to_owned(),
-            lamports: 3_000_000_000,
-            signature: "sig1".to_owned(),
+            paid: Paid::Sol {
+                lamports: 3_000_000_000,
+                signature: "sig1".to_owned(),
+            },
             at: closed + 120,
         });
         write_record(&paths, &record);
@@ -894,6 +931,34 @@ mod tests {
         assert_eq!(week["payout"]["state"], "paid");
         assert_eq!(week["payout"]["lamports"], 3_000_000_000u64);
         assert_eq!(week["payout"]["signature"], "sig1");
+        // The Robinhood fields are there and null, so a reader can tell which
+        // chain paid from the document alone.
+        assert_eq!(week["payout"]["wei"], Value::Null);
+        assert_eq!(week["payout"]["transfer_tx"], Value::Null);
+
+        // And a week paid on Robinhood Chain fills the other side. Re-apply by
+        // writing `wei` as a number: the string assertion fails.
+        record.payout = Some(Payout {
+            recipient: "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06".to_owned(),
+            paid: Paid::Eth {
+                wei: Wei(4_014_961_601_594_189_201),
+                claim_tx: "0xc1".to_owned(),
+                transfer_tx: "0xt1".to_owned(),
+            },
+            at: closed + 120,
+        });
+        write_record(&paths, &record);
+        let week = &weeks_in(&paths, closed + 3600)["weeks"][0];
+        assert_eq!(week["payout"]["state"], "paid");
+        assert_eq!(week["payout"]["wei"], "4014961601594189201");
+        assert_eq!(week["payout"]["claim_tx"], "0xc1");
+        assert_eq!(week["payout"]["transfer_tx"], "0xt1");
+        assert_eq!(week["payout"]["lamports"], Value::Null);
+        assert_eq!(week["payout"]["signature"], Value::Null);
+        assert_eq!(
+            week["payout"]["recipient"],
+            "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06"
+        );
         // The winner is named and every claim about them is a link.
         assert_eq!(week["winner"]["handle"], "alice_h");
         assert_eq!(week["winner"]["reply_url"], reply_url("r1"));
@@ -1361,7 +1426,9 @@ mod tests {
         std::fs::create_dir_all(&paths.contest_dir).expect("mkdir");
         let vault = Vault {
             address: "VAULT".to_owned(),
-            lamports: 123_456_789,
+            balance: Balance::Sol {
+                lamports: 123_456_789,
+            },
             measured_at: WEEK.closes_at(),
         };
         std::fs::write(
@@ -1378,8 +1445,10 @@ mod tests {
             });
             record.payout = Some(Payout {
                 recipient: "ADDR".to_owned(),
-                lamports: 1_000 + week.0,
-                signature: format!("SIG{}", week.0),
+                paid: Paid::Sol {
+                    lamports: 1_000 + week.0,
+                    signature: format!("SIG{}", week.0),
+                },
                 at: week.closes_at() + 2,
             });
             std::fs::write(
@@ -1403,6 +1472,27 @@ mod tests {
         assert_eq!(winners.len(), 2);
         assert_eq!(winners[0]["week"], "2026-09-07");
         assert_eq!(winners[0]["signature"], "SIG2958");
+        assert_eq!(winners[0]["wei"], Value::Null);
+        assert_eq!(doc["wei"], Value::Null);
+
+        // An escrow reading fills `wei` and leaves `lamports` null.
+        let escrow = Vault {
+            address: "ESCROW".to_owned(),
+            balance: Balance::Eth {
+                holder: "0xabc".to_owned(),
+                wei: Wei(u128::from(u64::MAX) + 1),
+            },
+            measured_at: WEEK.closes_at(),
+        };
+        std::fs::write(
+            format!("{}/pool.json", paths.contest_dir),
+            escrow.to_json().expect("json"),
+        )
+        .expect("write");
+        let doc = pool_in(&paths);
+        assert_eq!(doc["vault"], "ESCROW");
+        assert_eq!(doc["wei"], "18446744073709551616");
+        assert_eq!(doc["lamports"], Value::Null);
         assert_eq!(winners[1]["week"], "2026-08-31");
     }
 
