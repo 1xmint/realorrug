@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [package]
 name = "realorrug-cli"
-description = "The operator's commands: dossier, roast, the dry-run analyst loop, the contest's payout fallback, the journal audit and model prices."
+description = "The operator's commands: dossier, roast, the dry-run analyst loop, the launch check, the contest's payout fallback, the journal audit and model prices."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -24,6 +24,8 @@ realorrug-journal.workspace = true
 realorrug-contest.workspace = true
 realorrug-payout.workspace = true
 realorrug-pumpfun.workspace = true
+# The Robinhood Chain reader behind `realorrug launch-check`. Read-only: no key.
+realorrug-robinhood.workspace = true
 realorrug-model.workspace = true
 realorrug-types.workspace = true
 serde_json.workspace = true

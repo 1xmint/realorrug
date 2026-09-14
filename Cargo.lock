@@ -840,6 +840,7 @@ dependencies = [
  "realorrug-payout",
  "realorrug-pumpfun",
  "realorrug-roast",
+ "realorrug-robinhood",
  "realorrug-types",
  "serde_json",
 ]
@@ -952,6 +953,15 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "realorrug-robinhood"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "thiserror",
+ "ureq",
 ]
 
 [[package]]

@@ -41,7 +41,14 @@ this is what follows it, in order, each with what proves it.
    Launch-blocking. *Proof:* the transaction, committed as a fixture.
 6. **The Robinhood Chain payout and own-token reader** (design 0019 §4.4), which
    replace `realorrug-payout`'s pump.fun path and give constraints 1 and 6 an
-   instrument. *Proof:* tests over captured transactions.
+   instrument. *Proof:* tests over captured transactions. In three parts:
+   - 6a, the reader and the launch check (`realorrug-robinhood`,
+     `realorrug launch-check`). Built 2026-09-14.
+   - 6b, the fee escrow decoded: `Credited`/`Claimed`, the creator's claimable
+     balance, and a `claim()` captured and read back ([research 0036](../research/0036-pons-v2-read-from-a-real-launch.md) §5).
+   - 6c, the payout: claim from the escrow, pay the winner, read both back,
+     under `realorrug_contest::Payout::permitted`. Signs on EVM, so it brings
+     the signing dependency and the key file format; its own pull request.
 
 ## Handback
 
@@ -88,3 +95,22 @@ this is what follows it, in order, each with what proves it.
   - *Next:* step 6. Read the capture file in Rust tests first: the launch
     receipt's recipients, the sweep split. The fee after graduation and the
     escrow's payout path are unread, and the payout reader needs both.
+- 2026-09-14, fourth session:
+  - **Step 5 merged**, PR #5.
+  - **Step 6a built**: `realorrug-robinhood` reads receipts and decodes Pons
+    v2 launches, trades and sweeps; `pons::check_launch` is constraint 1;
+    `realorrug launch-check` runs it against the chain. Tested on the dirty
+    launch, a clean one captured this session, and each kind of dirt re-applied;
+    the RPC client and the command are tested against a loopback server. Against
+    mainnet it printed CLEAN for `0x2a43738c…` and NOT CLEAN, five reasons,
+    for `0x1013a302…`.
+  - **Found, not yet coded:** sweeps credit a shared fee escrow and the creator
+    claims from it; the hook keeps charging after graduation, and in source the
+    creator tax continues there (research 0036 §5).
+  - **Creator tax:** Josh asked whether a higher tax fuels the flywheel. Two
+    samples of 250 launches (research 0036 §6): 101–300 bps earned the most
+    and above 300 bps showed no gain but two outliers. Recommendation moved
+    from zero to **200 bps**, all of it to the prize. Josh decides at launch.
+  - **Step 2 approved by Josh** on 2026-09-14: deploy once the step 6 pull
+    request is merged and `main` is green.
+  - *Next:* merge 6a, deploy (step 2), then 6b.

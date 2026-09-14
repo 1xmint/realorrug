@@ -1,0 +1,2515 @@
+{
+ "source": "Robinhood Chain mainnet via https://rpc.mainnet.chain.robinhood.com: TokenLaunched logs from the Pons v2 factory, getLaunchedToken at the latest block, and each curve's CurveBuy/CurveSell logs",
+ "captured": "2026-09-14",
+ "head_block": 62382501,
+ "launch_blocks": [
+  62242501,
+  62342501
+ ],
+ "window_blocks": 36000,
+ "sampling": "every ETH-paired launch in the range, thinned evenly to at most 250",
+ "eth_launches_in_range": 1789,
+ "all_launches_in_range": 2471,
+ "rows": [
+  {
+   "token": "0x05eb3727a0fdb6a89a735d5ad269ccbfbb82706f",
+   "curve": "0xdf065a5024639129aa4665ea360e09084b81c860",
+   "launch_block": 62242503,
+   "launch_tx": "0xa6a703466c1cff942810ef69183fcbe0f7db189bce8b85a0671bb62e231da43c",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "19604000000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xf99441471731eae7c279fc144429da0742fbce07",
+   "curve": "0xdd165a0081331a3e6a33d3059d8dbe4d1202aaa3",
+   "launch_block": 62242777,
+   "launch_tx": "0x3b9cec10288a10744ad64143d9922cfaf83328e76071bb424ff4e95e92f436e1",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "224737834317081383",
+   "trades_first_window": 12
+  },
+  {
+   "token": "0xe2021428222ad98f38720319a9c8ec12e49a9094",
+   "curve": "0x544b5c0c63655a1141a6c4aba1bc695f0fe489fc",
+   "launch_block": 62243116,
+   "launch_tx": "0x6197ef9572fa685badbb56709d8dd53175bcbc0972a08209d93831cda27f4d2c",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "1124950690819000000",
+   "trades_first_window": 22
+  },
+  {
+   "token": "0x8d55168977bf2f28eb20b3a61d6fc277084ff8d6",
+   "curve": "0x9d776085bdb22fb72e98536acc25e68714c0d277",
+   "launch_block": 62243507,
+   "launch_tx": "0x7022836b44706581da5f96c0577b171f08409725046dd12c72d37c24517e4ea7",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1196868478082259907",
+   "trades_first_window": 41
+  },
+  {
+   "token": "0x6afa36d2c6ae398b53774aa855fc0fbda44d7b4b",
+   "curve": "0x6aed553c8afcdd6b03ec8dc521bf6c0ca7fe26be",
+   "launch_block": 62243742,
+   "launch_tx": "0xb6653c8ea539080d5b74d56999c25d824c4a8d06815d00f529bcfd067ec150bf",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "1000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x6350ac4e3152e763ba8b5948bf1cf208df9a8fb1",
+   "curve": "0xe80c3e6ab1ad2aa34f4ad44df1546da4469af821",
+   "launch_block": 62243962,
+   "launch_tx": "0x9473d8d63a6056d3b47824e0354d2693f4b546591062919dba0903b968b569bf",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "16981059572804521382",
+   "trades_first_window": 451
+  },
+  {
+   "token": "0x94ef53ae4b32fb7fc6df6488895d33f8c0658910",
+   "curve": "0xc539f7173bb9dc4e0fdc5438bd582afafb2a4db3",
+   "launch_block": 62244234,
+   "launch_tx": "0x19ef41101bcd68b02ccb3f9da80bc60804fc879871806737bd519038c61ad60d",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1108515572085167447",
+   "trades_first_window": 12
+  },
+  {
+   "token": "0x1dca2d844bc9af8969732e5fa16a77967bd648a4",
+   "curve": "0xb84d1ccd47ca2c7c506cd4361c015f30ec2e4d82",
+   "launch_block": 62244491,
+   "launch_tx": "0xbb3b1e34008a931eb6e159ea3cfe203321016eaec160ffcd53e22a9cc25f568d",
+   "creator_tax_bps": 140,
+   "phase_now": 0,
+   "volume_wei_first_window": "4468067095886303447",
+   "trades_first_window": 133
+  },
+  {
+   "token": "0xae83c7bc769267d2bcab825566444fb9a65cb2c0",
+   "curve": "0xf4f140f3863ec19162d12d457287acf5821c8ece",
+   "launch_block": 62244698,
+   "launch_tx": "0xd1cbe18b18a431d16abf8307731ca845d0f579fef7a4ca804cdf27dba4cf0c08",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "8731495887239593811",
+   "trades_first_window": 442
+  },
+  {
+   "token": "0x81686fc15a97125f73c1e54f610467aab5939456",
+   "curve": "0x162a497d3e97482e887e35f8db4785b6e9e2fdf7",
+   "launch_block": 62245082,
+   "launch_tx": "0x7bf3863e0ed7012dbf8aa789ace70e96fa57b19d19b400c02c9d2d64a22e819c",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1162446868800000001",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0xbb77755a1de6513fb6569f6aa2ef00ae45039a6b",
+   "curve": "0xfe81c9be0858e9ff6c3e4745084a83832426f8d8",
+   "launch_block": 62245344,
+   "launch_tx": "0xc5f752ce439f07553a778cb8aa50ad8854883e3f37be786826c04041e9648d17",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1206474638400000002",
+   "trades_first_window": 17
+  },
+  {
+   "token": "0x0b91c9407a1a2ac727da26a4a367c8747b3057d6",
+   "curve": "0x6e17d2a600d59fca90b17377462e11325fbf33c8",
+   "launch_block": 62245683,
+   "launch_tx": "0xf2b6acf1977e3de91ecbeca8280430a9d543a5e7d542e2e2aa9ee23093e1fe30",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "250247822844503421",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x55b1eb56f1a18a02ef8af69781a5cedddda1f9a5",
+   "curve": "0x30f3e3961fda87b06aa008dcf6212154fbdadbc8",
+   "launch_block": 62246099,
+   "launch_tx": "0xd75412325a9caf2c7c8d532b57f5f59b264035cb25851743be4e5537ed405f1d",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "272495600000000008",
+   "trades_first_window": 12
+  },
+  {
+   "token": "0xaebff222c9ef12a0f10d3e06facae364de42487f",
+   "curve": "0x3dd14a0c341e351321b37b677c5ad5ab0a576ca6",
+   "launch_block": 62246419,
+   "launch_tx": "0x0a7c1af10bf54d876d71211d7fa2d6505717af66cf4814b935c13ce331c957fa",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "2740714358706907559",
+   "trades_first_window": 108
+  },
+  {
+   "token": "0x63ae1e0f1a756ec4947f3f06efb09c588984ed88",
+   "curve": "0x008089e243a611ace236fc4e2127403a3c9e347b",
+   "launch_block": 62246927,
+   "launch_tx": "0x451a0bbba764653a820682c8d543ed2c9b78066876a10b04498aa803bbe9da81",
+   "creator_tax_bps": 200,
+   "phase_now": 2,
+   "volume_wei_first_window": "32443530629321288373",
+   "trades_first_window": 805
+  },
+  {
+   "token": "0xc102441b09eceaef4df4d22267f2d28cb0f09cc7",
+   "curve": "0xd77ad6c165b8db9b381fa5a0b32cfa59beb50e56",
+   "launch_block": 62247135,
+   "launch_tx": "0xb84001e1f512e925aae6d831bfef5fe97b94502b6ecf9d06e490ceb1819fc00d",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "9719988685412348557",
+   "trades_first_window": 536
+  },
+  {
+   "token": "0xd801052e4c43e38a3f3887752e9bcdf59dc01324",
+   "curve": "0x07193f8c2f2453b843f57cc74d8566c427bfe179",
+   "launch_block": 62247388,
+   "launch_tx": "0xca2725eb82d57485c6524040e41686bfa63687a3870ad4e773d288f95f2fce2a",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "657146097236570506",
+   "trades_first_window": 15
+  },
+  {
+   "token": "0xdede0787f074fc15f310ce906d5b10a06458a3f2",
+   "curve": "0x89910810f6ba2249c8937d0d95c45b2c20790069",
+   "launch_block": 62247602,
+   "launch_tx": "0xe9a224575a0d27ed72aa189ecb4dc7ee1996dcc3888f47baa42fc164eaf139b4",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "254512166547093568",
+   "trades_first_window": 11
+  },
+  {
+   "token": "0xf08591818a71f7af3f502be98ef282cc46fe75ef",
+   "curve": "0x79c042b039cba9402a97093831fcf65bca96ce24",
+   "launch_block": 62247892,
+   "launch_tx": "0xd25ffa9e59e229f644b775d67e3adca719216e3d628c49d3742135364ecf33c8",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "2384564594902091285",
+   "trades_first_window": 71
+  },
+  {
+   "token": "0x248e70c7e94cce731c8a8b97470bf7b98ee26e48",
+   "curve": "0x7f24e68cfb6e0380dd7fc4fbd6955845077efe7d",
+   "launch_block": 62248231,
+   "launch_tx": "0x03808e093c183e2b673c01f233730a28ad700f0c389ae9d1aa1781f8b1b9ce78",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "455990489512591920",
+   "trades_first_window": 22
+  },
+  {
+   "token": "0x83258894b493c4a1bb42aa1ca43b9a89c2075f70",
+   "curve": "0x2144db9e7780c63672d9611b574d6f8edb1d2a9d",
+   "launch_block": 62248515,
+   "launch_tx": "0xaafd7183296abb02a379609120223357cd97e5a0a27978cb37c5da8f007183b1",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "657419900300000005",
+   "trades_first_window": 15
+  },
+  {
+   "token": "0xafd301e96139389f6d4e4afda7e9545ca6f80474",
+   "curve": "0xb1746743b63851943ef1eee8073cf78a07f630d7",
+   "launch_block": 62248735,
+   "launch_tx": "0x99a711acfb420248159a451eb9c051b035d32dd0033301b7cd0fc0d3c191541d",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "58403240985257734",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0x91448a5ccddb5205274c1ee68a305a9d49ca810b",
+   "curve": "0xfa8c16a7015fa817e7f0fe0853a15bae28ec3c1d",
+   "launch_block": 62249084,
+   "launch_tx": "0x6bbdea46e5e77336ecd00dabcba7a73ac89cae1de1989d79d190dc0234e65c53",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "48963450000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xbaecc6f332397009b2208110aa1ac01bf1837b6a",
+   "curve": "0xaa882eee517fa9eec0dcbfa76d5d637da26312fe",
+   "launch_block": 62249340,
+   "launch_tx": "0xd0605692136b1807a9a3c555bd3835032c6e88a08e651b77e0240f8f84a68f9e",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "78397379985154085",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xf4b5c6b9884da38c5391b27a827c371ba95b3a49",
+   "curve": "0xb65cc816d9b767ad6b37643a6a8031e4e834d1a0",
+   "launch_block": 62249656,
+   "launch_tx": "0x479a6ee658ba398cc6d448f0d50afa485d74841f7e841aeef11b2d7d43886801",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1661927793971872474",
+   "trades_first_window": 8
+  },
+  {
+   "token": "0xeb54047a7ded56894bd777094fa3c7617f3bd3d7",
+   "curve": "0xbe5fc55a006ee03d1935627b263467c89856df9e",
+   "launch_block": 62250019,
+   "launch_tx": "0x79f9a255fdfc6629a6dfdf389b648fd5ac8852950343a7be0fbb4c1949433bd3",
+   "creator_tax_bps": 750,
+   "phase_now": 0,
+   "volume_wei_first_window": "500000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0xbbd8cfd30f27a28aca4c787f3723a9a759073c78",
+   "curve": "0x0ebeb9f80e3f29e97c3d36185c13cefbd549362d",
+   "launch_block": 62250270,
+   "launch_tx": "0xf597740a3fc183a0f6ded0d36de83b18f9dc292f437e10eec6448362904b1f08",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "86471999995148124",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x6c6f4ad98ad170dad56820e9587c010c981352da",
+   "curve": "0x6a41132687e601d27d2aeea514c269a0fbeb425e",
+   "launch_block": 62250607,
+   "launch_tx": "0xf0fe9841f6710649b43af1e07698fc72eb064a39ce6e71f9cc028807a866e487",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "10000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x819939321f30a7a9a514da42ee89e744bbb7b976",
+   "curve": "0x7c199f141bec0e553ec6ecea113be3e728d54e78",
+   "launch_block": 62251056,
+   "launch_tx": "0x3e4352e82f23a11ea138eebcfd841f26404c9fe2bfd4a5ade1cab86442b6ae32",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "253115242674931470",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0xaf84fa5795319f5dd1ccfe65e3ef51d26df6873d",
+   "curve": "0xc2a0b5236952d9cc37eab50e0e3fd144aa42bb04",
+   "launch_block": 62251322,
+   "launch_tx": "0x48e4f92aea70907d36467162635cdc87ad5d6f1c2323597c1cd6bffd80ec336d",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "177134340825648376",
+   "trades_first_window": 9
+  },
+  {
+   "token": "0x86b54dc4b9a0769e80dc407467b7833888fdae31",
+   "curve": "0xf91377da90be70001d0e0773995178be066edd76",
+   "launch_block": 62251556,
+   "launch_tx": "0x6c3f38f3b304301be73e87cf9a62c9e5b82b67228690d916b1bc16055a8e5a55",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "83463915909711669",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x56658ba01ef305f380c0ce119e3b2b9012e3a04a",
+   "curve": "0x4e3d9448926ac79c5ff0d1fbf717e3928fbb49e4",
+   "launch_block": 62251771,
+   "launch_tx": "0x505e4ba03584cc2f71140f0562b1246f6447ee87403c45f2560af0e8a8e5e55d",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "62161895064517762",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0xc8b80bdd884dea45cb6ba147f622df411f48724c",
+   "curve": "0x72cd52cdc1873a1219be27a11e471de3d05f5a5c",
+   "launch_block": 62252192,
+   "launch_tx": "0x1e22a5b303b1828d700c7caa62d70092e283380370e88c1e819970a3d9efee11",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "14430114130521122613",
+   "trades_first_window": 156
+  },
+  {
+   "token": "0xa765a38716a02498022ccf59ca57d05fe847742d",
+   "curve": "0x9d0611f6791a13d66f0b8bc18f21ee0a37c0f89c",
+   "launch_block": 62252869,
+   "launch_tx": "0x16276535c1e9d4a042af10a63c779ea8c887ad6ae03436d5e96ae48ba033903f",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "65990599983842895",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xc6c4c931b2253c2593a431a276057b30a5657525",
+   "curve": "0x15a9c796042b4dcda05d94f239340abe0e62d002",
+   "launch_block": 62253174,
+   "launch_tx": "0x95fc274018478eb6fe3b8905522a1fd22f3f40b19a44395548f5c7a27315d863",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "10000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x8fcabacd39c919e1ef17e728a350868411219351",
+   "curve": "0x837131f000db40c1e2f1a8830fe811aaa53ebc9a",
+   "launch_block": 62253584,
+   "launch_tx": "0x3acf3e8867163a2f65d2e504774d7b535f238245b9b9b7dee8012fc70d9877bb",
+   "creator_tax_bps": 50,
+   "phase_now": 0,
+   "volume_wei_first_window": "15801898850642070",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x3f4ec7914009496ed441ffbab1db084727417ac1",
+   "curve": "0xae1831676c15fd73db9d6b58f662cfcb57862756",
+   "launch_block": 62254095,
+   "launch_tx": "0xea4b463a7134b9ab9c90e88d3c2b40f58e221e6b53bc688daef796ae7c2b09f7",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "19604000000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x9e9852bbcdc2617945871f203a08a1d87c3e4fff",
+   "curve": "0xc3278f06d94c6ec4619846471553603244d9bb4b",
+   "launch_block": 62254487,
+   "launch_tx": "0xb79fe62a1b1b2b51f362b9d46dcb15de4a684d23cf16495573cdb1fd242c6d51",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "2397426867000000000",
+   "trades_first_window": 48
+  },
+  {
+   "token": "0x7add23adc4a2c38d120596694af473d22d36f5a9",
+   "curve": "0x5495f88cec464c5f89c2b8b08d7f5dbc15f9bac8",
+   "launch_block": 62255004,
+   "launch_tx": "0x499c5edc60fab3914f0ea5ad3e4cad51b9e0f7976900533ea3e545f76bae0fca",
+   "creator_tax_bps": 250,
+   "phase_now": 0,
+   "volume_wei_first_window": "47894379989251929",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xa31397ae36b450899ed54c65423b5a0358e3dfd7",
+   "curve": "0xcd18917d9492ee8dac3b1f66f06b8319e42ec4cf",
+   "launch_block": 62255242,
+   "launch_tx": "0x7184187a059e1e53ec73990d7d5c13819e5cbee81b075cfb976e2ff82926fcc9",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1611901922800000000",
+   "trades_first_window": 11
+  },
+  {
+   "token": "0xc33eb4daa2f0ab1379a26b7be9f8f07990413b12",
+   "curve": "0xcd1ba7076b48ae1eda91a402ac9d1341c1779ffc",
+   "launch_block": 62255513,
+   "launch_tx": "0x6243468ca17fb9219143948dba7716db459c22dfdf45ab333c44c03d0ce4e2f1",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "290686741184029836",
+   "trades_first_window": 17
+  },
+  {
+   "token": "0xd5f28d4eded9ca91264f24aa4c881db064c8fe29",
+   "curve": "0x7555e39cbe1bc964264ac07613ea2d236f10a348",
+   "launch_block": 62255847,
+   "launch_tx": "0x7ab0ef1d3e11c62be3cec68fb4ad5168ffb379c672274604b188b8030a506ecc",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "921201800000000002",
+   "trades_first_window": 12
+  },
+  {
+   "token": "0xeaf0dab0615f7fed2ac637ccedcee236df83322a",
+   "curve": "0x456aac996beb6a0bfae2ea7149659d3164e7129a",
+   "launch_block": 62256029,
+   "launch_tx": "0xa950762e0d929e7af367bd0ca7781add24dd7cf3043a7ea3a48ae276b3e599e5",
+   "creator_tax_bps": 15,
+   "phase_now": 0,
+   "volume_wei_first_window": "15865490741192173",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0xb76c00110175ef8a8e9c22fe59ae83d29df14bb3",
+   "curve": "0xc47cf032f15c7032cc2b678feafd1389250881ee",
+   "launch_block": 62256442,
+   "launch_tx": "0x632c0364e5c60954731bb859118637e7358cce982ebb68565e30f7a3e9e5d5c6",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "30472130000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x523d0bd39e11720a630415c3ac7820d3d83a32d9",
+   "curve": "0xe3eeddacb993488a3389fa8dcbea91759504bd9a",
+   "launch_block": 62256855,
+   "launch_tx": "0xcbfc27c27172deb82249be5404e6077e06680866996acf92e2d2cbda386da3af",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "78425198985154085",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0xf2d023da6fad99e1e24a8bfe60b86c811c56b841",
+   "curve": "0x93ad738ab3c57193408976e1f627709e98781295",
+   "launch_block": 62257331,
+   "launch_tx": "0x63e0241299a735e575d0cc78a51339fbf9102d0a7e567ec5f5c09234608bfbbf",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "34639869399999991",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xe91e7fe4a27ad9a68c679c70d8b980b627cb1553",
+   "curve": "0x0f0611d2c550ed8a18d9db698d2b8414ace9394f",
+   "launch_block": 62257582,
+   "launch_tx": "0x31231c60212a70166435663fc3eacf6c8b3517b33091f8f5081db873090d974c",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "33946320314920001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x24b5c5bdf8970204182cde25a96504f652c5e5ff",
+   "curve": "0x6db82be892ea15fbabde82ebab9883427a83c0cb",
+   "launch_block": 62257750,
+   "launch_tx": "0x0337fac65d3afb4aa463c51f5e22fe5dcf96f7dac3a10ba594efb92a79c42b83",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "4508152989750504231",
+   "trades_first_window": 102
+  },
+  {
+   "token": "0x032fa5f34a873e26d288756df0eb1f0639584f90",
+   "curve": "0x712f078e5bb861abd4400a6e85c223f13d92dfe0",
+   "launch_block": 62258137,
+   "launch_tx": "0x052a18859e3e915710d2f9c2e702c95b236a47868754b31522bbacb50a1c2e7d",
+   "creator_tax_bps": 400,
+   "phase_now": 0,
+   "volume_wei_first_window": "120611280000000001",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x181c1d5ea104c8788863f6e6ba354a7dba7ada0d",
+   "curve": "0x0767646084643f32e5096ed2e8b039013ee5680e",
+   "launch_block": 62258397,
+   "launch_tx": "0xd4c71cd8ca265173c5c04e71cf950de90aadf2647e92d7ba10ee0ed1b26a3091",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "19604000000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x304f096d0dc6230d1da867d8145c02df49b118e3",
+   "curve": "0x403263d9652f04cbfa16a3177125d5a514e95de5",
+   "launch_block": 62258815,
+   "launch_tx": "0x1f1b6237ae4601be1f2db7198eb2dc32d12d0282358d8a8da4810280798161cc",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "516835985616926643",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0x16191c24c6e2b4c0802af213577302cc685c0d57",
+   "curve": "0x164f20733afff049fe8163f5d98fa3bd15be61f5",
+   "launch_block": 62259431,
+   "launch_tx": "0xf347b3a23925d404eb662394b59aa27df38d77119303d5f4f0eb41cb9d4cc403",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "818559158911861503",
+   "trades_first_window": 22
+  },
+  {
+   "token": "0x4f5fc7736c4c5039e14ad345ca4c711feb252ad4",
+   "curve": "0x7a0dc02fdcbf405d9bb945609e81f86d43c38bba",
+   "launch_block": 62259620,
+   "launch_tx": "0xd5c2518c67932b49248526014ca33e43680f9495587fd74eb8412a349cee1af0",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "1550287488398089167",
+   "trades_first_window": 52
+  },
+  {
+   "token": "0x33dc1f108fac269a4c7fe0b44464ed7f37df898d",
+   "curve": "0x6d36f0d79d6c4602b2d14f66e62b0db5b30f688f",
+   "launch_block": 62260127,
+   "launch_tx": "0xa1ee247c4ee4967586a26bf88af2fdacf1bb25894d70db50593f4e16c8137e41",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "19216000000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x352c9f327d1068c209a8c8cba3e68d7b8a32e7ef",
+   "curve": "0x56c2d568c0a8f6584bec0f6a7bcebddf525e3f50",
+   "launch_block": 62260628,
+   "launch_tx": "0xc5718ec9f140479ecc39d244e0bf056043084f91ba2127aca083b0247945cc55",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "844070504546108546",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0x786470fadf01ed575699656fb83943cc3d85a94d",
+   "curve": "0xc1ee5ff8a03e610cd5ebe197cd47abf5733fc05c",
+   "launch_block": 62260927,
+   "launch_tx": "0xf834812df784b5a82a1a6d3a631e46a64260a9b82d18cf17f40d6260d08ddeef",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "19782190000000000",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x6c2e31df4f9b3dd31b219d59eb6d928132f3dbbe",
+   "curve": "0xdf0bd06b67aba739102ba829a7fc9f2747110473",
+   "launch_block": 62261201,
+   "launch_tx": "0x7110bdabfb7ff3c8091b0e583642b08e6988888d6aefdf5ed09b1dca5a1c3745",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "23643292904062855",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x8ca0d8b0a3505039faa93b234059370a6db58000",
+   "curve": "0xe0f2b7f16cb11bae3bbabf24f0578052bd0fd479",
+   "launch_block": 62261338,
+   "launch_tx": "0x082861dd2af80c7ccfcc2db89ede4076346c6bb4129d6e39ad8208bfc0017168",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "1154997967082967080",
+   "trades_first_window": 15
+  },
+  {
+   "token": "0x2e45968ab6eb619f07b0a7a6969f53d467222833",
+   "curve": "0x7de3257059665c34a031a13f712fa42255c43fc0",
+   "launch_block": 62261794,
+   "launch_tx": "0x3dec53617a89700f64749c6789aa5cbea514e28a62a29964dd8112978fed935a",
+   "creator_tax_bps": 110,
+   "phase_now": 0,
+   "volume_wei_first_window": "49375067640336927",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x3d10b7c52b3ca6be5dd307c4a6b192b501018d5a",
+   "curve": "0xe41dcbf80a075fc9a22b7ad81cc89481487acc8b",
+   "launch_block": 62262025,
+   "launch_tx": "0x659d5cab392d1b434e03d9a2a431dc6449890fbf573ea6e4a9228e017cfe789b",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1220378110123554033",
+   "trades_first_window": 11
+  },
+  {
+   "token": "0x89523662ee84fb6fe9b9a7f795a815ae87a8e6be",
+   "curve": "0x0c67187890bbcb4a57086f5999781aeb93ae5b00",
+   "launch_block": 62262325,
+   "launch_tx": "0x07626be37a05a6c6c640d8d18754e2ab0feb6ce6880cf909ab9fb0e369f87a4b",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1115378334961529350",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0x0f2587eb8e4cbaaa7f021f065706dd5a96d23420",
+   "curve": "0xed42538f361056871abe5b32cc91b5e43ec99457",
+   "launch_block": 62262641,
+   "launch_tx": "0x36ddd9fe64116b4dc6f06ba523b4203264a8f590126bcae8d87485c0a36b066b",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0x4dc20b6e726a4892f0db204fdd47a79243841164",
+   "curve": "0x7ab1807172787fec2c848c13284d364db06e3d33",
+   "launch_block": 62263124,
+   "launch_tx": "0x4d08c2612f5ad5bd058adb61fef5fbc377dd0807d51ce8179488af8608ef6b1d",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "58242533100000001",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x072ffd6bae2c17053c029a282ab6ae8f246ab011",
+   "curve": "0xbddf1463efcc7bdff695b5186897ad51c9fdb4b3",
+   "launch_block": 62263551,
+   "launch_tx": "0xa5f4e5798b883a0d3a44fb4c22f8b944d83591fb18737a022616cc471b861051",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "1199328776082880026",
+   "trades_first_window": 37
+  },
+  {
+   "token": "0x248039f3864304f997f40535beb32b474bf137f0",
+   "curve": "0x87d1178baf2346d9d0d45ddaca8f447f978ecc61",
+   "launch_block": 62263924,
+   "launch_tx": "0x944723f0960c5c68d1f81997dce7faf0a82736e01d50a73c201c6b025e0c56cf",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "19216000000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xff5f380d692cbfabcb6305ef401e6752d6e41c88",
+   "curve": "0xc95f57ad5ad8a11be66eec1c06589afabaed9970",
+   "launch_block": 62264640,
+   "launch_tx": "0x20d189a7d1bee078e7feaca21d4b15dce2643cfc938229a5ad0000c1cfffae59",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "114276862275897927",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0xa00f4d249440ad4702a7ccbac5ac2a189cc0a502",
+   "curve": "0x17361491378f5bf7d28e9e51359f2d42a97e4ce9",
+   "launch_block": 62265043,
+   "launch_tx": "0x1b4215ec49603dec2a1637d93ef18c28ab480ef3b4b101d6a4ca9114caacceaf",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "71175393000000000",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x389499fd03f24866ecfbc4d1667c920c3a013fe5",
+   "curve": "0x2ba96101db42ca65177f7befd60c6376d8194e3a",
+   "launch_block": 62265201,
+   "launch_tx": "0xbb9c3f2667c62faafbe2ec2ab3ec2752374ea9ee3404cedae43484fdda48c849",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "39189380000000001",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xe50a02778b39d4bc72fb677f574e56b25933ac56",
+   "curve": "0x6b9a0e947b5e424f1a816e6aa3725943e6be1d50",
+   "launch_block": 62265515,
+   "launch_tx": "0x649b7c14f392864759e642674398b468b93516fe19c048b6595bc2d9e06b4d2a",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "925426731261213481",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0x63c7038e4afd4e139b509fe026b9e9eaee46a630",
+   "curve": "0xf5524441559771644d67655b25083f7a527984e5",
+   "launch_block": 62265824,
+   "launch_tx": "0x00355f69e1359c88d8a294bdbff5822a0dd7f976002ef6da5501ca475ef481b3",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "6029058565452557233",
+   "trades_first_window": 155
+  },
+  {
+   "token": "0x843599619e9926d81adedccac91aa798df5f7898",
+   "curve": "0xd951547be9c29cc280a0825613ffc2f87768fde4",
+   "launch_block": 62265920,
+   "launch_tx": "0x01b2ef6831f6560516aea97953188814454ec5261d2e337409cb1b28fd513707",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "45000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x51a091c03578d3ed683fe13915bcf65e66733b65",
+   "curve": "0x78f26a47e27e40deb4bb4790fc63ac25b3f5ae90",
+   "launch_block": 62266230,
+   "launch_tx": "0x42543d09668943e1a6ee44b5c60bab9e35c6a51f24bcca089d9c7b7c74de2a77",
+   "creator_tax_bps": 125,
+   "phase_now": 0,
+   "volume_wei_first_window": "2156635762346039",
+   "trades_first_window": 12
+  },
+  {
+   "token": "0xd81b915f9b7e7fa5576bc9c4ef242685958ff95d",
+   "curve": "0xa42e161a6c30c9dd11b520f7267db8bab743a225",
+   "launch_block": 62266715,
+   "launch_tx": "0xeb1064772291ad1c8713188c1d13047ed3e7dcbec499670ea6f0f24c6a8f4e56",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "21782190000000000",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x8cba7ae4468ab1e70f96c9825f6533cc7b800ccc",
+   "curve": "0x4a5010ca665645e879211ac48f4af3cfb9e1d2f0",
+   "launch_block": 62267025,
+   "launch_tx": "0x9967b67156819d87006f9e1d360adf155168c344e68de6755f2d6a373e72570a",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "128659474991759441",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x2f7b04c5da677eeefebb8a9d8250d8e41ed09e52",
+   "curve": "0x058fd1cf3545eb1373b122a5117bbcca900983c1",
+   "launch_block": 62267299,
+   "launch_tx": "0x3fd3e6c5a74080b4496096bde843dfd011b5deca4f81cc98fc5a4a5d6f3d52b3",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1650054919996600002",
+   "trades_first_window": 28
+  },
+  {
+   "token": "0x6007a009fe2730fdc8f2f39439bab93064735792",
+   "curve": "0xe25ceff257dbc04e55ec9fa4aec3f9155c0779ab",
+   "launch_block": 62267737,
+   "launch_tx": "0xbdca68ac1c39ba7d82f589a44c3c262aadcaeec73167c973fcc342019560bc9a",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "252134226449772580",
+   "trades_first_window": 12
+  },
+  {
+   "token": "0x7f8764b3e410e6d19b88548534992eef74f0b499",
+   "curve": "0x0638c1cbcfd801cfbc9ddaf5e484dbff1bf3249b",
+   "launch_block": 62268188,
+   "launch_tx": "0xfd6c0f5ced1321b418ebff649e62f2deda47789a2994a97fc4cf4d0c8318fe9f",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "98020000000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xd3eb007666d57e5c0bc1614aff2c992e0f6f0d04",
+   "curve": "0xc3c0de14ca38a7d5bae1103166ce36b96bd79644",
+   "launch_block": 62268633,
+   "launch_tx": "0xc7b2a2fa01f96990be85d05f54f7d45d0d69712a6781b31b9fe509ad29b4948c",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1132291135787915245",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0xea8d23474d39504c3938400da5835bd04f454e96",
+   "curve": "0x08c411247cc134509f2a19bc5da202f7f9bebfcd",
+   "launch_block": 62269144,
+   "launch_tx": "0xfbcf5646771f3f1cdd8b65ff042eb1b5ba27af91c46a6ea8ed21575878d51c17",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "75380800000000001",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xa670059c2990ffeabdb5e188c7e5a193cf710aab",
+   "curve": "0x76a543b5c6aef01c9fce2f6595d05c3179b167d9",
+   "launch_block": 62269481,
+   "launch_tx": "0x3dc829d80be856edabcc81e14f1da87b2e42eee13acb8db6abd0fab40db7d0bb",
+   "creator_tax_bps": 150,
+   "phase_now": 0,
+   "volume_wei_first_window": "1746992733064085",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x122c6f961aa6a8829918039e90b16ca43149f796",
+   "curve": "0x9d38a61210f707f53684be2ab9c2b0f7b9870659",
+   "launch_block": 62269874,
+   "launch_tx": "0x37ea1851552cb7398af5207a4e585a4044d7935bfb2d2ece051315bd29b6c405",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "23761200000000000",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x4c2def29eea16019d0a33630e67b7249c3cbfbe3",
+   "curve": "0x9148be47846853a88a2ea9d8edfc2166502f3aee",
+   "launch_block": 62270445,
+   "launch_tx": "0xdb8cf175c144b7c9f1d2dd6e2a58ab95348ca00edaf51eb7399cea4422a10b5b",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1124887345600000001",
+   "trades_first_window": 8
+  },
+  {
+   "token": "0xc394cff26d86c5da98739ddf285362f0be7ccd6a",
+   "curve": "0xf73d723eefe82b178d7c5b007a93bb485a2abaa7",
+   "launch_block": 62270867,
+   "launch_tx": "0x22adeb22a40c60d7f494e0c89f7bf56b8ea922e0b8c0e01c18f7e4ca7966e2c6",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "138550569991759442",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x2594b92eb25de169a6e856eb8f3da4b969849446",
+   "curve": "0x813f64b15062b2ceac1e93915f1ed28ea61e65bf",
+   "launch_block": 62271215,
+   "launch_tx": "0xd8928935933b010dea674c7ce05e8a82e085f9af12faea0eb56aa17d5f981674",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1462705932675957168",
+   "trades_first_window": 35
+  },
+  {
+   "token": "0x720a3e01c8c0203f92a29c0b57ff5583527f2111",
+   "curve": "0xff04a674a580aa897de84cd421dd2e3411824dd9",
+   "launch_block": 62271557,
+   "launch_tx": "0x83f99c669ab0e5b0b764522e7245c2748317aa5942d21f0e2cff777eb60a7126",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "3150111612636803288",
+   "trades_first_window": 39
+  },
+  {
+   "token": "0x79b5683475a54746119e43201ac453ade20e34fb",
+   "curve": "0xd7d961bc32f904aafed48c810aef859f31925cda",
+   "launch_block": 62271980,
+   "launch_tx": "0x1e911cdeeb4f9f20c112433bb4ebaa294cb5623b9075320e43ce1bfa164cbebf",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1197524676800000004",
+   "trades_first_window": 11
+  },
+  {
+   "token": "0x6e589521560f3967cee7b9af65c8df0c1a4c3a5f",
+   "curve": "0x44f408d7f2a981ee493b1ea8b16b56f5a9f8d385",
+   "launch_block": 62272301,
+   "launch_tx": "0x858a0c90ed4f74ddfcc4b88bf52631bdd7567cab2161f15fb90085473c33d700",
+   "creator_tax_bps": 150,
+   "phase_now": 0,
+   "volume_wei_first_window": "160156517500000001",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0xbcf28a0b37311f511d4e724eca2c1d2ea9fef0b5",
+   "curve": "0x4a34c3a04a18eedcb223b4b94722efc7fe026a75",
+   "launch_block": 62272731,
+   "launch_tx": "0x2768ff73dee96f7f78d0640bf13b18094bbb5c666c62294fc25297a6c2a83ffb",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "202913225000000000",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x785da034f62afbd7c45d3c08c6e98c3e8997953d",
+   "curve": "0x02681c69529af6d861a8afec08a8a55379f9699a",
+   "launch_block": 62273461,
+   "launch_tx": "0xb73f25669248956e36487e25fb4a1bf731af12f9e30c1fcb88aa0ae7f9b73f6d",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "19604000000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x5c15c4d8d92c2987ddd2ff06c0b0aa1545730cc5",
+   "curve": "0x6a4520b974a10fc3ba2fe921ca69077fbd6afd99",
+   "launch_block": 62273642,
+   "launch_tx": "0x957c8a633f4bf5a2f4474e6fa8cc8979df60860e3bda00ce9d319941f6b9f9f4",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "10703885282106331465",
+   "trades_first_window": 338
+  },
+  {
+   "token": "0x0cb5def284485c35bc475fd665f3f2c0569024e8",
+   "curve": "0x61cdcdd1b11aafc76491b07e1f28f3f1a80e515e",
+   "launch_block": 62273974,
+   "launch_tx": "0x35172fb59febf1cd6aba9d651dd8b80d6f657afca320d6f7ebffb8287572dccc",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "216149667008021503",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x8bef6dd283d4bf487e6de5668caaaa6f8b46d190",
+   "curve": "0x087834ef50108088ef031766925bf34a10e1dc10",
+   "launch_block": 62274280,
+   "launch_tx": "0xcc7669a57497d6e33f1dbf3647a163414af022bc8533c91b98e7fd57424bb9bf",
+   "creator_tax_bps": 1000,
+   "phase_now": 0,
+   "volume_wei_first_window": "9104446383916124068",
+   "trades_first_window": 390
+  },
+  {
+   "token": "0x6931fb3e91a1ba5c15d8565466f75927d88eb5ce",
+   "curve": "0x191edb87d1869e921ec72d5e1e72a0bcb2e541b6",
+   "launch_block": 62274644,
+   "launch_tx": "0xa58de2d009104b3bfd4fb20af49268c7072c4d157dba2467252b61a53183d804",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "235879322103872217",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x7746764a0e7cebdc230d3ed006e55a5b150551c7",
+   "curve": "0x0d66d0db2d2da1aee786dbd9763df1d35de514e7",
+   "launch_block": 62275047,
+   "launch_tx": "0xe473a8d6712ba2c1009cfc3038158bb400db0be2af25157be4b8c5d171a90d94",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "33955236056637364",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xf50c97c0eec94bc8463691d36762df60982630ba",
+   "curve": "0x8f2f32f903c709ba1a5c9ded309e5919ffa15170",
+   "launch_block": 62275196,
+   "launch_tx": "0x1e1a97876da853576ea414fbdf3ff7f7746ef8516a4f69eb4ebcc02bcd12c672",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1641173100794966088",
+   "trades_first_window": 23
+  },
+  {
+   "token": "0x64d5f7430c2ddb680a69b07c14067d2264be2631",
+   "curve": "0x136eac036ecbf3411e81ccebb68a34bb0b5029e2",
+   "launch_block": 62275439,
+   "launch_tx": "0x21bf681575b01ca5ed20a8679a248a615818666551cb21c8b875715c2bb27145",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1472110857600000001",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0xa4c5bc46e01b8fc47e181f0d0b4ac04667a4f423",
+   "curve": "0xee743168039f53a4e0fb9139bea5e7a085b2e11f",
+   "launch_block": 62275700,
+   "launch_tx": "0xb60b5a62ecead8fcc54e39416077c6ceb30a7b97e497829e4052f20af45ea912",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "3092846359096300603",
+   "trades_first_window": 94
+  },
+  {
+   "token": "0x41ec4e6f90864b595afef9700898cbbbb9631571",
+   "curve": "0xf5d06595cb6ac5ed05a793dcf525a563a3085d69",
+   "launch_block": 62276068,
+   "launch_tx": "0x961cd4013af66c0c8844df52234394e60ec934fe7a90989e0e0cbc6e0cc2ad2e",
+   "creator_tax_bps": 130,
+   "phase_now": 0,
+   "volume_wei_first_window": "29348397300000001",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x6fa145a4f60b5e4634a2cfb97afe93c0c0d6db5a",
+   "curve": "0x17f4bc9a621d4d746a75305bd2503cb52b2cbd8b",
+   "launch_block": 62276644,
+   "launch_tx": "0x270cb2ddf4b6902c484c091b8dfcff4491ced18acce351a77b9b0a4c2a34974d",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "1217028065600000001",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0x3d6bd7c0ce6b693bd6e3b040a334b5a9d830f250",
+   "curve": "0xc69fdb03a2d9fd7c1eb71c2a6a217dc0d06d3691",
+   "launch_block": 62276875,
+   "launch_tx": "0x09693773dc86c321a9d9903b6858bc5c1c68a781a3580635665de743dbc976b8",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "176417380000000001",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x93834bce063543156066eda2b69bec9a92f4a2a3",
+   "curve": "0x8c8e0f9f5c26fe53587e962d879ac07a574b870f",
+   "launch_block": 62277397,
+   "launch_tx": "0x1eb2ab8a37064731fd88af0176226bb03473d3b132ca89fbbfe0777ff3f87c0c",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0x8010e066c491b119426b104ff7fe35afb1b2e2c9",
+   "curve": "0xec142727b426e87dbd1d537e04a02828e0df310b",
+   "launch_block": 62277758,
+   "launch_tx": "0x96d0ed57df9fb8ad36e06779f4af2ab2db3a4d53534609e578f2677e73cc5b3a",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "385519455000000002",
+   "trades_first_window": 12
+  },
+  {
+   "token": "0x5aca7849314277a43d9fe08c7dd7289d65a69880",
+   "curve": "0x0e904350cdc16913431c18d31aadfa1a9112d457",
+   "launch_block": 62278072,
+   "launch_tx": "0xfa069ef1ec86c8a77410806f3e052d364f77365eeae33d844e8ab43ab9daf8f6",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "6048991874117312006",
+   "trades_first_window": 157
+  },
+  {
+   "token": "0x8e15bffbddf3fcd3787d04776cc175c967a86966",
+   "curve": "0x302ef4ff03aead636603ea0b3729a8123512479f",
+   "launch_block": 62278308,
+   "launch_tx": "0xd0cf05a492c640d217c40507a6e191ad9008a003bfdb123241ec5e1959f79ac6",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "60000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0xda29e4575fce4eeeeef6130bf96c9b3925d7f702",
+   "curve": "0x0c1b6fda84935784d13db70c5bc51acaacea3378",
+   "launch_block": 62278786,
+   "launch_tx": "0x55f31a5c3bdac995bfe21a6106636b3fcd69ab8dca7d54a59483d87d8a4f01fa",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0x3507c5fd1844fdaa2a52e1e5c3ad591d7f9cd03a",
+   "curve": "0x08fac87a7e36a9d9b87934951e8e59875721cdcd",
+   "launch_block": 62279020,
+   "launch_tx": "0xab02b37d7547c4bc22f8c3a14ddbd7e1dfbab4919936ae0c2859b8617319ded5",
+   "creator_tax_bps": 800,
+   "phase_now": 0,
+   "volume_wei_first_window": "54873798900000001",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x1d89616c6ae9ea0dabb3b1e328df5290b8e6fb1b",
+   "curve": "0x460941ea4d0ef2b9e211776890a93d2ae9e57285",
+   "launch_block": 62279357,
+   "launch_tx": "0x7263344f316ada67987be005d0ce83a4d3a1edcb9e81175ddbb15750d3839351",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "1540126609053283217",
+   "trades_first_window": 62
+  },
+  {
+   "token": "0xcbe8ffe7bc7ad0bed2dd0fefbcc92c051b42f003",
+   "curve": "0x3252fa3f8637d0c7db82b3407b864107c756a5d5",
+   "launch_block": 62279931,
+   "launch_tx": "0x019cde0a67dd60f17a4a81ad29b9939fd91d8f7370a0290c17f745c179df92b6",
+   "creator_tax_bps": 400,
+   "phase_now": 0,
+   "volume_wei_first_window": "590262693293117781",
+   "trades_first_window": 14
+  },
+  {
+   "token": "0x14c488b3eed0d803bf0b066cbedd157d34df41d1",
+   "curve": "0x16c250dcee5502b52ff4ca372063d5dd4ae8b368",
+   "launch_block": 62280436,
+   "launch_tx": "0x7f9780c115488f78f732d526a31c413a9cae90986330478ee093c4ced6160f0b",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "78785599995740624",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x9d838f9ef3e7a885d5fb28de241384ab2a63d66d",
+   "curve": "0xd1868ee89af843d61f7276f64dde5b48eec58871",
+   "launch_block": 62280726,
+   "launch_tx": "0x2f9c3b43a9142ec8c2414206f6926240e82eff4cd3f4aeb567c8af931ce32283",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "27491516200000001",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0xd89b123f86ba583333e667500c68c1d0bcb3cf65",
+   "curve": "0x7ea74ce5e03ef0eea636931fe45c3d9c4aa45ba1",
+   "launch_block": 62281191,
+   "launch_tx": "0xfc324e880d1de696b5262fd99e586de318ac984d400a305382b6a4ca4644219c",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "894459907156475682",
+   "trades_first_window": 14
+  },
+  {
+   "token": "0x3c2f04a2e0e6d208ffc229ee0eb81b43e4f80aa2",
+   "curve": "0xe5ab62ee6c53e9449f748e8d6e88113976e7987b",
+   "launch_block": 62281751,
+   "launch_tx": "0x67e594b60834ac23b69b2c8a62f9786d8fe307a68479bdddda5b962733257404",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "254838870000000009",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x6449740ebd4d446c09b22dd5416c87a368c50267",
+   "curve": "0xad763ff995dea13ee67ad32a766e55f9ef87d4c9",
+   "launch_block": 62282271,
+   "launch_tx": "0x97df69f872e2bebedb7024a0a1dfdc6c699f3b6af9b70835d9c8fb043e5c8a90",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "629370855620439999",
+   "trades_first_window": 12
+  },
+  {
+   "token": "0xd424c0e823253bfacf15c400b882623ca8b0a324",
+   "curve": "0x18a5d5bb90b201d220ed89ac53af9308bffd2aaf",
+   "launch_block": 62282649,
+   "launch_tx": "0x44511ef324f03b8ea82b8c91fa498429332dbd29c39e8e3351a77716628d01d9",
+   "creator_tax_bps": 90,
+   "phase_now": 0,
+   "volume_wei_first_window": "100000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0xf84777ebf768bba6cf18fac86e4aaf2927acdb60",
+   "curve": "0xe4267db54b889e23dcbc73927ef692aa00dfe144",
+   "launch_block": 62282999,
+   "launch_tx": "0xeeac070ebc262672f473b7afbf769c58524296348775a19de42d32a01434b258",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "1918409145145697717",
+   "trades_first_window": 27
+  },
+  {
+   "token": "0x5dc0f6002442ad9e9d0e7bb8811c0c59fcabc3d3",
+   "curve": "0x4db26c422b1ec7b86efcace76d091be43dda9a94",
+   "launch_block": 62283234,
+   "launch_tx": "0x19a5be28069bdc425193fe5de078790011415cfd4c40257b189b7fdc06909eb9",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "52313873517427600799",
+   "trades_first_window": 2590
+  },
+  {
+   "token": "0xe2f18a11c8efa0cba9cbfcf6ccffb4384f5dc103",
+   "curve": "0xc9df7809f11328dd0362ef08e30e4d6838a06e3a",
+   "launch_block": 62283532,
+   "launch_tx": "0x2dfab44bb175f0db23d92b4fd53da2921f031cd4b23eac939a33eee0446dd407",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "6233966038551211607",
+   "trades_first_window": 131
+  },
+  {
+   "token": "0xb7196d404040ea7dce4e1b228ee1a2dcebd25104",
+   "curve": "0xdc5650eb10405cc64a536551bcc086acbf97cb66",
+   "launch_block": 62283813,
+   "launch_tx": "0xc10abaecc63c66c504ed986579c9e20fd708aaa6bb0b84ee7518752b24c79aa5",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "4909472021798996436",
+   "trades_first_window": 89
+  },
+  {
+   "token": "0x423513f1136f927094d9923f36daf47336b51034",
+   "curve": "0x3410dd20c12b3f84b4aaa5d992641a90322ef8c9",
+   "launch_block": 62284169,
+   "launch_tx": "0x10a8a6286d604875ad88f633275ef8b49accce32008dc3e958d3fd119054d29f",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "771789446884019589",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x357ed14416296169b284bdff37c7cbd9b68b7ea3",
+   "curve": "0xacc8e08b3848d9be24074a6d03db88f84c83ae9e",
+   "launch_block": 62284536,
+   "launch_tx": "0xb8258b14ef46a71872138a6352cb2b62c7ec45d66e17aadc7050f62cd7511cab",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "230967099988119659",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x8ccd8ec5a26d7277c5d636f5dbac68225c697ce1",
+   "curve": "0xe7246e8284ee5487c213040586fdf8cc94991137",
+   "launch_block": 62284863,
+   "launch_tx": "0x3824e3dab7946431f144a5e0994fca7443204437733bc0f617e391b78a8d4fef",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "7686399999393131",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x6da94722d9777e7c6beb85635131a959290dffba",
+   "curve": "0x49132152f95a15ae805b3d079eaae71dccb7a999",
+   "launch_block": 62285042,
+   "launch_tx": "0x44326d0c0db831e6afa3bc6ae43df14811b8319da23d92dd79df15901952bc2b",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "5000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x44d035b04fba3f291a1ae5c2b289e8adfecd5810",
+   "curve": "0x98bb3d0336a4e83b3c971b8e03f5b5634bd506bf",
+   "launch_block": 62285419,
+   "launch_tx": "0x0ce8f07fa6bd591776a1558f94995732443fc42c3b30b5d9383832f30f379c26",
+   "creator_tax_bps": 90,
+   "phase_now": 0,
+   "volume_wei_first_window": "10000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x3fb3b6a937e5817436c05b3d0523707986eacc99",
+   "curve": "0x3518b26fe42c8a5b8fb6be201785a60fda3db8c6",
+   "launch_block": 62285804,
+   "launch_tx": "0x60d8e2223cf19b591b3ddf1c73acaa0ad7c0f40e383295e5ac8f0e7281cc5a8a",
+   "creator_tax_bps": 1000,
+   "phase_now": 0,
+   "volume_wei_first_window": "2285171470986102",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0xc137b023090061be5632287ba8409045be01257b",
+   "curve": "0xd44431c274f311b67850aaf7a88de03316e82759",
+   "launch_block": 62286244,
+   "launch_tx": "0x2829eb80f6ae43ac111338fbbd56b036c915508f47259cdd1066ee723e478237",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1940900000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x51305e44f0793851d896f07b15cf98d6b8254ed9",
+   "curve": "0x4d555583c5202920ba0296509972ca0b98554a01",
+   "launch_block": 62286597,
+   "launch_tx": "0x5214ead0e6cc3957ed8af6516ac219fe939adcd6913f8acf0885cbc92502fa20",
+   "creator_tax_bps": 130,
+   "phase_now": 0,
+   "volume_wei_first_window": "432953106000000007",
+   "trades_first_window": 16
+  },
+  {
+   "token": "0xe4a7091b6cfabd9a02620195ec77dd44f4f96f13",
+   "curve": "0xc0600dadc6a45f038f71728bbd2e93479365acf5",
+   "launch_block": 62286866,
+   "launch_tx": "0xfd2cf7b4a751d0d1152ba55a8fc5b3fecabd02c26766f62eed6f57c89207e07b",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1654745081997629081",
+   "trades_first_window": 55
+  },
+  {
+   "token": "0x97d67f13a5983049987042ce2e98ae2edaf19df2",
+   "curve": "0xfcb70b915d41b56d641d6ed36b164ee2f5150b0e",
+   "launch_block": 62287267,
+   "launch_tx": "0x6276d8a9331322eda25e62d72e951cffc31e43f288b0bb8f3a49db5b4deafa1c",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "2927972959432525846",
+   "trades_first_window": 84
+  },
+  {
+   "token": "0x173e3c21533b47b9e05bc93365e4cbf1ef3b1e78",
+   "curve": "0x0930737145863cd3be00b3faec6296082cbe7a4b",
+   "launch_block": 62287494,
+   "launch_tx": "0xa9575964502fdd9657605ee02651deb8550fd6ebd65b593096a92692e5732702",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0xf7eb65dc698693a32709ab566ba85ec7d19b0e6d",
+   "curve": "0xe4efbb08c548b6af1455572833bf3880aab76fb3",
+   "launch_block": 62287720,
+   "launch_tx": "0x324c2ed66e04a77207fc8f2d2132a18761e22025a35175bf0ca9b5c6f0aa1ee9",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "78016959999840839",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x1484ea7076b0cb1cd649e77209184cff3ae47ef4",
+   "curve": "0x1b76b0d1144e2b62ea1223beacc8254e50b9b662",
+   "launch_block": 62287833,
+   "launch_tx": "0xf27e04ee4dd7819dc99c402aaa7c0c78317c84d781f4f69872f7d5afd0ba81b4",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "747963907947408386",
+   "trades_first_window": 26
+  },
+  {
+   "token": "0x3e6eed45364a3d0c0cd99662e1ab9e857a6180f1",
+   "curve": "0x698ed512decfb2e73ad7a596f1b23c6013094e30",
+   "launch_block": 62288023,
+   "launch_tx": "0x4fc46b7a9009f8a9aefc23a425b95d536ce898a8eceb1759e2af605626e6099c",
+   "creator_tax_bps": 400,
+   "phase_now": 0,
+   "volume_wei_first_window": "32342499984859550",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x87036f28394dbfb16e1a3d744c1268ae863cc93c",
+   "curve": "0x0af0b90e279bfa53ae792aadd6ceea7e3c1cee15",
+   "launch_block": 62288300,
+   "launch_tx": "0xcce79cd0b2f78719067c41ba626755c19c7d914136193b7ee5e8e9bfb19234e2",
+   "creator_tax_bps": 150,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0x0b38af3fb987475f22e06bea6511673daf9eb67c",
+   "curve": "0x2e4594b40d064079f4938aca73f1e4822fd5706c",
+   "launch_block": 62288503,
+   "launch_tx": "0x0f820fcc5f46f5b3596234c7511396867f5dc03748af528352403ce4c7ac766e",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0xc200d8acce52ede67aa4605df23283bfcaa90126",
+   "curve": "0x9a658e29c1c5dabc9fcd965e2d14df8cee9cdb09",
+   "launch_block": 62288858,
+   "launch_tx": "0xd6972b951d07df9efd8ce6915e7688d2d2b2e3cdfb3170b98a1b8b86200f99ab",
+   "creator_tax_bps": 120,
+   "phase_now": 0,
+   "volume_wei_first_window": "463337532000000007",
+   "trades_first_window": 18
+  },
+  {
+   "token": "0x8609b5b4b4a3c9466683367fa9ad8311a6fab85f",
+   "curve": "0xcce4b8a015da4e73dfafef126761f607ffe0aecc",
+   "launch_block": 62289069,
+   "launch_tx": "0x7022b7875afeb584d5be661971d3c9d9315d9f072bc5e9424d2ce73674f251db",
+   "creator_tax_bps": 90,
+   "phase_now": 0,
+   "volume_wei_first_window": "10000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x030313501ad0a62e986130cc64cf84db4dfd7ca3",
+   "curve": "0xdcb05a6cecf1cc5c857d01ce923e3306df774436",
+   "launch_block": 62289429,
+   "launch_tx": "0x101d945da626bcac757414166fe4ce4968b8339153cfd0559d9327f409ab8de3",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x871b0b09d8cf34a06f2ade92202e1aed1e17a4b5",
+   "curve": "0xa78bd3a5be54a5054e8fa27c001fc3f1873fdc56",
+   "launch_block": 62289618,
+   "launch_tx": "0x48959d554fe84602e2148af23f033801d11d9de9d3a8f913ac819173bcb4cf80",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1940900000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x211a0dcfb3a05ab1169971818381908b5c419bd3",
+   "curve": "0xf79ed59356757f878fe55b9aa7f4b72af0dba278",
+   "launch_block": 62289893,
+   "launch_tx": "0xc80274f914e5dd7d23e2cfa4b8036eb47f64b73a0cb099958d7d1d5100d59184",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1940900000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x83c31abc535c33aaeafb436012a45ae2f73517e0",
+   "curve": "0xc2bf8cb30d568c0a2ad0703c29c7954ca850ee98",
+   "launch_block": 62290153,
+   "launch_tx": "0x6fd65e151fbc7d48f286c9e01a193dec41b6e8de028d533c95304a838724bf51",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "227097897073221823",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0x958007e621168bfde26d5248063c2ddeb4aeef28",
+   "curve": "0xc22ada7ea8321bbd176364bf02e169bb8c16554e",
+   "launch_block": 62290403,
+   "launch_tx": "0x65fde8d7dbe9dd60e7ff397415a0109146abbfa623ea35afe7d5e36ed40afda2",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "2623327522501807683",
+   "trades_first_window": 47
+  },
+  {
+   "token": "0x6ec0ef4e2b7d094ac85274b1f208e57789a2628a",
+   "curve": "0xc4ede3c50518173f860a57d2043df24be89e6e13",
+   "launch_block": 62290540,
+   "launch_tx": "0xe417777e25ed5bd9848435513735dade14a1fdecd14b1fee0d54b1d3d3c734b6",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "368644323200000001",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0x00e5cf1949c2461768c25138280b7b57e388d3b5",
+   "curve": "0x74a4e9c6e7458936ea1982395b0f2a7e2298041c",
+   "launch_block": 62290732,
+   "launch_tx": "0x5dd00018fd417b357b6975c3133640cbe3da7a29b809b9a52b1b4d2f4b6a3902",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1170396623606871624",
+   "trades_first_window": 11
+  },
+  {
+   "token": "0xadf8af4dcfd6a543f3f66f3171c6d0e16c226106",
+   "curve": "0x1c104982238dfbb4fb9159c7775a64c15cb84d7d",
+   "launch_block": 62290984,
+   "launch_tx": "0x567361e5064fd7bae80e508ff9416c3c46fc21bdac609a80d64ba94eea334e1f",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "322577311986797406",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xa407cc1d5149903b97844f09353434cc076fabf9",
+   "curve": "0xaf65a3678f0b3cb09c6fdc5977d360163f83e59e",
+   "launch_block": 62291200,
+   "launch_tx": "0x773cd71a9de9b1f51eec481c610a9bb3a942a83473baec106fca7be5d64c7588",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "78411960000000000",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0xb8689b730be8c02f98532a6ef116e36e126c9835",
+   "curve": "0x1935e9e3bf4e55316c00e795c3ec9618379c30c8",
+   "launch_block": 62291584,
+   "launch_tx": "0xd92520fdfad6bf4aca9dc9f85a010fb5bc0b1fbd6eea09cec489de9f836c205e",
+   "creator_tax_bps": 90,
+   "phase_now": 0,
+   "volume_wei_first_window": "11643220309233669",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x0f502c72507ab3f1193ef94192a25635ca5b8503",
+   "curve": "0xdb21b1e0b6f4e318f1df638874c0567f4f2f24b8",
+   "launch_block": 62292107,
+   "launch_tx": "0x394bc429d6341bc654390b4c2c8cd4f909314a3f20b35297f6aaae8482e400f7",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "802820572800000000",
+   "trades_first_window": 8
+  },
+  {
+   "token": "0x07769a6df1ce901b98e63024a2cf0a853f60a8b1",
+   "curve": "0x6816edbdf131273b3f9429c885561ab081cbf8f9",
+   "launch_block": 62292499,
+   "launch_tx": "0x87ebe5bc53aa4d1f62b867fab65b26ccd5c33ad3e8e73c88364bf21aee7111b4",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "11350161455873876911",
+   "trades_first_window": 458
+  },
+  {
+   "token": "0x12d74689909a756f815563b059b33cc8202de0f5",
+   "curve": "0xbf81c3ab37db4a8833e7c6610f1857bc6e9d236f",
+   "launch_block": 62292990,
+   "launch_tx": "0x55101797aef9d73b0d0bd9edcbe289f6677e3cd4d6a94617d36304bf218bd6d9",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0x5da51c455fc1f727f519a4b8ecc4d5d515ec6cff",
+   "curve": "0xa16d1d66e4c9ec274e956b686f83ad161f56c9c8",
+   "launch_block": 62293370,
+   "launch_tx": "0xb9c4f5982a1f43085b16ecf12d31a94deb74fca5cc0346e5cc8661a02ca7b218",
+   "creator_tax_bps": 400,
+   "phase_now": 0,
+   "volume_wei_first_window": "113562899992031551",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xd69f1c2fe0d873ec054d4edbb184378d3501bbea",
+   "curve": "0x59115acceb2b041c27147a124a233bd5a6ba1e60",
+   "launch_block": 62293597,
+   "launch_tx": "0x554f20b3d2bef1ba3972285372c1077217a8619d1fcb6ec97e9348970ff43e18",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "165165720090858983",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0xe6cb90a913ad200d3a34b2bbe5bb6a1857f6e2b9",
+   "curve": "0xa35dec9046a3e1528f1e6eb4506ce837c108b9c2",
+   "launch_block": 62293961,
+   "launch_tx": "0xc15912c1f8ba66de79ad3e0a61e60abd843bd87a6bb48a2efab057d4f48e4c8e",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "68603240055480001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x0ff3e8045c82090d4206cb1c8905084aa858b71c",
+   "curve": "0x601cb934739d541ca009169f3e8edcf3dab60c6c",
+   "launch_block": 62294247,
+   "launch_tx": "0x8124562c0804f556f975ad16820b3688c64a724b25d33d6fc8e1cd7958b499c6",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "398828080000000001",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x30262a341a4af1f550f17b374edac6b3f21fe54b",
+   "curve": "0xfdaaa2da74a5fc3784df7ebf77c7bd947e9ba29e",
+   "launch_block": 62294693,
+   "launch_tx": "0xf8b8875e2b25c9b6530f97e2f3e21f428f0f0c0471e247d06b037a5ca7e9091b",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "425608725000000005",
+   "trades_first_window": 20
+  },
+  {
+   "token": "0x375345b11205835b7bd4866d86b7364de7483805",
+   "curve": "0x84c7efa57af9f7e1e55d44f07e83032f95e374a6",
+   "launch_block": 62295167,
+   "launch_tx": "0x9b234224e4e33f2e7ffd0629c419b0278340c895031e1ec3b949d0df1937e376",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "240968486144000004",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0x93ffbf4d712c207feb9ea6a40fdace5c1ae2d23a",
+   "curve": "0xda5bf4ed75559abe29eee4ba1a7883c4330e9f30",
+   "launch_block": 62295472,
+   "launch_tx": "0xe9ef2e509293ee92d981d60f1221a5e32d25cca5c460cd5dafe1bc8ff134254d",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "126122122885748795",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x5265c717bc1b7998402bedab754dd6ef36923f9f",
+   "curve": "0xdcbb512bcb0b9df68280883b7f9fbcd9455c65c9",
+   "launch_block": 62295815,
+   "launch_tx": "0xac3c77970160ae4d4316ace7937d39c41c04261a86f26cba85b4c28f503bafd4",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "840258992800000001",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x4474fa0c2f8b64d96d2dda3abe9ca1e9dd6588be",
+   "curve": "0xef22be6eec36491ffc145d1f80b44edd01b49d58",
+   "launch_block": 62296218,
+   "launch_tx": "0x530d4d561f73b00de55f4bc0df779a41fe25a696e8bbd32001ec3eb6305bb0b8",
+   "creator_tax_bps": 250,
+   "phase_now": 0,
+   "volume_wei_first_window": "149537848598000003",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x35902f39d0c053c89b4c604a53a31a64866aaf8b",
+   "curve": "0x2eb4200150298a5371d50639c50bc154c433dd9e",
+   "launch_block": 62296408,
+   "launch_tx": "0xcdafc02258b4dc4585b9b4f5cb7466b65027cf4549ac4559b2ac7254c935dba2",
+   "creator_tax_bps": 90,
+   "phase_now": 0,
+   "volume_wei_first_window": "10000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0xc77bea075daa1bef5bd69673676248f6c5656272",
+   "curve": "0x3d3f98e4b686892099cac475a6eb9d88bd04efd0",
+   "launch_block": 62296768,
+   "launch_tx": "0xa2079a93461389f23e956017197c25abc10b687a1903b78df7c5df2ced0d847d",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "105669759995148123",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x167728beb900590ef70341f0e77082e39b4f62dc",
+   "curve": "0x1741b01dd1e400f2d88de8ac1e50f507fbcede87",
+   "launch_block": 62297137,
+   "launch_tx": "0x6674e8ea5ec1ba99784ddb594a4d672882247e36927d1c2e8f51576df1d8a29e",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "516736884304771616",
+   "trades_first_window": 17
+  },
+  {
+   "token": "0x58b68c1e185773bab7a0a7b16c86592e8b9a20c5",
+   "curve": "0x70515c67752f0933a08b9a09a12522be7a689157",
+   "launch_block": 62297535,
+   "launch_tx": "0x3145aa073aff3b3b1747154e8aec4f67d321e8ff916108ed604a7af4d8f5e254",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "365955236920999999",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0xe17cb7943980a074f9046db20d2bdd6d76ad6308",
+   "curve": "0x8d6eb1f33b983197e30cc35160e9283b3905e3ed",
+   "launch_block": 62298106,
+   "launch_tx": "0xf974aa0a037a40beeacf8920fc8185897b2a80ce4d6cdf4e988472cc4a8a76f1",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "507479171414912004",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0xa182b5dda9211506b6e387084674eed214dd42db",
+   "curve": "0x13ad32fb0c6877cca7ad14e75314c49a8aea2abf",
+   "launch_block": 62298583,
+   "launch_tx": "0x059d36ec45ac16d545502bb721f34a1b902ecf79e740eea55b08675f34b8263f",
+   "creator_tax_bps": 255,
+   "phase_now": 0,
+   "volume_wei_first_window": "142381936154790357",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0x06abf177bc253df6de5ace85bf4586c6bc35af80",
+   "curve": "0x7dcc03b6e67e21bc0cc3cf91aa2180bd6803449a",
+   "launch_block": 62299041,
+   "launch_tx": "0x46c39d897ebee3add0bd4585ced5b1bfb3df43150935568604b17221bac36b69",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "699229671135500619",
+   "trades_first_window": 26
+  },
+  {
+   "token": "0x1aff997ff8f95438dc0438d5ac1448a8cf009382",
+   "curve": "0xd945bd08140f70e4c78b106f9f61a17e80d32f4b",
+   "launch_block": 62299398,
+   "launch_tx": "0xaff5ca925ff1a1e24c726f7919a55ea80229734d0e6eca018aad2b20822645bb",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "606184092800000001",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x72b484c72bdbb2548c7fde1fd54d909a92f57f2f",
+   "curve": "0x1ea3e0328662314bd465e3f4fa1498c6533840b9",
+   "launch_block": 62300053,
+   "launch_tx": "0x7f876745744ce809ec0c0b099bc68cb11ce00742d83abf851e3980b06c26fc2b",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "114702720000000001",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x3abd739ee4fd134fcbe9b37fcf967dcb8e96095a",
+   "curve": "0x80d882594226a824b1be7999a2ecbb42faf52b0b",
+   "launch_block": 62300427,
+   "launch_tx": "0xc4729db5d4fa3c2ecd72f9dad67f445d025133c8d282eb6277c54bb95f236b2b",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "135862999985909052",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xdcea57fb6e72c3f5520d1ee44547d1eaf02777c6",
+   "curve": "0x9745fe62ceba8cc82af8f6dd3d45fa696fd0ced6",
+   "launch_block": 62300659,
+   "launch_tx": "0xc5d103ee524934167544375924e4beefa3cc6fce91a6d1316d8433d5356b3e27",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "83456541440000002",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x227623e51208e49ab5694315be451341bebcf389",
+   "curve": "0xad050d3823ae303aedbafe92a29712cbb5f4caf9",
+   "launch_block": 62300964,
+   "launch_tx": "0x650ac4d1c35ac5c8957545a6608f629a07e1d1923b6327a4c6dc4d41b542fa73",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "318985599987575716",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x3e095e3cb55eb2fdb7cbe57db9180f651c83be76",
+   "curve": "0xdbb61f07658873254a7195df61aa0d8012d3ea16",
+   "launch_block": 62301725,
+   "launch_tx": "0xe1a9420904d9cd60405356e7390aea6ee0791a81aa7dc5f174348fe8a2116c40",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "851479619500110491",
+   "trades_first_window": 16
+  },
+  {
+   "token": "0xa10c8b2fe19ae9b5c7ce55e4a998770e1d5aee8f",
+   "curve": "0x8872f784927a737e27b90b8df2e52163412e4bb3",
+   "launch_block": 62302210,
+   "launch_tx": "0x81bb0f1c6e6e4d74e387273b989472d6279e96be63c5937452e346f473b65687",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "605910600000000001",
+   "trades_first_window": 15
+  },
+  {
+   "token": "0x276895bca176c1c1642df7a9f2a332056f387ad1",
+   "curve": "0xe09961ff55f3f613c7e999adf7b2f754bde62d12",
+   "launch_block": 62302388,
+   "launch_tx": "0x972d8c6f74eead76f87699378309db8b72acc18b05a6c850d7c6a95399455c7e",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "1556318224745334177",
+   "trades_first_window": 69
+  },
+  {
+   "token": "0x3e3ec43d27136cc07f6928bf0c9f33f0ef3f7c69",
+   "curve": "0x8089937d0bf962cde114a41ad7d55b2842abee82",
+   "launch_block": 62302700,
+   "launch_tx": "0x1af04c283bb0803f011a9b61a3084cb3b619cefdac85a267f34967288619f5c5",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "417789634299190374",
+   "trades_first_window": 16
+  },
+  {
+   "token": "0xd82096f132196e8810dba379e23b0713f65e4d9b",
+   "curve": "0xdb1e60fb906f35d6a675e55c3e2ff5d641f8ef3f",
+   "launch_block": 62302930,
+   "launch_tx": "0x615a3e1c693b26dc90e26c01a8d5ea1ea6ae52df378cb891fb13b1b10f4a0549",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "9900500000000000",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x5c812d0ce39d4fd456643f5e2c6e271c8c3461be",
+   "curve": "0x982972ee7ba61ae227c711615f1a031fda1ed9de",
+   "launch_block": 62303478,
+   "launch_tx": "0x24e568e52528298e95580420564e25980833ec4244cf11c2dd83e1b1b8ef57b2",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "558388200000000001",
+   "trades_first_window": 15
+  },
+  {
+   "token": "0x14ba4cd03a292aec00917d0cd91316c97b13a5c8",
+   "curve": "0xa81f57021092f0397096d742489cabf75afb8706",
+   "launch_block": 62303846,
+   "launch_tx": "0xe748ea6f2eb60d216d1feebe739b80e58eeee0e67ffa2939db91791cc410f32d",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "15905990170821731449",
+   "trades_first_window": 721
+  },
+  {
+   "token": "0x0d26499e803d9428049d7c57a14dc302220e42ef",
+   "curve": "0x8cbf0c1b2c033cfa88dd56c2421c586e512841d4",
+   "launch_block": 62304370,
+   "launch_tx": "0xe55f6e7a7ccb8301a511f56b0718fb76cf323550e136efef6cd17342e3b1d245",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "133918719998841637",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x087c2596ecc1b0820afec65cd87e5a43e35077b3",
+   "curve": "0xcd43e7a6a58fb6ef81bdc64744bd12978319f43e",
+   "launch_block": 62304714,
+   "launch_tx": "0xc1d01f085e23d00204d0e2ec4183f60e88f4a39de945e7697cbbdc4071da1eaf",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "554216894560000005",
+   "trades_first_window": 13
+  },
+  {
+   "token": "0x5e86581790d8e946dd64282e2e6b67d1bb0a7b26",
+   "curve": "0xd7b75923ed022997eb418d543dda433011a4c67d",
+   "launch_block": 62304986,
+   "launch_tx": "0x75e238766920831ad909ccc218f9abfa5fc4c89b61c44e8758de54884841707f",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "770555835200000001",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0x099fec256a2599b7301c4e40e9681c75426714f2",
+   "curve": "0xb933c706b438a24e8416a9e8605ba41c18af8ae6",
+   "launch_block": 62305511,
+   "launch_tx": "0xc8457355ffdcac9f2fec4f7743ee9852dff48e52c83d0f2006772637e6629c65",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "114702719987456000",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x55860b3254c5f99e7bb4beb98d3f09cdd9a40d93",
+   "curve": "0xd1bfab805e8c200b0befdc0bec8aeca9061d5a6f",
+   "launch_block": 62305927,
+   "launch_tx": "0x06c319a910a24e940ab45fde0d3c0c6f4475efe0c0167f3b92060af50aacf27b",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "8452610297636346182",
+   "trades_first_window": 264
+  },
+  {
+   "token": "0x22b763a2d3bb26c2752292b55e646dc04bcef70c",
+   "curve": "0x37c61207309e54ba8177eda4823374336bfc5665",
+   "launch_block": 62306216,
+   "launch_tx": "0x8588c44a6d1b303b1aef7f5a2354e8d7d15b741aaa9c67ab5471b4acdf52b0fc",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "904812277678458231",
+   "trades_first_window": 9
+  },
+  {
+   "token": "0xf8bec6dc31fc9b0fd10604b7920bad0140e4ce2b",
+   "curve": "0x29ee182b4d29f5d4e863efecff687a5aa242a258",
+   "launch_block": 62306652,
+   "launch_tx": "0x676e8a8f4475b3bc18a65fdb6bfcf34be0420e0a4e8b7207629803b37d501a20",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "458514513280000001",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0x9867d96b17f256101990f6ba2944a37d57fe6cf9",
+   "curve": "0xf817525fa462202614ebb1465ac2c5f8c489e0c1",
+   "launch_block": 62307295,
+   "launch_tx": "0xd3fe778826793bacdb244bd33c989008c7c1042be15e86cc15a3e4aa81b36f8f",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "2721102984979356423",
+   "trades_first_window": 102
+  },
+  {
+   "token": "0x43225d3a20a5e5c3fce2b75cd77a0c7ccce62b2d",
+   "curve": "0x3cfd158f7503cde90dc8660ba690a90dabb82c5a",
+   "launch_block": 62307828,
+   "launch_tx": "0xb0dcfcce97c270c205e303f37e6fc010d4b6619841a376565664be9f707b081f",
+   "creator_tax_bps": 150,
+   "phase_now": 0,
+   "volume_wei_first_window": "6780206970393308475",
+   "trades_first_window": 158
+  },
+  {
+   "token": "0xc42aeb356fb0cb8999036c726fa8dc2fc3218ec5",
+   "curve": "0x6c7a1b35202d5420ee1ddc72ff6d96b15147b91d",
+   "launch_block": 62308404,
+   "launch_tx": "0xd2820bd52d84f7c7dca6e2808b06cbf8f9aad85e51608d02ae99053c8da9f6ad",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "531633808000000012",
+   "trades_first_window": 14
+  },
+  {
+   "token": "0xe48a7a8a0e92fd0ba707fad8ac5f2c09878ec763",
+   "curve": "0xbb8822c70d707a86e8352d588868ec1d5d761dbd",
+   "launch_block": 62308883,
+   "launch_tx": "0xa128c0034999ca529b81f9fabc19cf9df2a4e1579012b856dbff96227f4a50e4",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "77636000000000001",
+   "trades_first_window": 3
+  },
+  {
+   "token": "0xe9d3fe8f4e2b29eebecd6bd76d49e0684b598b7d",
+   "curve": "0x305235e2a5b8372cc6e228f0ce17796ec64e195e",
+   "launch_block": 62309370,
+   "launch_tx": "0xd095619bd0fccf7a98a2875dc3adc0bb01835c7e7136a9f111210e10b37ccda7",
+   "creator_tax_bps": 0,
+   "phase_now": 2,
+   "volume_wei_first_window": "40763668387499722515",
+   "trades_first_window": 1140
+  },
+  {
+   "token": "0x5ae68c4efe9198c975dfc26b8df81e4e711f8200",
+   "curve": "0x7196c53702c5883a2ce0b2cc3c4061557efebebe",
+   "launch_block": 62310152,
+   "launch_tx": "0xd154d3713e1ffc9fc5bb8fbcf4a1006f48bc5e1fab2ea2eef18d4770e544b68a",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "4220563765770284751",
+   "trades_first_window": 91
+  },
+  {
+   "token": "0xefecd50ff23d51e9c2aad7b8756a11403e118914",
+   "curve": "0x6743f491d0b66ad88db99fce6b30f4aedf5fc57b",
+   "launch_block": 62310563,
+   "launch_tx": "0xd2f95ff8bbe56c7391bdef0b56bac0359e21a5570de355a1fdad1a138749f432",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "360619219989051470",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xca1da8fbc833a0914e336ecf5604b09881b96b36",
+   "curve": "0x210b82c5217e137c064ab77a63b71c782dfbf32c",
+   "launch_block": 62311265,
+   "launch_tx": "0xac3bca9b6f13e34ee6c5adb5a9e8bd3bced3b9e08feab0fd9802f39a7d90f97a",
+   "creator_tax_bps": 400,
+   "phase_now": 0,
+   "volume_wei_first_window": "231250680131658789",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0x522d42244255b5d7c1f25a6349f1924d8898f571",
+   "curve": "0xba6ef6fffdfe33211b33ba5a80f8d5f60e7177eb",
+   "launch_block": 62312064,
+   "launch_tx": "0xb3255d5e7b4e1458753995465504dcc613ec78cbbd189b253a5daee6dce63739",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "21289953994786285",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x0e05d75423682f7e9673348737bb10df6c6778a0",
+   "curve": "0xb863f2d0a566f5d50e4978f8934b0b6aa9950628",
+   "launch_block": 62312537,
+   "launch_tx": "0x2dcf633a1c5fe93695fbce77ea64ed423ca8a9bb91be67bb3efa7a0dee78f922",
+   "creator_tax_bps": 900,
+   "phase_now": 0,
+   "volume_wei_first_window": "699999999999985",
+   "trades_first_window": 40
+  },
+  {
+   "token": "0x75948dbaf58eed87f53095ea99eac3d01e559533",
+   "curve": "0x975ee01cbe5185b0b7d96721fc7ef36c76eff085",
+   "launch_block": 62312883,
+   "launch_tx": "0xb364819b168037a2c89825efbd63d2ada48ef4abfc83f8ee405750ac55133c08",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "2806435332000000010",
+   "trades_first_window": 74
+  },
+  {
+   "token": "0x27f2a46d8bfba1942090c97c25b0b4179ad947ec",
+   "curve": "0x925f4e859fb93f0d85e560536236abd4ae2b3ca8",
+   "launch_block": 62313436,
+   "launch_tx": "0x81e78e1993095bbd18450f2c2a28f74e1b08587a07aae84fc59e55aa53e4ac1d",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "4753763588273721096",
+   "trades_first_window": 448
+  },
+  {
+   "token": "0x1a908e9e423095f0af87bb1c83c067b94e56a889",
+   "curve": "0x436b6f5b14ca581c00e52157d8d54bc824f3c7eb",
+   "launch_block": 62314044,
+   "launch_tx": "0xfd3d500068f3be1ff90b857c081370154c4c6948728af45437dd75498d60158d",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "653261371200000001",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0xfed01b3d93bcbb5fbb1df63731c51f8201f0cfec",
+   "curve": "0x9bfb2daaf53a3094cd46e5135941c9753a9aa6a2",
+   "launch_block": 62314436,
+   "launch_tx": "0x6bbf08c1897ae355122c1c18ed01221b3cd3532c9077be2b97b362d9df8fc524",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "116435569995238948",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x74b3d6520317cd12a42d31525b5de72980507332",
+   "curve": "0x3589b68a3377135db7b91aa44e90bcbdb7d53abe",
+   "launch_block": 62314879,
+   "launch_tx": "0xe7d855d4cfb7bbe47a2f9eb1c1b4c055416c30c7a50dcee1394963dbf2aaf636",
+   "creator_tax_bps": 200,
+   "phase_now": 2,
+   "volume_wei_first_window": "15088069140926361082",
+   "trades_first_window": 412
+  },
+  {
+   "token": "0xcaa16bb220b50c12f38de4fd90daf66cdf3b81f1",
+   "curve": "0xad46552f251efc93f8f618c9e5f7d7631d7a66af",
+   "launch_block": 62315340,
+   "launch_tx": "0xd9541d3a0f6caaa1b8ca4c2a256fe02e0a0fc3ef1e2f10c98b1a82652701f7a5",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "776691363040000001",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0xf866502314fcd92c7d58f1a4d57e3c6e145270bc",
+   "curve": "0xa3a4f5c375bb2d0cbf8838f39a8bf8920b1986c0",
+   "launch_block": 62315589,
+   "launch_tx": "0x77181cc32f834ebc5b73147e086e727ba6fd9c8f9bbc282bfae59ba762c6775c",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0xc5336d0f6124a801ec21714996ede4b7faf9dc7f",
+   "curve": "0xf6e1f779b36e600162e6679097594d96995ef00f",
+   "launch_block": 62315989,
+   "launch_tx": "0x109a912ef6d1d2fe5e49aa131b1a593649f1923c653dd18ff1c4ddef95334506",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "911572885750000001",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0x97ceaadfea76b7fa27e53b15a6348e75b15362d9",
+   "curve": "0x6e0254b8e0a05ae844c922f72fefe04abf525552",
+   "launch_block": 62316751,
+   "launch_tx": "0x7db1a99c443e95a2b41b3fcad25eda4cbcd98c1055a83052fecee9a4f345e5c2",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "292511908960000001",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x959c5f4443b6029c141a129273c0d5d8fa2c87fe",
+   "curve": "0x60e5f553645fde0677d4d7aa59d5cde704518842",
+   "launch_block": 62317150,
+   "launch_tx": "0xd694afca3fbd6a53a3dc387808a3bd1aec006b988fa8d6409e25a9515b69dc5f",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "8314686719383557137",
+   "trades_first_window": 228
+  },
+  {
+   "token": "0xcdac0cf15cce2b9fb9fece3b3bd475220ae03bce",
+   "curve": "0x6ea48e970567bb12af06b5ad76d184896b5ed9be",
+   "launch_block": 62317930,
+   "launch_tx": "0xfc8e5294eec9f2d26d82e9729c8777278c7b0519b85d0621c57dd7ac12b2d398",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "297368368640000002",
+   "trades_first_window": 5
+  },
+  {
+   "token": "0x44bff6822bcddbbbc2433830090394a5359aada4",
+   "curve": "0xc7d4b1c057f5a2eab4fc2742981cf85ce1255b22",
+   "launch_block": 62318411,
+   "launch_tx": "0x71dda25ee6c35c2382e300450e5d5d66de1da810750d3907f6c3e67b046a0926",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "3926627419601465306",
+   "trades_first_window": 138
+  },
+  {
+   "token": "0x2e27db491f7c1b2540155d01b23f2b09d2649ad3",
+   "curve": "0xc36848193a30fc234f37ee9fc7404fc5c1c49d4a",
+   "launch_block": 62318843,
+   "launch_tx": "0x9569db875c2a710acc07f68bec58a39a3a8917a676327a2097fa85d615a76fcd",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "148117491775501318",
+   "trades_first_window": 7
+  },
+  {
+   "token": "0x952d89ee1c449ccb1103f40c5be95c4b4a6858b5",
+   "curve": "0xa6e2588c97d6de910a7825e36e82b6c9a07d1726",
+   "launch_block": 62319302,
+   "launch_tx": "0xfe81ee050509b129630799804d067c16a41b633a75fd91ab1b54ec84f0333113",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "699524170524222068",
+   "trades_first_window": 19
+  },
+  {
+   "token": "0x0779afdf3f9c95f5ead1443de7714ecd829bda84",
+   "curve": "0x4175de6ce4b2f2b3d13eea4baaa55f9ebe2350de",
+   "launch_block": 62319539,
+   "launch_tx": "0x99684350eacb9123cc04901f9d6bb6b14436255f8d526f5ceda8b60b4d78eff6",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "3661082860800000016",
+   "trades_first_window": 124
+  },
+  {
+   "token": "0x503ab5b300c1a7a7baf582bf1acee2da4a1fcf12",
+   "curve": "0x7604362619fe688fb0e8fb6f55504d3f8aceea41",
+   "launch_block": 62319827,
+   "launch_tx": "0xb98f570c764f5a6cedfa5510c1c3c6193ac27a225ca899a27b6c2e5363acef99",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0x244e61941bfe2302a0a509622dc553379c5dda43",
+   "curve": "0x74902d6a07784dc5f87564f83fb75bfb88ebcd43",
+   "launch_block": 62320338,
+   "launch_tx": "0x882644b2e8dc803f122fd38efa611a1ff586109eacb74074bff4a1813922b0b3",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "34642983045253147340",
+   "trades_first_window": 1749
+  },
+  {
+   "token": "0x3607dfdc50997cbd41447396e70fc881eb29c6da",
+   "curve": "0x7f8698d7a8a62b03c4a725437c51667223f59a49",
+   "launch_block": 62320642,
+   "launch_tx": "0x37abff2834055a84e5a4dba2690db02619e216385fb07a7ef907a5baa9d4eeaa",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "4421092953234124335",
+   "trades_first_window": 121
+  },
+  {
+   "token": "0x94a68486cefb631c42e9e5ccafea508f1ab3d6ab",
+   "curve": "0x7e394d66d20a3d189e43034bfa67a30c22e59bc8",
+   "launch_block": 62320944,
+   "launch_tx": "0x027f579d71d70d5c51767adcad793a1c40cce189a7d830358d96a9c5980a790d",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "168858299997544227",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xa454c04817011637eaa4b6e8e3cf513bbefa67ad",
+   "curve": "0x6764e472b00f23f931f4bfc78f123885b94bf499",
+   "launch_block": 62321471,
+   "launch_tx": "0xf59031a9d5e8152a2499f65fd47a62d2489c6ac544369074cc68b9a2c33c4636",
+   "creator_tax_bps": 280,
+   "phase_now": 0,
+   "volume_wei_first_window": "1499651000720180352",
+   "trades_first_window": 32
+  },
+  {
+   "token": "0xb6318b67e265f665f96dfd48cebf2d141cb9417b",
+   "curve": "0x7f40c93114b22bde4fafdf1b0a69e8820e0fb7d6",
+   "launch_block": 62321962,
+   "launch_tx": "0xa14a2146d8bd7453dd9cee380f60679c28d97d7eebc0d550ba0c6ae8a7ba03e8",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "1797127974958446042",
+   "trades_first_window": 19
+  },
+  {
+   "token": "0x2e00f4cb2c11813c62f6478c126a10c798d30476",
+   "curve": "0x1a9785db9454bf546ccf3cdd49d75d262ab67c4d",
+   "launch_block": 62322308,
+   "launch_tx": "0x7d397d8c883a9160bbf78d4dd73f4c32f0249bceaa344d22980766a73cee5db2",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "97767164787456002",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x82020ceb79c87317bf0e9caa0b2d78f6c0aad8d1",
+   "curve": "0x9760be88fc705212c54904779c5aba015adff825",
+   "launch_block": 62322664,
+   "launch_tx": "0xe09ad19f70ae8e14e047c5e0b550ecc84db75e208e383347bf6edebcf540d112",
+   "creator_tax_bps": 500,
+   "phase_now": 0,
+   "volume_wei_first_window": "166282362200000001",
+   "trades_first_window": 9
+  },
+  {
+   "token": "0x0c08ec50b219999dd56ab7f0997da63df457207f",
+   "curve": "0x6bafa204a09d1c4a2b207ddadd14f244f3b2cf0a",
+   "launch_block": 62323127,
+   "launch_tx": "0x3b9ea489540399ee1c1268e76f5ed26ff2f24f018004342a803da99aead4ccbf",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "8639504331615079185",
+   "trades_first_window": 276
+  },
+  {
+   "token": "0x86df5f71d47e512f4f790d4b0888221cd413a58a",
+   "curve": "0x655a90b4a2059014ef029587a18f5cf8dc3c75a2",
+   "launch_block": 62323523,
+   "launch_tx": "0xc3f7e9e7a83f597181773185d86f79efee3254e5b2f85be691a7ad9e0e1f4a80",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "618065922080000001",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x43729ff7f25ef6829565d774d5ec2cc821841499",
+   "curve": "0x26f9acac36b14504faff8ecc36e30be5c758d46a",
+   "launch_block": 62323836,
+   "launch_tx": "0x301bb4a027ef253fbfe71b62171cf6916bb7b33c2bade8dfe7f4d40dae3d36b2",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "554534116478439999",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0x5ab2fe737d40defb1aaea4a8e8c4fbbaeba91a6c",
+   "curve": "0x0d60125bb608a3361f271883500100643a0e6f8d",
+   "launch_block": 62324249,
+   "launch_tx": "0xd58a302cfe5f8cd785f092608c411d7641544dc744ae8e77649f13c010dac212",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "726403232000000001",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xb7735e9c827532eb35449fddb414b2f18241d8e2",
+   "curve": "0x3d6c4d6acf710896123766eaafa4a009df93ac8f",
+   "launch_block": 62324513,
+   "launch_tx": "0x14235b19e73afbd6ecd2bdd44f8b20352c66dc18da99e089487ff5943321ad77",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "6645412522754454124",
+   "trades_first_window": 145
+  },
+  {
+   "token": "0xb0dda64ab44cf6ece0361af19f17a37cccb1327b",
+   "curve": "0x0fd7ad9ef57d056f970e0c04cabf66c589588c0d",
+   "launch_block": 62324828,
+   "launch_tx": "0xf851415bbef0978880f59a3d25816683e4b0ea2a4f20595d8b1f128aa9492bab",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "10000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0xecb76e97983c50e6c21e33368a05dfbd51ce5207",
+   "curve": "0x0cae7a9cadb7f9665c9c7b954d671e2298a7a032",
+   "launch_block": 62325728,
+   "launch_tx": "0xb4d5fc48ace0623253ed1e21beea16b57e730af5abf633df8742d3aab33ed168",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "2398497346308046",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xbf2ac33768049bbd151088dd3dfa732f8dc0df10",
+   "curve": "0xec065648ba6e1dabcff5ad4febf84c5909a1d656",
+   "launch_block": 62326354,
+   "launch_tx": "0x79f5ca08cd987fccbea3f9221e6c1c6f0f494c98f8638cdf366a0b894ca33fd1",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "305860196100000006",
+   "trades_first_window": 24
+  },
+  {
+   "token": "0x474d90cc3c4f3cd60a690eb385e7ebb16a697d0a",
+   "curve": "0x243c801e969b53808087d1f4fa4ca16c9711bb10",
+   "launch_block": 62326650,
+   "launch_tx": "0xa0ea84ecb3bbb7e3a05f458134e4193e7648120879330543b0c13778206cff6e",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "554428000000000001",
+   "trades_first_window": 15
+  },
+  {
+   "token": "0x891b793674a1d443a608ccafccc5b58a11e40387",
+   "curve": "0xa82c22484159b734a6a00dd2dc3c32531b9e7155",
+   "launch_block": 62327343,
+   "launch_tx": "0xf3b46da20c13c9722ce4e738677372b4e2938fe71ec5d48fd8bd7b1d8459abef",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "84925511996909292",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0x9dc8aa706f37e38381b89386825166108fca6bbb",
+   "curve": "0x6d5824ae94bde9ed4e794929af2fc7b919ee432c",
+   "launch_block": 62327547,
+   "launch_tx": "0x934516c129fec636e155495956b26d17f691c3ee937b007ad57857639e368299",
+   "creator_tax_bps": 500,
+   "phase_now": 0,
+   "volume_wei_first_window": "2825400000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xbded329ef63bcc6ce85bc4e7ae87e973540db879",
+   "curve": "0xdb00bc4e8d5e536e4ff1db442e5db454d8bdc766",
+   "launch_block": 62327803,
+   "launch_tx": "0xbb9cd92b6d1e8ee22f46f6035bb08609a203edc3081c545926162d960007cf02",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "118806000000000000",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0xe9a5edca874a96f512d5ed452eb31cda6bfd581f",
+   "curve": "0xeed1b42d3b7a9dbf9acee6e4be82e0dcd198a76d",
+   "launch_block": 62328226,
+   "launch_tx": "0x373dc9683aee0ce040d97720969d7efdd080686984a2ede3289837f57908ec66",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "2192541593700000003",
+   "trades_first_window": 62
+  },
+  {
+   "token": "0x4479bf61e8debefae95096d1d6357d67e4bf0e37",
+   "curve": "0xa6072da66c28f1cd11640116bc2e530a9ed4ed9e",
+   "launch_block": 62328512,
+   "launch_tx": "0x271ae96a951f6aa32e39c2f17a87fa5eca2c1e053654d43d6f411f4b955bcc85",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "86471999995148124",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x0241e3bd9a9061a57a374673c66e08d7b939a88d",
+   "curve": "0x2682414e1b0c220cabc6b816ef7f5bad4d34f3c1",
+   "launch_block": 62329181,
+   "launch_tx": "0x8a29fca5e7dbce15adba346ef5939aa8fd0f8ee794e365aa5512476612a69b8b",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "347437367149263251",
+   "trades_first_window": 8
+  },
+  {
+   "token": "0x6aeeb87fe58d344be94b145f468265787fa780eb",
+   "curve": "0x677c19b94e09dd88cc6e66876ad56ca9f7e2b5ef",
+   "launch_block": 62329604,
+   "launch_tx": "0x349d892e653c0673a2a7ac0b469f0d0cfa36da320e4994e4011ff5b83d965ba4",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "246576765704339334",
+   "trades_first_window": 23
+  },
+  {
+   "token": "0x14ebb85f57cc62f6eb80f16fd47e4da61cf64581",
+   "curve": "0xf380cdd4c7b08ea348fbf06069d07c0182c61825",
+   "launch_block": 62330186,
+   "launch_tx": "0x8b83fdcfa06278cea86bab3803a14511cd258bf07de6277376733463b267f8b2",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "94723122457003566",
+   "trades_first_window": 10
+  },
+  {
+   "token": "0xb41feb4b717926045d52da516ffee452160f31e8",
+   "curve": "0x837863176c15081f940a088f4556ea05f8820217",
+   "launch_block": 62330655,
+   "launch_tx": "0xe5fcb85c09e3a844485dd35b85f447a9b7448d64ac3f3fcb13810b05bcf0304c",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "735786595000000007",
+   "trades_first_window": 14
+  },
+  {
+   "token": "0x1dde067df449b7546a676d976709f70dca8d7f4c",
+   "curve": "0xb6d3df3a9e58e557fe0eff8ca307ec9bf72f4b2b",
+   "launch_block": 62331468,
+   "launch_tx": "0xc6545373abb638d7578b0f4cc461ccdb227fb285be3351c8f561c5d7cdb4c58d",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "79185190000000000",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xd24bd5022f0e941603c9e818a9535fb31f70ab17",
+   "curve": "0xc7552335557ac98fe569ad86c9a86873109cba92",
+   "launch_block": 62331731,
+   "launch_tx": "0xca00806ab88d1a29dd3a0bc1d5a5851f660e0742696a851539cb480ef0b11601",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "3650852637395010428",
+   "trades_first_window": 97
+  },
+  {
+   "token": "0x229de4fb0e1617b36caf1851ec7071215d507296",
+   "curve": "0x26224c41ddfc03573c6d267e2c5efb6e03acf437",
+   "launch_block": 62332250,
+   "launch_tx": "0x554112e06978ce22989f74eb82fc019f2729b18372daa82aeb04a36c7708511c",
+   "creator_tax_bps": 300,
+   "phase_now": 0,
+   "volume_wei_first_window": "88334271995148125",
+   "trades_first_window": 4
+  },
+  {
+   "token": "0xe3ba75922190582b0d644e6e4a2974388a5d9e63",
+   "curve": "0xe28e75e09eb0cc824d8ea68b68fe52060dc9c4be",
+   "launch_block": 62332737,
+   "launch_tx": "0x802d11c38a864d2b4b504c2853758d1e8275aebf2933824052cd562e8f2a381c",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "0",
+   "trades_first_window": 0
+  },
+  {
+   "token": "0x8900f03e496332f109f409b0f9079c83611c66a0",
+   "curve": "0x6edb6b216aa6954af516e1620ce0d6dd0af8cd72",
+   "launch_block": 62333366,
+   "launch_tx": "0x0568ad264914ab6b61ea7048422a97933cf2177eaebfa91bffc52ed4b915a5e6",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "1355861627596580894",
+   "trades_first_window": 19
+  },
+  {
+   "token": "0x0de6633859f7331b68ae03d3b9171e8d9630bf24",
+   "curve": "0xe81c19a12e07bc1e5f2b40f13cf4d5a46da2bf07",
+   "launch_block": 62334162,
+   "launch_tx": "0xdc5eb373987c1b05ecc5fcc12a71c50b7c37080bb133868a476cdf2b24498add",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "2047176893000000001",
+   "trades_first_window": 60
+  },
+  {
+   "token": "0x67da164179c7bb9950bb40117281768152d1f855",
+   "curve": "0xd223bb27ddafa7fc7ff2afe6852d9ab94d14d519",
+   "launch_block": 62334568,
+   "launch_tx": "0x62138697f27d89fa40b1f556663e79f01d3da178ace1dc735f5aa304bc63da70",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "5822699989798914",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x017230d9b86f6cd243aef6d3aa013dc36826d0e4",
+   "curve": "0x092d615564de03b09ad0939299840d40d4f67b30",
+   "launch_block": 62335000,
+   "launch_tx": "0x09b0c623913be52c754eff994f28b4effdfc6a66eac3eb923e6cfa254007c139",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "764850030000894985",
+   "trades_first_window": 18
+  },
+  {
+   "token": "0xefec544c77685abf5cabc647a4b4c1ea360762e5",
+   "curve": "0x6ce47b2768c273b66246a234d740e853f1e31607",
+   "launch_block": 62335624,
+   "launch_tx": "0xd12f894ffe3980592824ff69ca99fcd5d7f6619b42c4552c21a7b226429defd1",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "88891826392070652",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0xe1c0193d20b7686dec21d75437ed49e821d11bcf",
+   "curve": "0xc80828d9a223a70be4fbd7075b3a7a76eef1f3b2",
+   "launch_block": 62336243,
+   "launch_tx": "0x2ec9b9aa7abaaa1a1a576ce841ea27fad223f044a09c8834526e6e2b4b3cc062",
+   "creator_tax_bps": 100,
+   "phase_now": 0,
+   "volume_wei_first_window": "9802000000000001",
+   "trades_first_window": 2
+  },
+  {
+   "token": "0x51101140ff5d63377ad7a7cb272af62f08860425",
+   "curve": "0xf5fa96c13834dfe40e34aef1141f732e8113b216",
+   "launch_block": 62336408,
+   "launch_tx": "0x31a4f358a81d6be1dc424900fae3075ae8eb1066bf6f3bdf738d7591ae014263",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "1272608273292607087",
+   "trades_first_window": 11
+  },
+  {
+   "token": "0xed94561f38f594a553c3903bba84cf903ba32952",
+   "curve": "0x13c7eebd04758aac805cedd503675a0dced9b2ba",
+   "launch_block": 62337055,
+   "launch_tx": "0xd5d4027da2c15c5e9ebe8c4c0afca97e697c7264e86b6638bacfbff33eeb7628",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "166844372835320001",
+   "trades_first_window": 6
+  },
+  {
+   "token": "0x3844f7b4f5710b5ecfe50c000cd376b54b8fde3e",
+   "curve": "0x819fbe8220f0ea0660727a93511869670826e0b3",
+   "launch_block": 62337905,
+   "launch_tx": "0xe585a5331181c9bdd4eecafa6157bacada136e08d18e896cfef4a6fe74fbb9df",
+   "creator_tax_bps": 0,
+   "phase_now": 0,
+   "volume_wei_first_window": "1208414689307527019",
+   "trades_first_window": 48
+  },
+  {
+   "token": "0xa76ac5f2add6067c1d1603fc622c8205c9de9dd9",
+   "curve": "0x303dad3ca7d7d7994ad3655cc335e2b97d6c37c7",
+   "launch_block": 62338199,
+   "launch_tx": "0xf994ba82d9eae23c9fd4796f5668a72a1b42b4d50af2403be33832dcf78fa731",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "1000000000000000",
+   "trades_first_window": 1
+  },
+  {
+   "token": "0x7b89b435ca658309f9f2c1844320b6cee4b11e3c",
+   "curve": "0x2d4f5a2bf900617e2262d279d1ddbfd5c7fd744d",
+   "launch_block": 62338456,
+   "launch_tx": "0xb59e4eebd57cdf54620770b922ba53b7fee8fc373ac3664d28ef9b082dfe0de9",
+   "creator_tax_bps": 200,
+   "phase_now": 0,
+   "volume_wei_first_window": "137549864000000001",
+   "trades_first_window": 5
+  }
+ ]
+}
