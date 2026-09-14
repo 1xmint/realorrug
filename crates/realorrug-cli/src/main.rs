@@ -9,6 +9,7 @@ mod analyst;
 mod audit;
 mod contest;
 mod dossier;
+mod launch_check;
 mod model_prices;
 mod roast;
 
@@ -41,6 +42,11 @@ commands:
   contest <pay --dry-run | record-payout --signature <sig> | void --reason <word>> --week N
                                  the payout's manual fallback, through the same
                                  check the automated payout uses
+  launch-check --tx <hash> --rpc URL
+                                 whether a Pons v2 launch on Robinhood Chain
+                                 is clean (ADR 0013 constraint 1): the mint
+                                 only to the curve, no trade, no extra
+                                 snipe-tax exemption. Read-only, holds no key
   model-prices <model> [--check] | --list
                                  what to paste into analyst.env for a model,
                                  read from models.dev rather than typed
@@ -82,6 +88,7 @@ fn main() -> ExitCode {
         "roast" => roast::run(&args),
         "analyst" => analyst::run(&args),
         "audit" => audit::run(&args),
+        "launch-check" => launch_check::run(&args),
         "model-prices" => model_prices::run(&args),
         "-h" | "--help" | "help" => {
             print!("{}", usage());

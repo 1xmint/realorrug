@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "realorrug-robinhood"
+description = "Reads Robinhood Chain: transaction receipts, and Pons v2 launches, trades and fee sweeps decoded from them."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# JSON-RPC is JSON. Receipts arrive as JSON objects and are parsed into typed
+# values at the edge, so nothing past `Receipt::from_json` sees a string.
+serde_json.workspace = true
+thiserror.workspace = true
+# The one HTTP client the workspace already carries (`realorrug-onchain`,
+# `realorrug-payout`). Read-only here: this crate holds no key and signs nothing.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
