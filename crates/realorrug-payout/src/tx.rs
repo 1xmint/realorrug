@@ -292,7 +292,11 @@ fn integer(it: Item<'_>, name: &'static str, width: usize) -> Result<u128, TxErr
     if b.len() > width {
         return Err(TxError::Wide(name));
     }
-    Ok(b.iter().fold(0u128, |acc, &x| (acc << 8) | u128::from(x)))
+    // Padded into a u128's bytes rather than folded with shifts, so there is
+    // no `|` that an `^` computes identically.
+    let mut be = [0u8; 16];
+    be[16 - b.len()..].copy_from_slice(b);
+    Ok(u128::from_be_bytes(be))
 }
 
 fn integer_u64(it: Item<'_>, name: &'static str) -> Result<u64, TxError> {
@@ -473,6 +477,20 @@ mod tests {
         let long = enc_string(&[b'x'; 56]);
         assert_eq!(item(&long), Ok((Item::Bytes(&[b'x'; 56]), &[][..])));
         assert_eq!(item(&[0x81, 0x05]), Err(TxError::NonCanonical));
+        // 0x80 itself is not its own encoding, so its one-byte string is
+        // canonical. Re-apply `<=` for `<` in the check: this is refused.
+        assert_eq!(item(&[0x81, 0x80]), Ok((Item::Bytes(&[0x80]), &[][..])));
+        // Two length bytes, for a string and for a list. 0xb9 and 0xf9 name a
+        // two-byte length; re-apply `/` for `-` and they read one byte.
+        let mut wide = vec![0xb9, 0x01, 0x00];
+        wide.extend_from_slice(&[b'x'; 256]);
+        assert_eq!(item(&wide), Ok((Item::Bytes(&[b'x'; 256]), &[][..])));
+        wide[0] = 0xf9;
+        assert_eq!(item(&wide), Ok((Item::List(&[b'x'; 256]), &[][..])));
+        // An r or s of 33 bytes is too wide; 32 is not.
+        assert_eq!(word(Item::Bytes(&[1; 33]), "r"), Err(TxError::Wide("r")));
+        assert_eq!(word(Item::Bytes(&[1; 32]), "r"), Ok([1; 32]));
+        assert_eq!(word(Item::Bytes(&[1; 31]), "r").map(|w| w[0]), Ok(0));
         // A long header for a short string.
         assert_eq!(
             item(&[0xb8, 0x05, 1, 2, 3, 4, 5]),

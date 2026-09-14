@@ -108,6 +108,8 @@ struct Fake {
     /// Receipts for transactions to this address are not returned.
     hide_receipts_to: Cell<Option<Address>>,
     escrow_pays_short: Cell<u128>,
+    /// Taken from the wallet when a claim lands, standing in for its gas.
+    claim_spends: Cell<u128>,
     claim_reverts: Cell<bool>,
     transfer_reverts: Cell<bool>,
     /// Added to the value a transaction reads back with.
@@ -131,6 +133,7 @@ fn fake() -> Fake {
         lands: Cell::new(true),
         hide_receipts_to: Cell::new(None),
         escrow_pays_short: Cell::new(0),
+        claim_spends: Cell::new(0),
         claim_reverts: Cell::new(false),
         transfer_reverts: Cell::new(false),
         readback_extra: Cell::new(0),
@@ -233,7 +236,8 @@ impl Chain for Fake {
                 let asked = u128::from_be_bytes(signed.tx.data[20..36].try_into().expect("16"));
                 let paid = asked - self.escrow_pays_short.get();
                 self.escrow.set(self.escrow.get() - paid);
-                self.wallet_eth.set(self.wallet_eth.get() + paid);
+                self.wallet_eth
+                    .set(self.wallet_eth.get() + paid - self.claim_spends.get());
                 let mut who = [0u8; 32];
                 who[12..].copy_from_slice(&from.0);
                 logs.push(Log {
@@ -527,6 +531,9 @@ fn a_recipient_with_code_is_refused_whatever_the_code_is() {
             Ok(vec![0x60, 0x80, 0x60, 0x40]),
             Some("contract code, 4 bytes"),
         ),
+        // Twenty-three bytes of ordinary code is a contract, not a delegation.
+        // Re-apply `||` for `&&` in the 7702 test: this reads as one.
+        (Ok(vec![0x60; 23]), Some("contract code, 23 bytes")),
         (Ok(delegation), Some("EIP-7702 delegation to 0x5555")),
         (Err("timeout".to_owned()), None),
     ];
@@ -1024,4 +1031,307 @@ fn a_raw_transaction_is_sent_as_hex_and_the_nodes_hash_is_read_back() {
     let request = server.join().expect("served");
     assert_eq!(request["method"], "eth_sendRawTransaction");
     assert_eq!(request["params"], serde_json::json!(["0x02c0"]));
+}
+
+#[test]
+fn the_dry_run_names_the_amount_the_recipient_both_transactions_and_the_unsigned_claim() {
+    // What an operator reads before signing by hand. Re-apply by returning an
+    // empty string: every assertion fails.
+    let d = claimed_dir("describe");
+    let planned = plan(&fake(), &d, WEEK, &config(), NOW).expect("planned");
+    let text = planned.describe();
+    assert!(
+        text.starts_with(&format!("week {}: would claim {PRIZE} wei", WEEK.0)),
+        "{text}"
+    );
+    assert!(text.contains(&RECIPIENT.to_string()), "{text}");
+    assert!(
+        text.contains(&format!(
+            "claim: to {ESCROW}, value 0 wei, nonce 0, gas limit 50000"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "transfer: to {RECIPIENT}, value {PRIZE} wei, nonce 1"
+        )),
+        "{text}"
+    );
+    assert!(text.contains(&format!("gas: up to {NEED} wei")), "{text}");
+    assert!(
+        text.ends_with(&realorrug_robinhood::to_hex(&planned.claim.unsigned())),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_transfer_is_verified_field_by_field_in_the_receipt_and_the_transaction() {
+    // Each field wrong on its own, with every other field right, so an `||`
+    // turned into `&&` anywhere lets exactly one case through.
+    let hash = Hash32([7; 32]);
+    let good_receipt = Receipt {
+        transaction: hash,
+        block: 1,
+        succeeded: true,
+        from: wallet(),
+        to: Some(RECIPIENT),
+        logs: Vec::new(),
+    };
+    let good_tx = Transaction {
+        hash,
+        from: wallet(),
+        to: Some(RECIPIENT),
+        value: PRIZE,
+        input: Vec::new(),
+        nonce: 1,
+        block: Some(1),
+    };
+    let check = |receipt: Receipt, sent: Transaction| {
+        let chain = fake();
+        chain.txs.borrow_mut().insert(hash, sent);
+        verify_transfer(&chain, &receipt, &wallet(), &RECIPIENT, PRIZE)
+    };
+    assert_eq!(check(good_receipt.clone(), good_tx.clone()), Ok(()));
+    let stranger = Address([0x33; 20]);
+    let cases: Vec<(&str, Receipt, Transaction)> = vec![
+        (
+            "reverted",
+            Receipt {
+                succeeded: false,
+                ..good_receipt.clone()
+            },
+            good_tx.clone(),
+        ),
+        (
+            "receipt from",
+            Receipt {
+                from: stranger,
+                ..good_receipt.clone()
+            },
+            good_tx.clone(),
+        ),
+        (
+            "receipt to",
+            Receipt {
+                to: Some(stranger),
+                ..good_receipt.clone()
+            },
+            good_tx.clone(),
+        ),
+        (
+            "tx hash",
+            good_receipt.clone(),
+            Transaction {
+                hash: Hash32([8; 32]),
+                ..good_tx.clone()
+            },
+        ),
+        (
+            "tx from",
+            good_receipt.clone(),
+            Transaction {
+                from: stranger,
+                ..good_tx.clone()
+            },
+        ),
+        (
+            "tx to",
+            good_receipt.clone(),
+            Transaction {
+                to: Some(stranger),
+                ..good_tx.clone()
+            },
+        ),
+        (
+            "value",
+            good_receipt.clone(),
+            Transaction {
+                value: PRIZE - 1,
+                ..good_tx.clone()
+            },
+        ),
+        (
+            "input",
+            good_receipt.clone(),
+            Transaction {
+                input: vec![0],
+                ..good_tx.clone()
+            },
+        ),
+    ];
+    for (name, receipt, sent) in cases {
+        assert!(
+            matches!(check(receipt, sent), Err(PayError::Verify(_))),
+            "{name} wrong must not verify"
+        );
+    }
+}
+
+#[test]
+fn the_transfer_is_refused_when_the_claim_left_too_little_for_its_gas() {
+    // The balance check before the transfer, at its boundary. Re-apply `<=`:
+    // exactly enough is refused. Re-apply `==`: one wei short is sent.
+    let transfer_need = 26_250 * 2 * BASE_FEE + PRIZE;
+    let spends_to_exactly = NEED - 26_250 * 2 * BASE_FEE;
+
+    let d = claimed_dir("transfer-gas-short");
+    let chain = fake();
+    chain.claim_spends.set(spends_to_exactly + 1);
+    assert_eq!(
+        pay_once(&chain, &Local::new(), &d),
+        Err(PayError::GasUnfunded {
+            need: transfer_need,
+            have: transfer_need - 1
+        })
+    );
+    assert_eq!(chain.sent_to(RECIPIENT), 0);
+    assert_eq!(
+        read_pending(&d, WEEK).expect("kept").claim.claimed_wei,
+        Some(Wei(PRIZE)),
+        "the claim is kept for the run after the float is topped up"
+    );
+
+    let d = claimed_dir("transfer-gas-exact");
+    let chain = fake();
+    chain.claim_spends.set(spends_to_exactly);
+    pay_once(&chain, &Local::new(), &d).expect("exactly enough pays");
+}
+#[test]
+fn a_transfer_the_node_does_not_know_is_not_verified() {
+    let receipt = Receipt {
+        transaction: Hash32([7; 32]),
+        block: 1,
+        succeeded: true,
+        from: wallet(),
+        to: Some(RECIPIENT),
+        logs: Vec::new(),
+    };
+    assert!(matches!(
+        verify_transfer(&fake(), &receipt, &wallet(), &RECIPIENT, PRIZE),
+        Err(PayError::Verify(why)) if why.contains("does not know")
+    ));
+}
+
+#[test]
+fn the_fallback_refuses_either_transaction_already_recorded_and_nothing_else() {
+    let paid_dir = claimed_dir("reuse-source");
+    let chain = fake();
+    let payout = pay_once(&chain, &Local::new(), &paid_dir).expect("paid");
+    let Paid::Eth {
+        claim_tx,
+        transfer_tx,
+        ..
+    } = &payout.paid
+    else {
+        panic!("eth");
+    };
+    let claim: Hash32 = claim_tx.parse().expect("hash");
+    let transfer: Hash32 = transfer_tx.parse().expect("hash");
+
+    let other_week = |claim_tx: &str, transfer_tx: &str| {
+        let mut record = record_claimed_by(&RECIPIENT.to_string());
+        record.week = Week(WEEK.0 - 1);
+        record.payout = Some(Payout {
+            recipient: RECIPIENT.to_string(),
+            paid: Paid::Eth {
+                wei: Wei(1),
+                claim_tx: claim_tx.to_owned(),
+                transfer_tx: transfer_tx.to_owned(),
+            },
+            at: 1,
+        });
+        record
+    };
+    // Another week paid by other transactions does not block this one.
+    // Re-apply `!=` for `==` in either comparison: this is refused.
+    let d = claimed_dir("reuse-unrelated");
+    write_record(&d, &other_week("0xaa", "0xbb")).expect("write");
+    record_payout(&chain, &d, WEEK, &wallet(), &claim, &transfer, NOW).expect("recorded");
+
+    // Only the claim reused, or only the transfer: each refused. Re-apply `&&`
+    // for `||`: both of these record.
+    for (name, reused) in [
+        ("claim", other_week(claim_tx, "0xbb")),
+        ("transfer", other_week("0xaa", transfer_tx)),
+    ] {
+        let d = claimed_dir(&format!("reuse-{name}"));
+        write_record(&d, &reused).expect("write");
+        assert!(
+            matches!(
+                record_payout(&chain, &d, WEEK, &wallet(), &claim, &transfer, NOW),
+                Err(PayError::Verify(why)) if why.contains("already records")
+            ),
+            "{name}"
+        );
+        assert_eq!(read_record(&d, WEEK).expect("record").payout, None);
+    }
+}
+
+/// A JSON-RPC node that answers each connection with the next result.
+fn node(results: Vec<&'static str>) -> String {
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let url = format!("http://{}", listener.local_addr().expect("addr"));
+    std::thread::spawn(move || {
+        for result in results {
+            let (stream, _) = listener.accept().expect("a connection");
+            let mut reader = BufReader::new(stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("header");
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().expect("length");
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).expect("body");
+            let answer = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result}}}"#);
+            let mut stream = reader.into_inner();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
+                answer.len()
+            )
+            .expect("respond");
+        }
+    });
+    url
+}
+
+#[test]
+fn the_real_chain_passes_each_read_through_to_the_node() {
+    // The trait's `Rpc` impl is a row of one-line forwards, and a forward that
+    // returned a constant would pass every fake-chain test. Re-apply by
+    // returning `Ok(0)` from any of them: its assertion fails.
+    let rpc = Rpc::new(node(vec![
+        r#""0x1237""#,
+        r#"{"number":"0x1","baseFeePerGas":"0x4255720"}"#,
+        r#""0x2a""#,
+        r#""0x3""#,
+        r#""0x6001""#,
+        r#""0x7fa7""#,
+    ]));
+    assert_eq!(Chain::chain_id(&rpc), Ok(4663));
+    assert_eq!(Chain::base_fee(&rpc), Ok(0x0425_5720));
+    assert_eq!(Chain::balance(&rpc, &wallet()), Ok(42));
+    assert_eq!(Chain::nonce(&rpc, &wallet(), Tag::Pending), Ok(3));
+    assert_eq!(Chain::code(&rpc, &RECIPIENT), Ok(vec![0x60, 0x01]));
+    assert_eq!(
+        Chain::estimate_gas(&rpc, &wallet(), &RECIPIENT, 1, &[]),
+        Ok(0x7fa7)
+    );
+}
+
+#[test]
+fn the_real_chain_waits_a_second_between_receipt_polls() {
+    // Without the wait, ninety polls take milliseconds and a claim that needs
+    // a few blocks is abandoned to the next day's run. Re-apply by making
+    // `pause` do nothing: this fails.
+    let started = std::time::Instant::now();
+    Chain::pause(&Rpc::new("http://127.0.0.1:1"));
+    assert!(started.elapsed() >= std::time::Duration::from_secs(1));
 }

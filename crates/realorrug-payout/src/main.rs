@@ -120,6 +120,17 @@ fn signing_from(get: &impl Fn(&str) -> Option<String>, missing: &mut Vec<String>
     }
 }
 
+/// The Turnkey variables alone, for `--setup-proof`, which touches no chain.
+fn proof_settings_from(get: &impl Fn(&str) -> Option<String>) -> Result<Signing, Vec<String>> {
+    let mut missing = Vec::new();
+    let signing = signing_from(get, &mut missing);
+    if missing.is_empty() {
+        Ok(signing)
+    } else {
+        Err(missing)
+    }
+}
+
 fn settings_from(get: &impl Fn(&str) -> Option<String>) -> Result<Settings, Vec<String>> {
     let mut missing = Vec::new();
     let signing = signing_from(get, &mut missing);
@@ -214,11 +225,10 @@ fn main() -> ExitCode {
     let get = |k: &str| std::env::var(k).ok();
 
     if has(&args, "--setup-proof") {
-        let mut missing = Vec::new();
-        let signing = signing_from(&get, &mut missing);
-        if !missing.is_empty() {
-            return refuse(&missing);
-        }
+        let signing = match proof_settings_from(&get) {
+            Ok(s) => s,
+            Err(missing) => return refuse(&missing),
+        };
         let client = match turnkey(&signing) {
             Ok(c) => c,
             Err(e) => return refuse(&[e]),
@@ -423,6 +433,36 @@ mod tests {
             }
         };
         assert!(settings_from(&bad).expect_err("bad")[0].contains("does not parse"));
+    }
+
+    #[test]
+    fn the_setup_proof_needs_the_turnkey_variables_and_nothing_else() {
+        // It touches no chain, so it must run before a token or an endpoint
+        // exists, which is when the operator sets Turnkey up. Re-apply by
+        // inverting the emptiness check: a complete set is refused.
+        let wallet = format!("0x{}", "11".repeat(20));
+        let turnkey_only = |k: &str| match k {
+            "TURNKEY_API_KEY" => Some("/etc/radar/turnkey.key".to_owned()),
+            "TURNKEY_API_PUBLIC_KEY" => Some("02ab".to_owned()),
+            "TURNKEY_ORGANIZATION_ID" => Some("org".to_owned()),
+            "RADAR_PAYOUT_ADDRESS" => Some(wallet.clone()),
+            _ => None,
+        };
+        let got = proof_settings_from(&turnkey_only).expect("enough for the proof");
+        assert_eq!(got.organization, "org");
+        assert!(settings_from(&turnkey_only).is_err(), "not enough to pay");
+        let missing = proof_settings_from(&|k: &str| {
+            if k == "TURNKEY_ORGANIZATION_ID" {
+                None
+            } else {
+                turnkey_only(k)
+            }
+        })
+        .expect_err("missing");
+        assert_eq!(
+            missing,
+            vec!["TURNKEY_ORGANIZATION_ID is not set".to_owned()]
+        );
     }
 
     #[test]

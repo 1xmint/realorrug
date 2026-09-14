@@ -170,7 +170,8 @@ impl ApiKey {
 pub fn der(signature: &Signature) -> Vec<u8> {
     let (r, s) = signature.split_bytes();
     let integer = |be: &[u8]| {
-        let first = be.iter().position(|&b| b != 0).unwrap_or(be.len() - 1);
+        // r and s are nonzero, so a nonzero byte is always found.
+        let first = be.iter().position(|&b| b != 0).unwrap_or(0);
         let digits = &be[first..];
         let pad = digits[0] & 0x80 != 0;
         let mut out = vec![0x02, (digits.len() + usize::from(pad)) as u8];
