@@ -1,8 +1,39 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Deploying realorrug
 
-Three processes, each its own unit. **None of them is installed on the box as of
-2026-09-13**; this is the runbook for when they are.
+Three processes, each its own unit. **Installed on the box: `realorrug-serve`
+only**, since 2026-09-14, as a user unit (below). The analyst and the payout are
+not installed; this is the runbook for when they are.
+
+## What runs today
+
+`realorrug-serve` runs as guardian's systemd **user** unit,
+[`deploy/user/realorrug-serve.service`](user/realorrug-serve.service), on
+`127.0.0.1:8090`, beside `radar-serve` on `8402`. A user unit because the
+system unit needs sudo with a password and the box's passwordless sudo belongs
+to other services; guardian lingers, so the unit starts at boot and is
+supervised. Binary at `~/realorrug/bin/realorrug-serve`, with the release's
+`BUILD-INFO.txt` beside it.
+
+Installed from `release-linux` run 34793325535, commit `ae448f0`; `/health`
+reported that build, and the five `/v1/public/*` documents were byte-identical
+to `radar-serve`'s on install.
+
+**The live site does not reach it yet.** The site calls
+`https://radar.heyvera.org`, which the root-owned tunnel in
+`/etc/cloudflared/config.yml` sends to `radar-serve`. The switch is a tunnel
+rule sending `/v1/public/*` on that hostname to `8090`, made by the owner with
+sudo. Step 3 of plan 0001 (removing the bot from Radar) waits for it.
+
+```bash
+# Check
+ssh guardian-vps-tail 'systemctl --user is-active realorrug-serve; curl -s localhost:8090/health'
+# Upgrade: download the artifact, then
+scp realorrug-serve guardian-vps-tail:/tmp/ && ssh guardian-vps-tail \
+  'install -m 0755 /tmp/realorrug-serve ~/realorrug/bin/ && systemctl --user restart realorrug-serve'
+# Remove
+ssh guardian-vps-tail 'systemctl --user disable --now realorrug-serve'
+```
 
 | unit | binary | what it does | writes |
 |---|---|---|---|
