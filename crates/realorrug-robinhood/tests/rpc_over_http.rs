@@ -253,7 +253,10 @@ fn the_nonce_is_asked_at_the_named_tag() {
     let rpc = Rpc::new(url);
     assert_eq!(rpc.nonce(&claimer(), Tag::Latest), Ok(3));
     assert_eq!(rpc.nonce(&claimer(), Tag::Pending), Ok(4));
-    assert!(rpc.nonce(&claimer(), Tag::Latest).is_err(), "a number is not a quantity");
+    assert!(
+        rpc.nonce(&claimer(), Tag::Latest).is_err(),
+        "a number is not a quantity"
+    );
     let log = seen.lock().expect("the log");
     assert_eq!(log[0]["method"], "eth_getTransactionCount");
     assert_eq!(
@@ -287,7 +290,9 @@ fn gas_is_estimated_for_the_exact_call_and_the_base_fee_read_from_the_latest_blo
     );
     let reverted = rpc.estimate_gas(&claimer(), &ESCROW, 0, &data);
     assert!(
-        reverted.as_ref().is_err_and(|e| e.contains("execution reverted")),
+        reverted
+            .as_ref()
+            .is_err_and(|e| e.contains("execution reverted")),
         "{reverted:?}"
     );
     let log = seen.lock().expect("the log");

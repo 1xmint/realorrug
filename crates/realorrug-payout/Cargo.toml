@@ -1,6 +1,6 @@
 [package]
 name = "realorrug-payout"
-description = "Pays the week's prize from the creator vault to the claimed address, under three refusals, and does nothing else."
+description = "Claims the week's prize from the Pons fee escrow and pays it to the claimed address on Robinhood Chain, signed through Turnkey, under three refusals, and does nothing else."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,19 +11,23 @@ authors.workspace = true
 
 [dependencies]
 realorrug-contest.workspace = true
-realorrug-decode.workspace = true
-realorrug-pumpfun.workspace = true
-realorrug-types.workspace = true
-# The one signature this process makes. The same library the signer uses; a
-# second implementation of ed25519 would be a second thing to get wrong.
-ed25519-dalek.workspace = true
+# Reads the chain: receipts, the escrow, the factory's launch record. It holds no
+# key; the signing and sending live here.
+realorrug-robinhood.workspace = true
+# Recovering a signed transaction's sender, and stamping Turnkey requests.
+k256.workspace = true
+sha3.workspace = true
 base64.workspace = true
-bs58.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# Direct RPC, never the x402 lane (rule 7). The same client the analyst uses.
+# JSON-RPC and Turnkey's API. The same client the reader uses.
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+# DER parsing for the stamp test only, so the hand-written encoder is checked by
+# `k256`'s own decoder. Not in the payout binary.
+k256 = { workspace = true, features = ["pkcs8"] }
 
 [[bin]]
 name = "realorrug-payout"

@@ -815,7 +815,15 @@ mod tests {
             at_scale
         );
         assert_eq!(Wei::parse(&u128::MAX.to_string()), Some(Wei(u128::MAX)));
-        for bad in ["", "+5", " 5", "5.0", "-1", "0x10", "340282366920938463463374607431768211456"] {
+        for bad in [
+            "",
+            "+5",
+            " 5",
+            "5.0",
+            "-1",
+            "0x10",
+            "340282366920938463463374607431768211456",
+        ] {
             assert_eq!(Wei::parse(bad), None, "{bad:?}");
         }
         assert!(
