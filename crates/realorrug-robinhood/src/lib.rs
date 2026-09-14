@@ -4,11 +4,14 @@
 //! Design 0019 §4.4, plan 0001 step 6. The token lives on Robinhood Chain
 //! (ADR 0023), and ADR 0013's constraint 1 -- no dev buy, the curve the only
 //! recipient -- is a property of one transaction there. This crate reads that
-//! transaction; [`pons`] says what it means.
+//! transaction; [`pons`] says what it means, and [`escrow`] reads where the
+//! creator's fees wait to be claimed.
 //!
 //! # Read-only
 //!
-//! No key, no signing, no transaction building. The payout that will spend on
+//! No key, no signing, no transaction building. [`escrow::claim_call`] encodes
+//! a claim's call data, so the payout and its tests share one encoding checked
+//! against mainnet, but nothing here can send it. The payout that will spend on
 //! this chain is a separate crate, so this one can be depended on by anything
 //! that needs to read the chain without that dependency reaching a key.
 //!
@@ -17,10 +20,11 @@
 //! A receipt is a JSON object of hex strings, and the logs Pons emits are
 //! fixed-width words. Parsing that is a page of code, tested against mainnet
 //! captures; a general EVM library would be tens of thousands of lines, most of
-//! them for signing, which this crate must not do. Event topics and the one
-//! selector are constants, checked against the captured transactions that use
-//! them, so no Keccak implementation is needed either.
+//! them for signing, which this crate must not do. Event topics and selectors
+//! are constants, checked against the captured transactions that use them, so
+//! no Keccak implementation is needed either.
 
+pub mod escrow;
 pub mod pons;
 
 use std::fmt;

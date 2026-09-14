@@ -11,6 +11,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
+use realorrug_robinhood::escrow::{ESCROW, claimable};
 use realorrug_robinhood::pons::{FACTORY, LaunchedToken};
 use realorrug_robinhood::{Address, Hash32, Receipt, Rpc};
 
@@ -168,5 +169,32 @@ fn a_contract_call_answering_anything_but_hex_is_an_error() {
     assert_eq!(
         rpc.call_contract(&FACTORY, &[]),
         Err("not hex: 0xabc".to_owned())
+    );
+}
+
+#[test]
+fn the_claimable_balance_asks_the_escrow_and_reads_one_amount() {
+    let claim: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/research/data/0036-escrow-claim.json"
+    ))
+    .expect("JSON");
+    let before = claim["reads"][3].clone();
+    let claimer: Address = "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06"
+        .parse()
+        .expect("an address");
+    let (url, seen) = serve(vec![
+        answer(&before["result"]),
+        answer(&serde_json::json!("0x00")),
+    ]);
+    let rpc = Rpc::new(url);
+    assert_eq!(claimable(&rpc, &claimer), Ok(4_014_961_601_594_189_201));
+    let request = seen.lock().expect("the log")[0].clone();
+    assert_eq!(
+        request["params"],
+        serde_json::json!([{ "to": ESCROW.to_string(), "data": before["params"][0]["data"] }, "latest"])
+    );
+    assert_eq!(
+        claimable(&rpc, &claimer),
+        Err("balanceOf returned 1 bytes".to_owned())
     );
 }
