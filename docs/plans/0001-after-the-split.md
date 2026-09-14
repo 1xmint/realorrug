@@ -51,8 +51,14 @@ this is what follows it, in order, each with what proves it.
      balance, and a `claim()` captured and read back ([research 0036](../research/0036-pons-v2-read-from-a-real-launch.md) §5).
      Built 2026-09-14 (`realorrug_robinhood::escrow`).
    - 6c, the payout: claim from the escrow, pay the winner, read both back,
-     under `realorrug_contest::Payout::permitted`. Signs on EVM, so it brings
-     the signing dependency and the key file format; its own pull request.
+     under `realorrug_contest::Payout::permitted`, signed through Turnkey
+     ([ADR 0025](../adr/0025-the-robinhood-payout-signs-through-turnkey.md)).
+     Built 2026-09-14 on `payout/robinhood`. Waits on the Turnkey setup proof
+     and a read-only gas capture, both research 0037.
+   - 6d, before launch: the analyst's `try_claim` accepting an EVM address; the
+     site showing ETH with a Robinhood explorer link; Radar's `radar brief`
+     reading the new payout shape; and how the token is launched with the
+     Turnkey account as creator fee recipient (ADR 0025 §2).
 
 ## Handback
 
@@ -171,3 +177,25 @@ this is what follows it, in order, each with what proves it.
     old build, which predates this session.
   - *Next:* step 6c, the payout. Radar's own deploy (its new build, and
     `radar brief` on the box as step 3's second proof) is Radar's to run.
+- 2026-09-14, sixth session:
+  - **Step 6c built** on `payout/robinhood`, one pull request.
+    [ADR 0025](../adr/0025-the-robinhood-payout-signs-through-turnkey.md)
+    records Josh's decision that the key lives in Turnkey. The ledger holds
+    wei (`Paid::Eth`, with `Sol` read-only); `realorrug-payout` claims from the
+    escrow, transfers exactly the `Claimed` figure, reads both back, and keeps
+    a pending file so a rerun never claims twice; `realorrug contest pay
+    --dry-run` and `record-payout --claim-tx --transfer-tx` run the same
+    checks; serve adds `wei`, `claim_tx`, `transfer_tx`.
+  - **Proved locally:** the encoder rebuilds the captured claim `0x07cab768…`
+    to mainnet's hash and recovers its sender; the Turnkey stamp verifies
+    under `k256`'s own DER decoder; 22 flow tests against a fake chain cover
+    every refusal and every resume case. Contest, robinhood, payout, cli,
+    serve, analyst and repo-conformance tests and clippy pass, one crate at a
+    time. MIN_TESTS 1030 → 1062 by count.
+  - **Not proved:** nothing touched Turnkey or mainnet. The deploy guide's
+    policy expression is untested until the setup proof.
+  - *Next, needing Josh:* (1) a yes to the read-only capture for research
+    0037 (a plain transfer and its receipt, the base fee, and two gas
+    estimates); (2) the Turnkey organisation, wallet, user, API key and
+    policy, then `realorrug-payout --setup-proof`; (3) at launch, the gas
+    float, the first payout and enabling the timer. 6d before launch.

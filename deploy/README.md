@@ -64,7 +64,7 @@ sudo systemctl disable --now realorrug-analyst && sudo systemctl enable --now ra
 | unit | binary | what it does | writes |
 |---|---|---|---|
 | `realorrug-analyst.service` | `realorrug-analyst` | answers summoned mentions on X with measured facts | `data/analyst`, `data/contest` |
-| `realorrug-payout.service` + `realorrug-payout.timer` | `realorrug-payout --due` | pays a claimed, unpaid week under three refusals | `data/contest` |
+| `realorrug-payout.service` + `realorrug-payout.timer` | `realorrug-payout --due` | claims a claimed, unpaid week's fees from the escrow and pays them, signed through Turnkey | `data/contest` |
 | `realorrug-serve.service` | `realorrug-serve` | the public site's five documents | nothing |
 
 ## What it reads from Radar, and how
@@ -97,9 +97,71 @@ sudo systemctl enable --now realorrug-serve realorrug-analyst
 ```
 
 The payout runs as its own user, `realorrug-payout`, which owns nothing but its
-key and the contest directory. Create it before enabling the timer. The payout
-code today is pump.fun's; ADR 0023 replaces it with a Robinhood Chain payout
-before the token launches, so **do not enable the timer until that lands**.
+Turnkey API key and the contest directory. **Do not enable the timer until
+launch**: the token exists, the gas float is funded, and the setup proof below
+has passed.
+
+### The payout's key is in Turnkey
+
+[ADR 0025](../docs/adr/0025-the-robinhood-payout-signs-through-turnkey.md). The
+wallet key never touches the box. What the box holds is a Turnkey API key that
+can ask Turnkey to sign two kinds of transaction and nothing else.
+
+Set up in Turnkey's dashboard, by the operator, on a passkey:
+
+1. An organisation, with the operator as root user.
+2. One wallet with one Ethereum account. Its address is `RADAR_PAYOUT_ADDRESS`,
+   and the token's creator fee recipient.
+3. A user `realorrug-payout`, not in the root quorum, holding one API key of
+   type secp256k1. Put its private key, `0x` and 64 hex digits, in a file and
+   install it as `/etc/radar/turnkey.key`, mode `0400`, owner
+   `realorrug-payout`. The process refuses a file group or others can read, and
+   one whose public key is not `TURNKEY_API_PUBLIC_KEY`.
+4. One ALLOW policy for that user, and no other policy naming it. Check the
+   expression in Turnkey's policy editor while writing it:
+
+   ```text
+   consensus: approvers.any(user, user.id == '<realorrug-payout user id>')
+   condition: activity.type == 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2'
+     && eth.tx.chain_id == 4663
+     && ((eth.tx.to == '0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e'
+          && eth.tx.value == 0
+          && eth.tx.function_signature == '0x379607f5')
+         || eth.tx.data == '')
+   ```
+
+   That is `claim(uint256)` on the Pons fee escrow, or a plain ETH transfer, on
+   Robinhood Chain. No token approvals, no other contracts, no other chains.
+   There is deliberately no value cap; ADR 0025 says why.
+5. Wallet and key export stay denied to everyone but root.
+
+Then the setup proof. It needs only the Turnkey variables and
+`RADAR_PAYOUT_ADDRESS`, sends nothing to any chain, and costs nothing:
+
+```bash
+sudo systemd-run --pty --wait --uid=realorrug-payout -p EnvironmentFile=/etc/radar/payout.env -E TURNKEY_API_KEY=/etc/radar/turnkey.key /usr/local/bin/realorrug-payout --setup-proof
+```
+
+It passes only when `whoami` answers, a call to the Pons factory is **denied**,
+and `claim(0)` at nonce 1,000,000 is **allowed**, returned as the transaction
+asked for and signed by the wallet. Record the three lines in research 0037,
+without the organisation id or any key.
+
+### A payout that stopped part way
+
+A run writes `data/contest/<week>.pending.json` before each transaction it
+sends, and the next run finishes that week before anything else. It never claims
+twice. Two cases stop for the operator:
+
+- **`nonce N was used by a transaction other than ...`**: something else was sent
+  from the wallet. Look the wallet up on the explorer; if the pending claim is
+  truly dead, delete the pending file.
+- **`locked`**: `data/contest/payout.lock` exists. If no payout is running, a run
+  died holding it; check the wallet and any pending file, then delete the lock.
+
+A claim or transfer made by hand is recorded with
+`realorrug contest record-payout --week N --wallet <address> --rpc <url> --claim-tx <hash> --transfer-tx <hash>`,
+which reads both back through the same checks.
 
 The environment variables keep their `RADAR_` prefix, so an existing
 `/etc/radar/analyst.env` works unchanged.
