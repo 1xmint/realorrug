@@ -28,7 +28,8 @@ this is what follows it, in order, each with what proves it.
    `/v1/public/*` calls to the new server instead (`deploy/README.md`). *Proof:* `/health`'s `build` equals
    the release artifact's `BUILD-INFO.txt` commit, and the site's five pages load.
    **Touches production: ask first.**
-3. **Remove the bot from Radar.** Only after step 2, because Radar's server
+3. **Remove the bot from Radar.** Merged as theradar#253 on 2026-09-14; the
+   box's `radar brief` proof waits for Radar's next deploy. Only after step 2, because Radar's server
    answers the live site's `/v1/public/*` today. Delete `radar-analyst`,
    `radar-roast`, `radar-contest`, `radar-payout` and the public routes; move
    `radar_roast::creator` and `BaseRates` down into a Radar crate so
@@ -133,3 +134,34 @@ this is what follows it, in order, each with what proves it.
     home, leaderboard, pool, history and token rendered, their calls to
     `weeks`, `stats`, `leaderboard` and `pool` each 200. Rollback is in the
     [deploy guide](../../deploy/README.md). Step 3 is unblocked.
+- 2026-09-14, fifth session:
+  - **Step 6b done**, PR #9, every check green including mutants.
+    `realorrug_robinhood::escrow` reads credits, claims and the claimable
+    balance, and reads a claim back. Captured claim `0x07cab768…`: the
+    escrow's record fell from 4,014,961,601,594,189,201 wei to zero, its ETH
+    by the same, and the claimer's ETH rose by that less the gas, to the wei.
+    The deployed call is `claim(uint256)`, not the published `claim()`.
+  - **Step 3 done in Radar**, theradar#253 (squash `c8fca0e`), every check
+    green. Four bot crates, the public routes and the bot's commands and
+    units deleted; `creator` and `BaseRates` moved into `radar-research`;
+    `radar brief`, `seven-days-later` and `radar-backfill` read the reply log
+    and ledger as files. Radar's test floor 2089 → 1979. The first mutation
+    run caught six survivors in the new file readers, each now pinned. A
+    helper agent did most of it and stopped without committing; the work was
+    recovered from its worktree. Radar #249 merged too (squash `26e1bd0`), and
+    the `radar-realorrug` worktree is removed. Radar allows only squash merges.
+  - **Not yet deployed:** Radar's new build is not on the box, so `radar brief`
+    on the box, step 3's second proof, still runs the old binary.
+  - **Radar's contest alarm was false.** `radar brief` said `data/contest`
+    could not be written, but week 2958 closed at 00:03 UTC and the analyst's
+    journal holds no read-only error since 2026-09-11. The installed
+    `/etc/systemd/system/radar-brief.service` lacked the contest grant Radar's repo copy has.
+  - **The analyst swap is staged, waiting on Josh's sudo:** `realorrug-analyst`
+    from release run 34852198731 (`1706340`, sha256 `928f6835…`) at
+    `~/bin/realorrug-analyst`, and both unit files in `~/realorrug/deploy/`.
+    Running it with `--help` to check it started it as a daemon (it has no
+    such flag); it had no credential, read and posted nothing, wrote nothing,
+    and was stopped within three minutes. `radar brief`'s process list does
+    not name `realorrug-analyst`, so a stale binary there is not yet caught.
+  - *Next:* Josh runs the swap; then check `realorrug-analyst`'s journal and
+    `radar brief`. Then step 6c, the payout.

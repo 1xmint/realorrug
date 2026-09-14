@@ -45,6 +45,15 @@ scp realorrug-serve guardian-vps-tail:/tmp/ && ssh guardian-vps-tail \
 ssh guardian-vps-tail 'systemctl --user disable --now realorrug-serve'
 ```
 
+**The analyst is staged, not running.** The bot answering mentions on the box
+is still Radar's `/etc/systemd/system/radar-analyst.service`. `realorrug-analyst` from release run
+34852198731 is at `~/bin/realorrug-analyst`, with
+[`realorrug-analyst.service`](realorrug-analyst.service) copied to
+`~/realorrug/deploy/`; the switch installs it and stops the old unit first,
+with sudo. Both units read `/etc/radar/analyst.env` and write the same
+directories, so they must never run together. The binary has no `--help`:
+any invocation starts the daemon.
+
 | unit | binary | what it does | writes |
 |---|---|---|---|
 | `realorrug-analyst.service` | `realorrug-analyst` | answers summoned mentions on X with measured facts | `data/analyst`, `data/contest` |
