@@ -155,7 +155,7 @@ this is what follows it, in order, each with what proves it.
   - **Radar's contest alarm was false.** `radar brief` said `data/contest`
     could not be written, but week 2958 closed at 00:03 UTC and the analyst's
     journal holds no read-only error since 2026-09-11. The installed
-    `radar-brief.service` lacked the contest grant Radar's repo copy has.
+    `/etc/systemd/system/radar-brief.service` lacked the contest grant Radar's repo copy has.
   - **The analyst swap is staged, waiting on Josh's sudo:** `realorrug-analyst`
     from release run 34852198731 (`1706340`, sha256 `928f6835…`) at
     `~/bin/realorrug-analyst`, and both unit files in `~/realorrug/deploy/`.

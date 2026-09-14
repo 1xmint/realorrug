@@ -46,7 +46,7 @@ ssh guardian-vps-tail 'systemctl --user disable --now realorrug-serve'
 ```
 
 **The analyst is staged, not running.** The bot answering mentions on the box
-is still Radar's `radar-analyst.service`. `realorrug-analyst` from release run
+is still Radar's `/etc/systemd/system/radar-analyst.service`. `realorrug-analyst` from release run
 34852198731 is at `~/bin/realorrug-analyst`, with
 [`realorrug-analyst.service`](realorrug-analyst.service) copied to
 `~/realorrug/deploy/`; the switch installs it and stops the old unit first,
