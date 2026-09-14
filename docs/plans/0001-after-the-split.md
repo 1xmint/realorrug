@@ -113,4 +113,12 @@ this is what follows it, in order, each with what proves it.
     from zero to **200 bps**, all of it to the prize. Josh decides at launch.
   - **Step 2 approved by Josh** on 2026-09-14: deploy once the step 6 pull
     request is merged and `main` is green.
-  - *Next:* merge 6a, deploy (step 2), then 6b.
+  - **6a merged** (PR #6, `ae448f0`), `main` green.
+  - **Step 2, first half done:** `realorrug-serve` from release run 34793325535
+    runs on the box as a user unit on `127.0.0.1:8090`; `/health` says
+    `ae448f0`, and the five `/v1/public/*` documents are byte-identical to
+    `radar-serve`'s ([deploy guide](../../deploy/README.md)). **Second half
+    waits for Josh:** the live site reaches `radar-serve` through the root-owned
+    tunnel config, and the rule sending `/v1/public/*` to `8090` needs his sudo.
+    Then the site's five pages are step 2's proof, and step 3 can start.
+  - *Next:* Josh's tunnel rule, then step 3; 6b meanwhile.

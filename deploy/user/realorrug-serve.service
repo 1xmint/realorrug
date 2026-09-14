@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# realorrug-serve as a systemd *user* unit for guardian, beside radar-serve.
+#
+# Why a user unit and not ../realorrug-serve.service: installing a system unit
+# needs sudo with a password, and the box's passwordless sudo belongs to other
+# services. guardian has lingering enabled, so this unit is supervised by
+# guardian's systemd manager, starts at boot, and survives logout -- unlike a
+# process started by hand over SSH. The system unit stays the target once the
+# owner installs it with sudo; this file is the no-sudo way to run the same
+# binary with the same environment.
+#
+# Install (as guardian, no sudo):
+#   install -D -m 0755 realorrug-serve ~/realorrug/bin/realorrug-serve
+#   install -D -m 0644 realorrug-serve.service ~/.config/systemd/user/realorrug-serve.service
+#   systemctl --user daemon-reload && systemctl --user enable --now realorrug-serve
+# Remove:
+#   systemctl --user disable --now realorrug-serve
+[Unit]
+Description=realorrug public documents (user unit) — stats, leaderboard, weeks, hunters, pool
+Documentation=https://github.com/1xmint/realorrug
+After=network-online.target
+
+[Service]
+Type=simple
+# The base-rate and population files are read relative to this directory, where
+# Radar's creator-index job publishes them.
+WorkingDirectory=/home/guardian/radar
+ExecStart=/home/guardian/realorrug/bin/realorrug-serve
+Environment=REALORRUG_BIND=127.0.0.1:8090
+Environment=RADAR_CONTEST_DIR=/home/guardian/radar/data/contest
+Environment=RADAR_ANALYST_DIR=/home/guardian/radar/data/analyst
+# The same origin radar-serve sends today (/etc/radar/radar.env).
+Environment=RADAR_SITE_ORIGIN=https://cabalhunter.org
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+MemoryMax=128M
+TasksMax=32
+
+[Install]
+WantedBy=default.target
