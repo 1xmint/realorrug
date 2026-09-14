@@ -14,6 +14,7 @@ this is what follows it, in order, each with what proves it.
 | release binaries on push to `main` | `release-linux` workflow |
 | step 1, own-name mask: `realorrug` masked beside `cabalhunter.org` | `the_account_can_say_its_own_name_and_every_other_rug_is_still_refused` in `forbidden.rs`, which failed at its first assertion with the name removed from `OWN_NAMES` |
 | step 4, `repo-conformance` and mutation shards | both green on PR #3, whose first mutation run caught a survivor in the new crate |
+| step 2, `realorrug-serve` answers the live site | `/health` build `ae448f0` equals release run 34793325535's; the site's pages load through the tunnel rule ([deploy guide](../../deploy/README.md)) |
 | step 5, a real Pons v2 launch captured | `docs/research/data/0036-pons-v2-launch.json`, findings in [research 0036](../research/0036-pons-v2-read-from-a-real-launch.md) |
 
 ## Next, in order
@@ -22,8 +23,9 @@ this is what follows it, in order, each with what proves it.
    The handle is `@realorrug` (renamed 2026-09-13), which the mask covers. The
    site is still `cabalhunter.org`, which stays in `OWN_NAMES` until the new
    domain is bought; a domain not spelled `realorrug` must be added there.
-2. **Deploy `realorrug-serve` beside Radar's server** (`deploy/README.md`), and
-   point the site's `VITE_API_BASE` at it. *Proof:* `/health`'s `build` equals
+2. ~~**Deploy `realorrug-serve` beside Radar's server**~~ Done; see the table
+   above. The site's `VITE_API_BASE` stayed; a tunnel rule sends its
+   `/v1/public/*` calls to the new server instead (`deploy/README.md`). *Proof:* `/health`'s `build` equals
    the release artifact's `BUILD-INFO.txt` commit, and the site's five pages load.
    **Touches production: ask first.**
 3. **Remove the bot from Radar.** Only after step 2, because Radar's server
@@ -122,3 +124,11 @@ this is what follows it, in order, each with what proves it.
     tunnel config, and the rule sending `/v1/public/*` to `8090` needs his sudo.
     Then the site's five pages are step 2's proof, and step 3 can start.
   - *Next:* Josh's tunnel rule, then step 3; 6b meanwhile.
+  - **Step 2 done.** Josh added the tunnel rule; `cloudflared ingress rule`
+    matched `/v1/public/stats` to `localhost:8090`. Through
+    `radar.heyvera.org` all five documents answer 200 with the site's CORS
+    header and match `8090`'s own answers apart from `measured_at`; the tunnel
+    held one connection to `8090` and none to `8402`. On `cabalhunter.org`,
+    home, leaderboard, pool, history and token rendered, their calls to
+    `weeks`, `stats`, `leaderboard` and `pool` each 200. Rollback is in the
+    [deploy guide](../../deploy/README.md). Step 3 is unblocked.

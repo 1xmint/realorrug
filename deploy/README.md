@@ -19,11 +19,21 @@ Installed from `release-linux` run 34793325535, commit `ae448f0`; `/health`
 reported that build, and the five `/v1/public/*` documents were byte-identical
 to `radar-serve`'s on install.
 
-**The live site does not reach it yet.** The site calls
-`https://radar.heyvera.org`, which the root-owned tunnel in
-`/etc/cloudflared/config.yml` sends to `radar-serve`. The switch is a tunnel
-rule sending `/v1/public/*` on that hostname to `8090`, made by the owner with
-sudo. Step 3 of plan 0001 (removing the bot from Radar) waits for it.
+**The live site reaches it** since 2026-09-14. The site calls
+`https://radar.heyvera.org`; the root-owned tunnel config
+`/etc/cloudflared/config.yml` holds a rule, above that hostname's catch-all,
+sending `/v1/public/*` to `http://localhost:8090`. Everything else on the
+hostname still goes to `radar-serve`. On the switch, the five documents fetched
+through the hostname matched `8090`'s own answers apart from their
+`measured_at` time, and the tunnel held a connection to `8090` and none to
+`8402`.
+
+```bash
+# Which rule a URL matches (on the box)
+sudo cloudflared tunnel --config /etc/cloudflared/config.yml ingress rule https://radar.heyvera.org/v1/public/stats
+# Roll back to radar-serve: the config before the rule was kept beside it
+sudo cp /etc/cloudflared/config.yml.bak-realorrug /etc/cloudflared/config.yml && sudo systemctl restart cloudflared
+```
 
 ```bash
 # Check
