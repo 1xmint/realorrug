@@ -1,0 +1,152 @@
+{
+ "source": "Robinhood Chain mainnet (chain id 4663) via https://rpc.mainnet.chain.robinhood.com, JSON-RPC responses as returned",
+ "captured": "2026-09-14",
+ "why": "A creator claiming from the Pons v2 fee escrow (0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e): the call, its Claimed event, and the escrow record and ETH balances on both sides of it, so the ETH reaching the claimer can be recomputed to the wei.",
+ "reads": [
+  {
+   "why": "chain id",
+   "method": "eth_chainId",
+   "params": [],
+   "result": "0x1237"
+  },
+  {
+   "why": "the claim transaction",
+   "method": "eth_getTransactionByHash",
+   "params": [
+    "0x07cab768bdf8dcf67edc9b0bc74d9d2d70cdd4f88b4cbe8ada2b6ec85f44fa7b"
+   ],
+   "result": {
+    "blockHash": "0xf570f8b56eb4f8cf31bbc74a006cd398c54fe0699b516eb9ba0d8aba25265c48",
+    "blockNumber": "0x3bf1262",
+    "from": "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+    "gas": "0xa661",
+    "gasPrice": "0x4255720",
+    "maxFeePerGas": "0xc448890",
+    "maxPriorityFeePerGas": "0x0",
+    "hash": "0x07cab768bdf8dcf67edc9b0bc74d9d2d70cdd4f88b4cbe8ada2b6ec85f44fa7b",
+    "input": "0x379607f500000000000000000000000000000000000000000000000037b8024df1dae591",
+    "nonce": "0x3",
+    "to": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+    "transactionIndex": "0x9",
+    "value": "0x0",
+    "type": "0x2",
+    "accessList": [],
+    "chainId": "0x1237",
+    "v": "0x1",
+    "r": "0xa0aeb63a390e48bcac3cffbf1d647d7d9f1719d3d1b38f02c2afd3d698b2a363",
+    "s": "0x51e473993cf73b24fcced82b93b326ead0b9416b2da2e3a6f4a04931f86541c6",
+    "yParity": "0x1"
+   }
+  },
+  {
+   "why": "the claim receipt",
+   "method": "eth_getTransactionReceipt",
+   "params": [
+    "0x07cab768bdf8dcf67edc9b0bc74d9d2d70cdd4f88b4cbe8ada2b6ec85f44fa7b"
+   ],
+   "result": {
+    "blockHash": "0xf570f8b56eb4f8cf31bbc74a006cd398c54fe0699b516eb9ba0d8aba25265c48",
+    "blockNumber": "0x3bf1262",
+    "contractAddress": null,
+    "cumulativeGasUsed": "0xc3e85",
+    "effectiveGasPrice": "0x4255720",
+    "from": "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+    "gasUsed": "0x7fa7",
+    "gasUsedForL1": "0x0",
+    "l1BlockNumber": "0x18c5d13",
+    "logs": [
+     {
+      "address": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+      "topics": [
+       "0xd8138f8a3f377c5259ca548e70e4c2de94f129f5a11036a15b69513cba2b426a",
+       "0x0000000000000000000000006aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06"
+      ],
+      "data": "0x00000000000000000000000000000000000000000000000037b8024df1dae591",
+      "blockNumber": "0x3bf1262",
+      "transactionHash": "0x07cab768bdf8dcf67edc9b0bc74d9d2d70cdd4f88b4cbe8ada2b6ec85f44fa7b",
+      "transactionIndex": "0x9",
+      "blockHash": "0xf570f8b56eb4f8cf31bbc74a006cd398c54fe0699b516eb9ba0d8aba25265c48",
+      "blockTimestamp": "0x6aa7fa81",
+      "logIndex": "0x14",
+      "removed": false
+     }
+    ],
+    "logsBloom": "0x00000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000400000000000000000000000000000000000000000008000000000000000800000000000000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000001000000000000000000000000",
+    "status": "0x1",
+    "to": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+    "transactionHash": "0x07cab768bdf8dcf67edc9b0bc74d9d2d70cdd4f88b4cbe8ada2b6ec85f44fa7b",
+    "transactionIndex": "0x9",
+    "type": "0x2"
+   }
+  },
+  {
+   "why": "escrow at block 62853729: balanceOf(claimer)",
+   "method": "eth_call",
+   "params": [
+    {
+     "to": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+     "data": "0x70a082310000000000000000000000006aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06"
+    },
+    "0x3bf1261"
+   ],
+   "result": "0x00000000000000000000000000000000000000000000000037b8024df1dae591"
+  },
+  {
+   "why": "claimer's ETH at block 62853729",
+   "method": "eth_getBalance",
+   "params": [
+    "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+    "0x3bf1261"
+   ],
+   "result": "0xdbd5a0613bfa700"
+  },
+  {
+   "why": "escrow's ETH at block 62853729",
+   "method": "eth_getBalance",
+   "params": [
+    "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+    "0x3bf1261"
+   ],
+   "result": "0x68d4142c335ad9669c"
+  },
+  {
+   "why": "escrow at block 62853730: balanceOf(claimer)",
+   "method": "eth_call",
+   "params": [
+    {
+     "to": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+     "data": "0x70a082310000000000000000000000006aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06"
+    },
+    "0x3bf1262"
+   ],
+   "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "why": "claimer's ETH at block 62853730",
+   "method": "eth_getBalance",
+   "params": [
+    "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+    "0x3bf1262"
+   ],
+   "result": "0x45755a42cb05d6b1"
+  },
+  {
+   "why": "escrow's ETH at block 62853730",
+   "method": "eth_getBalance",
+   "params": [
+    "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+    "0x3bf1262"
+   ],
+   "result": "0x689c5c29e568fe810b"
+  },
+  {
+   "why": "claimer's code at the claim block",
+   "method": "eth_getCode",
+   "params": [
+    "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+    "0x3bf1262"
+   ],
+   "result": "0x"
+  }
+ ]
+}

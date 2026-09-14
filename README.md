@@ -24,7 +24,7 @@ installed on any server.
 | `crates/realorrug-onchain` | the dossier, read from the chain on demand |
 | `crates/realorrug-contest` | the weekly prize as a rule that replays |
 | `crates/realorrug-payout` | the week's payout, under three refusals |
-| `crates/realorrug-robinhood` | Robinhood Chain, read: receipts, and Pons v2 launches, trades and fee sweeps; the launch check behind `realorrug launch-check` |
+| `crates/realorrug-robinhood` | Robinhood Chain, read: receipts, and Pons v2 launches, trades and fee sweeps; the launch check behind `realorrug launch-check`; the fee escrow's credits, claims and claimable balance |
 | `crates/realorrug-serve` | the public site's documents |
 | `crates/realorrug-cli` | `realorrug dossier`, `roast`, `analyst`, `contest`, `launch-check`, `audit`, `model-prices` |
 | `crates/realorrug-agent`, `crates/realorrug-model`, `crates/realorrug-provider` | the boundary a model sits behind, the model client, the spend meter |

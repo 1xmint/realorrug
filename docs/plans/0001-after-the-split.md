@@ -48,6 +48,7 @@ this is what follows it, in order, each with what proves it.
      `realorrug launch-check`). Built 2026-09-14.
    - 6b, the fee escrow decoded: `Credited`/`Claimed`, the creator's claimable
      balance, and a `claim()` captured and read back ([research 0036](../research/0036-pons-v2-read-from-a-real-launch.md) §5).
+     Built 2026-09-14 (`realorrug_robinhood::escrow`).
    - 6c, the payout: claim from the escrow, pay the winner, read both back,
      under `realorrug_contest::Payout::permitted`. Signs on EVM, so it brings
      the signing dependency and the key file format; its own pull request.

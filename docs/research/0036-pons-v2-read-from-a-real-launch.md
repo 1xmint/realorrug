@@ -6,8 +6,8 @@
 contents that [research 0035](0035-robinhood-chain-read-from-its-own-pages.md) §6
 left open, on the bonding curve only. Every number in §1–§3 is recomputed from
 [`docs/research/data/0036-pons-v2-launch.json`](data/0036-pons-v2-launch.json):
-raw JSON-RPC responses, each pinned to a block; §4 and §6 name their own files,
-and §5 is read, not captured. The factory owner can change
+raw JSON-RPC responses, each pinned to a block; §4, §5 and §6 name their own
+files, and §5's paragraph on the hook is read, not captured. The factory owner can change
 the settings in §1 for **future** launches, so they go stale; a launched curve
 keeps what it snapshotted. The split after graduation is source-only (§5).
 **Feeds:** plan 0001 step 6, [design 0019](../design/0019-realorrug-on-robinhood-chain.md) §4.4,
@@ -135,22 +135,43 @@ against mainnet on 2026-09-14.
 
 ## 5. Where the creator's money goes, and after graduation
 
-*Added 2026-09-14. Read from the chain and the published source; not yet
-decoded in code or captured into a fixture.*
+*Added 2026-09-14. The escrow and its claim are captured and decoded; the hook
+paragraph is read from the chain and the published source only.*
 
 **A sweep does not pay the creator; it credits the fee escrow.** The captured
 sweep's receipt holds two logs from the escrow
 (`0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e`, as Pons's docs name it) before
 `FeesSwept`: one crediting the protocol recipient 5,086,595,949,856,946 wei, one
 crediting the creator 28,824,043,715,856,030 — the `FeesSwept` amounts exactly.
-The sweep was sent by `0x49bbf2b7…`, neither the creator nor the protocol, so a
-keeper sweeps. The escrow's events hash to these signatures, each confirmed
-against a log it emitted in the 3,000 blocks before block 62382501:
-`Credited(address,address,uint256)`, `Claimed(address,uint256)`,
-`CreditedToken(address,address,address,uint256)`,
-`ClaimedToken(address,address,uint256)`. The published interface gives the
-escrow `claim()` and `balanceOf(recipient)`. So a payout claims from the escrow
-and then pays the winner, and the week's pool is the creator's escrow balance.
+Each names the curve as the source. The sweep was sent by `0x49bbf2b7…`,
+neither the creator nor the protocol, so a keeper sweeps. The escrow's events
+hash to these signatures, each confirmed against a log it emitted in the 3,000
+blocks before block 62382501: `Credited(address,address,uint256)`,
+`Claimed(address,uint256)`, `CreditedToken(address,address,address,uint256)`,
+`ClaimedToken(address,address,uint256)`.
+
+**A claim, read back to the wei.**
+[`0036-escrow-claim.json`](data/0036-escrow-claim.json) holds claim
+`0x07cab768…` (block 62853730) by the wallet `0x6aa025a3…`. The published
+interface shows `claim()` with no argument; the deployed escrow was called as
+`claim(uint256)` (selector `0x379607f5`) with 4,014,961,601,594,189,201 wei. In
+the block before, the escrow's `balanceOf` for the claimer was exactly that
+amount; after, zero. The escrow's ETH fell by exactly that amount, and the
+claimer's rose by it less the gas (2,273,020,524,000 wei), to the wei. The
+claimer holds no code, so the ETH did not pass on to someone else.
+
+So a payout claims the creator's balance from the escrow and then pays the
+winner, and the week's prize is that balance. `realorrug-robinhood`'s
+`escrow` module reads it (`claimable`), encodes the claim (`claim_call`, equal
+to the captured call's input) and reads a claim back (`claimed`), tested in
+`crates/realorrug-robinhood/tests/escrow_as_mainnet_wrote_it.rs`. **Inference:**
+the escrow also takes partial claims, since the call names an amount; no partial
+claim was captured.
+
+Credits read the same day, around the claim's block, also name the meme hook
+(`0xe5e70264…`) as their source, so fees from graduated pools land in the same
+escrow; those logs are not in a capture file, and how the hook splits them was
+not measured.
 
 **The fee continues after graduation, and so does the creator tax** — in the
 published source. The meme hook charges `hookFeeBps`, split between protocol
@@ -192,5 +213,5 @@ of 250 had graduated.
 - The split after graduation, from a decoded hook sweep.
 - Who receives the snipe tax, and whether the protocol takes a share of it.
 - Buyback's effect on the creator's income, from a real sweep.
-- A `claim()` read back: the ETH that reaches the creator for a `Claimed` event.
+- A partial claim, and what the escrow does with a claim above the balance.
 - What the ERC-20 pair assets are.
