@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use realorrug_robinhood::escrow::{ESCROW, claimable};
 use realorrug_robinhood::pons::{FACTORY, LaunchedToken};
-use realorrug_robinhood::{Address, Hash32, Receipt, Rpc};
+use realorrug_robinhood::{Address, Hash32, Receipt, Rpc, Tag, Transaction};
 
 const CLEAN: &str = include_str!("../../../docs/research/data/0036-pons-v2-clean-launch.json");
 
@@ -197,4 +197,147 @@ fn the_claimable_balance_asks_the_escrow_and_reads_one_amount() {
         claimable(&rpc, &claimer),
         Err("balanceOf returned 1 bytes".to_owned())
     );
+}
+
+fn escrow_claim(index: usize) -> serde_json::Value {
+    let claim: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/research/data/0036-escrow-claim.json"
+    ))
+    .expect("JSON");
+    claim["reads"][index].clone()
+}
+
+fn claimer() -> Address {
+    "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06"
+        .parse()
+        .expect("an address")
+}
+
+#[test]
+fn the_chain_id_balance_and_code_are_read_as_mainnet_answered_them() {
+    let (url, seen) = serve(vec![
+        answer(&escrow_claim(0)["result"]),
+        answer(&escrow_claim(4)["result"]),
+        answer(&escrow_claim(9)["result"]),
+        answer(&serde_json::json!("0xef0100aa")),
+    ]);
+    let rpc = Rpc::new(url);
+    assert_eq!(rpc.chain_id(), Ok(4663));
+    assert_eq!(rpc.balance(&claimer()), Ok(0x0dbd_5a06_13bf_a700));
+    assert_eq!(rpc.code(&claimer()), Ok(Vec::new()));
+    assert_eq!(rpc.code(&claimer()), Ok(vec![0xef, 0x01, 0x00, 0xaa]));
+    let log = seen.lock().expect("the log");
+    assert_eq!(log[0]["method"], "eth_chainId");
+    assert_eq!(log[1]["method"], "eth_getBalance");
+    assert_eq!(
+        log[1]["params"],
+        serde_json::json!([claimer().to_string(), "latest"])
+    );
+    assert_eq!(log[2]["method"], "eth_getCode");
+    assert_eq!(
+        log[2]["params"],
+        serde_json::json!([claimer().to_string(), "latest"])
+    );
+}
+
+#[test]
+fn the_nonce_is_asked_at_the_named_tag() {
+    // Pending for a new transaction, so one the node holds is not reused;
+    // latest for "has this nonce landed". Re-apply by sending "latest" for
+    // both: the second params assertion fails.
+    let (url, seen) = serve(vec![
+        answer(&serde_json::json!("0x3")),
+        answer(&serde_json::json!("0x4")),
+        answer(&serde_json::json!(3)),
+    ]);
+    let rpc = Rpc::new(url);
+    assert_eq!(rpc.nonce(&claimer(), Tag::Latest), Ok(3));
+    assert_eq!(rpc.nonce(&claimer(), Tag::Pending), Ok(4));
+    assert!(rpc.nonce(&claimer(), Tag::Latest).is_err(), "a number is not a quantity");
+    let log = seen.lock().expect("the log");
+    assert_eq!(log[0]["method"], "eth_getTransactionCount");
+    assert_eq!(
+        log[0]["params"],
+        serde_json::json!([claimer().to_string(), "latest"])
+    );
+    assert_eq!(
+        log[1]["params"],
+        serde_json::json!([claimer().to_string(), "pending"])
+    );
+}
+
+#[test]
+fn gas_is_estimated_for_the_exact_call_and_the_base_fee_read_from_the_latest_block() {
+    let (url, seen) = serve(vec![
+        answer(&serde_json::json!("0x7fa7")),
+        answer(&serde_json::json!({ "number": "0x1", "baseFeePerGas": "0x4255720" })),
+        answer(&serde_json::json!({ "number": "0x1" })),
+        r#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}"#.to_owned(),
+    ]);
+    let rpc = Rpc::new(url);
+    let data = realorrug_robinhood::escrow::claim_call(5);
+    assert_eq!(
+        rpc.estimate_gas(&claimer(), &ESCROW, 0x1_0000_0000_0000_0000, &data),
+        Ok(0x7fa7)
+    );
+    assert_eq!(rpc.base_fee(), Ok(0x0425_5720));
+    assert_eq!(
+        rpc.base_fee(),
+        Err("eth_getBlockByNumber: no baseFeePerGas".to_owned())
+    );
+    let reverted = rpc.estimate_gas(&claimer(), &ESCROW, 0, &data);
+    assert!(
+        reverted.as_ref().is_err_and(|e| e.contains("execution reverted")),
+        "{reverted:?}"
+    );
+    let log = seen.lock().expect("the log");
+    assert_eq!(log[0]["method"], "eth_estimateGas");
+    assert_eq!(
+        log[0]["params"],
+        serde_json::json!([{
+            "from": claimer().to_string(),
+            "to": ESCROW.to_string(),
+            "value": "0x10000000000000000",
+            "data": realorrug_robinhood::to_hex(&data),
+        }])
+    );
+    assert_eq!(log[1]["method"], "eth_getBlockByNumber");
+    assert_eq!(log[1]["params"], serde_json::json!(["latest", false]));
+}
+
+#[test]
+fn a_transaction_is_read_by_hash_with_its_value_and_input() {
+    let captured = escrow_claim(1)["result"].clone();
+    let mut pending = captured.clone();
+    pending["blockNumber"] = serde_json::Value::Null;
+    let (url, seen) = serve(vec![
+        answer(&captured),
+        answer(&pending),
+        answer(&serde_json::Value::Null),
+    ]);
+    let rpc = Rpc::new(url);
+    let hash: Hash32 = "0x07cab768bdf8dcf67edc9b0bc74d9d2d70cdd4f88b4cbe8ada2b6ec85f44fa7b"
+        .parse()
+        .expect("a hash");
+    let got = rpc.transaction(&hash).expect("read").expect("known");
+    assert_eq!(
+        got,
+        Transaction {
+            hash,
+            from: claimer(),
+            to: Some(ESCROW),
+            value: 0,
+            input: realorrug_robinhood::escrow::claim_call(4_014_961_601_594_189_201),
+            nonce: 3,
+            block: Some(0x03bf_1262),
+        }
+    );
+    assert_eq!(
+        rpc.transaction(&hash).expect("read").expect("known").block,
+        None
+    );
+    assert_eq!(rpc.transaction(&hash), Ok(None));
+    let log = seen.lock().expect("the log");
+    assert_eq!(log[0]["method"], "eth_getTransactionByHash");
+    assert_eq!(log[0]["params"], serde_json::json!([hash.to_string()]));
 }
