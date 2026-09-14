@@ -117,7 +117,7 @@ const fn fixed<const N: usize>(literal: &str) -> [u8; N] {
     let mut out = [0u8; N];
     let mut i = 0;
     while i < N {
-        out[i] = (nibble(b[2 + 2 * i]) << 4) | nibble(b[3 + 2 * i]);
+        out[i] = nibble(b[2 + 2 * i]) * 16 + nibble(b[3 + 2 * i]);
         i += 1;
     }
     out
