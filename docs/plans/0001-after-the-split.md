@@ -163,5 +163,11 @@ this is what follows it, in order, each with what proves it.
     such flag); it had no credential, read and posted nothing, wrote nothing,
     and was stopped within three minutes. `radar brief`'s process list does
     not name `realorrug-analyst`, so a stale binary there is not yet caught.
-  - *Next:* Josh runs the swap; then check `realorrug-analyst`'s journal and
-    `radar brief`. Then step 6c, the payout.
+  - **Analyst swapped**, Josh's sudo, 15:32 UTC: `radar-analyst` stopped and
+    disabled, `realorrug-analyst` enabled and `LIVE` as the old one was, two
+    operator ids each, no overlap; it moved the mention cursor two minutes
+    later with no error. `radar brief` after the swap: contest `[ok]` (week
+    2958, 3 records); its one failure is Radar's `radar-backfill` running an
+    old build, which predates this session.
+  - *Next:* step 6c, the payout. Radar's own deploy (its new build, and
+    `radar brief` on the box as step 3's second proof) is Radar's to run.

@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Deploying realorrug
 
-Three processes, each its own unit. **Installed on the box: `realorrug-serve`
-only**, since 2026-09-14, as a user unit (below). The analyst and the payout are
-not installed; this is the runbook for when they are.
+Three processes, each its own unit. **Installed on the box since 2026-09-14:
+`realorrug-serve`, as a user unit, and `realorrug-analyst`** (below). The payout
+is not installed; this is the runbook for when it is.
 
 ## What runs today
 
@@ -45,14 +45,21 @@ scp realorrug-serve guardian-vps-tail:/tmp/ && ssh guardian-vps-tail \
 ssh guardian-vps-tail 'systemctl --user disable --now realorrug-serve'
 ```
 
-**The analyst is staged, not running.** The bot answering mentions on the box
-is still Radar's `/etc/systemd/system/radar-analyst.service`. `realorrug-analyst` from release run
-34852198731 is at `~/bin/realorrug-analyst`, with
-[`realorrug-analyst.service`](realorrug-analyst.service) copied to
-`~/realorrug/deploy/`; the switch installs it and stops the old unit first,
-with sudo. Both units read `/etc/radar/analyst.env` and write the same
+**The analyst runs** since 2026-09-14 15:32 UTC, as the system unit
+[`realorrug-analyst.service`](realorrug-analyst.service), binary
+`~/bin/realorrug-analyst` from release run 34852198731 (`1706340`). It
+replaced Radar's `/etc/systemd/system/radar-analyst.service`, which is
+stopped and disabled; the old stopped at 15:32:13 and the new started at
+15:32:14. Both started `LIVE` with two operator ids, and the new one moved the
+mention cursor two minutes later with nothing in its journal but its startup
+lines. Both units read `/etc/radar/analyst.env` and write the same
 directories, so they must never run together. The binary has no `--help`:
 any invocation starts the daemon.
+
+```bash
+# Roll back to Radar's analyst (on the box)
+sudo systemctl disable --now realorrug-analyst && sudo systemctl enable --now radar-analyst
+```
 
 | unit | binary | what it does | writes |
 |---|---|---|---|
