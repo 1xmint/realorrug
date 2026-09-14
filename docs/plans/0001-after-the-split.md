@@ -13,6 +13,8 @@ this is what follows it, in order, each with what proves it.
 | builds, tests, lint, fmt, licence headers, site, cargo-deny, MSRV in CI | the `ci` run on `c13a6ec`; see the handback below for its result |
 | release binaries on push to `main` | `release-linux` workflow |
 | step 1, own-name mask: `realorrug` masked beside `cabalhunter.org` | `the_account_can_say_its_own_name_and_every_other_rug_is_still_refused` in `forbidden.rs`, which failed at its first assertion with the name removed from `OWN_NAMES` |
+| step 4, `repo-conformance` and mutation shards | both green on PR #3, whose first mutation run caught a survivor in the new crate |
+| step 5, a real Pons v2 launch captured | `docs/research/data/0036-pons-v2-launch.json`, findings in [research 0036](../research/0036-pons-v2-read-from-a-real-launch.md) |
 
 ## Next, in order
 
@@ -31,10 +33,10 @@ this is what follows it, in order, each with what proves it.
    `radar-research` keeps them; make `radar-backfill`, `radar brief` and
    `radar seven-days-later` read the reply log and contest ledger as files.
    *Proof:* Radar's CI, and `radar brief` on the box.
-4. **Carry Radar's two missing checks over:** `repo-conformance` (links, paths,
+4. ~~**Carry Radar's two missing checks over:**~~ Done; see the table above. `repo-conformance` (links, paths,
    a status on every numbered document) and the mutation shards on pull
    requests. *Proof:* both jobs green on a pull request.
-5. **Capture a real Pons v2 launch** on Robinhood Chain: fee rate, fee currency,
+5. ~~**Capture a real Pons v2 launch**~~ Done; see the table above. On Robinhood Chain: fee rate, fee currency,
    curve-only launch block ([research 0035](../research/0035-robinhood-chain-read-from-its-own-pages.md) §6).
    Launch-blocking. *Proof:* the transaction, committed as a fixture.
 6. **The Robinhood Chain payout and own-token reader** (design 0019 §4.4), which
@@ -68,3 +70,21 @@ this is what follows it, in order, each with what proves it.
     Steps 3, 5 and 6 not started.
   - *Next:* merge #2, #3, #4 once green. Then step 2 on Josh's yes; if it is
     not given, step 5 (the Pons v2 launch capture) does not depend on it.
+- 2026-09-13, third session:
+  - **#2, #3 and #4 merged**, each green; #4 re-ran on the new `main` first,
+    so the conformance and mutation checks passed over it too.
+  - **Step 5 done.** One launch, its first taxed buy and one fee sweep,
+    captured as raw RPC responses pinned to blocks; research 0036 recomputes
+    every number from that file. On the curve the creator gets 70 bps of
+    volume plus a creator tax chosen once at launch (0 to 1,000 bps), in the
+    pair asset. The mint went only to the curve, and a launch can still carry
+    a buy in the same transaction, so constraint 1 is proved by the launch
+    receipt holding no `CurveBuy` and no extra `SnipeTaxExempted`. Pons's published source does not match what is
+    deployed; the chain is the reference.
+  - **Open for Josh before launch:** the creator tax. Recommendation: zero. The
+    prize is then 70 bps of curve volume in ETH, over twice pump.fun's 30, and
+    after the first three seconds a trader pays only the 1% base fee.
+  - **Step 2 still waits for Josh** (production). Step 3 waits on step 2.
+  - *Next:* step 6. Read the capture file in Rust tests first: the launch
+    receipt's recipients, the sweep split. The fee after graduation and the
+    escrow's payout path are unread, and the payout reader needs both.
