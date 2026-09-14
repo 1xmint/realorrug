@@ -191,7 +191,11 @@ this is what follows it, in order, each with what proves it.
     under `k256`'s own DER decoder; 22 flow tests against a fake chain cover
     every refusal and every resume case. Contest, robinhood, payout, cli,
     serve, analyst and repo-conformance tests and clippy pass, one crate at a
-    time. MIN_TESTS 1030 → 1062 by count.
+    time. MIN_TESTS 1030 → 1070 by count.
+  - **CI green on PR #12, mutants included**, after two fixes: the first
+    mutation run found 24 survivors in the new payout code, each now pinned
+    by a test or rewritten away; and cargo-deny failed on RUSTSEC-2026-0285
+    in rustls 0.23.43, which `main` also carries, fixed by 0.23.45.
   - **Not proved:** nothing touched Turnkey or mainnet. The deploy guide's
     policy expression is untested until the setup proof.
   - *Next, needing Josh:* (1) a yes to the read-only capture for research
