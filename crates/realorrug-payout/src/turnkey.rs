@@ -328,7 +328,8 @@ impl Turnkey {
             "timestampMs": timestamp_ms.to_string(),
             "organizationId": self.organization,
             "parameters": {
-                "signWith": self.sign_with.to_string(),
+                // EIP-55 mixed case: Turnkey refuses the lowercase form.
+                "signWith": crate::tx::checksummed(&self.sign_with),
                 "type": "TRANSACTION_TYPE_ETHEREUM",
                 // Hex without `0x`, as Turnkey's viem adapter sends it.
                 "unsignedTransaction": hex(&tx.unsigned()),

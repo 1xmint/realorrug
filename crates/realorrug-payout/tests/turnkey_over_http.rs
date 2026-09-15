@@ -18,7 +18,7 @@ use k256::ecdsa::SigningKey;
 use p256::ecdsa::Signature;
 use p256::ecdsa::signature::Verifier as _;
 use realorrug_payout::turnkey::{ApiKey, Turnkey, hex};
-use realorrug_payout::tx::{Eip1559, Signed, address_of};
+use realorrug_payout::tx::{Eip1559, Signed, address_of, checksummed};
 use realorrug_payout::{PayError, setup_proof, sign_checked};
 use realorrug_robinhood::escrow::{ESCROW, claim_call};
 
@@ -166,7 +166,7 @@ fn a_signing_request_is_the_exact_body_stamped_and_posted_to_the_exact_path() {
     assert_eq!(
         body["parameters"],
         serde_json::json!({
-            "signWith": address_of(wallet_key().verifying_key()).to_string(),
+            "signWith": checksummed(&address_of(wallet_key().verifying_key())),
             "type": "TRANSACTION_TYPE_ETHEREUM",
             "unsignedTransaction": hex(&tx.unsigned()),
         })

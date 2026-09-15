@@ -79,3 +79,8 @@ wallet, `realorrug-payout` user, P-256 API key and policy exist
 the organisation id or any key: `whoami` answered, the factory call denied,
 `claim(0)` allowed and recovering to the wallet, and a 1 wei transfer allowed
 the same way.
+
+A first run on 2026-09-15 answered `whoami` and failed every signing request
+with HTTP 404, "Could not find any resource to sign with. Addresses are case
+sensitive.": Turnkey's `signWith` takes the address only in EIP-55 mixed case.
+Its factory "denial" was that error, so it is not a result.

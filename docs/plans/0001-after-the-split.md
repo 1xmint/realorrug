@@ -242,5 +242,14 @@ this is what follows it, in order, each with what proves it.
     wallet; and the policy, entered as JSON, which Turnkey accepted. The policy
     matches empty call data as `''` or `'0x'`, and the setup proof gained a
     fourth request, a 1 wei transfer, so that guess is tested before launch.
-  - *Next:* merge PR #12, install the payout binary and `payout.env` on the
-    box, and run the setup proof.
+  - **The first setup proof failed at signing** (2026-09-15, PR #12 merged and
+    installed on the box). `whoami` answered as `realorrug-payout`, so the key,
+    organisation and stamp work; the three signing requests each came back
+    HTTP 404, "Could not find any resource to sign with. Addresses are case
+    sensitive." The payout sent the wallet address in lowercase, and Turnkey
+    matches it only in EIP-55's mixed case. It now sends that form
+    (`tx::checksummed`, tested against EIP-55's own examples and the wallet's
+    address; re-applying the lowercase form fails the HTTP test). The "denied"
+    on the factory call that run was this error, not the policy, so it proves
+    nothing; the rerun must show the claim and transfer signed.
+  - *Next:* install the new binary and rerun the setup proof.
