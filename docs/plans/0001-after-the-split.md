@@ -62,7 +62,7 @@ this is what follows it, in order, each with what proves it.
      Turnkey account as creator fee recipient (ADR 0025 §2).
 7. **Standalone from Radar** ([ADR 0026](../adr/0026-realorrug-reads-nothing-from-radar.md)),
    in two parts, in the order Josh chose on 2026-09-15.
-   - 7a, before the payout timer is enabled: Radar stops reading the reply log
+   - ~~7a~~ Done 2026-09-15; see the handback. Before the payout timer is enabled: Radar stops reading the reply log
      and ledger (a Radar pull request, installed on the box with its
      `radar-seven-days` timer disabled); then, with the analyst and server
      stopped, `data/analyst` and `data/contest` move to
@@ -272,5 +272,19 @@ this is what follows it, in order, each with what proves it.
     first, because it unblocks the payout timer; 7b, realorrug's own creator
     index and seven-days-later join, after. Josh approved stopping the analyst
     and server for about five minutes for the move.
-  - *Next:* 7a: the Radar pull request and realorrug's own folders, then the
-    move on the box; then 7b, the payout timer and the launch items in 6d.
+  - **Step 7a done.** Radar stopped reading the bot's files in theradar#254
+    (merged as `56b18a4`); its `radar` and `radar-backfill` and, by Josh's
+    `radar-deploy`, `radar-serve` are that build on the box (`/health` build
+    `56b18a45`). The `radar-seven-days` timer is disabled and its unit files
+    removed. realorrug's units and env moved in PR #15, and PR #16 made the
+    move's last check able to pass. Josh ran the move on the box; its script
+    printed all three proofs: the weeks matched before and after, no unit or env
+    file names `/home/guardian/radar` or `/etc/radar`, and the analyst's cursor
+    changed after the start (19:33:27 UTC), logging
+    `dir=/home/guardian/realorrug/data/analyst`. The copies under
+    `~/radar/data` are kept for a day.
+  - **Found on the box:** Radar's brief had failed since 2026-09-12 on
+    "replaced but not restarted: radar-backfill". The stale process was
+    `radar-market-tape`, not `radar-follow`; Josh restarted it.
+  - *Next:* 7b, research first (Pons v2 launches and outcomes read over a
+    range); then the payout timer and the launch items in 6d.
