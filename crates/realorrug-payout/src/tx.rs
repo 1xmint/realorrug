@@ -391,6 +391,30 @@ pub fn address_of(key: &VerifyingKey) -> Address {
     Address(out)
 }
 
+/// An address in EIP-55's mixed case: each hex letter is upper case where the
+/// matching nibble of the Keccak of the lowercase hex is 8 or more.
+///
+/// Turnkey's `signWith` needs this form. It matches addresses exactly as it
+/// stores them, and the lowercase form [`Address`] prints was refused on the
+/// first setup proof: "Could not find any resource to sign with. Addresses are
+/// case sensitive."
+#[must_use]
+pub fn checksummed(address: &Address) -> String {
+    let lower = address.to_string();
+    let digits = &lower[2..];
+    let hash = keccak(digits.as_bytes());
+    let mut out = String::from("0x");
+    for (i, c) in digits.chars().enumerate() {
+        let nibble = (hash[i / 2] >> if i % 2 == 0 { 4 } else { 0 }) & 0x0f;
+        out.push(if nibble >= 8 {
+            c.to_ascii_uppercase()
+        } else {
+            c
+        });
+    }
+    out
+}
+
 /// The account that signed a transaction.
 ///
 /// Refuses a high-s signature, which Ethereum has rejected since EIP-2, and
@@ -433,6 +457,26 @@ mod tests {
         let mut out = Vec::new();
         uint(&mut out, v);
         out
+    }
+
+    #[test]
+    fn checksummed_matches_eip55s_own_examples_and_the_turnkey_wallet() {
+        // EIP-55's test vectors, all-caps and all-lowercase included, and the
+        // payout wallet as Turnkey's dashboard shows it. Re-apply by testing
+        // the nibble against 7, or by taking the high nibble for every digit:
+        // these fail.
+        for expected in [
+            "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+            "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+            "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+            "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb",
+            "0x52908400098527886E0F7030069857D2E4169EE7",
+            "0xde709f2102306220921060314715629080e2fb77",
+            "0xD66578AC5fD7E36F8427C61Edb7a2cbFA4c75793",
+        ] {
+            let address: Address = expected.parse().expect("an address");
+            assert_eq!(checksummed(&address), expected);
+        }
     }
 
     #[test]
