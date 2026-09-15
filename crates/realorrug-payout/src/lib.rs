@@ -638,20 +638,24 @@ impl Plan {
 /// reach, so the transaction Turnkey signs can never land.
 pub const PROOF_NONCE: u64 = 1_000_000;
 
-/// ADR 0025's setup proof: three requests to Turnkey that move no money.
+/// ADR 0025's setup proof: four requests to Turnkey that move no money.
 ///
 /// 1. `whoami` answers for the API key.
 /// 2. Signing a call to another contract, with call data, is **denied**.
 /// 3. Signing `claim(0)` to the escrow at [`PROOF_NONCE`] is **allowed**, and
 ///    the answer is the transaction asked for, signed by the wallet.
+/// 4. Signing a plain transfer of 1 wei at [`PROOF_NONCE`] is **allowed**, the
+///    same way.
 ///
 /// Nothing is sent to any chain. Together 2 and 3 settle what the docs could
 /// not: that Turnkey parses chain 4663's transactions and matches the policy on
-/// the function.
+/// the function. 4 settles how the policy sees empty call data, which the docs
+/// do not say; without it a wrong guess would first show after a live claim,
+/// with the prize held in the wallet.
 ///
 /// # Errors
 ///
-/// The report so far, when any of the three does not hold.
+/// The report so far, when any of the four does not hold.
 pub fn setup_proof(
     turnkey: &turnkey::Turnkey,
     wallet: &Address,
@@ -702,6 +706,23 @@ pub fn setup_proof(
         Err(e) => {
             held = false;
             lines.push(format!("3. claim(0) was not signed as asked: {e}"));
+        }
+    }
+    let transfer = Eip1559 {
+        gas_limit: 21_000,
+        to: *wallet,
+        value: 1,
+        data: Vec::new(),
+        ..denied
+    };
+    match sign_checked(turnkey, &transfer, wallet) {
+        Ok(signed) => lines.push(format!(
+            "4. a 1 wei transfer at nonce {PROOF_NONCE} was signed by {wallet}, hash {}; not sent, and it cannot land",
+            signed.hash()
+        )),
+        Err(e) => {
+            held = false;
+            lines.push(format!("4. a plain transfer was not signed as asked: {e}"));
         }
     }
     if held { Ok(lines) } else { Err(lines) }

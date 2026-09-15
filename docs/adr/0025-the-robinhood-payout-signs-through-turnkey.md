@@ -65,9 +65,11 @@ another contract, or sign on another chain.
 **Unverified until the setup proof.** Turnkey's page says Robinhood Chain is at
 its top EVM support level but names neither chain 4663 nor mainnet, and
 matching a policy on the function is documented but untested here.
-`realorrug-payout --setup-proof` settles both with three requests that move no
+`realorrug-payout --setup-proof` settles both with four requests that move no
 money: `whoami` answers; a call to the factory is denied; `claim(0)` at nonce
-1,000,000 is allowed and recovers to the wallet. Its result goes in research
+1,000,000 is allowed and recovers to the wallet; and a 1 wei transfer at that
+nonce is allowed the same way, since how the policy sees empty call data is
+undocumented and would otherwise first be tested after a live claim. Its result goes in research
 0037.
 
 ### 2. The Turnkey account is the creator fee recipient

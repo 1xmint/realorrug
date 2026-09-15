@@ -28,7 +28,7 @@
 //!
 //! `--week N` names the week; `--due` pays every claimed, unpaid week, which
 //! is what the timer runs; `--dry-run` plans and signs nothing;
-//! `--setup-proof` runs ADR 0025's three Turnkey requests and sends nothing to
+//! `--setup-proof` runs ADR 0025's four Turnkey requests and sends nothing to
 //! any chain.
 
 use std::process::ExitCode;

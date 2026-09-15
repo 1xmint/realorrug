@@ -75,6 +75,7 @@ Two things follow:
 
 Pending. `realorrug-payout --setup-proof` on the box, once the organisation,
 wallet, `realorrug-payout` user, P-256 API key and policy exist
-([deploy guide](../../deploy/README.md)). Record its three lines here, without
-the organisation id or any key: `whoami` answered, the factory call denied, and
-`claim(0)` allowed and recovering to the wallet.
+([deploy guide](../../deploy/README.md)). Record its four lines here, without
+the organisation id or any key: `whoami` answered, the factory call denied,
+`claim(0)` allowed and recovering to the wallet, and a 1 wei transfer allowed
+the same way.

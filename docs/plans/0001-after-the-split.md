@@ -236,6 +236,11 @@ this is what follows it, in order, each with what proves it.
     restored; the script was rerun against a scratch folder three ways (old key
     present, good key present, fresh), with each printed public key recomputed
     on P-256 from the file.
-  - *Next, needing Josh:* rerun the key script; in Turnkey replace the service
-    user's API key with the new public key, create the wallet, and send the
-    user id and wallet address for the policy; then the setup proof.
+  - **Turnkey is set up** (Josh, on the dashboard): the key script rerun on the
+    box; the service user recreated with the P-256 public key (Turnkey refused
+    to delete a user's only API key: "user missing valid credential"); the
+    wallet; and the policy, entered as JSON, which Turnkey accepted. The policy
+    matches empty call data as `''` or `'0x'`, and the setup proof gained a
+    fourth request, a 1 wei transfer, so that guess is tested before launch.
+  - *Next:* merge PR #12, install the payout binary and `payout.env` on the
+    box, and run the setup proof.

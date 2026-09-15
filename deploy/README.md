@@ -142,22 +142,23 @@ Set up in Turnkey's dashboard, by the operator, on a passkey:
    `TURNKEY_API_PUBLIC_KEY`. **A key made on your own root user is not this
    key**: the root quorum is not bound by the policy, so it could sign
    anything.
-4. One ALLOW policy for that user, and no other policy naming it. Check the
-   expression in Turnkey's policy editor while writing it:
+4. One ALLOW policy for that user, and no other policy naming it. The
+   dashboard's New Policy box takes the policy as JSON (in place since
+   2026-09-15):
 
-   ```text
-   consensus: approvers.any(user, user.id == '<realorrug-payout user id>')
-   condition: activity.type == 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2'
-     && eth.tx.chain_id == 4663
-     && ((eth.tx.to == '0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e'
-          && eth.tx.value == 0
-          && eth.tx.function_signature == '0x379607f5')
-         || eth.tx.data == '')
+   ```json
+   {
+     "effect": "EFFECT_ALLOW",
+     "consensus": "approvers.any(user, user.id == '<realorrug-payout user id>')",
+     "condition": "activity.type == 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2' && eth.tx.chain_id == 4663 && ((eth.tx.to == '0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e' && eth.tx.value == 0 && eth.tx.function_signature == '0x379607f5') || eth.tx.data == '' || eth.tx.data == '0x')"
+   }
    ```
 
    That is `claim(uint256)` on the Pons fee escrow, or a plain ETH transfer, on
    Robinhood Chain. No token approvals, no other contracts, no other chains.
-   There is deliberately no value cap; ADR 0025 says why.
+   Empty call data is matched both as `''` and `'0x'` because Turnkey's policy
+   language documents `eth.tx.data` only as "hex-encoded"; neither can match a
+   call that carries data. There is deliberately no value cap; ADR 0025 says why.
 5. Wallet and key export stay denied to everyone but root.
 
 Then the setup proof. It needs only the Turnkey variables and
@@ -168,8 +169,9 @@ sudo systemd-run --pty --wait --uid=realorrug-payout -p EnvironmentFile=/etc/rea
 ```
 
 It passes only when `whoami` answers, a call to the Pons factory is **denied**,
-and `claim(0)` at nonce 1,000,000 is **allowed**, returned as the transaction
-asked for and signed by the wallet. Record the three lines in
+and both `claim(0)` and a 1 wei transfer at nonce 1,000,000 are **allowed**,
+each returned as the transaction asked for and signed by the wallet. Record the
+four lines in
 [research 0037](../docs/research/0037-a-payouts-gas-read-from-mainnet.md) §4,
 without the organisation id or any key. The same document sizes the gas float:
 0.001 ETH covers about 95 weeks at the September 2026 base fee.

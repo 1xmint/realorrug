@@ -259,8 +259,21 @@ fn a_signed_answer_that_is_not_the_request_or_not_the_wallets_is_refused() {
     ));
 }
 
+/// The setup proof's plain transfer: 1 wei from the wallet to itself, no call
+/// data, at the proof's nonce.
+fn proof_transfer() -> Eip1559 {
+    Eip1559 {
+        gas_limit: 21_000,
+        to: address_of(wallet_key().verifying_key()),
+        value: 1,
+        data: Vec::new(),
+        ..claim()
+    }
+}
+
 #[test]
-fn the_setup_proof_holds_only_when_whoami_answers_the_factory_is_denied_and_the_claim_is_signed() {
+fn the_setup_proof_holds_only_when_whoami_answers_the_factory_is_denied_and_the_claim_and_transfer_are_signed()
+ {
     let wallet = address_of(wallet_key().verifying_key());
     let whoami = (
         200,
@@ -271,11 +284,13 @@ fn the_setup_proof_holds_only_when_whoami_answers_the_factory_is_denied_and_the_
         whoami.clone(),
         denied.clone(),
         completed(&signed_by(&wallet_key(), &claim())),
+        completed(&signed_by(&wallet_key(), &proof_transfer())),
     ]);
     let lines = setup_proof(&client(url), &wallet).expect("the proof holds");
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 4);
     assert!(lines[0].contains("realorrug-payout"), "{lines:?}");
     assert!(lines[2].contains("not sent"), "{lines:?}");
+    assert!(lines[3].contains("1 wei transfer"), "{lines:?}");
     let log = seen.lock().expect("the log");
     assert_eq!(log[0].line, "POST /public/v1/query/whoami HTTP/1.1");
     let second: serde_json::Value = serde_json::from_str(&log[1].body).expect("json");
@@ -285,14 +300,34 @@ fn the_setup_proof_holds_only_when_whoami_answers_the_factory_is_denied_and_the_
             .is_some_and(|u| u.contains("deadbeef")),
         "the denied request carries call data to another contract"
     );
+    let fourth: serde_json::Value = serde_json::from_str(&log[3].body).expect("json");
+    assert_eq!(
+        fourth["parameters"]["unsignedTransaction"],
+        hex(&proof_transfer().unsigned()),
+        "the transfer asked for is 1 wei to the wallet with no call data"
+    );
+    drop(log);
 
     // A policy that signs the factory call fails the proof. Re-apply by
     // counting step 2 as passed whatever the answer: this returns Ok.
     let (url, _) = serve(vec![
-        whoami,
+        whoami.clone(),
         completed(&signed_by(&wallet_key(), &claim())),
         completed(&signed_by(&wallet_key(), &claim())),
+        completed(&signed_by(&wallet_key(), &proof_transfer())),
     ]);
     let lines = setup_proof(&client(url), &wallet).expect_err("too wide");
     assert!(lines[1].contains("SIGNED"), "{lines:?}");
+
+    // A policy that denies the plain transfer fails the proof, though the
+    // claim was signed. Re-apply by ignoring step 4's answer: this returns Ok.
+    let (url, _) = serve(vec![
+        whoami,
+        denied,
+        completed(&signed_by(&wallet_key(), &claim())),
+        (403, r#"{"message":"policy denied"}"#.to_owned()),
+    ]);
+    let lines = setup_proof(&client(url), &wallet).expect_err("the transfer is denied");
+    assert_eq!(lines.len(), 4);
+    assert!(lines[3].contains("not signed"), "{lines:?}");
 }
