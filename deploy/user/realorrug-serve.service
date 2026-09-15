@@ -31,7 +31,7 @@ ExecStart=/home/guardian/realorrug/bin/realorrug-serve
 Environment=REALORRUG_BIND=127.0.0.1:8090
 Environment=RADAR_CONTEST_DIR=/home/guardian/realorrug/data/contest
 Environment=RADAR_ANALYST_DIR=/home/guardian/realorrug/data/analyst
-# The same origin radar-serve sends today (/etc/radar/radar.env).
+# The same origin radar-serve sends today, from its own env file in Radar.
 Environment=RADAR_SITE_ORIGIN=https://cabalhunter.org
 Restart=always
 RestartSec=10
