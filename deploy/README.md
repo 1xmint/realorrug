@@ -112,11 +112,23 @@ Set up in Turnkey's dashboard, by the operator, on a passkey:
 1. An organisation, with the operator as root user.
 2. One wallet with one Ethereum account. Its address is `RADAR_PAYOUT_ADDRESS`,
    and the token's creator fee recipient.
-3. A user `realorrug-payout`, not in the root quorum, holding one API key of
-   type secp256k1. Put its private key, `0x` and 64 hex digits, in a file and
-   install it as `/etc/radar/turnkey.key`, mode `0400`, owner
-   `realorrug-payout`. The process refuses a file group or others can read, and
-   one whose public key is not `TURNKEY_API_PUBLIC_KEY`.
+3. A user `realorrug-payout`, not in the root quorum, holding one API key on
+   the **secp256k1** curve. Turnkey's CLI defaults to P-256, which the payout
+   cannot use, so name the curve. Generate it where it will live, so the private
+   half never crosses a network, and paste the printed `publicKey` into the
+   user's API key in the dashboard:
+
+   ```bash
+   turnkey generate api-key --organization <org id> --key-name realorrug-payout --curve secp256k1
+   sudo install -m 0400 -o realorrug-payout ~/.config/turnkey/keys/realorrug-payout.private /etc/radar/turnkey.key
+   ```
+
+   The file goes in as the CLI wrote it (64 hex digits, `:secp256k1`); a `0x`
+   prefix or no suffix also loads. The process refuses a key marked as another
+   curve, a file group or others can read, and a key whose public half is not
+   `TURNKEY_API_PUBLIC_KEY`. Delete the CLI's copy once installed. **A key made
+   on your own root user is not this key**: the root quorum is not bound by the
+   policy, so it could sign anything.
 4. One ALLOW policy for that user, and no other policy naming it. Check the
    expression in Turnkey's policy editor while writing it:
 
@@ -144,8 +156,10 @@ sudo systemd-run --pty --wait --uid=realorrug-payout -p EnvironmentFile=/etc/rad
 
 It passes only when `whoami` answers, a call to the Pons factory is **denied**,
 and `claim(0)` at nonce 1,000,000 is **allowed**, returned as the transaction
-asked for and signed by the wallet. Record the three lines in research 0037,
-without the organisation id or any key.
+asked for and signed by the wallet. Record the three lines in
+[research 0037](../docs/research/0037-a-payouts-gas-read-from-mainnet.md) §4,
+without the organisation id or any key. The same document sizes the gas float:
+0.001 ETH covers about 95 weeks at the September 2026 base fee.
 
 ### A payout that stopped part way
 

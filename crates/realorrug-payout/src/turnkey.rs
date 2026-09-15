@@ -56,9 +56,17 @@ pub enum KeyError {
     /// The file could not be read.
     #[error("the API key file could not be read: {0}")]
     Read(String),
-    /// Not `0x` and 64 hex digits.
-    #[error("the API key file is not 0x and 64 hex digits")]
+    /// Not 64 hex digits, with an optional `0x` or `:secp256k1`.
+    #[error("the API key file is not 64 hex digits, as Turnkey's CLI writes them")]
     Malformed,
+    /// A key Turnkey's CLI marked as another curve.
+    #[error(
+        "the API key is a {curve} key; the payout stamps with secp256k1 only, so make one with `turnkey generate api-key --curve secp256k1`"
+    )]
+    WrongCurve {
+        /// The curve named after the colon.
+        curve: String,
+    },
     /// Zero, or not below the curve order: not a private key.
     #[error("the API key is not a valid secp256k1 private key")]
     OutOfRange,
@@ -69,7 +77,9 @@ pub enum KeyError {
         mode: u32,
     },
     /// The key's public half is not the one configured.
-    #[error("the API key's public key is {derived}, not the configured TURNKEY_API_PUBLIC_KEY")]
+    #[error(
+        "the API key's public key, read as secp256k1, is {derived}, not the configured TURNKEY_API_PUBLIC_KEY (a P-256 key fails this way too)"
+    )]
     WrongPublicKey {
         /// What the file's key derives.
         derived: String,
@@ -112,12 +122,25 @@ impl ApiKey {
     ///
     /// # Errors
     ///
-    /// [`KeyError::Malformed`], [`KeyError::OutOfRange`] or
-    /// [`KeyError::WrongPublicKey`].
+    /// [`KeyError::Malformed`], [`KeyError::WrongCurve`],
+    /// [`KeyError::OutOfRange`] or [`KeyError::WrongPublicKey`].
     pub fn from_text(text: &str, expected_public: &str) -> Result<Self, KeyError> {
-        let digits = text
-            .trim()
-            .strip_prefix("0x")
+        // Turnkey's CLI writes `key.private` as the hex scalar, a colon and the
+        // curve, and prints it bare with `--key-name -`; either is accepted as
+        // it comes, so the file is copied rather than edited by hand. A curve
+        // named is checked by name: its absence cannot be, and a key from the
+        // wrong curve then fails the public-key comparison below.
+        let (scalar, curve) = match text.trim().split_once(':') {
+            Some((scalar, curve)) => (scalar, Some(curve)),
+            None => (text.trim(), None),
+        };
+        if let Some(curve) = curve.filter(|c| *c != "secp256k1") {
+            return Err(KeyError::WrongCurve {
+                curve: curve.to_owned(),
+            });
+        }
+        let scalar = scalar.strip_prefix("0x").unwrap_or(scalar);
+        let digits = Some(scalar)
             .filter(|d| d.len() == 64 && d.bytes().all(|c| c.is_ascii_hexdigit()))
             .ok_or(KeyError::Malformed)?;
         let mut secret = [0u8; 32];
@@ -453,9 +476,24 @@ mod tests {
         );
         let below = "0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140";
         assert!(ApiKey::from_text(below, &public_of(below)).is_ok());
+        // As Turnkey's CLI writes the file, and as it prints the key bare.
+        let digits = SECRET.trim_start_matches("0x");
+        assert!(ApiKey::from_text(&format!("{digits}:secp256k1\n"), &public).is_ok());
+        assert!(ApiKey::from_text(digits, &public).is_ok());
+        for curve in ["p256", "ed25519", ""] {
+            assert_eq!(
+                ApiKey::from_text(&format!("{digits}:{curve}"), &public).map(|k| k.public),
+                Err(KeyError::WrongCurve {
+                    curve: curve.to_owned()
+                }),
+                "{curve}"
+            );
+        }
         for bad in [
-            "1111111111111111111111111111111111111111111111111111111111111111",
+            "111111111111111111111111111111111111111111111111111111111111111",
             "0x111111111111111111111111111111111111111111111111111111111111111",
+            "0x0x1111111111111111111111111111111111111111111111111111111111111111",
+            "1111111111111111111111111111111111111111111111111111111111111111g:secp256k1",
             "0x111111111111111111111111111111111111111111111111111111111111111g",
             "0x11111111111111111111111111111111111111111111111111111111111111111",
         ] {

@@ -1,0 +1,173 @@
+{
+ "source": "Robinhood Chain mainnet (chain id 4663) via https://rpc.mainnet.chain.robinhood.com, JSON-RPC responses as returned",
+ "captured": "2026-09-15",
+ "why": "What a payout's second transaction costs and what the gas estimate says before it is signed: a plain ETH transfer and its receipt, the base fee at capture, and eth_estimateGas for a 1-wei transfer, and for claim(balance) and claim(0) from the creator captured in 0036-escrow-claim.json, with that creator's escrow balance read just before. The claim estimate's revert data 0xc2caa2a6 is NoBalance() in the Sourcify 4byte signature database. Read only; nothing sent.",
+ "reads": [
+  {
+   "why": "chain id",
+   "method": "eth_chainId",
+   "params": [],
+   "result": "0x1237"
+  },
+  {
+   "why": "the latest block: its baseFeePerGas",
+   "method": "eth_getBlockByNumber",
+   "params": [
+    "latest",
+    false
+   ],
+   "result": {
+    "baseFeePerGas": "0x3e99e10",
+    "difficulty": "0x1",
+    "extraData": "0xf792a7d06f380b8e4acb29635998a8e9766c1cf068eb71b39ffa470ba4fdd699",
+    "gasLimit": "0x4000000000000",
+    "gasUsed": "0x343db0",
+    "hash": "0x78fcc46b61d208e52a1135d3e6668c17f26693c9b67ddd27dc0b3ccaaf2e62ec",
+    "l1BlockNumber": "0x18c7b0d",
+    "logsBloom": "0x0d000094110000100180100012080000001c0800b0000890210210802000082100480104140002012000000100020800460404001400310006c00344002420001484000002d0c0080000824c0031228018402c4080040020100000800024300000000000020e00480001c0000d0008000002500188040800008080d0000a00010020000919000000900100001000030900a889000000100020004010000050000a2004004010010010400120080024800001410000850008004302300120900000000c0a000202410481081200201000004000000400200a000204901010680000500c0000040000044000000120304204068000018800000010a00002000800",
+    "miner": "0xa4b000000000000000000073657175656e636572",
+    "mixHash": "0x000000000000097500000000018c7b0d000000000000003d0000000000000000",
+    "nonce": "0x0000000000044dfe",
+    "number": "0x3ccf12b",
+    "parentHash": "0x87f3c7a4f8b2e6dc402cfdb6b2dd95a0220fa91e337858334f4f095d2e761066",
+    "receiptsRoot": "0xd825598c3b4f6937c215007e72918b05d0c9214b97d7b02016aba5b81bf1b425",
+    "sendCount": "0x975",
+    "sendRoot": "0xf792a7d06f380b8e4acb29635998a8e9766c1cf068eb71b39ffa470ba4fdd699",
+    "sha3Uncles": "0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347",
+    "size": "0x8c4f",
+    "stateRoot": "0x639a650008ea60aafa55eaab3bead1cbdc809bba1dd3a0e3f68234ee58e127d6",
+    "timestamp": "0x6aa9640a",
+    "transactions": [
+     "0xb15307e10bd3c8131e0a2b98d24dccb03f115a70076b4abaadd3da50582b008a",
+     "0x7724093cf902c3a66e670082ee6f005df28ce0865ca7851892131467cae6d8d6",
+     "0x9202bd78f738d59a5e83d9860a61625e54e23dfc6ba851c1955cbbab0f6571b0",
+     "0xd0fdd471f6bad5381687656e3cc8f33002908486060f0de43295a72316e9cc88",
+     "0xa4c5184d167c91c12bc914f33848a1b8015ccad64044d6e9e72cd78b105d5043",
+     "0x3aca809d62c4ad0a9e230c979e0d5b411ffe597074e244b1c5d30914c7d0507d",
+     "0x3fd210073cda95ecf19c2e55b92668d3360dc0adb3466cfd3399a6302f1e5b56",
+     "0xd77e10492659f1dffdda58124715aa22f161fe66b3fcf1c6a13274ee85a74011",
+     "0x5e3ce8b1cc6114c185499b550e5124a0f1acadf52823ad712f7f8540c2e2a2df"
+    ],
+    "transactionsRoot": "0xac32cbcde3234037c287100bcbce83c90def11a7ee2193e139caea4423c926ea",
+    "uncles": []
+   }
+  },
+  {
+   "why": "a plain ETH transfer: value, empty call data, type 2",
+   "method": "eth_getTransactionByHash",
+   "params": [
+    "0xbbf7981be2b372ffca162196cd2dd0132a93288e8cea71e8b23b54372f921480"
+   ],
+   "result": {
+    "blockHash": "0x87f3c7a4f8b2e6dc402cfdb6b2dd95a0220fa91e337858334f4f095d2e761066",
+    "blockNumber": "0x3ccf12a",
+    "from": "0xdcb18730c3f1006f5b9a972a177be19cefa83316",
+    "gas": "0x5208",
+    "gasPrice": "0x4b0bb80",
+    "maxFeePerGas": "0x4b0bb80",
+    "maxPriorityFeePerGas": "0x4b0bb80",
+    "hash": "0xbbf7981be2b372ffca162196cd2dd0132a93288e8cea71e8b23b54372f921480",
+    "input": "0x",
+    "nonce": "0x7301",
+    "to": "0x5450dcaa0f320849fda46a2ce2f41cd6b09cb727",
+    "transactionIndex": "0x1",
+    "value": "0x4a4c5771f57ce",
+    "type": "0x2",
+    "accessList": [],
+    "chainId": "0x1237",
+    "v": "0x1",
+    "r": "0xc899fbd2497df41bb926e5b9c82a4faab4f2575fc4b9a518ff8127b7f115f1e7",
+    "s": "0x73f9896632509429cca30511088061c3dcc08fce4c7948e6f30c3f6e609bd6bf",
+    "yParity": "0x1"
+   }
+  },
+  {
+   "why": "its receipt: gasUsed for a plain transfer on this chain",
+   "method": "eth_getTransactionReceipt",
+   "params": [
+    "0xbbf7981be2b372ffca162196cd2dd0132a93288e8cea71e8b23b54372f921480"
+   ],
+   "result": {
+    "blockHash": "0x87f3c7a4f8b2e6dc402cfdb6b2dd95a0220fa91e337858334f4f095d2e761066",
+    "blockNumber": "0x3ccf12a",
+    "contractAddress": null,
+    "cumulativeGasUsed": "0x5208",
+    "effectiveGasPrice": "0x3e72d10",
+    "from": "0xdcb18730c3f1006f5b9a972a177be19cefa83316",
+    "gasUsed": "0x5208",
+    "gasUsedForL1": "0x0",
+    "l1BlockNumber": "0x18c7b0d",
+    "logs": [],
+    "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "status": "0x1",
+    "to": "0x5450dcaa0f320849fda46a2ce2f41cd6b09cb727",
+    "transactionHash": "0xbbf7981be2b372ffca162196cd2dd0132a93288e8cea71e8b23b54372f921480",
+    "transactionIndex": "0x1",
+    "type": "0x2"
+   }
+  },
+  {
+   "why": "its recipient has no code",
+   "method": "eth_getCode",
+   "params": [
+    "0x5450dcaa0f320849fda46a2ce2f41cd6b09cb727",
+    "latest"
+   ],
+   "result": "0x"
+  },
+  {
+   "why": "gas for a 1-wei transfer from the captured claimer",
+   "method": "eth_estimateGas",
+   "params": [
+    {
+     "from": "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+     "to": "0x5450dcaa0f320849fda46a2ce2f41cd6b09cb727",
+     "value": "0x1"
+    }
+   ],
+   "result": "0x5208"
+  },
+  {
+   "why": "balanceOf(claimer) on the escrow: what it holds for the captured claimer now",
+   "method": "eth_call",
+   "params": [
+    {
+     "to": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+     "data": "0x70a082310000000000000000000000006aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06"
+    },
+    "latest"
+   ],
+   "result": "0x00000000000000000000000000000000000000000000000000125979c7d62a04"
+  },
+  {
+   "why": "gas for claim(balanceOf) on the escrow from the captured claimer: the call a payout makes",
+   "method": "eth_estimateGas",
+   "params": [
+    {
+     "from": "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+     "to": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+     "value": "0x0",
+     "data": "0x379607f500000000000000000000000000000000000000000000000000125979c7d62a04"
+    }
+   ],
+   "result": "0xa655"
+  },
+  {
+   "why": "gas for claim(0) on the escrow from the captured claimer",
+   "method": "eth_estimateGas",
+   "params": [
+    {
+     "from": "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+     "to": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+     "value": "0x0",
+     "data": "0x379607f50000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ],
+   "error": {
+    "code": 3,
+    "message": "execution reverted",
+    "data": "0xc2caa2a6"
+   }
+  }
+ ]
+}

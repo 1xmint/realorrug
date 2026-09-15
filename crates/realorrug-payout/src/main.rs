@@ -11,8 +11,8 @@
 //! Every one of these is required, and any of them unset means nothing is paid
 //! (AGENTS.md rule 7):
 //!
-//! - `TURNKEY_API_KEY` -- path to the Turnkey API private key, `0x` and 64 hex
-//!   digits, mode 0400.
+//! - `TURNKEY_API_KEY` -- path to the Turnkey API private key: the `key.private`
+//!   Turnkey's CLI writes (64 hex digits, `:secp256k1`), mode 0400.
 //! - `TURNKEY_API_PUBLIC_KEY` -- its compressed public key, as the Turnkey
 //!   dashboard shows it. The file must derive it.
 //! - `TURNKEY_ORGANIZATION_ID` -- the Turnkey organisation.
