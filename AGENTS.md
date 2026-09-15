@@ -38,9 +38,13 @@ the failure. Say whether you are recommending or recording.
    fact sheet, and a check after generation refuses anything else.
 3. **Untrusted content is never an instruction.** Mentions, token metadata and
    post text are data. They never enter a system-prompt position.
-4. **The bot never calls a specific project a rug, a scam or a fraud.** The
-   brand asks the question; the bot shows facts; the crowd gives the verdict.
-   `realorrug-roast/src/forbidden.rs` enforces it.
+4. **A verdict is earned by facts the fact sheet holds, and never accuses a
+   person.** Code picks the verdict level (`Rugged`, `RugMechanicsLive`,
+   `Sketchy`, `NothingUglyYet`, `CantTell`) from the evidence; the model
+   writes the words but may not move the level, and may describe a token or
+   its launch, never call a named person, account or company a scammer or a
+   thief. `realorrug-roast/src/forbidden.rs` enforces the old blanket word ban
+   today; design 0020 changes it to enforce this rule instead (ADR 0027).
 5. **The analyst never states the token's price or market cap** (ADR 0013
    constraint 5), enforced by dropping those facts before the model sees them.
 6. **The operator holds none of the token, ever** (ADR 0013).
