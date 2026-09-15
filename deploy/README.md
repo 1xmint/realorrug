@@ -52,14 +52,9 @@ replaced Radar's `/etc/systemd/system/radar-analyst.service`, which is
 stopped and disabled; the old stopped at 15:32:13 and the new started at
 15:32:14. Both started `LIVE` with two operator ids, and the new one moved the
 mention cursor two minutes later with nothing in its journal but its startup
-lines. Both units read `/etc/radar/analyst.env` and write the same
-directories, so they must never run together. The binary has no `--help`:
-any invocation starts the daemon.
-
-```bash
-# Roll back to Radar's analyst (on the box)
-sudo systemctl disable --now realorrug-analyst && sudo systemctl enable --now radar-analyst
-```
+lines. The binary has no `--help`: any invocation starts the daemon. Radar's
+analyst no longer exists to roll back to: Radar removed it, and its unit names
+Radar's folders, which realorrug leaves in plan 0001 step 7a (below).
 
 | unit | binary | what it does | writes |
 |---|---|---|---|
@@ -67,27 +62,66 @@ sudo systemctl disable --now realorrug-analyst && sudo systemctl enable --now ra
 | `realorrug-payout.service` + `realorrug-payout.timer` | `realorrug-payout --due` | claims a claimed, unpaid week's fees from the escrow and pays them, signed through Turnkey | `data/contest` |
 | `realorrug-serve.service` | `realorrug-serve` | the public site's five documents | nothing |
 
-## What it reads from Radar, and how
+## It reads nothing from Radar
 
-**Ending:** [ADR 0026](../docs/adr/0026-realorrug-reads-nothing-from-radar.md)
-removes all of this before the payout timer is enabled (plan 0001 step 7).
-Until then, as installed:
+[ADR 0026](../docs/adr/0026-realorrug-reads-nothing-from-radar.md). Every unit
+runs in `/home/guardian/realorrug`, writes under its `data/`, and reads its
+settings from `/etc/realorrug`. Radar reads nothing of realorrug's either.
 
-The bot does not import Radar. It reads **two files Radar publishes**, at paths
-relative to its working directory:
+Three files are read at paths relative to that working directory:
 
-- `docs/research/data/creator-index.json` and `population.json`, written every
-  six hours by Radar's `theradar:deploy/radar-creator-index.timer`.
 - `docs/research/data/0024-base-rates.json`, a dated snapshot. A copy is
-  committed here, so the bot runs without Radar; the box's copy wins when the
-  working directory is Radar's.
+  committed here too.
+- `docs/research/data/population.json`, the population summary behind
+  `/v1/public/stats`. The box holds the last one Radar built, copied once, and
+  the page states its date. Without it the page answers "not measured yet" and
+  the site shows its own dated figures.
+- `docs/research/data/creator-index.json`, who launched what. **Absent** until
+  realorrug builds its own from Robinhood Chain launches (plan 0001 step 7b).
+  Without it, replies say nothing about who launched a token, and the analyst
+  says so once at startup. A stale copy of Radar's would be worse: a creator
+  it has not seen would read as a first launch.
 
-That is why the units keep `WorkingDirectory=/home/guardian/radar`. A file
-format is the whole contract: if Radar stops publishing, the bot's replies say
-nothing about who launched a token, and say so, rather than failing.
+The daily "seven days later" post reads a day's file in `data/analyst/daily/`.
+Radar's join wrote those; nothing does now, so the post is silent until step 7b.
 
-Radar's `radar seven-days-later` timer still joins this bot's reply log with
-Radar's store and writes the file the daily post reads.
+## Moving off Radar's folders
+
+Plan 0001 step 7a, done once. Before it, the analyst ran in
+`/home/guardian/radar` and read `/etc/radar/analyst.env`. First install the
+Radar build that stops reading realorrug's files and disable its
+`theradar:deploy/radar-seven-days.timer`, so Radar does not report the files as missing. Then,
+on the box, with a build of this repository's units in `~/realorrug/deploy`:
+
+```bash
+# 1. What the site lists now, to compare after
+# (its measured_at is the time of asking, so it is left out of the comparison)
+curl -s localhost:8090/v1/public/weeks | sed 's/"measured_at":"[^"]*"//g' > ~/weeks-before.json
+# 2. Stop both (about five minutes of no replies)
+sudo systemctl stop realorrug-analyst && systemctl --user stop realorrug-serve
+# 3. Copy, keeping the originals until the proof passes
+cp -a ~/radar/data/analyst/. ~/realorrug/data/analyst/
+cp -a ~/radar/data/contest/. ~/realorrug/data/contest/
+mkdir -p ~/realorrug/docs/research/data
+cp -a ~/radar/docs/research/data/0024-base-rates.json ~/radar/docs/research/data/population.json ~/realorrug/docs/research/data/
+sudo install -m 0640 -o root -g guardian /etc/radar/analyst.env /etc/realorrug/analyst.env
+sudo sed -i 's#/home/guardian/radar/#/home/guardian/realorrug/#g' /etc/realorrug/analyst.env
+# 4. The units, keeping the old ones beside them
+cp /etc/systemd/system/realorrug-analyst.service ~/.config/systemd/user/realorrug-serve.service ~/realorrug/
+sudo install -m 0644 ~/realorrug/deploy/realorrug-analyst.service /etc/systemd/system/
+install -m 0644 ~/realorrug/deploy/user/realorrug-serve.service ~/.config/systemd/user/
+sudo systemctl daemon-reload && systemctl --user daemon-reload
+# 5. Start, and check
+sudo systemctl start realorrug-analyst && systemctl --user start realorrug-serve
+curl -s localhost:8090/v1/public/weeks | sed 's/"measured_at":"[^"]*"//g' | cmp - ~/weeks-before.json && echo same weeks
+sudo grep -n 'radar/\|/etc/radar' /etc/systemd/system/realorrug-*.service ~/.config/systemd/user/realorrug-serve.service /etc/realorrug/analyst.env /etc/realorrug/payout.env; [ $? -eq 1 ] && echo no Radar paths
+```
+
+The move is done when the weeks match, no Radar path is left, and the
+analyst's cursor file changes after the start (`ls -l
+~/realorrug/data/analyst/cursor`). Then the copies under `~/radar/data` can go.
+To go back before that: stop both, install the two kept units
+(`~/realorrug/realorrug-*.service`) where they came from, reload, start.
 
 ## Install
 
@@ -95,7 +129,7 @@ Radar's store and writes the file the daily post reads.
 # Built by CI on a push to main; download the artifact, then:
 sudo install -m 0755 realorrug-analyst realorrug-payout realorrug-serve /usr/local/bin/
 sudo install -m 0644 deploy/realorrug-analyst.service deploy/realorrug-payout.service deploy/realorrug-payout.timer deploy/realorrug-serve.service /etc/systemd/system/
-sudo install -m 0640 -o root -g guardian deploy/analyst.env.example /etc/radar/analyst.env
+sudo install -m 0640 -o root -g guardian deploy/analyst.env.example /etc/realorrug/analyst.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now realorrug-serve realorrug-analyst
 ```
@@ -193,4 +227,5 @@ A claim or transfer made by hand is recorded with
 which reads both back through the same checks.
 
 The environment variables keep their `RADAR_` prefix, so an existing
-`/etc/radar/analyst.env` works unchanged.
+`analyst.env` works unchanged once it is under `/etc/realorrug` with its
+directory paths moved.

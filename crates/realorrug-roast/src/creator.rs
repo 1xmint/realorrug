@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn the_size_of_the_index_is_the_number_of_creators_in_it() {
-        // It is printed by `radar creator-index` and it is how an operator
+        // It is printed by whatever builds the index, and it is how an operator
         // knows the build worked: "117,680 creators at slot N" against "0
         // creators" is the difference between a good index and a silently
         // empty one, and a constant would report the same either way.

@@ -12,13 +12,14 @@ Wants=network-online.target
 Type=simple
 User=guardian
 Group=guardian
-# The base-rate and population files are read relative to this directory, where
-# Radar's creator-index job publishes them.
-WorkingDirectory=/home/guardian/radar
+# The base-rate and population files are read relative to this directory: dated
+# copies under docs/research/data/, placed there when realorrug left Radar's
+# folders (ADR 0026, deploy/README.md).
+WorkingDirectory=/home/guardian/realorrug
 ExecStart=/usr/local/bin/realorrug-serve
 Environment=REALORRUG_BIND=127.0.0.1:8090
-Environment=RADAR_CONTEST_DIR=/home/guardian/radar/data/contest
-Environment=RADAR_ANALYST_DIR=/home/guardian/radar/data/analyst
+Environment=RADAR_CONTEST_DIR=/home/guardian/realorrug/data/contest
+Environment=RADAR_ANALYST_DIR=/home/guardian/realorrug/data/analyst
 # Set to the site's origin to let a browser read these; unset sends no CORS header.
 EnvironmentFile=-/etc/realorrug/serve.env
 Restart=always

@@ -22,13 +22,13 @@ Wants=network-online.target
 Type=simple
 User=guardian
 Group=guardian
-WorkingDirectory=/home/guardian/radar
+WorkingDirectory=/home/guardian/realorrug
 
 # Every switch is deny-by-default, so an absent file means a service that runs,
 # says what is missing, and posts nothing. The leading `-` keeps that true: a
 # missing env file must not be a failed start, because a unit that will not
 # start is a unit somebody stops looking at.
-EnvironmentFile=-/etc/radar/analyst.env
+EnvironmentFile=-/etc/realorrug/analyst.env
 ExecStart=/home/guardian/bin/realorrug-analyst
 
 Restart=always
@@ -49,7 +49,7 @@ ProtectHome=read-only
 # worked, every reply posted, and at 00:00 UTC on the Monday the close said
 # `Read-only file system (os error 30)` every five minutes into a journal
 # nobody was reading. **The contest could not close, ever.**
-ReadWritePaths=/home/guardian/radar/data/analyst /home/guardian/radar/data/contest
+ReadWritePaths=/home/guardian/realorrug/data/analyst /home/guardian/realorrug/data/contest
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
