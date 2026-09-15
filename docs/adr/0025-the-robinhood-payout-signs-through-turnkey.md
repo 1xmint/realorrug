@@ -123,3 +123,22 @@ fields.
 - **The operator funds gas**, a money decision at launch.
 - **Radar's `radar brief` reads `lamports` and `signature`** and skips a payout it
   cannot read; plan 0001 6d fixes it in Radar before launch.
+
+## Considered, not taken: an Alchemy smart account with an agent session key
+
+2026-09-15, raised by Josh from a suggested layout: an AI agent holding a
+session key on an Alchemy smart account (ERC-4337), with Turnkey as the root
+authority and Alchemy's bundler and paymaster in front of the chain. **Not
+taken, recommended and approved with Josh's plan of 2026-09-15:**
+
+- **It gives a model a key that can move money.** AGENTS.md §3 rule 1 forbids
+  that path outright. The payout pays what `realorrug_contest::Payout::permitted`
+  allows, and no model sits between that rule and the signature.
+- **It buys nothing this payout needs.** Turnkey already keeps the key off the
+  box. Gas sponsorship only replaces the operator's small gas float (research
+  0037). A bundler and a paymaster add a vendor and a contract to trust on every
+  payout.
+- **The creator fee recipient is fixed at launch** (§2), so a contract account
+  as recipient would be a one-way choice made before it was ever tested.
+
+Revisit only for a feature where users, not the payout, need their gas paid.

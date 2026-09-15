@@ -4,6 +4,7 @@
 **Date:** 2026-09-15
 **Status:** accepted, not yet built. **Josh's decision, recorded**: "id rather
 have both standalone entirely", and "yes go standalone from radar".
+Amended 2026-09-15 (below): Robinhood answers come first.
 **Amends:** [ADR 0024](0024-the-bot-stands-alone.md), whose "What stays the
 same" kept a data contract with Radar of published files. That contract ends.
 **Built by:** [plan 0001](../plans/0001-after-the-split.md) step 7.
@@ -55,9 +56,14 @@ its numbers belong in a reply about a Robinhood token is part of step 7.
 
 ## Consequences
 
-- **The analyst says less about creators until its own index exists.** Radar's
-  index describes a different chain, so for Robinhood tokens it already says
-  nothing useful; the loss is on paper.
+- **The analyst says less about creators until its own index exists.** This
+  first read "the loss is on paper". That was wrong: the analyst answers only
+  about Solana coins (`crates/realorrug-analyst/src/answer.rs` and `daemon.rs`
+  build the sheet with `realorrug_onchain`, and the crate has no
+  `realorrug-robinhood` dependency), so dropping Radar's Solana index removed
+  real creator lines from live replies. A Pons v2 index also has no reader
+  until the analyst can answer about a Robinhood Chain token. See the
+  amendment below.
 - **One more timer on the box**, realorrug's own index, reading Robinhood Chain
   over public RPC.
 - **The contest ledger moves once, with the analyst and server stopped**, from
@@ -66,3 +72,22 @@ its numbers belong in a reply about a Robinhood token is part of step 7.
   ledgers, so the move happens before the payout timer is enabled.
 - **Radar's `radar brief` loses its view of the bot.** Watching the bot becomes
   realorrug's job.
+
+## Amendment, 2026-09-15: Robinhood answers come first
+
+**Josh's decision, recorded** ("Add Robinhood", 2026-09-15), taken after the
+correction above and [research 0038](../research/0038-pons-v2-creators-and-outcomes-read-over-a-range.md)'s
+launch counts.
+
+1. **The bot learns to answer about a Robinhood Chain (Pons v2) token first**,
+   before the creator index: a fact sheet for an `0x` token, chosen by the
+   address's shape.
+2. **Solana replies keep working meanwhile, without creator lines.**
+3. **No Solana creator index is ever built** in this repository. Decision 1
+   stands: the only creator index is realorrug's own, from Pons v2 launches,
+   keyed on the creator fee recipient (research 0038 §2).
+4. Then the Robinhood creator index, then the seven-days-later join
+   (decision 2), both fed by the data source research chooses.
+
+Built by [plan 0001](../plans/0001-after-the-split.md) step 7b, whose first
+part is the Robinhood answer.
