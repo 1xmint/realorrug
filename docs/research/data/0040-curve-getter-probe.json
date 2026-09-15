@@ -1,0 +1,198 @@
+{
+  "getReserves()": {
+    "selector": "0x0902f1ac",
+    "result": "0x0000000000000000000000000000000000000000000000001769a55100d9a4b800000000000000000000000000000000000000000337b7e8c14116b7aca782f7"
+  },
+  "reserves()": {
+    "selector": "0x75172a8b",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "reserveQuote()": {
+    "selector": "0x93778609",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "reserveToken()": {
+    "selector": "0xf4325d67",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "virtualReserveQuote()": {
+    "selector": "0x5b09020e",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "virtualReserveToken()": {
+    "selector": "0x9d1a5307",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "virtualQuoteReserve()": {
+    "selector": "0xf5596626",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "virtualTokenReserve()": {
+    "selector": "0x343ee3b7",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "quoteReserve()": {
+    "selector": "0x9da771f4",
+    "result": "0x0000000000000000000000000000000000000000000000001769a55100d9a4b8"
+  },
+  "tokenReserve()": {
+    "selector": "0xcbcb3171",
+    "result": "0x00000000000000000000000000000000000000000337b7e8c14116b7aca782f7"
+  },
+  "getPrice()": {
+    "selector": "0x98d5fdca",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "price()": {
+    "selector": "0xa035b1fe",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "currentPrice()": {
+    "selector": "0x9d1b464a",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "spotPrice()": {
+    "selector": "0x398482d8",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "getSpotPrice()": {
+    "selector": "0xdc76fabc",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "getCurrentPrice()": {
+    "selector": "0xeb91d37e",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "getQuote(uint256)": {
+    "selector": "0xcf39918e",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "previewBuy(uint256)": {
+    "selector": "0x48153279",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "quoteBuy(uint256)": {
+    "selector": "0x4beb394c",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "getAmountOut(uint256,bool)": {
+    "selector": "0x11106ee2",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "phase()": {
+    "selector": "0xb1c9fe6e",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "currentReserves()": {
+    "selector": "0xa30b59b8",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "reserveOf(address)": {
+    "selector": "0x9fa77b20",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "phantomReserve()": {
+    "selector": "0xdb763ba8",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "realReserveQuote()": {
+    "selector": "0x5092507d",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  },
+  "realReserveToken()": {
+    "selector": "0x94ba10b3",
+    "error": {
+      "code": 3,
+      "message": "execution reverted",
+      "data": "0x"
+    }
+  }
+}
