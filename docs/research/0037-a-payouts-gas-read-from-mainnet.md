@@ -2,8 +2,8 @@
 # 0037 — A payout's gas, read from mainnet
 
 **Date:** 2026-09-15
-**Status:** captured (§1–§3); §4, the Turnkey setup proof, is pending Josh's
-Turnkey account. Every number in §1–§3 is recomputed from
+**Status:** captured. §1–§3 read mainnet; §4, the Turnkey setup proof, passed
+on the box on 2026-09-15. Every number in §1–§3 is recomputed from
 [`docs/research/data/0037-transfer-and-gas.json`](data/0037-transfer-and-gas.json):
 raw JSON-RPC responses, read only, nothing sent.
 **Feeds:** [ADR 0025](../adr/0025-the-robinhood-payout-signs-through-turnkey.md)
@@ -73,12 +73,36 @@ Two things follow:
 
 ## 4. The Turnkey setup proof
 
-Pending. `realorrug-payout --setup-proof` on the box, once the organisation,
-wallet, `realorrug-payout` user, P-256 API key and policy exist
-([deploy guide](../../deploy/README.md)). Record its four lines here, without
-the organisation id or any key: `whoami` answered, the factory call denied,
-`claim(0)` allowed and recovering to the wallet, and a 1 wei transfer allowed
-the same way.
+Passed, 2026-09-15: `realorrug-payout --setup-proof` on the box, run as the
+`realorrug-payout` system user with `/etc/realorrug/payout.env` and the P-256
+API key, against the organisation, wallet, user and policy the
+[deploy guide](../../deploy/README.md) describes. Its four lines, as printed
+(the organisation id is not recorded; no key is printed):
+
+1. `whoami answered, as user realorrug-payout`
+2. `a call to the factory was denied: ... HTTP 403: {"code":7, "message":"You
+   don't have sufficient permissions to take this action. ..." ... "No policies
+   evaluated to outcome: Allow", "policyEvaluations":[{... "outcome":"OUTCOME_DENY_IMPLICIT"}]}`
+3. `claim(0) at nonce 1000000 was signed by 0xd66578ac5fd7e36f8427c61edb7a2cbfa4c75793,
+   hash 0xc026e14d065803c39e1f073978e4f4baae58438a40e7bbc586a74693681f0765; not
+   sent, and it cannot land`
+4. `a 1 wei transfer at nonce 1000000 was signed by 0xd66578ac5fd7e36f8427c61edb7a2cbfa4c75793,
+   hash 0x710e5745c496934e62e1c4cc8cb0c2e218f32d1ff6fbf9ba631db5d3e480430d; not
+   sent, and it cannot land`
+
+What it settles:
+
+- **The stamp, key and organisation work**: Turnkey named the user.
+- **The policy denies what it should**: the factory call failed in the policy
+  engine itself, with the one policy evaluated and none allowing it. This is a
+  403 from policy, not the 404 of the first run below.
+- **The policy allows the claim**, and the signed bytes recover to the wallet:
+  the payout decodes them, compares every field with what it asked for, and
+  recovers the sender before printing line 3.
+- **`eth.tx.data == '' || eth.tx.data == '0x'` matches a plain transfer**, the
+  one part of the policy that was a guess.
+- Nothing was sent. Neither transaction was broadcast, and at nonce 1,000,000
+  neither could be mined before the wallet had sent a million others.
 
 A first run on 2026-09-15 answered `whoami` and failed every signing request
 with HTTP 404, "Could not find any resource to sign with. Addresses are case
