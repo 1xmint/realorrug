@@ -198,6 +198,11 @@ as open, not solved.
   `cabalhunter.org`, and a test fails if the name is taken back out. "drug" and
   "struggle" are still refused; that is the blunt trade the file's header
   argues for, and the cost is the template shipping instead.
+- **Superseded in part by [ADR 0027](../adr/0027-the-bot-gives-verdicts-it-can-prove.md)
+  (2026-09-15).** The blanket ban below is replaced by an earned verdict: the
+  bot may call a token rugged when the fact sheet holds the evidence, and may
+  never accuse a named person, account or company. The reason the old rule
+  gave is the reason the new one aims at people rather than tokens.
 - **The rule stays.** It is Radar's rule, not a chain rule, and it exists
   because calling a named project a "rug" in public accuses identifiable people
   of fraud. The meme and the rule fit together: the brand asks "real or rug?",
