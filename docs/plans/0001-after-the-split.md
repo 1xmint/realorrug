@@ -53,8 +53,9 @@ this is what follows it, in order, each with what proves it.
    - 6c, the payout: claim from the escrow, pay the winner, read both back,
      under `realorrug_contest::Payout::permitted`, signed through Turnkey
      ([ADR 0025](../adr/0025-the-robinhood-payout-signs-through-turnkey.md)).
-     Built 2026-09-14 on `payout/robinhood`. Waits on the Turnkey setup proof
-     and a read-only gas capture, both research 0037.
+     Built 2026-09-14 on `payout/robinhood`; installed on the box, and the
+     Turnkey setup proof and read-only gas capture passed 2026-09-15 (research
+     0037). The timer stays off until step 7 and launch.
    - 6d, before launch: the analyst's `try_claim` accepting an EVM address; the
      site showing ETH with a Robinhood explorer link; Radar's `radar brief`
      reading the new payout shape; and how the token is launched with the
@@ -252,4 +253,10 @@ this is what follows it, in order, each with what proves it.
     address; re-applying the lowercase form fails the HTTP test). The "denied"
     on the factory call that run was this error, not the policy, so it proves
     nothing; the rerun must show the claim and transfer signed.
-  - *Next:* install the new binary and rerun the setup proof.
+  - **The setup proof passed** on the rerun (PR #13's binary): `whoami`
+    answered; the factory call was denied by the policy engine (HTTP 403, "No
+    policies evaluated to outcome: Allow"); `claim(0)` and a 1 wei transfer
+    were both signed by the wallet and read back. The four lines are in
+    research 0037 §4. The policy's empty-data guess holds.
+  - *Next:* step 7, standalone from Radar (ADR 0026), before the payout timer
+    is enabled; then the launch items in 6d.
