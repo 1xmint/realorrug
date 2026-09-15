@@ -64,10 +64,14 @@ sudo systemctl disable --now realorrug-analyst && sudo systemctl enable --now ra
 | unit | binary | what it does | writes |
 |---|---|---|---|
 | `realorrug-analyst.service` | `realorrug-analyst` | answers summoned mentions on X with measured facts | `data/analyst`, `data/contest` |
-| `realorrug-payout.service` + `realorrug-payout.timer` | `realorrug-payout --due` | pays a claimed, unpaid week under three refusals | `data/contest` |
+| `realorrug-payout.service` + `realorrug-payout.timer` | `realorrug-payout --due` | claims a claimed, unpaid week's fees from the escrow and pays them, signed through Turnkey | `data/contest` |
 | `realorrug-serve.service` | `realorrug-serve` | the public site's five documents | nothing |
 
 ## What it reads from Radar, and how
+
+**Ending:** [ADR 0026](../docs/adr/0026-realorrug-reads-nothing-from-radar.md)
+removes all of this before the payout timer is enabled (plan 0001 step 7).
+Until then, as installed:
 
 The bot does not import Radar. It reads **two files Radar publishes**, at paths
 relative to its working directory:
@@ -97,9 +101,96 @@ sudo systemctl enable --now realorrug-serve realorrug-analyst
 ```
 
 The payout runs as its own user, `realorrug-payout`, which owns nothing but its
-key and the contest directory. Create it before enabling the timer. The payout
-code today is pump.fun's; ADR 0023 replaces it with a Robinhood Chain payout
-before the token launches, so **do not enable the timer until that lands**.
+Turnkey API key and the contest directory. **Do not enable the timer until
+launch**: the token exists, the gas float is funded, and the setup proof below
+has passed.
+
+### The payout's key is in Turnkey
+
+[ADR 0025](../docs/adr/0025-the-robinhood-payout-signs-through-turnkey.md). The
+wallet key never touches the box. What the box holds is a Turnkey API key that
+can ask Turnkey to sign two kinds of transaction and nothing else.
+
+Set up in Turnkey's dashboard, by the operator, on a passkey:
+
+1. An organisation, with the operator as root user.
+2. One wallet with one Ethereum account. Its address is `RADAR_PAYOUT_ADDRESS`,
+   and the token's creator fee recipient.
+3. A user `realorrug-payout`, not in the root quorum, holding one API key on
+   the **P-256** curve. Make the key on the box, where it will live, so the
+   private half never crosses a network. From a checkout (sudo asks for a
+   password, so ssh needs `-t`):
+
+   ```bash
+   scp deploy/make-payout-key.sh guardian-vps-tail:
+   ```
+
+   ```bash
+   ssh -t guardian-vps-tail 'bash make-payout-key.sh; rm make-payout-key.sh'
+   ```
+
+   [`make-payout-key.sh`](make-payout-key.sh) uses the box's OpenSSL, creates
+   the system user, writes `/etc/realorrug/turnkey.key` (0400, that user's),
+   refuses to overwrite an existing key (removing only a secp256k1 key from its
+   first version, which Turnkey cannot use), and prints only the public key. In
+   Turnkey's dashboard, create a service user with "Generate API key via CLI"
+   ticked and paste that public key; the dashboard files it as P-256, which is
+   why the payout uses P-256 (ADR 0025). The file is in the format
+   Turnkey's CLI writes (64 hex digits, `:p256`), so a CLI-made key also
+   loads. The process refuses a key marked as another curve, a file group or
+   others can read, and a key whose public half is not
+   `TURNKEY_API_PUBLIC_KEY`. **A key made on your own root user is not this
+   key**: the root quorum is not bound by the policy, so it could sign
+   anything.
+4. One ALLOW policy for that user, and no other policy naming it. The
+   dashboard's New Policy box takes the policy as JSON (in place since
+   2026-09-15):
+
+   ```json
+   {
+     "effect": "EFFECT_ALLOW",
+     "consensus": "approvers.any(user, user.id == '<realorrug-payout user id>')",
+     "condition": "activity.type == 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2' && eth.tx.chain_id == 4663 && ((eth.tx.to == '0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e' && eth.tx.value == 0 && eth.tx.function_signature == '0x379607f5') || eth.tx.data == '' || eth.tx.data == '0x')"
+   }
+   ```
+
+   That is `claim(uint256)` on the Pons fee escrow, or a plain ETH transfer, on
+   Robinhood Chain. No token approvals, no other contracts, no other chains.
+   Empty call data is matched both as `''` and `'0x'` because Turnkey's policy
+   language documents `eth.tx.data` only as "hex-encoded"; neither can match a
+   call that carries data. There is deliberately no value cap; ADR 0025 says why.
+5. Wallet and key export stay denied to everyone but root.
+
+Then the setup proof. It needs only the Turnkey variables and
+`RADAR_PAYOUT_ADDRESS`, sends nothing to any chain, and costs nothing:
+
+```bash
+sudo systemd-run --pty --wait --uid=realorrug-payout -p EnvironmentFile=/etc/realorrug/payout.env -E TURNKEY_API_KEY=/etc/realorrug/turnkey.key /usr/local/bin/realorrug-payout --setup-proof
+```
+
+It passes only when `whoami` answers, a call to the Pons factory is **denied**,
+and both `claim(0)` and a 1 wei transfer at nonce 1,000,000 are **allowed**,
+each returned as the transaction asked for and signed by the wallet. Record the
+four lines in
+[research 0037](../docs/research/0037-a-payouts-gas-read-from-mainnet.md) §4,
+without the organisation id or any key. The same document sizes the gas float:
+0.001 ETH covers about 95 weeks at the September 2026 base fee.
+
+### A payout that stopped part way
+
+A run writes `data/contest/<week>.pending.json` before each transaction it
+sends, and the next run finishes that week before anything else. It never claims
+twice. Two cases stop for the operator:
+
+- **`nonce N was used by a transaction other than ...`**: something else was sent
+  from the wallet. Look the wallet up on the explorer; if the pending claim is
+  truly dead, delete the pending file.
+- **`locked`**: `data/contest/payout.lock` exists. If no payout is running, a run
+  died holding it; check the wallet and any pending file, then delete the lock.
+
+A claim or transfer made by hand is recorded with
+`realorrug contest record-payout --week N --wallet <address> --rpc <url> --claim-tx <hash> --transfer-tx <hash>`,
+which reads both back through the same checks.
 
 The environment variables keep their `RADAR_` prefix, so an existing
 `/etc/radar/analyst.env` works unchanged.

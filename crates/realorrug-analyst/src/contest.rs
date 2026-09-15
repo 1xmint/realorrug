@@ -900,7 +900,8 @@ pub fn void_week(contest_dir: &str, week: Week, reason: &str, now: u64) -> Resul
         // an edit to this one.
         return Err(format!(
             "week {} was paid under {}; voiding it now would not unpay it",
-            week.0, paid.signature
+            week.0,
+            paid.transaction()
         ));
     }
     if let Some(already) = &record.voided {
@@ -1709,8 +1710,11 @@ mod tests {
         let mut record = Record::close(WEEK, realorrug_contest::Ranking::default(), &rules);
         record.payout = Some(realorrug_contest::Payout {
             recipient: "somebody".to_owned(),
-            lamports: 10,
-            signature: "the-signature".to_owned(),
+            paid: realorrug_contest::Paid::Eth {
+                wei: realorrug_contest::Wei(10),
+                claim_tx: "the-claim".to_owned(),
+                transfer_tx: "the-signature".to_owned(),
+            },
             at: 5,
         });
         write_record(&path, &record).expect("write");

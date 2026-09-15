@@ -51,8 +51,24 @@ this is what follows it, in order, each with what proves it.
      balance, and a `claim()` captured and read back ([research 0036](../research/0036-pons-v2-read-from-a-real-launch.md) §5).
      Built 2026-09-14 (`realorrug_robinhood::escrow`).
    - 6c, the payout: claim from the escrow, pay the winner, read both back,
-     under `realorrug_contest::Payout::permitted`. Signs on EVM, so it brings
-     the signing dependency and the key file format; its own pull request.
+     under `realorrug_contest::Payout::permitted`, signed through Turnkey
+     ([ADR 0025](../adr/0025-the-robinhood-payout-signs-through-turnkey.md)).
+     Built 2026-09-14 on `payout/robinhood`. Waits on the Turnkey setup proof
+     and a read-only gas capture, both research 0037.
+   - 6d, before launch: the analyst's `try_claim` accepting an EVM address; the
+     site showing ETH with a Robinhood explorer link; Radar's `radar brief`
+     reading the new payout shape; and how the token is launched with the
+     Turnkey account as creator fee recipient (ADR 0025 §2).
+7. **Standalone from Radar** ([ADR 0026](../adr/0026-realorrug-reads-nothing-from-radar.md)),
+   before the payout timer is enabled. In order: Radar stops reading the reply
+   log and ledger (a Radar pull request); realorrug indexes its own creators
+   from Pons v2 launches and runs its own seven-days-later join; then, with the
+   analyst and server stopped, `data/` moves to `/home/guardian/realorrug`,
+   `analyst.env` to `/etc/realorrug`, and the three units follow. The payout's
+   key and env file are already under `/etc/realorrug`. *Proof:* no unit, env
+   file or code path on the box names `/home/guardian/radar` or `/etc/radar`;
+   the analyst moves its mention cursor after the move; `/v1/public/weeks`
+   lists the same weeks before and after.
 
 ## Handback
 
@@ -171,3 +187,60 @@ this is what follows it, in order, each with what proves it.
     old build, which predates this session.
   - *Next:* step 6c, the payout. Radar's own deploy (its new build, and
     `radar brief` on the box as step 3's second proof) is Radar's to run.
+- 2026-09-14, sixth session:
+  - **Step 6c built** on `payout/robinhood`, one pull request.
+    [ADR 0025](../adr/0025-the-robinhood-payout-signs-through-turnkey.md)
+    records Josh's decision that the key lives in Turnkey. The ledger holds
+    wei (`Paid::Eth`, with `Sol` read-only); `realorrug-payout` claims from the
+    escrow, transfers exactly the `Claimed` figure, reads both back, and keeps
+    a pending file so a rerun never claims twice; `realorrug contest pay
+    --dry-run` and `record-payout --claim-tx --transfer-tx` run the same
+    checks; serve adds `wei`, `claim_tx`, `transfer_tx`.
+  - **Proved locally:** the encoder rebuilds the captured claim `0x07cab768…`
+    to mainnet's hash and recovers its sender; the Turnkey stamp verifies
+    under `k256`'s own DER decoder; 22 flow tests against a fake chain cover
+    every refusal and every resume case. Contest, robinhood, payout, cli,
+    serve, analyst and repo-conformance tests and clippy pass, one crate at a
+    time. MIN_TESTS 1030 → 1070 by count.
+  - **CI green on PR #12, mutants included**, after two fixes: the first
+    mutation run found 24 survivors in the new payout code, each now pinned
+    by a test or rewritten away; and cargo-deny failed on RUSTSEC-2026-0285
+    in rustls 0.23.43, which `main` also carries, fixed by 0.23.45.
+  - **Not proved:** nothing touched Turnkey or mainnet. The deploy guide's
+    policy expression is untested until the setup proof.
+  - *Next, needing Josh:* (1) a yes to the read-only capture for research
+    0037 (a plain transfer and its receipt, the base fee, and two gas
+    estimates); (2) the Turnkey organisation, wallet, user, API key and
+    policy, then `realorrug-payout --setup-proof`; (3) at launch, the gas
+    float, the first payout and enabling the timer. 6d before launch.
+- 2026-09-15, seventh session:
+  - **Research 0037 captured** (Josh's yes): a transfer is 21,000 gas with no
+    L1 part, a claim estimates at 42,581, and `claim(0)` reverts `NoBalance()`.
+    A 0.001 ETH float covers about 95 weeks. The key loader now reads the file
+    Turnkey's CLI writes.
+  - **Turnkey, read only:** one root user, no wallet, no policy. Josh's first
+    API key was on the root user and P-256, so it cannot be the payout's.
+  - **Josh chose standalone from Radar**, recorded as ADR 0026 and step 7. The
+    payout's key and env file moved to `/etc/realorrug` in PR #12.
+  - **`deploy/make-payout-key.sh`** makes the key on the box with OpenSSL
+    (Turnkey's CLI is not installed there). Tested against a scratch folder:
+    it refused a second run, and the public key it printed was recomputed from
+    the file it wrote. Running it on the box is Josh's: the agent was refused
+    writing a secret there.
+  - **Josh ran the script and created the `realorrug-payout` service user**
+    with its public key. The dashboard filed that secp256k1 key as P-256, with
+    no choice of curve, so it could never stamp a request. The payout now
+    stamps with P-256 (ADR 0025 amended): `p256` beside `k256`, the scheme
+    `SIGNATURE_SCHEME_TK_API_P256`, and the script makes a P-256 key, removing
+    the earlier secp256k1 one. The over-HTTP test fails with the old scheme
+    restored; the script was rerun against a scratch folder three ways (old key
+    present, good key present, fresh), with each printed public key recomputed
+    on P-256 from the file.
+  - **Turnkey is set up** (Josh, on the dashboard): the key script rerun on the
+    box; the service user recreated with the P-256 public key (Turnkey refused
+    to delete a user's only API key: "user missing valid credential"); the
+    wallet; and the policy, entered as JSON, which Turnkey accepted. The policy
+    matches empty call data as `''` or `'0x'`, and the setup proof gained a
+    fourth request, a 1 wei transfer, so that guess is tested before launch.
+  - *Next:* merge PR #12, install the payout binary and `payout.env` on the
+    box, and run the setup proof.

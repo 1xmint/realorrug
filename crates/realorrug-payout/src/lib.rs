@@ -1,369 +1,1310 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The payout: one transaction a week, under three refusals, from a key that
-//! can do nothing else.
+//! The payout: claim the week's creator fees from the Pons escrow, pay exactly
+//! what the escrow says was claimed to the winner, read both back, and only then
+//! write the ledger.
 //!
-//! Design 0007 §6.3 C4 and C5, ADR 0013, plan 0006 item 7. The token's creator
-//! fee accrues in the pump.fun creator vault of the wallet that launched it.
-//! Once a week's record carries a claim, this pays it: `collect_creator_fee`
-//! moves what the vault holds into the creator wallet, and a system transfer
-//! moves it on to the claimed address, in one transaction the creator wallet
-//! signs. That wallet holds the token's creator role and nothing else -- no
-//! tokens (ADR 0013 constraint 2), no other funds beyond what pays a fee.
+//! Plan 0001 step 6c, ADR 0025, ADR 0013. On Robinhood Chain a sweep does not
+//! pay the creator; it credits the Pons v2 fee escrow, and the creator claims
+//! from it (research 0036 §5). So a week's payout is two transactions from the
+//! payout wallet, which is the token's creator fee recipient: `claim(amount)`
+//! to the escrow, then a plain ETH transfer to the claimed address.
 //!
-//! # The three refusals, and where they live
+//! # The refusals, and where they live
 //!
-//! [`realorrug_contest::Payout::permitted`] is the policy: not already paid, a
-//! winner, a claim, the recipient is the claimed address, the amount is at
-//! most what was collected. This crate calls it and never argues with it. What
-//! this crate adds is the plumbing a refusal has to survive: the transaction
-//! is built from the record and the chain, not from arguments; the amount is
-//! what the vault holds above its rent reserve, so there is no field for a
-//! larger number; and after sending, the transaction is **read back** and
-//! checked -- recipient and amount -- before the ledger says it was paid.
+//! [`realorrug_contest::Payout::permitted`] is the policy: not already paid, not
+//! voided, a winner, a claim, the recipient is the claimed address, the amount
+//! is at most what was collected, and not below the floor. This crate calls it
+//! before the claim and again before the transfer, with the escrow's own figure,
+//! and never argues with it. What it adds is what a refusal has to survive:
 //!
-//! # Two paths, one check
+//! - the chain is Robinhood Chain, and the wallet is the token's creator fee
+//!   recipient, or nothing is read further;
+//! - the recipient has no code, so the prize never goes to a contract;
+//! - both transactions' gas is estimated and funded before the first signature;
+//! - Turnkey's signed bytes decode to the fields asked for and recover to the
+//!   wallet before they are sent ([`sign_checked`]);
+//! - the transfer is read back -- from the wallet, to the claim, for exactly the
+//!   claimed wei, with no call data -- before the ledger says paid.
 //!
-//! `realorrug-payout --week N` signs and sends. `radar contest pay --week N
-//! --dry-run` prints the exact unsigned transaction for the operator to sign
-//! elsewhere, and `radar contest record-payout --week N --signature S` reads
-//! that transaction back through the same [`verify`] the automated path uses.
-//! The fallback is therefore exercised by the automated path's own test, which
-//! is design 0007 C5's condition for having one.
+//! # Surviving a crash between the two transactions
 //!
-//! # Not the trading signer
+//! Before each transaction is sent, its signed bytes and hash are written to
+//! `<week>.pending.json` (Radar ADR 0017: the intent before the effect). A run
+//! that finds that file resumes that week and does nothing else. A claim that
+//! landed is never made again; the transfer pays the claimed amount stored
+//! beside it. See [`resume`].
 //!
-//! This is a different key, a different unit, a different user. It does not
-//! touch `radar-risk`, it cannot sign a trade, and the trading signer cannot
-//! sign this. The blast radius of the hot key is one week of creator fees
-//! (ADR 0013 "What this costs").
+//! # Not a model's hand
+//!
+//! AGENTS.md rule 1. No model-side crate depends on this one, and
+//! `repo-conformance` holds that.
 
-use std::path::Path;
+pub mod turnkey;
+pub mod tx;
 
-use base64::Engine as _;
-use ed25519_dalek::{Signer as _, SigningKey};
-use realorrug_contest::{Payout, Record, Refusal, Vault, Week};
-use realorrug_pumpfun::transaction::{Instruction, transaction};
-use realorrug_pumpfun::{instruction, pda};
-use realorrug_types::Address;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
-/// Lamports a zero-data account must hold to be rent exempt, which is what
-/// `collect_creator_fee` leaves in the vault.
-///
-/// **An assumption until a capture confirms it.** The figure is the runtime's
-/// rent-exempt minimum for zero bytes of data at the default rent parameters
-/// (890,880). The vault's balance after a collect on mainnet is the evidence;
-/// when a `collect_creator_fee` transaction is captured into
-/// `realorrug-pumpfun/tests/fixtures`, its post-balance replaces this comment
-/// with a test. Until then the direction of any error is safe: too high a
-/// reserve pays out slightly less than collected, never more.
-pub const VAULT_RENT_RESERVE: u64 = 890_880;
+use realorrug_contest::{Balance, Paid, Payout, Record, Refusal, Vault, Week, Wei};
+use realorrug_robinhood::escrow::{self, ESCROW};
+use realorrug_robinhood::pons::{FACTORY, LaunchedToken};
+use realorrug_robinhood::{Address, Hash32, Receipt, Rpc, Tag, Transaction};
+use serde::{Deserialize, Serialize};
 
-/// What the vault holds above its reserve: what can be paid.
-#[must_use]
-pub const fn collected(vault_lamports: u64) -> u64 {
-    vault_lamports.saturating_sub(VAULT_RENT_RESERVE)
-}
+use crate::tx::{Eip1559, Signed};
 
-/// A payment, planned and not yet made.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Plan {
-    /// Which week.
-    pub week: Week,
-    /// The creator wallet: signer, payer, and the vault's owner.
-    pub creator: Address,
-    /// The claimed address.
-    pub recipient: Address,
-    /// What is paid, in lamports. Equal to `collected`: the whole fee is the
-    /// prize (ADR 0013 constraint 3, design 0009 L1).
-    pub lamports: u64,
-    /// What the vault held above its reserve when the plan was made.
-    pub collected: u64,
-    /// The two instructions, in order.
-    pub instructions: Vec<Instruction>,
-    /// The transaction with its signature slot blank, ready to sign.
-    pub unsigned: Vec<u8>,
-}
+/// Robinhood Chain mainnet (research 0035 §1; `eth_chainId` `0x1237` in the
+/// captured claim).
+pub const CHAIN_ID: u64 = 4663;
 
-impl Plan {
-    /// The unsigned transaction, base64, as `solana` tooling accepts it.
-    #[must_use]
-    pub fn unsigned_base64(&self) -> String {
-        base64::engine::general_purpose::STANDARD.encode(&self.unsigned)
-    }
-}
+/// How many base fees a transaction may pay per gas. Two absorbs a base fee
+/// that doubles between estimate and inclusion; the tip is zero, as it was in
+/// the captured claim, so the chain charges the base fee and refunds the rest.
+pub const FEE_CAP_BASE_FEES: u128 = 2;
 
-/// Why nothing was paid.
+/// How many one-second waits for a receipt before the run stops and leaves the
+/// pending file for the next one.
+pub const RECEIPT_POLLS: u32 = 90;
+
+/// Why nothing was paid, or not all of it.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PayError {
     /// The policy refused. Recorded, never argued with.
     #[error("refused: {0:?}")]
     Refused(Refusal),
-    /// The vault holds nothing above its reserve, so there is nothing to pay.
-    /// Distinct from a refusal: the week is fine, the pool is empty.
-    #[error("nothing collected: the vault holds {vault} lamports, the reserve is {reserve}")]
-    NothingCollected {
-        /// The vault's balance.
-        vault: u64,
-        /// The rent reserve it keeps.
-        reserve: u64,
-    },
-    /// The claim carries text that is not an address.
-    #[error("the claimed address does not parse: {0}")]
+    /// The escrow holds nothing for the wallet. Not a refusal: the week is
+    /// fine, the pool is empty.
+    #[error("nothing collected: the escrow holds 0 wei for {0}")]
+    NothingCollected(Address),
+    /// The claim is not an address this chain can pay.
+    #[error("the claimed address cannot be paid: {0}")]
     BadAddress(String),
-    /// A derivation failed, which for a real creator it cannot.
-    #[error("the creator vault could not be derived")]
-    NoVault,
-    /// The transaction could not be built.
-    #[error("the transaction could not be built: {0}")]
-    Unbuildable(String),
+    /// The endpoint is not Robinhood Chain.
+    #[error("the endpoint is chain {got}, not Robinhood Chain ({CHAIN_ID})")]
+    WrongChain {
+        /// What it said.
+        got: u64,
+    },
+    /// The wallet is not the token's creator fee recipient, the token is not
+    /// known to the factory, or its fees are not paid in ETH.
+    #[error("identity: {0}")]
+    Identity(String),
+    /// The wallet cannot pay for both transactions at the fee cap.
+    #[error("gas unfunded: need {need} wei, the wallet holds {have}")]
+    GasUnfunded {
+        /// What the transactions could cost at the cap, plus any prize to send.
+        need: u128,
+        /// What the wallet holds.
+        have: u128,
+    },
+    /// Turnkey did not sign: denied by policy, failed, or waiting on consensus.
+    #[error("the signer refused: {0}")]
+    SignerRefused(String),
+    /// The signer returned bytes that are not the transaction asked for, or
+    /// not signed by the wallet. Nothing was sent.
+    #[error("the signed transaction was not the one asked for: {0}")]
+    BadSignature(String),
+    /// A pending transaction was never mined and its nonce is now used by
+    /// another. Stops for the operator.
+    #[error(
+        "nonce {nonce} was used by a transaction other than {transaction}; check the wallet by hand"
+    )]
+    NonceTaken {
+        /// The nonce.
+        nonce: u64,
+        /// The transaction that was expected to use it.
+        transaction: Hash32,
+    },
+    /// The claim reverted. The pending file is cleared and the next run starts
+    /// the week over.
+    #[error("the claim {0} reverted; the next run starts the week over")]
+    ClaimReverted(Hash32),
     /// The chain did not answer, or answered with something unreadable.
     #[error("chain: {0}")]
     Chain(String),
-    /// The record or the pool file could not be read or written.
+    /// The record, pool or pending file could not be read or written.
     #[error("ledger: {0}")]
     Ledger(String),
-    /// The sent transaction does not say what the plan said.
+    /// A transaction read back does not say what was sent.
     #[error("verification failed: {0}")]
     Verify(String),
+    /// Another payout run holds the lock.
+    #[error("locked: {0}")]
+    Locked(String),
 }
 
-/// The payout floor, in lamports, from a getter.
-///
-/// Design 0007 J2 and design 0009 L4 both say a floor with rollover. Josh sets
-/// the number; 0.1 SOL is what both documents suggest, and this reads whatever
-/// is configured rather than choosing for him.
-///
-/// **Unset means no floor**, which pays out whatever a week collected. That
-/// looks like it breaks rule 8 -- deny by default when config is missing --
-/// and it does not: a floor is not a permission, it is a *threshold below
-/// which money is withheld from the person who won it*. The safe direction
-/// here is paying the winner, not keeping their prize in the vault because
-/// nobody typed a number. The refusals that actually bound the hot key are
-/// the five above it, and none of them defaults open.
-///
-/// A value that will not parse is **no floor**, not a floor of zero and not an
-/// error: both are the same behaviour, and the daemon says which it is using
-/// so a typo is visible rather than silent.
-#[must_use]
-pub fn floor_from(get: &impl Fn(&str) -> Option<String>) -> u64 {
-    get("RADAR_PAYOUT_FLOOR_LAMPORTS")
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(0)
+/// What the payout asks of the chain. A trait so every path runs against a
+/// fake in tests; the real one is [`Rpc`].
+pub trait Chain {
+    /// The chain id.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason.
+    fn chain_id(&self) -> Result<u64, String>;
+    /// The factory's record of a launch, at the latest block.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason, or a record that does not read.
+    fn launched_token(&self, token: &Address) -> Result<LaunchedToken, String>;
+    /// What the escrow holds for `holder`, in wei.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason.
+    fn claimable(&self, holder: &Address) -> Result<u128, String>;
+    /// An account's ETH, in wei.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason.
+    fn balance(&self, account: &Address) -> Result<u128, String>;
+    /// An account's next nonce at `tag`.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason.
+    fn nonce(&self, account: &Address, tag: Tag) -> Result<u64, String>;
+    /// The code at an address.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason.
+    fn code(&self, account: &Address) -> Result<Vec<u8>, String>;
+    /// The node's gas estimate for a call.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason, a revert included.
+    fn estimate_gas(
+        &self,
+        from: &Address,
+        to: &Address,
+        value: u128,
+        data: &[u8],
+    ) -> Result<u64, String>;
+    /// The latest block's base fee, in wei per gas.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason.
+    fn base_fee(&self) -> Result<u128, String>;
+    /// Sends signed bytes and returns the hash the node computed.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason, a rejection included.
+    fn send_raw(&self, raw: &[u8]) -> Result<Hash32, String>;
+    /// A receipt, or `None` while the transaction is not in a block.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason.
+    fn receipt(&self, hash: &Hash32) -> Result<Option<Receipt>, String>;
+    /// A transaction, or `None` when the node does not know it.
+    ///
+    /// # Errors
+    ///
+    /// The transport's or the node's reason.
+    fn transaction(&self, hash: &Hash32) -> Result<Option<Transaction>, String>;
+    /// Waits between receipt polls: a second on the real chain, nothing in a
+    /// test.
+    fn pause(&self);
 }
 
-/// What the run says about the floor it is using, on start.
-///
-/// A line rather than silence, because "no floor" and "0.1 SOL" produce very
-/// different runs and an operator who mistyped the variable would otherwise
-/// find out from a payment.
-#[must_use]
-pub fn floor_notice(floor: u64) -> String {
-    if floor == 0 {
-        "realorrug-payout: no floor (RADAR_PAYOUT_FLOOR_LAMPORTS unset or unreadable); \
-         a week pays out whatever it collected."
-            .to_owned()
-    } else {
-        format!("realorrug-payout: floor {floor} lamports; a week below it rolls over unpaid.")
+impl Chain for Rpc {
+    fn chain_id(&self) -> Result<u64, String> {
+        Self::chain_id(self)
+    }
+    fn launched_token(&self, token: &Address) -> Result<LaunchedToken, String> {
+        let data = self.call_contract(&FACTORY, &LaunchedToken::call_data(token))?;
+        LaunchedToken::from_return(&data)
+            .ok_or_else(|| format!("getLaunchedToken returned {} unreadable bytes", data.len()))
+    }
+    fn claimable(&self, holder: &Address) -> Result<u128, String> {
+        escrow::claimable(self, holder)
+    }
+    fn balance(&self, account: &Address) -> Result<u128, String> {
+        Self::balance(self, account)
+    }
+    fn nonce(&self, account: &Address, tag: Tag) -> Result<u64, String> {
+        Self::nonce(self, account, tag)
+    }
+    fn code(&self, account: &Address) -> Result<Vec<u8>, String> {
+        Self::code(self, account)
+    }
+    fn estimate_gas(
+        &self,
+        from: &Address,
+        to: &Address,
+        value: u128,
+        data: &[u8],
+    ) -> Result<u64, String> {
+        Self::estimate_gas(self, from, to, value, data)
+    }
+    fn base_fee(&self) -> Result<u128, String> {
+        Self::base_fee(self)
+    }
+    fn send_raw(&self, raw: &[u8]) -> Result<Hash32, String> {
+        let result = self.call(
+            "eth_sendRawTransaction",
+            &serde_json::json!([realorrug_robinhood::to_hex(raw)]),
+        )?;
+        result
+            .as_str()
+            .ok_or("eth_sendRawTransaction returned no hash")?
+            .parse()
+            .map_err(|e| format!("eth_sendRawTransaction: {e}"))
+    }
+    fn receipt(&self, hash: &Hash32) -> Result<Option<Receipt>, String> {
+        Self::receipt(self, hash)
+    }
+    fn transaction(&self, hash: &Hash32) -> Result<Option<Transaction>, String> {
+        Self::transaction(self, hash)
+    }
+    fn pause(&self) {
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
 
-/// Plans a week's payment from its record and the vault's balance. Pure.
+/// What signs a transaction for the wallet. Turnkey in production, a local key
+/// in tests.
+pub trait Signer {
+    /// The signed bytes for `tx`, unchecked.
+    ///
+    /// # Errors
+    ///
+    /// The signer's refusal, in its words.
+    fn sign(&self, tx: &Eip1559) -> Result<Vec<u8>, String>;
+}
+
+impl Signer for turnkey::Turnkey {
+    fn sign(&self, tx: &Eip1559) -> Result<Vec<u8>, String> {
+        self.sign_transaction(tx)
+    }
+}
+
+/// Asks the signer for `tx` and accepts the answer only if it is `tx`, signed
+/// by `wallet`.
+///
+/// Turnkey is trusted to hold the key, not to sign the right thing. The bytes
+/// must decode strictly, re-encode to themselves, carry exactly the fields
+/// asked for, and recover to the wallet.
 ///
 /// # Errors
 ///
-/// [`PayError::Refused`] with the policy's reason; [`PayError::NothingCollected`]
-/// when the vault is at its reserve; the others when the claim does not parse
-/// or the transaction cannot be built.
-pub fn plan(
-    record: &Record,
-    creator: &Address,
-    vault_lamports: u64,
-    blockhash: &[u8; 32],
-    floor: u64,
-) -> Result<Plan, PayError> {
-    let collected = collected(vault_lamports);
-    // The recipient is the claim, never an argument. An unclaimed week has no
-    // recipient and the policy says so first; the empty string is what it is
-    // compared against, and it is compared against nothing.
-    let claimed = record
-        .claim
-        .as_ref()
-        .map(|c| c.address.clone())
-        .unwrap_or_default();
-    Payout::permitted(record, &claimed, collected, collected, floor).map_err(PayError::Refused)?;
-    if collected == 0 {
-        return Err(PayError::NothingCollected {
-            vault: vault_lamports,
-            reserve: VAULT_RENT_RESERVE,
-        });
-    }
-    let recipient: Address = claimed
-        .parse()
-        .map_err(|e| PayError::BadAddress(format!("{claimed}: {e}")))?;
-    let instructions = vec![
-        instruction::collect_creator_fee(creator).ok_or(PayError::NoVault)?,
-        instruction::system_transfer(creator, &recipient, collected),
-    ];
-    let unsigned = transaction(creator, &instructions, blockhash)
-        .map_err(|e| PayError::Unbuildable(e.to_string()))?;
-    Ok(Plan {
-        week: record.week,
-        creator: *creator,
-        recipient,
-        lamports: collected,
-        collected,
-        instructions,
-        unsigned,
-    })
+/// [`PayError::SignerRefused`] when the signer refuses;
+/// [`PayError::BadSignature`] when its answer is anything but `tx` from
+/// `wallet`.
+pub fn sign_checked(
+    signer: &dyn Signer,
+    tx: &Eip1559,
+    wallet: &Address,
+) -> Result<Signed, PayError> {
+    let raw = signer.sign(tx).map_err(PayError::SignerRefused)?;
+    checked(&raw, tx, wallet)
 }
 
-/// Signs an unsigned transaction with one key: the creator's.
-///
-/// The wire format is a compact-u16 count of signatures, that many 64-byte
-/// slots, then the message. Exactly one slot is expected here; a transaction
-/// asking for more is not one this crate built.
-///
-/// # Errors
-///
-/// [`PayError::Unbuildable`] when the bytes are not a one-signer transaction.
-pub fn sign(unsigned: &[u8], key: &SigningKey) -> Result<Vec<u8>, PayError> {
-    if unsigned.first() != Some(&1) || unsigned.len() < 1 + 64 + 1 {
-        return Err(PayError::Unbuildable(
-            "not a one-signer transaction".to_owned(),
-        ));
+fn checked(raw: &[u8], tx: &Eip1559, wallet: &Address) -> Result<Signed, PayError> {
+    let signed = tx::decode_signed(raw)
+        .map_err(|e| PayError::BadSignature(format!("does not decode: {e}")))?;
+    // Strict decoding makes this hold for any input the decoder accepts; it is
+    // checked anyway because it is the property that makes the field
+    // comparison below a comparison of every byte sent.
+    if signed.encode() != raw {
+        return Err(PayError::BadSignature("not canonically encoded".to_owned()));
     }
-    let message = &unsigned[65..];
-    let signature = key.sign(message).to_bytes();
-    let mut signed = unsigned.to_vec();
-    signed[1..65].copy_from_slice(&signature);
+    if signed.tx != *tx {
+        return Err(PayError::BadSignature(format!(
+            "asked for {tx:?}, signed {:?}",
+            signed.tx
+        )));
+    }
+    let from = tx::recover(&signed).map_err(|e| PayError::BadSignature(e.to_string()))?;
+    if from != *wallet {
+        return Err(PayError::BadSignature(format!(
+            "signed by {from}, not the wallet {wallet}"
+        )));
+    }
     Ok(signed)
 }
 
-/// Loads a Solana keypair file: a JSON array of 64 bytes, secret then public.
-///
-/// The two halves must agree, as in `radar-signer`: a file whose public half
-/// does not match its secret has been edited, and signing with it would
-/// produce signatures for a wallet that is not the one named.
-///
-/// # Errors
-///
-/// [`PayError::Ledger`] with the reason.
-pub fn load_key(path: &Path) -> Result<SigningKey, PayError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| PayError::Ledger(format!("key file {}: {e}", path.display())))?;
-    let bytes: Vec<u8> = serde_json::from_str(&text)
-        .map_err(|_| PayError::Ledger("key file is not a JSON byte array".to_owned()))?;
-    if bytes.len() != 64 {
-        return Err(PayError::Ledger(
-            "key file is not a 64-byte keypair".to_owned(),
-        ));
-    }
-    let secret: [u8; 32] = bytes[..32]
-        .try_into()
-        .map_err(|_| PayError::Ledger("key file is not a 64-byte keypair".to_owned()))?;
-    let key = SigningKey::from_bytes(&secret);
-    if key.verifying_key().to_bytes() != bytes[32..] {
-        return Err(PayError::Ledger(
-            "key file's public half does not match its secret half".to_owned(),
-        ));
-    }
-    Ok(key)
+/// Who pays, for which token, and the floor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Config {
+    /// The payout wallet: Turnkey's account, and the token's creator fee
+    /// recipient.
+    pub wallet: Address,
+    /// The token whose creator fees are the prize.
+    pub token: Address,
+    /// The floor, in wei; zero is no floor.
+    pub floor: u128,
 }
 
-/// The creator wallet a signing key is.
+/// The payout floor, in wei, from a getter.
+///
+/// Design 0007 J2 and design 0009 L4 both say a floor with rollover. **Unset or
+/// unreadable means no floor**, which pays out whatever a week collected. A
+/// floor is not a permission, it is a threshold below which money is withheld
+/// from the person who won it, and the safe direction is paying them; the
+/// refusals that bound the key are the others, and none of them defaults open.
 #[must_use]
-pub fn wallet_of(key: &SigningKey) -> Address {
-    Address::new(key.verifying_key().to_bytes())
+pub fn floor_from(get: &impl Fn(&str) -> Option<String>) -> u128 {
+    get("RADAR_PAYOUT_FLOOR_WEI")
+        .and_then(|v| Wei::parse(v.trim()))
+        .map_or(0, |w| w.0)
 }
 
-/// One system transfer, as read back off the chain.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Transfer {
-    /// The sender.
-    pub from: Address,
-    /// The recipient.
-    pub to: Address,
-    /// The amount, in lamports.
-    pub lamports: u64,
+/// What the run says about the floor it is using, on start, so a mistyped
+/// variable is visible rather than found out from a payment.
+#[must_use]
+pub fn floor_notice(floor: u128) -> String {
+    if floor == 0 {
+        "realorrug-payout: no floor (RADAR_PAYOUT_FLOOR_WEI unset or unreadable); \
+         a week pays out whatever it collected."
+            .to_owned()
+    } else {
+        format!("realorrug-payout: floor {floor} wei; a week below it rolls over unpaid.")
+    }
 }
 
-/// What this crate asks of the chain. A trait so the whole path runs against a
-/// fake in tests; the real one is [`Rpc`].
-pub trait Chain {
-    /// An account's balance in lamports; zero for an account that does not exist.
-    ///
-    /// # Errors
-    ///
-    /// The transport's or the node's reason.
-    fn balance(&self, address: &Address) -> Result<u64, String>;
-    /// A recent blockhash.
-    ///
-    /// # Errors
-    ///
-    /// The transport's or the node's reason.
-    fn latest_blockhash(&self) -> Result<[u8; 32], String>;
-    /// Sends a signed transaction, base64, and returns its signature.
-    ///
-    /// # Errors
-    ///
-    /// The transport's or the node's reason, including a rejected transaction.
-    fn send(&self, signed_base64: &str) -> Result<String, String>;
-    /// Which program owns an address, or `None` when nothing is there.
-    ///
-    /// A wallet is owned by the system program or does not exist yet; a mint,
-    /// a token account and a PDA are owned by something else. `None` is a
-    /// wallet: a keypair that has never received lamports has no account, and
-    /// that is exactly what somebody generates for a public payout.
-    ///
-    /// # Errors
-    ///
-    /// The transport's or the node's reason. **Never read an error as "it is
-    /// a wallet"** -- the caller refuses, because an unreadable owner is an
-    /// unknown one.
-    fn owner_of(&self, address: &Address) -> Result<Option<String>, String>;
-    /// The system transfers a confirmed transaction made, or `None` when the
-    /// transaction is not (yet) found.
-    ///
-    /// # Errors
-    ///
-    /// The transport's or the node's reason.
-    fn transfers_in(&self, signature: &str) -> Result<Option<Vec<Transfer>>, String>;
-}
-
-/// Reads a sent transaction back and checks it against the plan.
+/// Checks the endpoint is Robinhood Chain and the wallet is the token's creator
+/// fee recipient, whose ETH the escrow holds.
 ///
-/// The step both paths share (design 0007 C5). What is checked is what the
-/// three refusals protect: one transfer from the creator to the claimed
-/// address for exactly the planned amount. Anything else -- no transfer, a
-/// different recipient, a different amount, a second transfer -- is a
-/// transaction the ledger must not describe as this week's payout.
+/// Only the recipient can claim, so a wallet that is not it would sign a claim
+/// that reverts; and a token whose recipient is somebody else is not a token
+/// whose fees this contest owns. Before launch the token is unset and `main`
+/// never gets here.
 ///
 /// # Errors
 ///
-/// [`PayError::Verify`] with what differed; [`PayError::Chain`] when the
-/// transaction could not be read at all.
-pub fn verify(chain: &dyn Chain, signature: &str, plan: &Plan) -> Result<(), PayError> {
-    let Some(transfers) = chain.transfers_in(signature).map_err(PayError::Chain)? else {
-        return Err(PayError::Verify(format!("{signature} is not on chain yet")));
-    };
-    let expected = Transfer {
-        from: plan.creator,
-        to: plan.recipient,
-        lamports: plan.lamports,
-    };
-    match transfers.as_slice() {
-        [one] if *one == expected => Ok(()),
-        [one] => Err(PayError::Verify(format!(
-            "the transaction paid {} lamports from {} to {}; the plan was {} from {} to {}",
-            one.lamports, one.from, one.to, expected.lamports, expected.from, expected.to
-        ))),
-        [] => Err(PayError::Verify(
-            "the transaction made no transfer".to_owned(),
+/// [`PayError::WrongChain`], [`PayError::Identity`], or [`PayError::Chain`].
+pub fn preflight(chain: &dyn Chain, config: &Config) -> Result<(), PayError> {
+    let got = chain.chain_id().map_err(PayError::Chain)?;
+    if got != CHAIN_ID {
+        return Err(PayError::WrongChain { got });
+    }
+    let launch = chain
+        .launched_token(&config.token)
+        .map_err(PayError::Chain)?;
+    if !launch.exists || launch.token != config.token {
+        return Err(PayError::Identity(format!(
+            "the factory does not know {} as a launch",
+            config.token
+        )));
+    }
+    if launch.creator_fee_recipient != config.wallet {
+        return Err(PayError::Identity(format!(
+            "the creator fee recipient of {} is {}, not the payout wallet {}",
+            config.token, launch.creator_fee_recipient, config.wallet
+        )));
+    }
+    // A token paired to an ERC-20 pays its creator in that token, credited as
+    // `CreditedToken`, which this payout never claims.
+    if let Some(pair) = launch.pair {
+        return Err(PayError::Identity(format!(
+            "{} is paired to {pair}, so its creator fees are not ETH",
+            config.token
+        )));
+    }
+    Ok(())
+}
+
+/// A week's payout, planned from the chain and not yet signed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plan {
+    /// Which week.
+    pub week: Week,
+    /// The claimed address, parsed.
+    pub recipient: Address,
+    /// What the escrow holds for the wallet: what is claimed and paid.
+    pub amount: u128,
+    /// The claim, at the wallet's pending nonce.
+    pub claim: Eip1559,
+    /// The transfer, at the nonce after it. Rebuilt with a fresh nonce and the
+    /// claimed figure when it is actually sent.
+    pub transfer: Eip1559,
+    /// What both could cost at the fee cap.
+    pub need: u128,
+    /// What the wallet holds.
+    pub have: u128,
+}
+
+/// The claimed address, if the chain can pay it.
+fn recipient_of(text: &str, wallet: &Address) -> Result<Address, PayError> {
+    let address: Address = text
+        .parse()
+        .map_err(|e| PayError::BadAddress(format!("{text}: {e}")))?;
+    if address == Address::ZERO {
+        return Err(PayError::BadAddress("the zero address".to_owned()));
+    }
+    // The operator holds none of the prize (ADR 0013): a claim naming the
+    // payout wallet is not a payout.
+    if address == *wallet {
+        return Err(PayError::BadAddress(format!(
+            "{text} is the payout wallet itself"
+        )));
+    }
+    Ok(address)
+}
+
+/// Refuses a recipient with code, or whose code cannot be read.
+///
+/// An ordinary account has none. A contract may refuse the transfer or keep
+/// it; an EIP-7702 account (`0xef0100` then an address) runs its delegate's
+/// code, which is a contract by another name. Unreadable is unknown, and
+/// unknown is not safe (rule 8).
+///
+/// # Errors
+///
+/// [`Refusal::NotAWallet`], saying what is there.
+pub fn check_wallet(chain: &dyn Chain, recipient: &Address) -> Result<(), PayError> {
+    let refuse = |owner| Err(PayError::Refused(Refusal::NotAWallet { owner }));
+    match chain.code(recipient) {
+        Ok(code) if code.is_empty() => Ok(()),
+        Ok(code) if code.len() == 23 && code.starts_with(&[0xef, 0x01, 0x00]) => {
+            refuse(Some(format!(
+                "EIP-7702 delegation to {}",
+                realorrug_robinhood::to_hex(&code[3..])
+            )))
+        }
+        Ok(code) => refuse(Some(format!("contract code, {} bytes", code.len()))),
+        Err(_) => refuse(None),
+    }
+}
+
+/// The fee cap: [`FEE_CAP_BASE_FEES`] times the latest base fee.
+fn fee_cap(chain: &dyn Chain) -> Result<u128, PayError> {
+    let base = chain.base_fee().map_err(PayError::Chain)?;
+    base.checked_mul(FEE_CAP_BASE_FEES)
+        .ok_or_else(|| PayError::Chain(format!("base fee {base} overflows")))
+}
+
+/// An estimate with a quarter on top, rounded up. The estimate is the node's
+/// view of one block; the margin covers the next.
+fn gas_limit(estimate: u64) -> Result<u64, PayError> {
+    estimate
+        .checked_add(estimate.div_ceil(4))
+        .ok_or_else(|| PayError::Chain(format!("gas estimate {estimate} overflows")))
+}
+
+fn cost(gas: u64, cap: u128) -> Result<u128, PayError> {
+    u128::from(gas)
+        .checked_mul(cap)
+        .ok_or_else(|| PayError::Chain("gas cost overflows".to_owned()))
+}
+
+fn claim_text(record: &Record) -> String {
+    // The recipient is the claim, never an argument. An unclaimed week has
+    // none and the policy says so first.
+    record
+        .claim
+        .as_ref()
+        .map(|c| c.address.clone())
+        .unwrap_or_default()
+}
+
+/// Plans a week: reads the escrow, writes the pool reading, asks the policy,
+/// checks the recipient, estimates and funds the gas. Nothing is signed.
+///
+/// Steps 3 to 6 of ADR 0025's run. Assumes [`preflight`] passed.
+///
+/// # Errors
+///
+/// Any [`PayError`] but the signing and sending ones.
+pub fn plan(
+    chain: &dyn Chain,
+    contest_dir: &str,
+    week: Week,
+    config: &Config,
+    now: u64,
+) -> Result<Plan, PayError> {
+    if pending_path(contest_dir, week).exists() {
+        return Err(PayError::Ledger(format!(
+            "week {} has a payout in flight; a run without --dry-run resumes it",
+            week.0
+        )));
+    }
+    let record = read_record(contest_dir, week)?;
+    let amount = chain.claimable(&config.wallet).map_err(PayError::Chain)?;
+    write_vault(
+        contest_dir,
+        &Vault {
+            address: ESCROW.to_string(),
+            balance: Balance::Eth {
+                holder: config.wallet.to_string(),
+                wei: Wei(amount),
+            },
+            measured_at: now,
+        },
+    )?;
+    let claimed = claim_text(&record);
+    Payout::permitted(&record, &claimed, amount, amount, config.floor)
+        .map_err(PayError::Refused)?;
+    if amount == 0 {
+        return Err(PayError::NothingCollected(config.wallet));
+    }
+    let recipient = recipient_of(&claimed, &config.wallet)?;
+    check_wallet(chain, &recipient)?;
+
+    let cap = fee_cap(chain)?;
+    let data = escrow::claim_call(amount);
+    // A claim that would revert fails here, before any signature.
+    let claim_gas = gas_limit(
+        chain
+            .estimate_gas(&config.wallet, &ESCROW, 0, &data)
+            .map_err(|e| PayError::Chain(format!("estimating the claim: {e}")))?,
+    )?;
+    // Estimated with no value: the wallet does not hold the prize until the
+    // claim lands, and a node refuses to estimate a transfer the sender cannot
+    // fund. The transfer is estimated again with the real amount after the
+    // claim, and the quarter margin covers the value's few bytes of L1 data.
+    let transfer_gas = gas_limit(
+        chain
+            .estimate_gas(&config.wallet, &recipient, 0, &[])
+            .map_err(|e| PayError::Chain(format!("estimating the transfer: {e}")))?,
+    )?;
+    let need = cost(claim_gas, cap)?
+        .checked_add(cost(transfer_gas, cap)?)
+        .ok_or_else(|| PayError::Chain("gas cost overflows".to_owned()))?;
+    let have = chain.balance(&config.wallet).map_err(PayError::Chain)?;
+    if have < need {
+        return Err(PayError::GasUnfunded { need, have });
+    }
+    let nonce = chain
+        .nonce(&config.wallet, Tag::Pending)
+        .map_err(PayError::Chain)?;
+    Ok(Plan {
+        week,
+        recipient,
+        amount,
+        claim: Eip1559 {
+            chain_id: CHAIN_ID,
+            nonce,
+            max_priority_fee_per_gas: 0,
+            max_fee_per_gas: cap,
+            gas_limit: claim_gas,
+            to: ESCROW,
+            value: 0,
+            data,
+        },
+        transfer: Eip1559 {
+            chain_id: CHAIN_ID,
+            nonce: nonce.saturating_add(1),
+            max_priority_fee_per_gas: 0,
+            max_fee_per_gas: cap,
+            gas_limit: transfer_gas,
+            to: recipient,
+            value: amount,
+            data: Vec::new(),
+        },
+        need,
+        have,
+    })
+}
+
+impl Plan {
+    /// What a dry run prints: the claim, the transfer and the gas, and the
+    /// unsigned claim in the form Turnkey is asked to sign.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let line = |name: &str, tx: &Eip1559| {
+            format!(
+                "{name}: to {}, value {} wei, nonce {}, gas limit {}, fee cap {} wei per gas, tip {}",
+                tx.to,
+                tx.value,
+                tx.nonce,
+                tx.gas_limit,
+                tx.max_fee_per_gas,
+                tx.max_priority_fee_per_gas
+            )
+        };
+        format!(
+            "week {}: would claim {} wei from the escrow and pay it to {}\n{}\n{}\ngas: up to {} wei for both at the cap; the wallet holds {}\nunsigned claim: {}",
+            self.week.0,
+            self.amount,
+            self.recipient,
+            line("claim", &self.claim),
+            line("transfer", &self.transfer),
+            self.need,
+            self.have,
+            realorrug_robinhood::to_hex(&self.claim.unsigned()),
+        )
+    }
+}
+
+/// The nonce the setup proof signs at: far above anything the wallet will
+/// reach, so the transaction Turnkey signs can never land.
+pub const PROOF_NONCE: u64 = 1_000_000;
+
+/// ADR 0025's setup proof: four requests to Turnkey that move no money.
+///
+/// 1. `whoami` answers for the API key.
+/// 2. Signing a call to another contract, with call data, is **denied**.
+/// 3. Signing `claim(0)` to the escrow at [`PROOF_NONCE`] is **allowed**, and
+///    the answer is the transaction asked for, signed by the wallet.
+/// 4. Signing a plain transfer of 1 wei at [`PROOF_NONCE`] is **allowed**, the
+///    same way.
+///
+/// Nothing is sent to any chain. Together 2 and 3 settle what the docs could
+/// not: that Turnkey parses chain 4663's transactions and matches the policy on
+/// the function. 4 settles how the policy sees empty call data, which the docs
+/// do not say; without it a wrong guess would first show after a live claim,
+/// with the prize held in the wallet.
+///
+/// # Errors
+///
+/// The report so far, when any of the four does not hold.
+pub fn setup_proof(
+    turnkey: &turnkey::Turnkey,
+    wallet: &Address,
+) -> Result<Vec<String>, Vec<String>> {
+    let mut lines = Vec::new();
+    let mut held = true;
+    match turnkey.whoami() {
+        Ok(who) => lines.push(format!(
+            "1. whoami answered, as user {}",
+            who["username"].as_str().unwrap_or("(no username)")
         )),
-        many => Err(PayError::Verify(format!(
-            "the transaction made {} transfers; the plan made one",
-            many.len()
-        ))),
+        Err(e) => {
+            held = false;
+            lines.push(format!("1. whoami failed: {e}"));
+        }
+    }
+    let denied = Eip1559 {
+        chain_id: CHAIN_ID,
+        nonce: PROOF_NONCE,
+        max_priority_fee_per_gas: 0,
+        // The captured claim's fee cap and gas, so the only differences between
+        // this request and the next are the recipient and the call data.
+        max_fee_per_gas: 0x0c44_8890,
+        gas_limit: 0xa661,
+        to: FACTORY,
+        value: 0,
+        data: vec![0xde, 0xad, 0xbe, 0xef],
+    };
+    if let Err(e) = turnkey.sign_transaction(&denied) {
+        lines.push(format!("2. a call to the factory was denied: {e}"));
+    } else {
+        held = false;
+        lines.push(
+            "2. a call to the factory was SIGNED: the policy allows more than the claim and a transfer"
+                .to_owned(),
+        );
+    }
+    let allowed = Eip1559 {
+        to: ESCROW,
+        data: escrow::claim_call(0),
+        ..denied
+    };
+    match sign_checked(turnkey, &allowed, wallet) {
+        Ok(signed) => lines.push(format!(
+            "3. claim(0) at nonce {PROOF_NONCE} was signed by {wallet}, hash {}; not sent, and it cannot land",
+            signed.hash()
+        )),
+        Err(e) => {
+            held = false;
+            lines.push(format!("3. claim(0) was not signed as asked: {e}"));
+        }
+    }
+    let transfer = Eip1559 {
+        gas_limit: 21_000,
+        to: *wallet,
+        value: 1,
+        data: Vec::new(),
+        ..denied
+    };
+    match sign_checked(turnkey, &transfer, wallet) {
+        Ok(signed) => lines.push(format!(
+            "4. a 1 wei transfer at nonce {PROOF_NONCE} was signed by {wallet}, hash {}; not sent, and it cannot land",
+            signed.hash()
+        )),
+        Err(e) => {
+            held = false;
+            lines.push(format!("4. a plain transfer was not signed as asked: {e}"));
+        }
+    }
+    if held { Ok(lines) } else { Err(lines) }
+}
+
+/// A transaction written down before it was sent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sent {
+    /// The signed bytes, `0x` hex: rebroadcast as they are, so at most one copy
+    /// can land.
+    pub raw: String,
+    /// Their hash.
+    pub hash: String,
+    /// Their nonce.
+    pub nonce: u64,
+}
+
+impl Sent {
+    fn of(signed: &Signed) -> Self {
+        Self {
+            raw: realorrug_robinhood::to_hex(&signed.encode()),
+            hash: signed.hash().to_string(),
+            nonce: signed.tx.nonce,
+        }
+    }
+
+    /// The signed transaction, checked again: a pending file is a file, and a
+    /// torn or edited one must not be rebroadcast.
+    fn signed(&self, wallet: &Address) -> Result<Signed, PayError> {
+        let bad =
+            |why: String| PayError::Ledger(format!("pending transaction {}: {why}", self.hash));
+        let raw = realorrug_robinhood::hex_bytes(&self.raw).map_err(|e| bad(e.to_string()))?;
+        let signed = tx::decode_signed(&raw).map_err(|e| bad(e.to_string()))?;
+        if signed.hash().to_string() != self.hash || signed.tx.nonce != self.nonce {
+            return Err(bad("its bytes do not hash to it".to_owned()));
+        }
+        if tx::recover(&signed).map_err(|e| bad(e.to_string()))? != *wallet {
+            return Err(bad("not signed by the wallet".to_owned()));
+        }
+        Ok(signed)
+    }
+}
+
+/// The claim, as written before it was sent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingClaim {
+    /// The transaction.
+    #[serde(flatten)]
+    pub sent: Sent,
+    /// What was asked for.
+    pub asked_wei: Wei,
+    /// What the escrow said it paid, once the claim is read back. Present
+    /// means the claim is done and must never be made again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_wei: Option<Wei>,
+}
+
+/// The transfer, as written before it was sent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingTransfer {
+    /// The transaction.
+    #[serde(flatten)]
+    pub sent: Sent,
+    /// What it sends.
+    pub wei: Wei,
+}
+
+/// `<week>.pending.json`: a payout between its first signature and its record.
+///
+/// `records_in` ignores the name (it is not `<number>.json`), and serve never
+/// publishes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pending {
+    /// The claim.
+    pub claim: PendingClaim,
+    /// The transfer, once signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer: Option<PendingTransfer>,
+}
+
+/// Where a week's pending payout lives.
+#[must_use]
+pub fn pending_path(contest_dir: &str, week: Week) -> PathBuf {
+    Path::new(contest_dir).join(format!("{}.pending.json", week.0))
+}
+
+/// Every week with a pending payout, ascending.
+#[must_use]
+pub fn pending_weeks(contest_dir: &str) -> Vec<Week> {
+    let Ok(listing) = std::fs::read_dir(contest_dir) else {
+        return Vec::new();
+    };
+    let mut weeks: Vec<Week> = listing
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            name.to_str()?
+                .strip_suffix(".pending.json")?
+                .parse::<u64>()
+                .ok()
+                .map(Week)
+        })
+        .collect();
+    weeks.sort_unstable();
+    weeks
+}
+
+fn read_pending(contest_dir: &str, week: Week) -> Result<Pending, PayError> {
+    let path = pending_path(contest_dir, week);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| PayError::Ledger(format!("{}: {e}", path.display())))?;
+    serde_json::from_str(&text).map_err(|e| PayError::Ledger(format!("{}: {e}", path.display())))
+}
+
+fn write_pending(contest_dir: &str, week: Week, pending: &Pending) -> Result<(), PayError> {
+    let text =
+        serde_json::to_string_pretty(pending).map_err(|e| PayError::Ledger(e.to_string()))?;
+    write_atomically(&pending_path(contest_dir, week).to_string_lossy(), &text)
+}
+
+fn clear_pending(contest_dir: &str, week: Week) -> Result<(), PayError> {
+    let path = pending_path(contest_dir, week);
+    std::fs::remove_file(&path).map_err(|e| PayError::Ledger(format!("{}: {e}", path.display())))
+}
+
+/// Sends signed bytes, checks the node computed the same hash, and waits for
+/// the receipt.
+fn broadcast(chain: &dyn Chain, signed: &Signed) -> Result<Receipt, PayError> {
+    let hash = signed.hash();
+    let returned = chain.send_raw(&signed.encode()).map_err(PayError::Chain)?;
+    if returned != hash {
+        return Err(PayError::Verify(format!(
+            "the node says it received {returned}; the bytes sent hash to {hash}"
+        )));
+    }
+    wait_for_receipt(chain, &hash)
+}
+
+fn wait_for_receipt(chain: &dyn Chain, hash: &Hash32) -> Result<Receipt, PayError> {
+    for _ in 0..RECEIPT_POLLS {
+        if let Some(receipt) = chain.receipt(hash).map_err(PayError::Chain)? {
+            return Ok(receipt);
+        }
+        chain.pause();
+    }
+    Err(PayError::Chain(format!(
+        "{hash} is not in a block after {RECEIPT_POLLS} polls; the next run resumes it"
+    )))
+}
+
+/// A transaction written down in an earlier run: its receipt if it landed, or
+/// the same bytes sent again if its nonce is still free.
+fn settle(chain: &dyn Chain, wallet: &Address, signed: &Signed) -> Result<Receipt, PayError> {
+    let hash = signed.hash();
+    if let Some(receipt) = chain.receipt(&hash).map_err(PayError::Chain)? {
+        return Ok(receipt);
+    }
+    let landed = chain.nonce(wallet, Tag::Latest).map_err(PayError::Chain)?;
+    if landed > signed.tx.nonce {
+        // Asked again, because it may have landed between the two reads.
+        if let Some(receipt) = chain.receipt(&hash).map_err(PayError::Chain)? {
+            return Ok(receipt);
+        }
+        return Err(PayError::NonceTaken {
+            nonce: signed.tx.nonce,
+            transaction: hash,
+        });
+    }
+    // Same bytes, same nonce, same hash: at most one copy can land. The node's
+    // answer is usually "already known", which is not a failure; the receipt
+    // is what decides.
+    let _ = chain.send_raw(&signed.encode());
+    wait_for_receipt(chain, &hash)
+}
+
+/// Reads a claim's receipt: cleared and refused if it reverted, otherwise the
+/// escrow's own figure, stored before anything else happens.
+fn settle_claim(
+    contest_dir: &str,
+    week: Week,
+    wallet: &Address,
+    pending: &mut Pending,
+    receipt: &Receipt,
+) -> Result<u128, PayError> {
+    if !receipt.succeeded {
+        clear_pending(contest_dir, week)?;
+        return Err(PayError::ClaimReverted(receipt.transaction));
+    }
+    let claimed = escrow::claimed(receipt, wallet)
+        .map_err(|why| PayError::Verify(format!("the claim {}: {why:?}", receipt.transaction)))?;
+    pending.claim.claimed_wei = Some(Wei(claimed));
+    write_pending(contest_dir, week, pending)?;
+    Ok(claimed)
+}
+
+/// Reads a transfer back: it succeeded, from the wallet, to the recipient, and
+/// the transaction itself sent exactly `wei` with no call data.
+///
+/// The step the automated run and the manual fallback share.
+///
+/// # Errors
+///
+/// [`PayError::Verify`] with what differed; [`PayError::Chain`] when it could
+/// not be read.
+pub fn verify_transfer(
+    chain: &dyn Chain,
+    receipt: &Receipt,
+    wallet: &Address,
+    recipient: &Address,
+    wei: u128,
+) -> Result<(), PayError> {
+    let hash = receipt.transaction;
+    if !receipt.succeeded {
+        return Err(PayError::Verify(format!("the transfer {hash} reverted")));
+    }
+    if receipt.from != *wallet || receipt.to != Some(*recipient) {
+        return Err(PayError::Verify(format!(
+            "the transfer {hash} went from {} to {:?}; the payout is from {wallet} to {recipient}",
+            receipt.from, receipt.to
+        )));
+    }
+    let sent = chain
+        .transaction(&hash)
+        .map_err(PayError::Chain)?
+        .ok_or_else(|| PayError::Verify(format!("the node does not know {hash}")))?;
+    if sent.hash != hash || sent.from != *wallet || sent.to != Some(*recipient) {
+        return Err(PayError::Verify(format!(
+            "{hash} reads back as {} from {} to {:?}",
+            sent.hash, sent.from, sent.to
+        )));
+    }
+    if sent.value != wei || !sent.input.is_empty() {
+        return Err(PayError::Verify(format!(
+            "{hash} sent {} wei with {} bytes of call data; the payout is {wei} wei and none",
+            sent.value,
+            sent.input.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Pays a week: plans, claims, transfers, reads back, records. Resumes instead
+/// when the week has a pending file.
+///
+/// # Errors
+///
+/// Any [`PayError`]. Nothing is signed before the plan passes.
+pub fn pay(
+    chain: &dyn Chain,
+    signer: &dyn Signer,
+    contest_dir: &str,
+    week: Week,
+    config: &Config,
+    now: u64,
+) -> Result<Payout, PayError> {
+    if pending_path(contest_dir, week).exists() {
+        return resume(chain, signer, contest_dir, week, config, now);
+    }
+    let planned = plan(chain, contest_dir, week, config, now)?;
+    let claim = sign_checked(signer, &planned.claim, &config.wallet)?;
+    let mut pending = Pending {
+        claim: PendingClaim {
+            sent: Sent::of(&claim),
+            asked_wei: Wei(planned.amount),
+            claimed_wei: None,
+        },
+        transfer: None,
+    };
+    write_pending(contest_dir, week, &pending)?;
+    let receipt = broadcast(chain, &claim)?;
+    let claimed = settle_claim(contest_dir, week, &config.wallet, &mut pending, &receipt)?;
+    transfer(
+        chain,
+        signer,
+        contest_dir,
+        week,
+        config,
+        now,
+        claimed,
+        &mut pending,
+    )
+}
+
+/// Finishes a week whose pending file says a payout began.
+///
+/// - The claim not yet read back: its receipt, or the same bytes again while
+///   its nonce is free, or a stop when another transaction took the nonce. A
+///   reverted claim clears the file and the next run starts over.
+/// - The claim read back: **never claimed again.** The transfer pays the stored
+///   figure; one already sent is settled and verified, one that reverted is
+///   dropped and sent afresh by the next run.
+///
+/// # Errors
+///
+/// Any [`PayError`].
+pub fn resume(
+    chain: &dyn Chain,
+    signer: &dyn Signer,
+    contest_dir: &str,
+    week: Week,
+    config: &Config,
+    now: u64,
+) -> Result<Payout, PayError> {
+    let mut pending = read_pending(contest_dir, week)?;
+    let record = read_record(contest_dir, week)?;
+    if let Some(paid) = &record.payout {
+        // Recorded by an earlier run that died before clearing the file, or by
+        // the manual fallback. Cleared only when they name the same transfer.
+        let same = pending
+            .transfer
+            .as_ref()
+            .is_some_and(|t| t.sent.hash == paid.transaction());
+        if same {
+            clear_pending(contest_dir, week)?;
+            return Ok(paid.clone());
+        }
+        return Err(PayError::Verify(format!(
+            "week {} is recorded as paid by {}, and a pending payout names another transfer; check both by hand",
+            week.0,
+            paid.transaction()
+        )));
+    }
+    let claimed = if let Some(claimed) = pending.claim.claimed_wei {
+        claimed.0
+    } else {
+        let claim = pending.claim.sent.signed(&config.wallet)?;
+        let receipt = settle(chain, &config.wallet, &claim)?;
+        settle_claim(contest_dir, week, &config.wallet, &mut pending, &receipt)?
+    };
+    if let Some(sent) = pending.transfer.clone() {
+        let outgoing = sent.sent.signed(&config.wallet)?;
+        let receipt = settle(chain, &config.wallet, &outgoing)?;
+        return finish(
+            chain,
+            contest_dir,
+            week,
+            config,
+            now,
+            &record,
+            &mut pending,
+            &receipt,
+        );
+    }
+    transfer(
+        chain,
+        signer,
+        contest_dir,
+        week,
+        config,
+        now,
+        claimed,
+        &mut pending,
+    )
+}
+
+/// Sends the claimed wei to the claim, then finishes.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one run's state, threaded rather than bundled"
+)]
+fn transfer(
+    chain: &dyn Chain,
+    signer: &dyn Signer,
+    contest_dir: &str,
+    week: Week,
+    config: &Config,
+    now: u64,
+    claimed: u128,
+    pending: &mut Pending,
+) -> Result<Payout, PayError> {
+    let record = read_record(contest_dir, week)?;
+    let text = claim_text(&record);
+    // The escrow's figure, never the wallet balance, and no floor: the claim
+    // has already moved the money, and withholding it now would leave the prize
+    // in the operator's wallet.
+    Payout::permitted(&record, &text, claimed, claimed, 0).map_err(PayError::Refused)?;
+    let recipient = recipient_of(&text, &config.wallet)?;
+    check_wallet(chain, &recipient)?;
+    let cap = fee_cap(chain)?;
+    let gas = gas_limit(
+        chain
+            .estimate_gas(&config.wallet, &recipient, claimed, &[])
+            .map_err(|e| PayError::Chain(format!("estimating the transfer: {e}")))?,
+    )?;
+    let need = cost(gas, cap)?
+        .checked_add(claimed)
+        .ok_or_else(|| PayError::Chain("transfer cost overflows".to_owned()))?;
+    let have = chain.balance(&config.wallet).map_err(PayError::Chain)?;
+    if have < need {
+        return Err(PayError::GasUnfunded { need, have });
+    }
+    let nonce = chain
+        .nonce(&config.wallet, Tag::Pending)
+        .map_err(PayError::Chain)?;
+    let outgoing = sign_checked(
+        signer,
+        &Eip1559 {
+            chain_id: CHAIN_ID,
+            nonce,
+            max_priority_fee_per_gas: 0,
+            max_fee_per_gas: cap,
+            gas_limit: gas,
+            to: recipient,
+            value: claimed,
+            data: Vec::new(),
+        },
+        &config.wallet,
+    )?;
+    pending.transfer = Some(PendingTransfer {
+        sent: Sent::of(&outgoing),
+        wei: Wei(claimed),
+    });
+    write_pending(contest_dir, week, pending)?;
+    let receipt = broadcast(chain, &outgoing)?;
+    finish(
+        chain,
+        contest_dir,
+        week,
+        config,
+        now,
+        &record,
+        pending,
+        &receipt,
+    )
+}
+
+/// Verifies a transfer's receipt and writes the payout, or drops a reverted
+/// transfer so the next run sends another.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one run's state, threaded rather than bundled"
+)]
+fn finish(
+    chain: &dyn Chain,
+    contest_dir: &str,
+    week: Week,
+    config: &Config,
+    now: u64,
+    record: &Record,
+    pending: &mut Pending,
+    receipt: &Receipt,
+) -> Result<Payout, PayError> {
+    let claimed = pending.claim.claimed_wei.ok_or_else(|| {
+        PayError::Ledger("a transfer is pending with no claimed amount".to_owned())
+    })?;
+    if !receipt.succeeded {
+        pending.transfer = None;
+        write_pending(contest_dir, week, pending)?;
+        return Err(PayError::Verify(format!(
+            "the transfer {} reverted; the next run sends it again",
+            receipt.transaction
+        )));
+    }
+    let text = claim_text(record);
+    let recipient = recipient_of(&text, &config.wallet)?;
+    verify_transfer(chain, receipt, &config.wallet, &recipient, claimed.0)?;
+    let payout = Payout {
+        recipient: text,
+        paid: Paid::Eth {
+            wei: claimed,
+            claim_tx: pending.claim.sent.hash.clone(),
+            transfer_tx: receipt.transaction.to_string(),
+        },
+        at: now,
+    };
+    let mut record = record.clone();
+    record.payout = Some(payout.clone());
+    write_record(contest_dir, &record)?;
+    clear_pending(contest_dir, week)?;
+    Ok(payout)
+}
+
+/// Records a payout the operator made by hand, after reading both transactions
+/// back through the same checks.
+///
+/// The fallback (design 0007 C5). The claim's receipt gives the escrow's
+/// figure; the transfer must send exactly that, from the wallet, to the claim.
+/// **No floor**: this reads back money that already left, and refusing to
+/// record it would leave a paid week looking unpaid.
+///
+/// # Errors
+///
+/// Any [`PayError`], including a transaction already recorded for another week.
+pub fn record_payout(
+    chain: &dyn Chain,
+    contest_dir: &str,
+    week: Week,
+    wallet: &Address,
+    claim_tx: &Hash32,
+    transfer_tx: &Hash32,
+    now: u64,
+) -> Result<Payout, PayError> {
+    let got = chain.chain_id().map_err(PayError::Chain)?;
+    if got != CHAIN_ID {
+        return Err(PayError::WrongChain { got });
+    }
+    let (claim, transfer) = (claim_tx.to_string(), transfer_tx.to_string());
+    // One claim pays one week. Without this the same pair of transactions
+    // could be recorded against every unpaid week in the directory.
+    for other in realorrug_contest::records_in(Path::new(contest_dir)) {
+        if let Some(Payout {
+            paid:
+                Paid::Eth {
+                    claim_tx: used_claim,
+                    transfer_tx: used_transfer,
+                    ..
+                },
+            ..
+        }) = &other.payout
+            && (*used_claim == claim || *used_transfer == transfer)
+        {
+            return Err(PayError::Verify(format!(
+                "week {} already records {used_claim} and {used_transfer}",
+                other.week.0
+            )));
+        }
+    }
+    let record = read_record(contest_dir, week)?;
+    let read = |hash: &Hash32| {
+        chain
+            .receipt(hash)
+            .map_err(PayError::Chain)?
+            .ok_or_else(|| PayError::Verify(format!("{hash} is not in a block")))
+    };
+    let claimed = escrow::claimed(&read(claim_tx)?, wallet)
+        .map_err(|why| PayError::Verify(format!("the claim {claim_tx}: {why:?}")))?;
+    let text = claim_text(&record);
+    Payout::permitted(&record, &text, claimed, claimed, 0).map_err(PayError::Refused)?;
+    let recipient = recipient_of(&text, wallet)?;
+    verify_transfer(chain, &read(transfer_tx)?, wallet, &recipient, claimed)?;
+    let payout = Payout {
+        recipient: text,
+        paid: Paid::Eth {
+            wei: Wei(claimed),
+            claim_tx: claim,
+            transfer_tx: transfer,
+        },
+        at: now,
+    };
+    let mut record = record;
+    record.payout = Some(payout.clone());
+    write_record(contest_dir, &record)?;
+    Ok(payout)
+}
+
+/// An exclusively created `payout.lock`, removed when dropped.
+///
+/// The timer's oneshot cannot overlap itself; this stops a manual run beside
+/// it. Two runs would each read the same nonce and ask for the same claim.
+#[derive(Debug)]
+pub struct Lock {
+    path: PathBuf,
+}
+
+impl Lock {
+    /// Takes the lock.
+    ///
+    /// # Errors
+    ///
+    /// [`PayError::Locked`] when the file exists: another run holds it, or one
+    /// died holding it. A stale lock stops payouts until the operator checks
+    /// nothing is running and deletes it, which is the safe way round.
+    pub fn acquire(contest_dir: &str) -> Result<Self, PayError> {
+        let path = Path::new(contest_dir).join("payout.lock");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| {
+                PayError::Locked(format!(
+                    "{}: {e}. If no payout is running, a run died holding it: check the wallet and any .pending.json, then delete the lock",
+                    path.display()
+                ))
+            })?;
+        let _ = writeln!(file, "pid {}", std::process::id());
+        Ok(Self { path })
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -391,17 +1332,13 @@ pub fn read_record(contest_dir: &str, week: Week) -> Result<Record, PayError> {
 ///
 /// [`PayError::Ledger`] with the I/O reason.
 pub fn write_record(contest_dir: &str, record: &Record) -> Result<(), PayError> {
-    let path = record_path(contest_dir, record.week);
     let text = record
         .to_json()
         .map_err(|e| PayError::Ledger(e.to_string()))?;
-    write_atomically(&path, &text)
+    write_atomically(&record_path(contest_dir, record.week), &text)
 }
 
-/// Writes the vault reading the public pool page serves.
-///
-/// Here because this process reads the vault anyway, and design 0008 phase 3
-/// wanted the reading written by whichever job read it.
+/// Writes the pool reading the public pool page serves.
 ///
 /// # Errors
 ///
@@ -419,1073 +1356,5 @@ fn write_atomically(path: &str, text: &str) -> Result<(), PayError> {
     std::fs::rename(&tmp, path).map_err(|e| PayError::Ledger(format!("{path}: {e}")))
 }
 
-/// What a run did.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    /// Planned and printed; nothing signed, nothing sent.
-    Planned(Plan),
-    /// Sent, verified, and recorded.
-    Paid(Payout),
-}
-
-/// The system program, which owns every ordinary wallet.
-pub const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
-
-/// Whether an address is one the prize can safely be sent to.
-///
-/// `None` -- no account on chain -- is a wallet: a keypair that has never
-/// received lamports, which is what somebody generates for a public payout.
-#[must_use]
-pub fn is_wallet(owner: Option<&str>) -> bool {
-    owner.is_none_or(|o| o == SYSTEM_PROGRAM)
-}
-
-/// Pays a week, or plans it.
-///
-/// Reads the record and the vault, writes the pool reading either way, plans,
-/// checks the claimed address is a wallet, and -- unless `dry_run` -- signs,
-/// sends, verifies and records. The record is written only after verification:
-/// a signature the chain does not confirm as the planned transfer is printed
-/// and not recorded, and the next run refuses nothing it should pay.
-///
-/// # Errors
-///
-/// Any [`PayError`]; a refusal is the first thing checked after the vault is
-/// read, so a refused week costs one balance call and no signature.
-pub fn pay(
-    chain: &dyn Chain,
-    contest_dir: &str,
-    week: Week,
-    key: &SigningKey,
-    now: u64,
-    dry_run: bool,
-    floor: u64,
-) -> Result<Outcome, PayError> {
-    let creator = wallet_of(key);
-    let record = read_record(contest_dir, week)?;
-    let vault_address = pda::creator_vault(&creator).ok_or(PayError::NoVault)?;
-    let vault_lamports = chain.balance(&vault_address).map_err(PayError::Chain)?;
-    write_vault(
-        contest_dir,
-        &Vault {
-            address: vault_address.to_string(),
-            lamports: vault_lamports,
-            measured_at: now,
-        },
-    )?;
-    let blockhash = chain.latest_blockhash().map_err(PayError::Chain)?;
-    let planned = plan(&record, &creator, vault_lamports, &blockhash, floor)?;
-
-    // The claimed address is a wallet, or nothing is signed.
-    //
-    // `try_claim` already refused a non-wallet at claim time, where the winner
-    // could act on it. This is the second check and it is deliberate
-    // duplication: a mint and a wallet are the same shape, the claim file can
-    // be edited by hand, and what is on the other side of this line is a
-    // signature. AGENTS.md rule 9 -- an owner that will not read is unknown,
-    // and unknown refuses.
-    //
-    // Before the dry run returns, so `--dry-run` reports the refusal the real
-    // run would hit rather than printing a transaction that would be refused.
-    let owner = chain
-        .owner_of(&planned.recipient)
-        .map_err(PayError::Chain)?;
-    if !is_wallet(owner.as_deref()) {
-        return Err(PayError::Refused(Refusal::NotAWallet { owner }));
-    }
-
-    if dry_run {
-        return Ok(Outcome::Planned(planned));
-    }
-    let signed = sign(&planned.unsigned, key)?;
-    let signature = chain
-        .send(&base64::engine::general_purpose::STANDARD.encode(signed))
-        .map_err(PayError::Chain)?;
-    verify(chain, &signature, &planned)?;
-    let payout = Payout {
-        recipient: planned.recipient.to_string(),
-        lamports: planned.lamports,
-        signature,
-        at: now,
-    };
-    let mut record = record;
-    record.payout = Some(payout.clone());
-    write_record(contest_dir, &record)?;
-    Ok(Outcome::Paid(payout))
-}
-
-/// Records a payment the operator made by hand, after reading it back.
-///
-/// The fallback (design 0007 C5). The plan is rebuilt from the record with the
-/// vault as it stands, the transaction is read back through [`verify`], and
-/// only then does the ledger say the week was paid. The amount check is on the
-/// chain's figure, so a hand-signed transaction for the wrong amount is
-/// refused the same way an automated one would be.
-///
-/// # Errors
-///
-/// Any [`PayError`].
-pub fn record_payout(
-    chain: &dyn Chain,
-    contest_dir: &str,
-    week: Week,
-    creator: &Address,
-    signature: &str,
-    now: u64,
-) -> Result<Payout, PayError> {
-    let record = read_record(contest_dir, week)?;
-    let vault_address = pda::creator_vault(creator).ok_or(PayError::NoVault)?;
-    // The vault has been collected by the hand-made transaction, so its balance
-    // now is not what was paid. The plan's amount comes from the chain instead:
-    // the transfer that was actually made is what the policy is checked
-    // against, with `collected` taken as that amount plus what the vault still
-    // holds above its reserve -- the most that could have been there.
-    let Some(transfers) = chain.transfers_in(signature).map_err(PayError::Chain)? else {
-        return Err(PayError::Verify(format!("{signature} is not on chain yet")));
-    };
-    let [transfer] = transfers.as_slice() else {
-        return Err(PayError::Verify(format!(
-            "the transaction made {} transfers; a payout makes one",
-            transfers.len()
-        )));
-    };
-    let vault_now = chain.balance(&vault_address).map_err(PayError::Chain)?;
-    let could_have_held = collected(vault_now).saturating_add(transfer.lamports);
-    let claimed = record
-        .claim
-        .as_ref()
-        .map(|c| c.address.clone())
-        .unwrap_or_default();
-    // **No floor here, and that is the point.** This reads back a payment the
-    // network has already accepted. Refusing to record one because the amount
-    // was below today's floor would leave the ledger saying a paid week is
-    // unpaid, which is the one thing this file exists to prevent -- and the
-    // next `--due` run would try to pay it again. The floor decides whether to
-    // send; it has no opinion about what already left.
-    Payout::permitted(
-        &record,
-        &transfer.to.to_string(),
-        transfer.lamports,
-        could_have_held,
-        0,
-    )
-    .map_err(PayError::Refused)?;
-    if transfer.from != *creator || transfer.to.to_string() != claimed {
-        return Err(PayError::Verify(format!(
-            "the transaction moved {} to {}; the claim is {} from {}",
-            transfer.lamports, transfer.to, claimed, creator
-        )));
-    }
-    let payout = Payout {
-        recipient: transfer.to.to_string(),
-        lamports: transfer.lamports,
-        signature: signature.to_owned(),
-        at: now,
-    };
-    let mut record = record;
-    record.payout = Some(payout.clone());
-    write_record(contest_dir, &record)?;
-    Ok(payout)
-}
-
-/// The real chain, over JSON-RPC.
-#[derive(Clone, Debug)]
-pub struct Rpc {
-    endpoint: String,
-}
-
-impl Rpc {
-    /// A client for one endpoint. Direct, never the x402 lane (rule 7).
-    #[must_use]
-    pub fn new(endpoint: impl Into<String>) -> Self {
-        Self {
-            endpoint: endpoint.into(),
-        }
-    }
-
-    fn call(&self, method: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
-        let body =
-            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-        let mut response = ureq::post(&self.endpoint)
-            .content_type("application/json")
-            .send(body.to_string())
-            .map_err(|e| e.to_string())?;
-        let text = response
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| e.to_string())?;
-        let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("not json: {e}"))?;
-        if let Some(err) = value.get("error") {
-            return Err(format!("{method}: {err}"));
-        }
-        value
-            .get("result")
-            .cloned()
-            .ok_or_else(|| format!("{method} returned no result"))
-    }
-}
-
-impl Chain for Rpc {
-    fn owner_of(&self, address: &Address) -> Result<Option<String>, String> {
-        let result = self.call(
-            "getAccountInfo",
-            &serde_json::json!([address.to_string(), { "encoding": "base64" }]),
-        )?;
-        Ok(result
-            .get("value")
-            .and_then(|v| v.get("owner"))
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned))
-    }
-
-    fn balance(&self, address: &Address) -> Result<u64, String> {
-        let result = self.call("getBalance", &serde_json::json!([address.to_string()]))?;
-        result
-            .get("value")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| "getBalance: no value".to_owned())
-    }
-
-    fn latest_blockhash(&self) -> Result<[u8; 32], String> {
-        let result = self.call("getLatestBlockhash", &serde_json::json!([]))?;
-        let text = result
-            .get("value")
-            .and_then(|v| v.get("blockhash"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| "getLatestBlockhash: no blockhash".to_owned())?;
-        let bytes = bs58::decode(text)
-            .into_vec()
-            .map_err(|e| format!("blockhash is not base58: {e}"))?;
-        bytes
-            .try_into()
-            .map_err(|_| "blockhash is not 32 bytes".to_owned())
-    }
-
-    fn send(&self, signed_base64: &str) -> Result<String, String> {
-        let result = self.call(
-            "sendTransaction",
-            &serde_json::json!([signed_base64, { "encoding": "base64", "preflightCommitment": "confirmed" }]),
-        )?;
-        result
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| "sendTransaction: no signature".to_owned())
-    }
-
-    fn transfers_in(&self, signature: &str) -> Result<Option<Vec<Transfer>>, String> {
-        let result = self.call(
-            "getTransaction",
-            &serde_json::json!([signature, { "encoding": "jsonParsed", "commitment": "confirmed", "maxSupportedTransactionVersion": 0 }]),
-        )?;
-        if result.is_null() {
-            return Ok(None);
-        }
-        Ok(Some(transfers_of(&result)))
-    }
-}
-
-/// The system transfers in a `jsonParsed` transaction, top-level and inner.
-#[must_use]
-pub fn transfers_of(tx: &serde_json::Value) -> Vec<Transfer> {
-    let mut out = Vec::new();
-    let mut visit = |ix: &serde_json::Value| {
-        if ix.get("program").and_then(serde_json::Value::as_str) != Some("system") {
-            return;
-        }
-        let Some(parsed) = ix.get("parsed") else {
-            return;
-        };
-        if parsed.get("type").and_then(serde_json::Value::as_str) != Some("transfer") {
-            return;
-        }
-        let info = &parsed["info"];
-        let (Some(from), Some(to), Some(lamports)) = (
-            info.get("source")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|s| s.parse().ok()),
-            info.get("destination")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|s| s.parse().ok()),
-            info.get("lamports").and_then(serde_json::Value::as_u64),
-        ) else {
-            return;
-        };
-        out.push(Transfer { from, to, lamports });
-    };
-    for ix in tx["transaction"]["message"]["instructions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        visit(ix);
-    }
-    for inner in tx["meta"]["innerInstructions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        for ix in inner["instructions"].as_array().into_iter().flatten() {
-            visit(ix);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
-mod tests {
-
-    /// No floor: what these tests are about is the other five refusals, and a
-    /// floor would make every one of them depend on an amount that is not the
-    /// thing under test.
-    const NO_FLOOR: u64 = 0;
-    use super::*;
-    use realorrug_contest::{Claim, Entry, Metrics, Ranked, Ranking};
-    use std::cell::RefCell;
-
-    const WEEK: Week = Week(2957);
-    const BLOCKHASH: [u8; 32] = [7u8; 32];
-
-    fn key() -> SigningKey {
-        SigningKey::from_bytes(&[42u8; 32])
-    }
-
-    fn recipient() -> Address {
-        Address::new([9u8; 32])
-    }
-
-    fn record(claimed: bool) -> Record {
-        let mut ranking = Ranking::default();
-        ranking.ranked.push(Ranked {
-            entry: Entry {
-                reply_id: "r1".to_owned(),
-                summoner: "alice".to_owned(),
-                mention_id: None,
-                handle: None,
-                mint: "M".to_owned(),
-                at: WEEK.opens_at() + 10,
-                metrics: Metrics {
-                    likes: 3,
-                    ..Metrics::default()
-                },
-            },
-            score: 3,
-        });
-        let mut record = Record::close(WEEK, ranking, &realorrug_contest::Rules::published(["op"]));
-        assert!(record.winner.is_some());
-        if claimed {
-            record.claim = Some(Claim {
-                address: recipient().to_string(),
-                reply_id: "c1".to_owned(),
-                at: WEEK.closes_at() + 100,
-            });
-        }
-        record
-    }
-
-    /// A chain that answers from fields and records what it was sent.
-    #[derive(Default)]
-    struct Fake {
-        vault: u64,
-        sent: RefCell<Vec<String>>,
-        /// What `transfers_in` answers, or `None` for "not on chain".
-        confirms: Option<Vec<Transfer>>,
-        /// What owns the claimed address. `None` is an unfunded wallet.
-        owner: Option<String>,
-        /// Whether the owner lookup fails, so "unknown refuses" can be tested.
-        owner_errors: bool,
-        confirm_as_planned: bool,
-    }
-
-    impl Chain for Fake {
-        fn owner_of(&self, _: &Address) -> Result<Option<String>, String> {
-            if self.owner_errors {
-                return Err("node unreachable".to_owned());
-            }
-            Ok(self.owner.clone())
-        }
-        fn balance(&self, _: &Address) -> Result<u64, String> {
-            Ok(self.vault)
-        }
-        fn latest_blockhash(&self) -> Result<[u8; 32], String> {
-            Ok(BLOCKHASH)
-        }
-        fn send(&self, signed: &str) -> Result<String, String> {
-            self.sent.borrow_mut().push(signed.to_owned());
-            Ok("SIG1".to_owned())
-        }
-        fn transfers_in(&self, _: &str) -> Result<Option<Vec<Transfer>>, String> {
-            if self.confirm_as_planned {
-                return Ok(Some(vec![Transfer {
-                    from: wallet_of(&key()),
-                    to: recipient(),
-                    lamports: collected(self.vault),
-                }]));
-            }
-            Ok(self.confirms.clone())
-        }
-    }
-
-    fn dir(name: &str) -> String {
-        let dir =
-            std::env::temp_dir().join(format!("realorrug-payout-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        dir.to_string_lossy().into_owned()
-    }
-
-    #[test]
-    fn a_week_below_the_floor_refuses_and_rolls_over_rather_than_paying_dust() {
-        // Design 0007 J2 and design 0009 L4 both say a floor with rollover,
-        // and the code had none until 2026-09-06. Without it a week that
-        // collected a few thousand lamports pays them out: the transaction fee
-        // is a meaningful share of the prize, and the pool that should have
-        // been building is spent.
-        //
-        // Re-apply by deleting the `collected < floor` arm in `permitted`.
-        let creator = wallet_of(&key());
-        let floor = 100_000_000; // 0.1 SOL, the figure both documents name.
-        let thin = VAULT_RENT_RESERVE + floor - 1;
-
-        assert_eq!(
-            plan(&record(true), &creator, thin, &BLOCKHASH, floor).err(),
-            Some(PayError::Refused(Refusal::BelowFloor {
-                floor,
-                collected: floor - 1
-            }))
-        );
-        // Exactly at the floor pays: the refusal is "below", not "at or
-        // below", and a week that reaches the bar is not made to wait.
-        plan(
-            &record(true),
-            &creator,
-            VAULT_RENT_RESERVE + floor,
-            &BLOCKHASH,
-            floor,
-        )
-        .expect("at the floor is paid");
-        // And with no floor the same thin week pays, which is what an
-        // unconfigured instance does.
-        plan(&record(true), &creator, thin, &BLOCKHASH, NO_FLOOR).expect("no floor, paid");
-    }
-
-    #[test]
-    fn the_floor_is_checked_last_so_a_more_urgent_refusal_is_never_hidden() {
-        // Every other refusal is about whether the week may be paid at all;
-        // this one is only about whether it is worth paying yet. Reporting
-        // "below the floor" for a voided or already-paid week would send the
-        // operator to look at the vault instead of at the record.
-        //
-        // Re-apply by moving the floor check to the top of `permitted`.
-        let creator = wallet_of(&key());
-        let floor = 100_000_000;
-        let thin = VAULT_RENT_RESERVE + 1;
-
-        let mut voided = record(true);
-        voided.voided = Some(realorrug_contest::ledger::Voided {
-            at: 1_788_000_000,
-            reason: "bought".to_owned(),
-        });
-        assert!(matches!(
-            plan(&voided, &creator, thin, &BLOCKHASH, floor).err(),
-            Some(PayError::Refused(Refusal::Voided { .. }))
-        ));
-
-        assert!(matches!(
-            plan(&record(false), &creator, thin, &BLOCKHASH, floor).err(),
-            Some(PayError::Refused(Refusal::Unclaimed))
-        ));
-    }
-
-    #[test]
-    fn an_unset_or_unreadable_floor_is_no_floor_and_the_run_says_which() {
-        // Not rule 8's shape: a floor is not a permission, it is a threshold
-        // below which money is withheld from the person who won it, and the
-        // safe direction is paying them. What rule 8 does buy here is that the
-        // operator is told, so a typo is visible rather than silent.
-        assert_eq!(floor_from(&|_| None), 0);
-        assert_eq!(floor_from(&|_| Some("  not a number ".to_owned())), 0);
-        assert_eq!(
-            floor_from(&|k| (k == "RADAR_PAYOUT_FLOOR_LAMPORTS").then(|| " 100000000 ".to_owned())),
-            100_000_000
-        );
-
-        assert!(floor_notice(0).contains("no floor"), "{}", floor_notice(0));
-        assert!(
-            floor_notice(100_000_000).contains("rolls over unpaid"),
-            "{}",
-            floor_notice(100_000_000)
-        );
-    }
-
-    #[test]
-    fn the_plan_pays_the_claim_everything_above_the_reserve_in_two_instructions() {
-        let creator = wallet_of(&key());
-        let p = plan(
-            &record(true),
-            &creator,
-            VAULT_RENT_RESERVE + 1_000_000,
-            &BLOCKHASH,
-            NO_FLOOR,
-        )
-        .expect("a plan");
-        assert_eq!(p.lamports, 1_000_000);
-        assert_eq!(p.collected, 1_000_000);
-        assert_eq!(p.recipient, recipient());
-        assert_eq!(p.instructions.len(), 2);
-        // collect_creator_fee first, from the pump.fun program, creator signing.
-        assert_eq!(
-            p.instructions[0].program_id,
-            realorrug_decode::pumpfun::PROGRAM_ID
-        );
-        assert!(
-            p.instructions[0].accounts[0].signer && p.instructions[0].accounts[0].pubkey == creator
-        );
-        assert_eq!(
-            p.instructions[0].accounts[1].pubkey,
-            pda::creator_vault(&creator).expect("vault")
-        );
-        // Then the transfer, from the creator to the claim, for exactly the amount.
-        let transfer = &p.instructions[1];
-        assert_eq!(transfer.program_id, instruction::SYSTEM_PROGRAM);
-        assert_eq!(transfer.accounts[1].pubkey, recipient());
-        assert_eq!(&transfer.data[..4], &2u32.to_le_bytes());
-        assert_eq!(&transfer.data[4..], &1_000_000u64.to_le_bytes());
-        // One signature slot, blank.
-        assert_eq!(p.unsigned[0], 1);
-        assert!(p.unsigned[1..65].iter().all(|b| *b == 0));
-        assert!(!p.unsigned_base64().is_empty());
-    }
-
-    #[test]
-    fn the_three_refusals_and_the_empty_vault_stop_a_plan_before_anything_is_built() {
-        let creator = wallet_of(&key());
-        let full = VAULT_RENT_RESERVE + 1_000;
-        // Unclaimed.
-        assert_eq!(
-            plan(&record(false), &creator, full, &BLOCKHASH, NO_FLOOR).err(),
-            Some(PayError::Refused(Refusal::Unclaimed))
-        );
-        // Already paid.
-        let mut paid = record(true);
-        paid.payout = Some(Payout {
-            recipient: recipient().to_string(),
-            lamports: 1,
-            signature: "OLD".to_owned(),
-            at: 1,
-        });
-        assert_eq!(
-            plan(&paid, &creator, full, &BLOCKHASH, NO_FLOOR).err(),
-            Some(PayError::Refused(Refusal::AlreadyPaid {
-                signature: "OLD".to_owned()
-            }))
-        );
-        // No winner.
-        let none = Record::close(
-            WEEK,
-            Ranking::default(),
-            &realorrug_contest::Rules::published(["op"]),
-        );
-        assert_eq!(
-            plan(&none, &creator, full, &BLOCKHASH, NO_FLOOR).err(),
-            Some(PayError::Refused(Refusal::NoWinner))
-        );
-        // At the reserve: nothing to pay, and not a refusal.
-        assert_eq!(
-            plan(
-                &record(true),
-                &creator,
-                VAULT_RENT_RESERVE,
-                &BLOCKHASH,
-                NO_FLOOR
-            )
-            .err(),
-            Some(PayError::NothingCollected {
-                vault: VAULT_RENT_RESERVE,
-                reserve: VAULT_RENT_RESERVE
-            })
-        );
-        // A claim that is not an address.
-        let mut bad = record(true);
-        bad.claim.as_mut().expect("claim").address = "not-an-address".to_owned();
-        assert!(matches!(
-            plan(&bad, &creator, full, &BLOCKHASH, NO_FLOOR).err(),
-            Some(PayError::BadAddress(_))
-        ));
-    }
-
-    #[test]
-    fn the_signature_is_over_the_message_and_verifies_under_the_creators_key() {
-        let creator = wallet_of(&key());
-        let p = plan(
-            &record(true),
-            &creator,
-            VAULT_RENT_RESERVE + 5,
-            &BLOCKHASH,
-            NO_FLOOR,
-        )
-        .expect("a plan");
-        let signed = sign(&p.unsigned, &key()).expect("signed");
-        assert_eq!(signed.len(), p.unsigned.len());
-        assert_eq!(&signed[65..], &p.unsigned[65..], "the message is untouched");
-        let sig = ed25519_dalek::Signature::from_bytes(signed[1..65].try_into().expect("64"));
-        key()
-            .verifying_key()
-            .verify_strict(&signed[65..], &sig)
-            .expect("the signature verifies over the message");
-        // Not a one-signer transaction: refused rather than half-signed.
-        let mut two = p.unsigned.clone();
-        two[0] = 2;
-        assert!(sign(&two, &key()).is_err());
-    }
-
-    #[test]
-    fn verify_accepts_exactly_the_planned_transfer_and_nothing_else() {
-        let creator = wallet_of(&key());
-        let p = plan(
-            &record(true),
-            &creator,
-            VAULT_RENT_RESERVE + 500,
-            &BLOCKHASH,
-            NO_FLOOR,
-        )
-        .expect("a plan");
-        let planned = Transfer {
-            from: creator,
-            to: recipient(),
-            lamports: 500,
-        };
-        let chain = |confirms: Option<Vec<Transfer>>| Fake {
-            confirms,
-            ..Fake::default()
-        };
-        assert_eq!(verify(&chain(Some(vec![planned.clone()])), "S", &p), Ok(()));
-        // Re-applied by comparing only the recipient: the wrong amount passes
-        // and the second assertion fails.
-        let wrong_amount = Transfer {
-            lamports: 499,
-            ..planned.clone()
-        };
-        assert!(matches!(
-            verify(&chain(Some(vec![wrong_amount])), "S", &p),
-            Err(PayError::Verify(_))
-        ));
-        let wrong_recipient = Transfer {
-            to: Address::new([1u8; 32]),
-            ..planned.clone()
-        };
-        assert!(matches!(
-            verify(&chain(Some(vec![wrong_recipient])), "S", &p),
-            Err(PayError::Verify(_))
-        ));
-        assert!(matches!(
-            verify(
-                &chain(Some(vec![planned.clone(), planned.clone()])),
-                "S",
-                &p
-            ),
-            Err(PayError::Verify(_))
-        ));
-        assert!(matches!(
-            verify(&chain(Some(Vec::new())), "S", &p),
-            Err(PayError::Verify(_))
-        ));
-        assert!(matches!(
-            verify(&chain(None), "S", &p),
-            Err(PayError::Verify(_))
-        ));
-    }
-
-    #[test]
-    fn a_prize_is_never_signed_to_something_that_is_not_a_wallet() {
-        // Defence in depth, and the depth is the point. `try_claim` already
-        // refuses a non-wallet where the winner can act on it; this is the last
-        // check before a signature, because a mint and a wallet are the same
-        // shape and the claim file can be edited by hand.
-        //
-        // Re-apply by deleting the check: the token program's own address is
-        // paid the week's prize.
-        let d = dir("not-a-wallet");
-        write_record(&d, &record(true)).expect("record");
-        let mint_owned = Fake {
-            vault: VAULT_RENT_RESERVE + 2_000,
-            confirm_as_planned: true,
-            owner: Some("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA".to_owned()),
-            ..Fake::default()
-        };
-        match pay(
-            &mint_owned,
-            &d,
-            WEEK,
-            &key(),
-            1_788_000_000,
-            false,
-            NO_FLOOR,
-        ) {
-            Err(PayError::Refused(Refusal::NotAWallet { owner })) => assert_eq!(
-                owner.as_deref(),
-                Some("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-            ),
-            other => panic!("expected NotAWallet, got {other:?}"),
-        }
-        assert!(
-            mint_owned.sent.borrow().is_empty(),
-            "and nothing was sent, which is the whole point"
-        );
-
-        // The dry run reports the same refusal rather than printing a
-        // transaction the real run would refuse.
-        assert!(matches!(
-            pay(&mint_owned, &d, WEEK, &key(), 1_788_000_000, true, NO_FLOOR),
-            Err(PayError::Refused(Refusal::NotAWallet { .. }))
-        ));
-
-        // An owner that will not read is unknown, and unknown refuses.
-        let unreadable = Fake {
-            vault: VAULT_RENT_RESERVE + 2_000,
-            owner_errors: true,
-            ..Fake::default()
-        };
-        assert!(matches!(
-            pay(
-                &unreadable,
-                &d,
-                WEEK,
-                &key(),
-                1_788_000_000,
-                false,
-                NO_FLOOR
-            ),
-            Err(PayError::Chain(_))
-        ));
-    }
-
-    #[test]
-    fn an_unfunded_address_is_a_wallet_and_is_paid() {
-        // The case a stricter rule gets wrong. A keypair that has never
-        // received lamports has no account on chain, and that is exactly what a
-        // winner generates for a payout that will be published. Refusing it
-        // would refuse the careful winner and pay only the careless one.
-        assert!(is_wallet(None));
-        assert!(is_wallet(Some(SYSTEM_PROGRAM)));
-        assert!(!is_wallet(Some(
-            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        )));
-    }
-
-    #[test]
-    fn pay_writes_the_pool_reading_then_sends_verifies_and_records_in_that_order() {
-        let d = dir("pay");
-        write_record(&d, &record(true)).expect("record");
-        let chain = Fake {
-            vault: VAULT_RENT_RESERVE + 2_000,
-            confirm_as_planned: true,
-            ..Fake::default()
-        };
-        let out = pay(&chain, &d, WEEK, &key(), 1_788_000_000, false, NO_FLOOR).expect("paid");
-        let Outcome::Paid(payout) = out else {
-            panic!("paid");
-        };
-        assert_eq!(payout.lamports, 2_000);
-        assert_eq!(payout.signature, "SIG1");
-        assert_eq!(payout.recipient, recipient().to_string());
-        assert_eq!(chain.sent.borrow().len(), 1, "one transaction sent");
-        let saved = read_record(&d, WEEK).expect("record");
-        assert_eq!(saved.payout, Some(payout));
-        let pool =
-            Vault::from_json(&std::fs::read_to_string(format!("{d}/pool.json")).expect("pool"))
-                .expect("vault");
-        assert_eq!(pool.lamports, VAULT_RENT_RESERVE + 2_000);
-        assert_eq!(
-            pool.address,
-            pda::creator_vault(&wallet_of(&key()))
-                .expect("v")
-                .to_string()
-        );
-
-        // Paying again is refused as already paid, and nothing is sent.
-        let again = pay(&chain, &d, WEEK, &key(), 1_788_000_001, false, NO_FLOOR);
-        assert!(matches!(
-            again,
-            Err(PayError::Refused(Refusal::AlreadyPaid { .. }))
-        ));
-        assert_eq!(chain.sent.borrow().len(), 1);
-    }
-
-    #[test]
-    fn a_transaction_the_chain_does_not_confirm_as_planned_is_not_recorded() {
-        // Re-applied by writing the record before `verify`: the ledger says
-        // paid with a signature the chain does not confirm, and this fails.
-        let d = dir("unverified");
-        write_record(&d, &record(true)).expect("record");
-        let chain = Fake {
-            vault: VAULT_RENT_RESERVE + 2_000,
-            confirms: Some(vec![Transfer {
-                from: wallet_of(&key()),
-                to: Address::new([1u8; 32]),
-                lamports: 2_000,
-            }]),
-            ..Fake::default()
-        };
-        let out = pay(&chain, &d, WEEK, &key(), 1, false, NO_FLOOR);
-        assert!(matches!(out, Err(PayError::Verify(_))), "{out:?}");
-        assert_eq!(read_record(&d, WEEK).expect("record").payout, None);
-        assert_eq!(
-            chain.sent.borrow().len(),
-            1,
-            "it was sent; the ledger is what refuses"
-        );
-    }
-
-    #[test]
-    fn a_dry_run_plans_writes_the_pool_and_sends_nothing() {
-        let d = dir("dry");
-        write_record(&d, &record(true)).expect("record");
-        let chain = Fake {
-            vault: VAULT_RENT_RESERVE + 300,
-            ..Fake::default()
-        };
-        let out = pay(&chain, &d, WEEK, &key(), 1, true, NO_FLOOR).expect("planned");
-        assert!(matches!(out, Outcome::Planned(ref p) if p.lamports == 300));
-        assert!(chain.sent.borrow().is_empty());
-        assert!(std::path::Path::new(&format!("{d}/pool.json")).exists());
-        assert_eq!(read_record(&d, WEEK).expect("record").payout, None);
-    }
-
-    #[test]
-    fn the_fallback_records_a_hand_made_payment_only_when_the_chain_agrees_with_the_claim() {
-        let d = dir("fallback");
-        write_record(&d, &record(true)).expect("record");
-        let creator = wallet_of(&key());
-        let good = Fake {
-            vault: VAULT_RENT_RESERVE,
-            confirms: Some(vec![Transfer {
-                from: creator,
-                to: recipient(),
-                lamports: 777,
-            }]),
-            ..Fake::default()
-        };
-        let payout = record_payout(&good, &d, WEEK, &creator, "HAND1", 5).expect("recorded");
-        assert_eq!((payout.lamports, payout.signature.as_str()), (777, "HAND1"));
-        assert_eq!(read_record(&d, WEEK).expect("record").payout, Some(payout));
-
-        // A second week's record, and a hand-made transaction to somebody else:
-        // the policy's WrongRecipient, from the chain's own figure.
-        let mut other = record(true);
-        other.week = Week(WEEK.0 + 1);
-        write_record(&d, &other).expect("record");
-        let elsewhere = Fake {
-            vault: VAULT_RENT_RESERVE,
-            confirms: Some(vec![Transfer {
-                from: creator,
-                to: Address::new([1u8; 32]),
-                lamports: 777,
-            }]),
-            ..Fake::default()
-        };
-        assert_eq!(
-            record_payout(&elsewhere, &d, other.week, &creator, "HAND2", 6).err(),
-            Some(PayError::Refused(Refusal::WrongRecipient))
-        );
-        assert_eq!(read_record(&d, other.week).expect("record").payout, None);
-        // Not on chain: nothing recorded.
-        let missing = Fake {
-            vault: VAULT_RENT_RESERVE,
-            confirms: None,
-            ..Fake::default()
-        };
-        assert!(matches!(
-            record_payout(&missing, &d, other.week, &creator, "HAND3", 7),
-            Err(PayError::Verify(_))
-        ));
-    }
-
-    #[test]
-    fn transfers_are_read_out_of_a_parsed_transaction_top_level_and_inner() {
-        let tx = serde_json::json!({
-            "transaction": { "message": { "instructions": [
-                { "program": "spl-token", "parsed": { "type": "transfer", "info": {} } },
-                { "program": "system", "parsed": { "type": "transfer", "info": {
-                    "source": Address::new([2u8; 32]).to_string(),
-                    "destination": Address::new([3u8; 32]).to_string(),
-                    "lamports": 12 } } }
-            ] } },
-            "meta": { "innerInstructions": [ { "instructions": [
-                { "program": "system", "parsed": { "type": "createAccount", "info": {} } },
-                { "program": "system", "parsed": { "type": "transfer", "info": {
-                    "source": Address::new([4u8; 32]).to_string(),
-                    "destination": Address::new([5u8; 32]).to_string(),
-                    "lamports": 34 } } }
-            ] } ] }
-        });
-        let got = transfers_of(&tx);
-        assert_eq!(got.len(), 2);
-        assert_eq!((got[0].lamports, got[1].lamports), (12, 34));
-        assert_eq!(got[1].to, Address::new([5u8; 32]));
-    }
-
-    #[test]
-    fn the_unsigned_transaction_round_trips_through_base64_and_sign_refuses_the_wrong_shape() {
-        // CI's mutants: `unsigned_base64` replaced by "xyzzy", and the length
-        // bound in `sign` moved every way it can move.
-        let creator = wallet_of(&key());
-        let p = plan(
-            &record(true),
-            &creator,
-            VAULT_RENT_RESERVE + 5,
-            &BLOCKHASH,
-            NO_FLOOR,
-        )
-        .expect("a plan");
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(p.unsigned_base64())
-            .expect("base64");
-        assert_eq!(decoded, p.unsigned);
-
-        // 65 bytes is a count and an empty slot with no message: refused. 66 is
-        // the smallest one-signer transaction with a message and is signed.
-        assert!(sign(&[1u8; 65], &key()).is_err());
-        let mut smallest = vec![1u8];
-        smallest.extend_from_slice(&[0u8; 64]);
-        smallest.push(9);
-        let signed = sign(&smallest, &key()).expect("one byte of message is enough to sign");
-        assert_eq!(signed.len(), 66);
-        assert_ne!(&signed[1..65], &[0u8; 64], "the slot was filled");
-        assert!(sign(&[], &key()).is_err());
-    }
-
-    #[test]
-    fn the_fallback_refuses_a_payment_from_the_wrong_wallet_even_to_the_right_claim() {
-        // Re-applied by turning the `||` into `&&`: a transfer from a stranger's
-        // wallet to the claimed address is recorded as the week's payout, which
-        // is a payout the creator never made.
-        let d = dir("wrong-sender");
-        write_record(&d, &record(true)).expect("record");
-        let creator = wallet_of(&key());
-        let stranger = Fake {
-            vault: VAULT_RENT_RESERVE,
-            confirms: Some(vec![Transfer {
-                from: Address::new([8u8; 32]),
-                to: recipient(),
-                lamports: 777,
-            }]),
-            ..Fake::default()
-        };
-        assert!(matches!(
-            record_payout(&stranger, &d, WEEK, &creator, "HAND9", 5),
-            Err(PayError::Verify(_))
-        ));
-        assert_eq!(read_record(&d, WEEK).expect("record").payout, None);
-    }
-
-    /// A JSON-RPC node that answers each method with a canned result.
-    fn fake_node() -> String {
-        use std::io::{Read as _, Write as _};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
-        let port = listener.local_addr().expect("an address").port();
-        std::thread::spawn(move || {
-            for incoming in listener.incoming() {
-                let Ok(mut stream) = incoming else {
-                    return;
-                };
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-                let mut buf = vec![0u8; 65_536];
-                let mut n = 0;
-                let mut need = usize::MAX;
-                while n < buf.len() && n < need {
-                    let Ok(read) = stream.read(&mut buf[n..]) else {
-                        break;
-                    };
-                    if read == 0 {
-                        break;
-                    }
-                    n += read;
-                    if need == usize::MAX
-                        && let Some(end) = buf[..n].windows(4).position(|w| w == [13, 10, 13, 10])
-                    {
-                        let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
-                        let length = head
-                            .lines()
-                            .find_map(|l| l.strip_prefix("content-length:"))
-                            .and_then(|v| v.trim().parse::<usize>().ok())
-                            .unwrap_or(0);
-                        need = end + 4 + length;
-                    }
-                }
-                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
-                let result = if request.contains("getBalance") {
-                    r#"{"context":{"slot":1},"value":1234567}"#.to_owned()
-                } else if request.contains("getLatestBlockhash") {
-                    format!(
-                        r#"{{"context":{{"slot":1}},"value":{{"blockhash":"{}","lastValidBlockHeight":9}}}}"#,
-                        bs58::encode([7u8; 32]).into_string()
-                    )
-                } else if request.contains("sendTransaction") {
-                    r#""SIGNATURE1""#.to_owned()
-                } else if request.contains("getTransaction") {
-                    format!(
-                        r#"{{"slot":2,"transaction":{{"message":{{"instructions":[{{"program":"system","parsed":{{"type":"transfer","info":{{"source":"{}","destination":"{}","lamports":500}}}}}}]}}}},"meta":{{"innerInstructions":[]}}}}"#,
-                        Address::new([2u8; 32]),
-                        Address::new([3u8; 32])
-                    )
-                } else {
-                    "null".to_owned()
-                };
-                let body = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result}}}"#);
-                let crlf = String::from_utf8(vec![13, 10]).expect("ascii");
-                let head = format!(
-                    "HTTP/1.1 200 OK{crlf}Content-Length: {}{crlf}Content-Type: application/json{crlf}Connection: close{crlf}{crlf}",
-                    body.len()
-                );
-                let _ = stream.write_all(format!("{head}{body}").as_bytes());
-                let _ = stream.flush();
-            }
-        });
-        format!("http://127.0.0.1:{port}")
-    }
-
-    #[test]
-    fn the_rpc_client_reads_each_answer_out_of_the_nodes_shape() {
-        // CI's mutants replaced `latest_blockhash` with a fixed array and
-        // nothing failed, because nothing had asked a node. This asks a fake
-        // one, method by method, and reads back what it said.
-        let rpc = Rpc::new(fake_node());
-        assert_eq!(rpc.balance(&Address::new([1u8; 32])), Ok(1_234_567));
-        assert_eq!(rpc.latest_blockhash(), Ok([7u8; 32]));
-        assert_eq!(rpc.send("AAEC"), Ok("SIGNATURE1".to_owned()));
-        let transfers = rpc
-            .transfers_in("SIGNATURE1")
-            .expect("read")
-            .expect("on chain");
-        assert_eq!(
-            transfers,
-            vec![Transfer {
-                from: Address::new([2u8; 32]),
-                to: Address::new([3u8; 32]),
-                lamports: 500,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_keypair_file_loads_only_when_its_halves_agree() {
-        let d = dir("key");
-        let k = key();
-        let mut bytes = k.to_bytes().to_vec();
-        bytes.extend_from_slice(&k.verifying_key().to_bytes());
-        let path = std::path::PathBuf::from(format!("{d}/payout.json"));
-        std::fs::write(&path, serde_json::to_string(&bytes).expect("json")).expect("write");
-        let loaded = load_key(&path).expect("loads");
-        assert_eq!(wallet_of(&loaded), wallet_of(&k));
-
-        bytes[40] ^= 1;
-        std::fs::write(&path, serde_json::to_string(&bytes).expect("json")).expect("write");
-        assert!(
-            load_key(&path).is_err(),
-            "a mismatched public half is refused"
-        );
-        std::fs::write(&path, "[1,2,3]").expect("write");
-        assert!(load_key(&path).is_err());
-    }
-}
+mod tests;

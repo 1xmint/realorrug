@@ -70,8 +70,11 @@ pub struct Winner {
 /// anyone to see.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claim {
-    /// The Solana address, as text. Parsed and checked by the caller before it
-    /// is written here; this crate stores what was accepted.
+    /// The winner's Robinhood Chain (EVM) address, as text: `0x` and 40 hex
+    /// digits. Parsed and checked by the caller before it is written here; this
+    /// crate stores what was accepted. The payout parses it again as
+    /// `realorrug_robinhood::Address` and refuses anything else, a Solana
+    /// address from before the move included, before anything is signed.
     pub address: String,
     /// The reply it was read from.
     pub reply_id: String,
@@ -80,19 +83,105 @@ pub struct Claim {
 }
 
 /// A payment that was made.
+///
+/// The money is [`Paid`], flattened, so a record's `payout` object carries the
+/// recipient and time beside whichever amount and transaction fields its chain
+/// has. A week paid on Solana and a week paid on Robinhood Chain are both
+/// readable, and neither is renamed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Payout {
-    /// To whom.
+    /// To whom: the claim's address, as the claim wrote it.
     pub recipient: String,
-    /// How much.
-    pub lamports: u64,
-    /// The transaction signature, so the ledger's claim is checkable on chain.
-    pub signature: String,
+    /// How much, and the transactions that moved it.
+    #[serde(flatten)]
+    pub paid: Paid,
     /// When, as seconds since the epoch.
     pub at: u64,
 }
 
+/// What a payout moved, by chain.
+///
+/// **Untagged, and the field names are the tag.** A record written before the
+/// move to Robinhood Chain has `lamports` and `signature` and nothing else, and
+/// adding a tag field would make it a record `records_in` skips (finding S11).
+/// `Eth` is tried first: its three fields are all required, so a Solana payout
+/// never reads as one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Paid {
+    /// Robinhood Chain: the escrow claim, then the transfer to the winner.
+    Eth {
+        /// What the winner received, which is what the escrow said was claimed.
+        wei: Wei,
+        /// The claim from the Pons fee escrow, `0x` and 64 hex digits.
+        claim_tx: String,
+        /// The transfer to the winner.
+        transfer_tx: String,
+    },
+    /// Solana, from pump.fun's creator vault. **Read-only legacy**: nothing
+    /// writes this arm any more, and it stays so that any week paid under it
+    /// still reads.
+    Sol {
+        /// How much.
+        lamports: u64,
+        /// The transaction signature.
+        signature: String,
+    },
+}
+
+impl Payout {
+    /// The transaction a reader checks: the transfer that paid the winner.
+    #[must_use]
+    pub fn transaction(&self) -> &str {
+        match &self.paid {
+            Paid::Eth { transfer_tx, .. } => transfer_tx,
+            Paid::Sol { signature, .. } => signature,
+        }
+    }
+}
+
+/// An amount of wei, written as a decimal string.
+///
+/// **A string, not a JSON number**, for two reasons that each decide it alone.
+/// JavaScript reads a number above 2^53 inexactly, and 2^53 wei is under
+/// 0.01 ETH, so the site would print a prize that is not the one paid. And a
+/// `u64` stops at about 18.4 ETH, which a busy week's fees can pass.
+///
+/// Read strictly: ASCII digits only, so `+5`, ` 5` and `5.0` are refused rather
+/// than guessed at, and a JSON number is refused because whoever wrote it may
+/// already have rounded it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Wei(pub u128);
+
+impl Serialize for Wei {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Wei {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).ok_or_else(|| {
+            serde::de::Error::custom(format!("not a decimal amount of wei: {text:?}"))
+        })
+    }
+}
+
+impl Wei {
+    /// Decimal digits, and nothing else, that fit in `u128`.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        text.parse().ok().map(Self)
+    }
+}
+
 /// Why a payout is refused.
+///
+/// Amounts are in the chain's smallest unit: wei on Robinhood Chain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Refusal {
     /// Nobody won this week.
@@ -103,13 +192,14 @@ pub enum Refusal {
     WrongRecipient,
     /// More than the week collected.
     AboveCollected {
-        /// What was collected, in lamports.
-        collected: u64,
+        /// What was collected.
+        collected: u128,
     },
     /// This week has already been paid.
     AlreadyPaid {
-        /// The signature of the payment that was made.
-        signature: String,
+        /// The transaction that paid it: the transfer on Robinhood Chain, the
+        /// signature on Solana.
+        transaction: String,
     },
     /// The operator voided this week. It pays nobody and the pool rolls over.
     Voided {
@@ -120,28 +210,28 @@ pub enum Refusal {
     ///
     /// Defence in depth: `try_claim` already refuses one at claim time, where
     /// the winner can act on it. This is the second check, at the last moment
-    /// before a signature, because a mint and a wallet are the same shape and
-    /// what is on the other side of this is money leaving.
+    /// before a signature, because a contract and a wallet are the same shape
+    /// and what is on the other side of this is money leaving.
     NotAWallet {
-        /// What owns it, or `None` when the owner could not be read.
+        /// What is at the address instead, or `None` when it could not be read.
         owner: Option<String>,
     },
     /// The week collected less than the floor, so the pool rolls over.
     ///
     /// Design 0007 J2 and design 0009 L4 both say a floor with rollover, and
     /// the code had none until 2026-09-06. Without it a week that collected
-    /// a few thousand lamports pays them out: the transaction fee is a
-    /// meaningful share of the prize, the winner receives an amount not worth
-    /// the click, and the pool that should have been building is spent.
+    /// dust pays it out: the transaction fee is a meaningful share of the
+    /// prize, the winner receives an amount not worth the click, and the pool
+    /// that should have been building is spent.
     ///
     /// **Not an error.** The week stays unpaid and claimable-looking, the
     /// prize rolls into the next week, and the history page says so -- which
     /// is the same shape as `Unclaimed` and deliberately so.
     BelowFloor {
-        /// The floor in force, in lamports.
-        floor: u64,
+        /// The floor in force.
+        floor: u128,
         /// What the week actually collected.
-        collected: u64,
+        collected: u128,
     },
 }
 
@@ -174,20 +264,40 @@ pub struct Voided {
     pub reason: String,
 }
 
-/// The creator vault, as last read from the chain.
+/// Where the prize waits, as last read from the chain.
 ///
-/// Written by the timer that reads the vault balance (design 0008 phase 3,
-/// which needs the token to exist) and read by the public pool page. Absent
-/// means **no token yet**, which the page renders as a sentence and never as
-/// a balance of zero.
+/// Written by the payout run, which reads it anyway, and read by the public
+/// pool page. Absent means **no token yet**, which the page renders as a
+/// sentence and never as a balance of zero.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Vault {
-    /// The vault's address, base58.
+    /// The contract holding it: the Pons fee escrow, or on Solana the creator
+    /// vault.
     pub address: String,
     /// Its balance when read.
-    pub lamports: u64,
+    #[serde(flatten)]
+    pub balance: Balance,
     /// When it was read, seconds since the epoch.
     pub measured_at: u64,
+}
+
+/// A vault's balance, by chain. Untagged for the reason [`Paid`] is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Balance {
+    /// What the Pons escrow holds for the payout wallet.
+    Eth {
+        /// The address the escrow holds it for: the creator fee recipient,
+        /// which is the payout wallet.
+        holder: String,
+        /// How much.
+        wei: Wei,
+    },
+    /// Solana's creator vault. Read-only legacy.
+    Sol {
+        /// How much.
+        lamports: u64,
+    },
 }
 
 impl Vault {
@@ -352,11 +462,11 @@ pub fn records_in(dir: &std::path::Path) -> Vec<Record> {
 }
 
 impl Payout {
-    /// Whether paying `lamports` to `recipient` for this week is permitted.
+    /// Whether paying `amount` to `recipient` for this week is permitted.
     ///
     /// The three lines that bound the hot key's blast radius, in the order
     /// they are cheapest to check. `collected` is what the week's creator fee
-    /// amounted to, read from the chain by the caller.
+    /// amounted to, read from the chain by the caller. Every amount is in wei.
     ///
     /// # Errors
     ///
@@ -364,13 +474,13 @@ impl Payout {
     pub fn permitted(
         record: &Record,
         recipient: &str,
-        lamports: u64,
-        collected: u64,
-        floor: u64,
+        amount: u128,
+        collected: u128,
+        floor: u128,
     ) -> Result<(), Refusal> {
         if let Some(paid) = &record.payout {
             return Err(Refusal::AlreadyPaid {
-                signature: paid.signature.clone(),
+                transaction: paid.transaction().to_owned(),
             });
         }
         // Checked before the winner, the claim and the amount, because a
@@ -391,7 +501,7 @@ impl Payout {
         if claim.address != recipient {
             return Err(Refusal::WrongRecipient);
         }
-        if lamports > collected {
+        if amount > collected {
             return Err(Refusal::AboveCollected { collected });
         }
         // Last, and deliberately: every refusal above is about whether this
@@ -414,7 +524,7 @@ mod tests {
     /// No floor: what these tests are about is the other five refusals, and a
     /// floor would make every one of them depend on an amount that is not the
     /// thing under test.
-    const NO_FLOOR: u64 = 0;
+    const NO_FLOOR: u128 = 0;
 
     const WEEK: Week = Week(2958);
 
@@ -429,8 +539,8 @@ mod tests {
         // realorrug-payout tests could not: they are in another crate, and
         // `cargo mutants` runs each crate's own suite.
         let record = claimed();
-        let floor = 1_000u64;
-        let at = |collected: u64| Payout::permitted(&record, "ADDR", collected, collected, floor);
+        let floor = 1_000u128;
+        let at = |collected: u128| Payout::permitted(&record, "ADDR", collected, collected, floor);
 
         assert!(
             matches!(at(floor - 1), Err(Refusal::BelowFloor { .. })),
@@ -491,8 +601,7 @@ mod tests {
         let mut record = Record::close(WEEK, ranking_with_winner(), &Rules::published(["op"]));
         record.payout = Some(Payout {
             recipient: "somebody".to_owned(),
-            lamports: 10,
-            signature: "sig".to_owned(),
+            paid: eth(10, "0xclaim", "0xsig"),
             at: 1_788_000_000,
         });
         record.voided = Some(Voided {
@@ -649,16 +758,126 @@ mod tests {
         let mut paid = claimed();
         paid.payout = Some(Payout {
             recipient: "ADDR".to_owned(),
-            lamports: 1_000,
-            signature: "SIG".to_owned(),
+            paid: eth(1_000, "CLAIM", "SIG"),
             at: 1,
         });
+        // The transfer is named, not the claim: it is the transaction that
+        // paid the winner, and the one a reader looks up.
         assert_eq!(
             Payout::permitted(&paid, "ADDR", 1_000, 1_000, NO_FLOOR),
             Err(Refusal::AlreadyPaid {
-                signature: "SIG".to_owned()
+                transaction: "SIG".to_owned()
             })
         );
+    }
+
+    fn eth(wei: u128, claim_tx: &str, transfer_tx: &str) -> Paid {
+        Paid::Eth {
+            wei: Wei(wei),
+            claim_tx: claim_tx.to_owned(),
+            transfer_tx: transfer_tx.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_floor_and_the_cap_hold_at_amounts_no_u64_can_carry() {
+        // A week's fees can pass 18.4 ETH, which is where `u64` wei stops.
+        // Re-apply by narrowing `permitted` to `u64` with `as` casts: the
+        // amounts either side of 2^64 wrap and both assertions below flip.
+        let record = claimed();
+        let big = u128::from(u64::MAX) + 5;
+        assert_eq!(Payout::permitted(&record, "ADDR", big, big, big), Ok(()));
+        assert_eq!(
+            Payout::permitted(&record, "ADDR", big + 1, big, 0),
+            Err(Refusal::AboveCollected { collected: big })
+        );
+        assert_eq!(
+            Payout::permitted(&record, "ADDR", big - 1, big - 1, big),
+            Err(Refusal::BelowFloor {
+                floor: big,
+                collected: big - 1
+            })
+        );
+    }
+
+    #[test]
+    fn wei_is_a_decimal_string_read_strictly() {
+        // JSON numbers above 2^53 are inexact in the browser, so wei is text.
+        // Re-apply by deriving `Serialize` on `Wei`: the first assertion sees a
+        // bare number.
+        let at_scale = Wei(4_014_961_601_594_189_201);
+        assert_eq!(
+            serde_json::to_string(&at_scale).expect("json"),
+            "\"4014961601594189201\""
+        );
+        assert_eq!(
+            serde_json::from_str::<Wei>("\"4014961601594189201\"").expect("reads"),
+            at_scale
+        );
+        assert_eq!(Wei::parse(&u128::MAX.to_string()), Some(Wei(u128::MAX)));
+        for bad in [
+            "",
+            "+5",
+            " 5",
+            "5.0",
+            "-1",
+            "0x10",
+            "340282366920938463463374607431768211456",
+        ] {
+            assert_eq!(Wei::parse(bad), None, "{bad:?}");
+        }
+        assert!(
+            serde_json::from_str::<Wei>("5").is_err(),
+            "a number may already have been rounded"
+        );
+    }
+
+    #[test]
+    fn a_week_paid_on_either_chain_reads_back_as_the_chain_that_paid_it() {
+        // Both shapes, as bytes. A Solana payout from before the move carries
+        // `lamports` and `signature`; a Robinhood payout carries `wei`,
+        // `claim_tx` and `transfer_tx`. Each must read, and read as its own arm.
+        //
+        // Re-apply by making `wei` a `u128` number: the Eth record below does
+        // not parse and `records_in` would skip the week (S11). Re-apply by
+        // tagging the enum: the Solana record stops parsing.
+        let sol = r#"{"week":2956,"opened_at":1787529600,"closed_at":1788134400,
+            "ranking":{"ranked":[],"excluded":[]},"winner":null,"claim":null,
+            "payout":{"recipient":"So11111111111111111111111111111111111111112",
+                      "lamports":3000000000,"signature":"5sig","at":1788134520}}"#;
+        let record = Record::from_json(sol).expect("a Solana payout still reads");
+        let paid = record.payout.expect("paid");
+        assert_eq!(
+            paid.paid,
+            Paid::Sol {
+                lamports: 3_000_000_000,
+                signature: "5sig".to_owned()
+            }
+        );
+        assert_eq!(paid.transaction(), "5sig");
+
+        let eth_json = r#"{"week":2960,"opened_at":1789948800,"closed_at":1790553600,
+            "ranking":{"ranked":[],"excluded":[]},"winner":null,"claim":null,
+            "payout":{"recipient":"0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06",
+                      "wei":"4014961601594189201",
+                      "claim_tx":"0x07cab768bdf8dcf67edc9b0bc74d9d2d70cdd4f88b4cbe8ada2b6ec85f44fa7b",
+                      "transfer_tx":"0x11","at":1790553700}}"#;
+        let record = Record::from_json(eth_json).expect("an Eth payout reads");
+        let paid = record.payout.clone().expect("paid");
+        assert_eq!(
+            paid.paid,
+            eth(
+                4_014_961_601_594_189_201,
+                "0x07cab768bdf8dcf67edc9b0bc74d9d2d70cdd4f88b4cbe8ada2b6ec85f44fa7b",
+                "0x11"
+            )
+        );
+        assert_eq!(paid.transaction(), "0x11");
+        // And it writes back flat, with the amount as a string.
+        let json = record.to_json().expect("json");
+        assert!(json.contains("\"wei\": \"4014961601594189201\""), "{json}");
+        assert!(!json.contains("lamports"), "{json}");
+        assert_eq!(Record::from_json(&json).expect("round-trips"), record);
     }
 
     #[test]
@@ -684,8 +903,10 @@ mod tests {
         let mut paid = claimed();
         paid.payout = Some(Payout {
             recipient: "ADDR".to_owned(),
-            lamports: 1,
-            signature: "SIG".to_owned(),
+            paid: Paid::Sol {
+                lamports: 1,
+                signature: "SIG".to_owned(),
+            },
             at: 1,
         });
         assert!(matches!(
@@ -697,13 +918,22 @@ mod tests {
     #[test]
     fn the_vault_reading_round_trips_and_half_of_it_is_refused() {
         let vault = Vault {
-            address: "VAULT".to_owned(),
-            lamports: 5_000,
+            address: "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e".to_owned(),
+            balance: Balance::Eth {
+                holder: "0x6aa025a3292c4ab6a55af3b6a7f7cbf62a5c4d06".to_owned(),
+                wei: Wei(4_014_961_601_594_189_201),
+            },
             measured_at: 1_788_000_000,
         };
         let json = vault.to_json().expect("serialises");
+        assert!(json.contains("\"wei\": \"4014961601594189201\""), "{json}");
         assert_eq!(Vault::from_json(&json).expect("round-trips"), vault);
         assert!(Vault::from_json(&json[..json.len() / 2]).is_err());
+
+        // A Solana reading from before the move still reads as one.
+        let old = Vault::from_json(r#"{"address":"VAULT","lamports":5000,"measured_at":1}"#)
+            .expect("the legacy shape reads");
+        assert_eq!(old.balance, Balance::Sol { lamports: 5_000 });
     }
 
     #[test]

@@ -40,6 +40,8 @@ pub mod ledger;
 pub mod score;
 pub mod week;
 
-pub use ledger::{Claim, Payout, Record, Refusal, Vault, Voided, Winner, records_in};
+pub use ledger::{
+    Balance, Claim, Paid, Payout, Record, Refusal, Vault, Voided, Wei, Winner, records_in,
+};
 pub use score::{Entry, Excluded, Metrics, Ranked, Ranking, Rules, Standing, Verified, rank};
 pub use week::Week;

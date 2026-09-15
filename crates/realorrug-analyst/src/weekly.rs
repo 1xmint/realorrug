@@ -26,7 +26,7 @@
 
 use std::fmt::Write as _;
 
-use realorrug_contest::{Record, Vault};
+use realorrug_contest::{Balance, Record, Vault};
 use realorrug_roast::sheet::FactSheet;
 use realorrug_roast::voice::Reply;
 use realorrug_types::civil::{date_from_days, timestamp_from_seconds};
@@ -151,15 +151,15 @@ pub fn summary(record: &Record, vault: Option<&Vault>) -> Post {
         None => text.push_str("\nNothing counted, so no winner; the pool rolls over."),
     }
 
-    match vault {
-        Some(v) => {
-            let sol = v.lamports as f64 / LAMPORTS_PER_SOL;
+    match vault.map(|v| (&v.balance, v.measured_at)) {
+        Some((Balance::Sol { lamports }, measured_at)) => {
+            let sol = *lamports as f64 / LAMPORTS_PER_SOL;
             let rendered = format!("{sol:.3}");
             authorised.push(sol);
             if let Ok(r) = rendered.parse::<f64>() {
                 authorised.push(r);
             }
-            let at = timestamp_from_seconds(v.measured_at);
+            let at = timestamp_from_seconds(measured_at);
             authorise_date(&mut authorised, &at[..10]);
             authorised.extend(at[11..19].split(':').filter_map(|p| p.parse::<f64>().ok()));
             let _ = write!(text, "\nPrize pool: {rendered} SOL at {at}");
@@ -179,6 +179,10 @@ pub fn summary(record: &Record, vault: Option<&Vault>) -> Post {
                 (None, None) => text.push('.'),
             }
         }
+        // An ETH pool says nothing yet, and on purpose: "no token yet" would be
+        // false once there is one, and quoting wei as SOL is a wrong figure.
+        // Rendering ETH is plan 0001 step 6d, before launch.
+        Some((Balance::Eth { .. }, _)) => {}
         None => text.push_str("\nPrize pool: no token yet."),
     }
     // The address itself, since 2026-09-06. `forbidden::check` masks this exact
@@ -584,7 +588,9 @@ mod tests {
     fn vault() -> Vault {
         Vault {
             address: "VAULT".to_owned(),
-            lamports: 1_234_567_890,
+            balance: Balance::Sol {
+                lamports: 1_234_567_890,
+            },
             measured_at: WEEK.closes_at() + 60,
         }
     }

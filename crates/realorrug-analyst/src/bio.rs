@@ -217,9 +217,15 @@ impl State {
 #[must_use]
 pub fn state_of(record: &Record, now: u64) -> Option<State> {
     if let Some(payout) = &record.payout {
-        return Some(State::Paid {
-            sol: render_sol(payout.lamports),
-        });
+        return match payout.paid {
+            realorrug_contest::Paid::Sol { lamports, .. } => Some(State::Paid {
+                sol: render_sol(lamports),
+            }),
+            // Paid, so nothing else is true of the week, and the bio has no ETH
+            // sentence yet: plan 0001 step 6d writes one. Saying nothing is
+            // true; quoting wei as SOL would not be.
+            realorrug_contest::Paid::Eth { .. } => None,
+        };
     }
     // A voided week says nothing. The void is published on the site with the
     // operator's reason, and a bio has no room for a reason -- a bare "the week
@@ -471,8 +477,10 @@ mod tests {
         let mut paid = record_with_winner();
         paid.payout = Some(realorrug_contest::ledger::Payout {
             recipient: "R".to_owned(),
-            lamports: 123_400_000,
-            signature: "sig".to_owned(),
+            paid: realorrug_contest::Paid::Sol {
+                lamports: 123_400_000,
+                signature: "sig".to_owned(),
+            },
             at: closed + 120,
         });
         assert_eq!(

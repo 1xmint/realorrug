@@ -2,26 +2,30 @@
 #
 # Install to /etc/systemd/system/realorrug-payout.service. Started by the timer.
 #
-# The payout: pays each claimed, unpaid week from the creator vault to the
-# claimed address, under the contest's three refusals, and reads the
-# transaction back before the ledger says paid (design 0007 C4, ADR 0013).
+# The payout: for each claimed, unpaid week, claims the creator fees from the
+# Pons v2 fee escrow on Robinhood Chain, pays exactly what the escrow paid to
+# the claimed address, and reads both transactions back before the ledger says
+# paid (ADR 0025, ADR 0013). DO NOT ENABLE THE TIMER UNTIL LAUNCH.
 #
-# Its own user, its own key, its own unit -- modelled on radar-signer@.service
-# and for the same reason. This is NOT the trading signer: it cannot sign a
-# trade, and the trading signer cannot sign this. The key file is readable by
-# realorrug-payout and nobody else; it never appears in the environment, only its
-# path. The blast radius of this key is one week of creator fees.
+# Its own user and its own unit. The wallet key is in Turnkey and cannot be
+# copied out; what the box holds is a Turnkey API key, readable by
+# realorrug-payout and nobody else, whose policy lets it ask for two things on
+# chain 4663 and nothing more: claim() on the escrow, and a plain ETH transfer.
+# Revoking that API key in Turnkey's dashboard stops the payout.
 #
-# Network: RPC only, and only what pays a transaction. It reads no store, holds
-# no tokens (ADR 0013 constraint 2), and writes only the contest directory --
-# the week's record with its payout, and the pool reading the site serves.
+# Network: the Robinhood Chain RPC endpoint and api.turnkey.com, over HTTPS, and
+# nothing else. systemd cannot allow hosts by name; RestrictAddressFamilies below
+# limits it to IP sockets, and a host-level egress rule for this user is the
+# place to pin the two hosts if the box has one. It reads no store, holds no
+# tokens (ADR 0013 constraint 2), and writes only the contest directory: the
+# week's record, the pool reading, a pending file while a payout is in flight,
+# and its lock.
 #
-#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin realorrug-payout
-#   sudo install -m 0400 -o realorrug-payout -g realorrug-payout <keypair.json> /etc/radar/payout.json
-#   sudo install -m 0640 -o root -g realorrug-payout deploy/payout.env.example /etc/radar/payout.env
+#   bash deploy/make-payout-key.sh    # the user, and /etc/realorrug/turnkey.key
+#   sudo install -m 0640 -o root -g realorrug-payout deploy/payout.env.example /etc/realorrug/payout.env
 #   sudo setfacl -m u:realorrug-payout:rwx /home/guardian/radar/data/contest
 [Unit]
-Description=realorrug payout — pays the week's prize under three refusals
+Description=realorrug payout — claims the week's prize from the escrow and pays it, signed through Turnkey
 Documentation=https://github.com/1xmint/realorrug
 After=network-online.target
 Wants=network-online.target
@@ -32,9 +36,9 @@ User=realorrug-payout
 Group=realorrug-payout
 WorkingDirectory=/home/guardian/radar
 ExecStart=/usr/local/bin/realorrug-payout --due
-Environment=RADAR_PAYOUT_KEY=/etc/radar/payout.json
+Environment=TURNKEY_API_KEY=/etc/realorrug/turnkey.key
 Environment=RADAR_CONTEST_DIR=/home/guardian/radar/data/contest
-EnvironmentFile=/etc/radar/payout.env
+EnvironmentFile=/etc/realorrug/payout.env
 
 NoNewPrivileges=true
 PrivateTmp=true
@@ -52,5 +56,6 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 MemoryMax=256M
 TasksMax=16
