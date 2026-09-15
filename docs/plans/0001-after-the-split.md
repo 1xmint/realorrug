@@ -76,10 +76,17 @@ this is what follows it, in order, each with what proves it.
      `/home/guardian/radar` or `/etc/radar`; the analyst moves its mention
      cursor after the move; `/v1/public/weeks` lists the same weeks before and
      after.
-   - 7b: realorrug indexes its own creators from Pons v2 launches on Robinhood
-     Chain and runs its own seven-days-later join. Research first: nothing here
-     reads a range of chain logs yet, and the launch's phase word is not
-     decoded.
+   - 7b, in the order Josh chose on 2026-09-15 ("Add Robinhood", ADR 0026's
+     amendment):
+     1. **The bot answers about a Robinhood Chain token.** A fact sheet for an
+        `0x` Pons v2 token, the chain picked by the address's shape; Solana
+        replies keep working, without creator lines. Research first: which
+        data source (the public RPC is not enough, research 0038 §4), then
+        0038 §7's gaps (graduated phase values, the graduation event, a spot
+        price read), then a design, then the build.
+     2. realorrug indexes its own creators from Pons v2 launches, keyed on the
+        creator fee recipient.
+     3. realorrug runs its own seven-days-later join for Robinhood tokens.
 
 ## Handback
 
