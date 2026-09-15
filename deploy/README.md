@@ -105,7 +105,8 @@ cp -a ~/radar/data/contest/. ~/realorrug/data/contest/
 mkdir -p ~/realorrug/docs/research/data
 cp -a ~/radar/docs/research/data/0024-base-rates.json ~/radar/docs/research/data/population.json ~/realorrug/docs/research/data/
 sudo install -m 0640 -o root -g guardian /etc/radar/analyst.env /etc/realorrug/analyst.env
-sudo sed -i 's#/home/guardian/radar/#/home/guardian/realorrug/#g' /etc/realorrug/analyst.env
+# (the second substitution is for the file's header comments, which name /etc/radar)
+sudo sed -i -e 's#/home/guardian/radar/#/home/guardian/realorrug/#g' -e 's#/etc/radar/#/etc/realorrug/#g' /etc/realorrug/analyst.env
 # 4. The units, keeping the old ones beside them
 cp /etc/systemd/system/realorrug-analyst.service ~/.config/systemd/user/realorrug-serve.service ~/realorrug/
 sudo install -m 0644 ~/realorrug/deploy/realorrug-analyst.service /etc/systemd/system/
