@@ -96,7 +96,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let creators = realorrug_roast::CreatorIndex::read(realorrug_roast::creator::DEFAULT_PATH).ok();
     if creators.is_none() {
         eprintln!(
-            "no creator index at {}; the reply will say nothing about who launched this.              Build one with `radar creator-index --store <dir>`.",
+            "no creator index at {}; the reply will say nothing about who launched this; \
+             realorrug builds none yet (ADR 0026).",
             realorrug_roast::creator::DEFAULT_PATH
         );
     }

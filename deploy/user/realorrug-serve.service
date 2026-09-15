@@ -23,13 +23,14 @@ After=network-online.target
 
 [Service]
 Type=simple
-# The base-rate and population files are read relative to this directory, where
-# Radar's creator-index job publishes them.
-WorkingDirectory=/home/guardian/radar
+# The base-rate and population files are read relative to this directory: dated
+# copies under docs/research/data/, placed there when realorrug left Radar's
+# folders (ADR 0026, deploy/README.md).
+WorkingDirectory=/home/guardian/realorrug
 ExecStart=/home/guardian/realorrug/bin/realorrug-serve
 Environment=REALORRUG_BIND=127.0.0.1:8090
-Environment=RADAR_CONTEST_DIR=/home/guardian/radar/data/contest
-Environment=RADAR_ANALYST_DIR=/home/guardian/radar/data/analyst
+Environment=RADAR_CONTEST_DIR=/home/guardian/realorrug/data/contest
+Environment=RADAR_ANALYST_DIR=/home/guardian/realorrug/data/analyst
 # The same origin radar-serve sends today (/etc/radar/radar.env).
 Environment=RADAR_SITE_ORIGIN=https://cabalhunter.org
 Restart=always

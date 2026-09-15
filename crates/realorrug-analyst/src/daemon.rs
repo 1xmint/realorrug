@@ -52,7 +52,7 @@ pub struct Paths {
     /// The contest's week records and the pool reading, which the public
     /// endpoints serve.
     pub contest_dir: String,
-    /// The daily "seven days later" rows, written by `radar seven-days-later`
+    /// The daily "seven days later" rows, written by a seven-days-later join
     /// on a timer and posted from here.
     pub daily_dir: String,
     /// The hash-chained journal: what was decided, written before it was done.
@@ -312,7 +312,7 @@ pub fn self_mint_notice(self_mint: Option<&Address>) -> String {
 /// # Why this is not the credential
 ///
 /// It was. The token was both the reader and the publisher, so pasting it into
-/// `/etc/radar/analyst.env` turned a silent instance into a public account in
+/// `/etc/realorrug/analyst.env` turned a silent instance into a public account in
 /// one step — and there was no way to read live mentions while answering
 /// nobody.
 ///
@@ -593,7 +593,8 @@ pub fn run() -> ! {
     let creators = realorrug_roast::CreatorIndex::read(realorrug_roast::creator::DEFAULT_PATH).ok();
     if creators.is_none() {
         eprintln!(
-            "realorrug-analyst: no creator index; replies will say nothing about who launched              the token. Build one with `radar creator-index`."
+            "realorrug-analyst: no creator index; replies will say nothing about who launched \
+             the token; realorrug builds none yet (ADR 0026)."
         );
     }
     let provider = match realorrug_model::from_vars(&env) {

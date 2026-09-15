@@ -61,15 +61,25 @@ this is what follows it, in order, each with what proves it.
      reading the new payout shape; and how the token is launched with the
      Turnkey account as creator fee recipient (ADR 0025 §2).
 7. **Standalone from Radar** ([ADR 0026](../adr/0026-realorrug-reads-nothing-from-radar.md)),
-   before the payout timer is enabled. In order: Radar stops reading the reply
-   log and ledger (a Radar pull request); realorrug indexes its own creators
-   from Pons v2 launches and runs its own seven-days-later join; then, with the
-   analyst and server stopped, `data/` moves to `/home/guardian/realorrug`,
-   `analyst.env` to `/etc/realorrug`, and the three units follow. The payout's
-   key and env file are already under `/etc/realorrug`. *Proof:* no unit, env
-   file or code path on the box names `/home/guardian/radar` or `/etc/radar`;
-   the analyst moves its mention cursor after the move; `/v1/public/weeks`
-   lists the same weeks before and after.
+   in two parts, in the order Josh chose on 2026-09-15.
+   - 7a, before the payout timer is enabled: Radar stops reading the reply log
+     and ledger (a Radar pull request, installed on the box with its
+     `radar-seven-days` timer disabled); then, with the analyst and server
+     stopped, `data/analyst` and `data/contest` move to
+     `/home/guardian/realorrug`, the base-rates snapshot is copied beside them,
+     `analyst.env` moves to `/etc/realorrug`, and the three units follow
+     ([deploy/README.md](../../deploy/README.md), "Moving off Radar's
+     folders"). The payout's key and env file are already under
+     `/etc/realorrug`. Until 7b, replies say nothing about who launched a token
+     and the daily "seven days later" post stays silent, each because its file
+     is absent. *Proof:* no unit, env file or code path on the box names
+     `/home/guardian/radar` or `/etc/radar`; the analyst moves its mention
+     cursor after the move; `/v1/public/weeks` lists the same weeks before and
+     after.
+   - 7b: realorrug indexes its own creators from Pons v2 launches on Robinhood
+     Chain and runs its own seven-days-later join. Research first: nothing here
+     reads a range of chain logs yet, and the launch's phase word is not
+     decoded.
 
 ## Handback
 
@@ -258,5 +268,9 @@ this is what follows it, in order, each with what proves it.
     policies evaluated to outcome: Allow"); `claim(0)` and a 1 wei transfer
     were both signed by the wallet and read back. The four lines are in
     research 0037 §4. The policy's empty-data guess holds.
-  - *Next:* step 7, standalone from Radar (ADR 0026), before the payout timer
-    is enabled; then the launch items in 6d.
+  - **Step 7 split** (Josh, 2026-09-15): 7a, the Radar cut and the folder move,
+    first, because it unblocks the payout timer; 7b, realorrug's own creator
+    index and seven-days-later join, after. Josh approved stopping the analyst
+    and server for about five minutes for the move.
+  - *Next:* 7a: the Radar pull request and realorrug's own folders, then the
+    move on the box; then 7b, the payout timer and the launch items in 6d.

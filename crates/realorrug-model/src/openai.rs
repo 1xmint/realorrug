@@ -18,7 +18,7 @@
 //! # Switching is configuration, not a deploy
 //!
 //! Both providers are compiled in, so moving between OpenAI and Anthropic —
-//! `claude-sonnet-5`, say — is a change to `/etc/radar/analyst.env` and a
+//! `claude-sonnet-5`, say — is a change to `/etc/realorrug/analyst.env` and a
 //! restart. Setting more than one is refused rather than resolved, for the
 //! reason [`crate::Selection::Ambiguous`] gives.
 

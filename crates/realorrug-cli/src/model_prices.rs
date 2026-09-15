@@ -156,7 +156,7 @@ pub fn lines_for(m: &Listed) -> String {
         "# {}/{} -- ${} per million in, ${} per million out\n\
          # from {}\n\
          #\n\
-         # Paste into /etc/radar/analyst.env, replacing any existing\n\
+         # Paste into /etc/realorrug/analyst.env, replacing any existing\n\
          # RADAR_MODEL_ lines. Restart the unit afterwards.\n\n\
          RADAR_MODEL_NAME={}\n\
          RADAR_MODEL_PRICE_IN={}\n\
