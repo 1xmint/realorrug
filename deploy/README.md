@@ -117,20 +117,26 @@ Set up in Turnkey's dashboard, by the operator, on a passkey:
 2. One wallet with one Ethereum account. Its address is `RADAR_PAYOUT_ADDRESS`,
    and the token's creator fee recipient.
 3. A user `realorrug-payout`, not in the root quorum, holding one API key on
-   the **secp256k1** curve. Make the key on the box, where it will live, so the
-   private half never crosses a network:
+   the **P-256** curve. Make the key on the box, where it will live, so the
+   private half never crosses a network. From a checkout (sudo asks for a
+   password, so ssh needs `-t`):
 
    ```bash
-   ssh guardian-vps-tail 'bash -s' < deploy/make-payout-key.sh
+   scp deploy/make-payout-key.sh guardian-vps-tail:
+   ```
+
+   ```bash
+   ssh -t guardian-vps-tail 'bash make-payout-key.sh; rm make-payout-key.sh'
    ```
 
    [`make-payout-key.sh`](make-payout-key.sh) uses the box's OpenSSL, creates
    the system user, writes `/etc/realorrug/turnkey.key` (0400, that user's),
-   refuses to overwrite an existing key, and prints only the public key. In
-   Turnkey, create the user with that public key as its API key, on the
-   secp256k1 curve. Turnkey's CLI defaults to P-256, and the first key made in
-   the dashboard for this came out P-256 too; the payout cannot use either. The file is in the format
-   Turnkey's CLI writes (64 hex digits, `:secp256k1`), so a CLI-made key also
+   refuses to overwrite an existing key (removing only a secp256k1 key from its
+   first version, which Turnkey cannot use), and prints only the public key. In
+   Turnkey's dashboard, create a service user with "Generate API key via CLI"
+   ticked and paste that public key; the dashboard files it as P-256, which is
+   why the payout uses P-256 (ADR 0025). The file is in the format
+   Turnkey's CLI writes (64 hex digits, `:p256`), so a CLI-made key also
    loads. The process refuses a key marked as another curve, a file group or
    others can read, and a key whose public half is not
    `TURNKEY_API_PUBLIC_KEY`. **A key made on your own root user is not this

@@ -14,8 +14,9 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use k256::FieldBytes;
-use k256::ecdsa::signature::Verifier as _;
-use k256::ecdsa::{Signature, SigningKey};
+use k256::ecdsa::SigningKey;
+use p256::ecdsa::Signature;
+use p256::ecdsa::signature::Verifier as _;
 use realorrug_payout::turnkey::{ApiKey, Turnkey, hex};
 use realorrug_payout::tx::{Eip1559, Signed, address_of};
 use realorrug_payout::{PayError, setup_proof, sign_checked};
@@ -77,9 +78,13 @@ fn serve(answers: Vec<(u16, String)>) -> (String, Arc<Mutex<Vec<Seen>>>) {
 
 const API_SECRET: [u8; 32] = [0x11; 32];
 
+/// The API key's P-256 signing key; the wallet's keys below are secp256k1.
+fn api_signing_key() -> p256::ecdsa::SigningKey {
+    p256::ecdsa::SigningKey::from_bytes(&p256::FieldBytes::from(API_SECRET)).expect("a key")
+}
+
 fn api_key() -> ApiKey {
-    let public = hex(SigningKey::from_bytes(&FieldBytes::from(API_SECRET))
-        .expect("a key")
+    let public = hex(api_signing_key()
         .verifying_key()
         .to_sec1_point(true)
         .as_bytes());
@@ -181,13 +186,12 @@ fn a_signing_request_is_the_exact_body_stamped_and_posted_to_the_exact_path() {
         .expect("base64url");
     let stamp: serde_json::Value = serde_json::from_slice(&stamp).expect("json");
     assert_eq!(stamp["publicKey"], api_key().public_hex());
-    assert_eq!(stamp["scheme"], "SIGNATURE_SCHEME_TK_API_SECP256K1");
+    assert_eq!(stamp["scheme"], "SIGNATURE_SCHEME_TK_API_P256");
     let der =
         realorrug_robinhood::hex_bytes(&format!("0x{}", stamp["signature"].as_str().expect("hex")))
             .expect("hex");
     let signature = Signature::from_der(&der).expect("DER");
-    SigningKey::from_bytes(&FieldBytes::from(API_SECRET))
-        .expect("key")
+    api_signing_key()
         .verifying_key()
         .verify(request.body.as_bytes(), &signature)
         .expect("the stamp verifies over the body as sent");

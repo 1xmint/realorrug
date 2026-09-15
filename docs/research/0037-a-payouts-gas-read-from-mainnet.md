@@ -74,7 +74,7 @@ Two things follow:
 ## 4. The Turnkey setup proof
 
 Pending. `realorrug-payout --setup-proof` on the box, once the organisation,
-wallet, `realorrug-payout` user, secp256k1 API key and policy exist
+wallet, `realorrug-payout` user, P-256 API key and policy exist
 ([deploy guide](../../deploy/README.md)). Record its three lines here, without
 the organisation id or any key: `whoami` answered, the factory call denied, and
 `claim(0)` allowed and recovering to the wallet.

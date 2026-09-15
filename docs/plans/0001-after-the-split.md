@@ -227,6 +227,15 @@ this is what follows it, in order, each with what proves it.
     it refused a second run, and the public key it printed was recomputed from
     the file it wrote. Running it on the box is Josh's: the agent was refused
     writing a secret there.
-  - *Next, needing Josh:* run the key script; in Turnkey delete the root P-256
-    key, create the `realorrug-payout` user with the printed public key, the
-    wallet and the policy; then the setup proof.
+  - **Josh ran the script and created the `realorrug-payout` service user**
+    with its public key. The dashboard filed that secp256k1 key as P-256, with
+    no choice of curve, so it could never stamp a request. The payout now
+    stamps with P-256 (ADR 0025 amended): `p256` beside `k256`, the scheme
+    `SIGNATURE_SCHEME_TK_API_P256`, and the script makes a P-256 key, removing
+    the earlier secp256k1 one. The over-HTTP test fails with the old scheme
+    restored; the script was rerun against a scratch folder three ways (old key
+    present, good key present, fresh), with each printed public key recomputed
+    on P-256 from the file.
+  - *Next, needing Josh:* rerun the key script; in Turnkey replace the service
+    user's API key with the new public key, create the wallet, and send the
+    user id and wallet address for the policy; then the setup proof.

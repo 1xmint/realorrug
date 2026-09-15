@@ -56,11 +56,15 @@ sha1 = "0.11"
 base64 = "0.23"
 rand = "0.9"
 bs58 = { version = "0.5", default-features = false, features = ["alloc"] }
-# The Robinhood payout's two curve jobs, and nothing else: recovering the address
-# that signed a transaction Turnkey returns, and signing each Turnkey API request
-# with a secp256k1 API key. One curve for both, so no P-256 crate. Turnkey's own
-# stamper crate would bring k256 0.13 and a second copy of the digest stack.
+# The Robinhood payout's two curve jobs, one crate each: recovering the address
+# that signed a transaction Turnkey returns (secp256k1, `k256`), and stamping
+# each Turnkey API request with a P-256 API key (`p256`). Both are RustCrypto's,
+# on one `ecdsa` and `elliptic-curve`. P-256 because Turnkey's dashboard files
+# every pasted key as P-256; a secp256k1 key can only be registered by a request
+# a root API key signs (ADR 0025). Turnkey's own stamper crate would bring k256
+# 0.13 and a second copy of the digest stack.
 k256 = { version = "0.14", default-features = false, features = ["ecdsa", "arithmetic", "sha256", "std"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 # Keccak-256, which Ethereum hashes transactions and derives addresses with.
 sha3 = { version = "0.12", default-features = false }
 schemars = "1.2"

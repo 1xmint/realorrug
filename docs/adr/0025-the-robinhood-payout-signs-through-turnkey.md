@@ -35,18 +35,26 @@ proved against mainnet by rebuilding the captured claim `0x07cab768…` from its
 fields and getting its hash and sender
 ([test](../../crates/realorrug-payout/tests/claim_as_mainnet_signed_it.rs)).
 
-- **What the box holds** is a Turnkey API key: a secp256k1 private key in
+- **What the box holds** is a Turnkey API key: a P-256 private key in
   `/etc/realorrug/turnkey.key`, mode 0400, owner `realorrug-payout`. It stamps each
   request; it cannot sign a transaction. The loader refuses a malformed key, one
   outside the curve order, one group or others can read, and one whose public
   key is not the configured one.
+- **P-256, not secp256k1** (amended 2026-09-15). Turnkey accepts either for an
+  API key, but its dashboard files every pasted public key as P-256, with no
+  choice of curve: the first secp256k1 key pasted was filed as P-256 and could
+  never have stamped a request. A secp256k1 API key could only be registered by
+  a request signed with a root API key, a key that is bound by no policy. With
+  P-256, replacing or revoking the payout's key stays an ordinary dashboard
+  action on a passkey, and no root API key ever exists.
 - **The policy** allows the `realorrug-payout` user exactly one activity,
   `ACTIVITY_TYPE_SIGN_TRANSACTION_V2` on chain 4663, for either `claim(uint256)`
   to the escrow with no value, or a transfer with empty call data. Export stays
   root's. The expression is in the [deploy guide](../../deploy/README.md).
-- **No Turnkey or Ethereum library.** `k256` and `sha3`, one curve for both the
-  stamp and the recovery; RLP and the stamp by hand. Turnkey's stamper crate
-  would bring a second copy of the curve and digest crates.
+- **No Turnkey or Ethereum library.** `k256` for recovering a transaction's
+  sender, `p256` for the stamp, and `sha3`; RLP and the stamp by hand. The two
+  curve crates share RustCrypto's `ecdsa` and `elliptic-curve`. Turnkey's
+  stamper crate would bring a second copy of the curve and digest crates.
 
 **Why no value cap.** The winner changes weekly, so an attacker who controls the
 box can already send each week's prize anywhere, up to any cap, as often as the

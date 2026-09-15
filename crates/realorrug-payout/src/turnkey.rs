@@ -2,7 +2,7 @@
 //! Turnkey: where the payout key lives, and the one call that uses it.
 //!
 //! ADR 0025. The payout wallet's key is held by Turnkey and cannot be exported.
-//! What the box holds is an **API key**: a secp256k1 key that signs each
+//! What the box holds is an **API key**: a P-256 key that signs each
 //! request to Turnkey's API, which then applies the organisation's policy and,
 //! if it allows the request, signs the transaction with the wallet key. The API
 //! key can ask for nothing the policy does not allow, and revoking it in the
@@ -28,9 +28,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use base64::Engine as _;
-use k256::FieldBytes;
-use k256::ecdsa::signature::Signer as _;
-use k256::ecdsa::{Signature, SigningKey};
+use p256::FieldBytes;
+use p256::ecdsa::signature::Signer as _;
+use p256::ecdsa::{Signature, SigningKey};
 use realorrug_robinhood::Address;
 use serde_json::{Value, json};
 
@@ -40,8 +40,13 @@ use crate::tx::Eip1559;
 /// signer would be a way to send the request, stamp and all, somewhere else.
 pub const API: &str = "https://api.turnkey.com";
 
-/// The stamp scheme for a secp256k1 API key.
-pub const SCHEME: &str = "SIGNATURE_SCHEME_TK_API_SECP256K1";
+/// The stamp scheme for a P-256 API key.
+///
+/// P-256 rather than secp256k1, the curve the wallet signs with: Turnkey's
+/// dashboard files every pasted public key as P-256, so a secp256k1 API key can
+/// only be registered by a request a root API key signs, and the first one
+/// pasted was silently filed as P-256 (ADR 0025).
+pub const SCHEME: &str = "SIGNATURE_SCHEME_TK_API_P256";
 
 /// The activity that signs a transaction.
 pub const SIGN_TRANSACTION: &str = "ACTIVITY_TYPE_SIGN_TRANSACTION_V2";
@@ -56,19 +61,19 @@ pub enum KeyError {
     /// The file could not be read.
     #[error("the API key file could not be read: {0}")]
     Read(String),
-    /// Not 64 hex digits, with an optional `0x` or `:secp256k1`.
+    /// Not 64 hex digits, with an optional `0x` or `:p256`.
     #[error("the API key file is not 64 hex digits, as Turnkey's CLI writes them")]
     Malformed,
     /// A key Turnkey's CLI marked as another curve.
     #[error(
-        "the API key is a {curve} key; the payout stamps with secp256k1 only, so make one with `turnkey generate api-key --curve secp256k1`"
+        "the API key is a {curve} key; the payout stamps with P-256 only, so make one with `deploy/make-payout-key.sh`"
     )]
     WrongCurve {
         /// The curve named after the colon.
         curve: String,
     },
     /// Zero, or not below the curve order: not a private key.
-    #[error("the API key is not a valid secp256k1 private key")]
+    #[error("the API key is not a valid P-256 private key")]
     OutOfRange,
     /// Someone other than its owner can read it.
     #[error("the API key file is readable by group or others (mode {mode:o}); it must be 0400")]
@@ -78,7 +83,7 @@ pub enum KeyError {
     },
     /// The key's public half is not the one configured.
     #[error(
-        "the API key's public key, read as secp256k1, is {derived}, not the configured TURNKEY_API_PUBLIC_KEY (a P-256 key fails this way too)"
+        "the API key's public key, read as P-256, is {derived}, not the configured TURNKEY_API_PUBLIC_KEY (a key from another curve fails this way too)"
     )]
     WrongPublicKey {
         /// What the file's key derives.
@@ -134,7 +139,7 @@ impl ApiKey {
             Some((scalar, curve)) => (scalar, Some(curve)),
             None => (text.trim(), None),
         };
-        if let Some(curve) = curve.filter(|c| *c != "secp256k1") {
+        if let Some(curve) = curve.filter(|c| *c != "p256") {
             return Err(KeyError::WrongCurve {
                 curve: curve.to_owned(),
             });
@@ -166,8 +171,8 @@ impl ApiKey {
     /// The `X-Stamp` header value for a request body.
     #[must_use]
     pub fn stamp(&self, body: &str) -> String {
-        // SHA-256 over the body, as `k256`'s `Signer` does for secp256k1, with
-        // s normalised low.
+        // SHA-256 over the body, as `p256`'s `Signer` does, which is what
+        // Turnkey's own P-256 stamper sends.
         let signature: Signature = self.key.sign(body.as_bytes());
         let stamp = json!({
             "publicKey": self.public,
@@ -183,7 +188,7 @@ impl ApiKey {
 /// Each integer is minimal big-endian with a zero byte in front when its top
 /// bit is set, so it does not read as negative. r and s are nonzero and at most
 /// 32 bytes, so every length fits one byte and there is one way to write it.
-/// Written out rather than enabling `k256`'s `pkcs8` feature, which brings three
+/// Written out rather than enabling `p256`'s `pkcs8` feature, which brings three
 /// crates for these twelve lines; the test parses it with that feature on.
 #[must_use]
 #[allow(
@@ -376,7 +381,7 @@ pub fn signed_from(answer: &Value) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k256::ecdsa::signature::Verifier as _;
+    use p256::ecdsa::signature::Verifier as _;
 
     /// A fixed API key for tests, never used anywhere else.
     const SECRET: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
@@ -415,7 +420,7 @@ mod tests {
             stamp["signature"].as_str().expect("text")
         ))
         .expect("hex");
-        // Parsed by `k256`'s own DER decoder, enabled for tests only, so the
+        // Parsed by `p256`'s own DER decoder, enabled for tests only, so the
         // hand-written encoder is checked by something that is not itself.
         let signature = Signature::from_der(&der_bytes).expect("DER");
         let verifying =
@@ -469,18 +474,18 @@ mod tests {
             Err(KeyError::OutOfRange)
         );
         // The curve order itself is not a key; one below it is.
-        let order = "0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141";
+        let order = "0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551";
         assert_eq!(
             ApiKey::from_text(order, &public).map(|k| k.public),
             Err(KeyError::OutOfRange)
         );
-        let below = "0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140";
+        let below = "0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550";
         assert!(ApiKey::from_text(below, &public_of(below)).is_ok());
         // As Turnkey's CLI writes the file, and as it prints the key bare.
         let digits = SECRET.trim_start_matches("0x");
-        assert!(ApiKey::from_text(&format!("{digits}:secp256k1\n"), &public).is_ok());
+        assert!(ApiKey::from_text(&format!("{digits}:p256\n"), &public).is_ok());
         assert!(ApiKey::from_text(digits, &public).is_ok());
-        for curve in ["p256", "ed25519", ""] {
+        for curve in ["secp256k1", "ed25519", ""] {
             assert_eq!(
                 ApiKey::from_text(&format!("{digits}:{curve}"), &public).map(|k| k.public),
                 Err(KeyError::WrongCurve {
@@ -493,7 +498,7 @@ mod tests {
             "111111111111111111111111111111111111111111111111111111111111111",
             "0x111111111111111111111111111111111111111111111111111111111111111",
             "0x0x1111111111111111111111111111111111111111111111111111111111111111",
-            "1111111111111111111111111111111111111111111111111111111111111111g:secp256k1",
+            "1111111111111111111111111111111111111111111111111111111111111111g:p256",
             "0x111111111111111111111111111111111111111111111111111111111111111g",
             "0x11111111111111111111111111111111111111111111111111111111111111111",
         ] {
