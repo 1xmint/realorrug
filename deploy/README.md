@@ -69,6 +69,10 @@ sudo systemctl disable --now realorrug-analyst && sudo systemctl enable --now ra
 
 ## What it reads from Radar, and how
 
+**Ending:** [ADR 0026](../docs/adr/0026-realorrug-reads-nothing-from-radar.md)
+removes all of this before the payout timer is enabled (plan 0001 step 7).
+Until then, as installed:
+
 The bot does not import Radar. It reads **two files Radar publishes**, at paths
 relative to its working directory:
 
@@ -113,22 +117,25 @@ Set up in Turnkey's dashboard, by the operator, on a passkey:
 2. One wallet with one Ethereum account. Its address is `RADAR_PAYOUT_ADDRESS`,
    and the token's creator fee recipient.
 3. A user `realorrug-payout`, not in the root quorum, holding one API key on
-   the **secp256k1** curve. Turnkey's CLI defaults to P-256, which the payout
-   cannot use, so name the curve. Generate it where it will live, so the private
-   half never crosses a network, and paste the printed `publicKey` into the
-   user's API key in the dashboard:
+   the **secp256k1** curve. Make the key on the box, where it will live, so the
+   private half never crosses a network:
 
    ```bash
-   turnkey generate api-key --organization <org id> --key-name realorrug-payout --curve secp256k1
-   sudo install -m 0400 -o realorrug-payout ~/.config/turnkey/keys/realorrug-payout.private /etc/radar/turnkey.key
+   ssh guardian-vps-tail 'bash -s' < deploy/make-payout-key.sh
    ```
 
-   The file goes in as the CLI wrote it (64 hex digits, `:secp256k1`); a `0x`
-   prefix or no suffix also loads. The process refuses a key marked as another
-   curve, a file group or others can read, and a key whose public half is not
-   `TURNKEY_API_PUBLIC_KEY`. Delete the CLI's copy once installed. **A key made
-   on your own root user is not this key**: the root quorum is not bound by the
-   policy, so it could sign anything.
+   [`make-payout-key.sh`](make-payout-key.sh) uses the box's OpenSSL, creates
+   the system user, writes `/etc/realorrug/turnkey.key` (0400, that user's),
+   refuses to overwrite an existing key, and prints only the public key. In
+   Turnkey, create the user with that public key as its API key, on the
+   secp256k1 curve. Turnkey's CLI defaults to P-256, and the first key made in
+   the dashboard for this came out P-256 too; the payout cannot use either. The file is in the format
+   Turnkey's CLI writes (64 hex digits, `:secp256k1`), so a CLI-made key also
+   loads. The process refuses a key marked as another curve, a file group or
+   others can read, and a key whose public half is not
+   `TURNKEY_API_PUBLIC_KEY`. **A key made on your own root user is not this
+   key**: the root quorum is not bound by the policy, so it could sign
+   anything.
 4. One ALLOW policy for that user, and no other policy naming it. Check the
    expression in Turnkey's policy editor while writing it:
 
@@ -151,7 +158,7 @@ Then the setup proof. It needs only the Turnkey variables and
 `RADAR_PAYOUT_ADDRESS`, sends nothing to any chain, and costs nothing:
 
 ```bash
-sudo systemd-run --pty --wait --uid=realorrug-payout -p EnvironmentFile=/etc/radar/payout.env -E TURNKEY_API_KEY=/etc/radar/turnkey.key /usr/local/bin/realorrug-payout --setup-proof
+sudo systemd-run --pty --wait --uid=realorrug-payout -p EnvironmentFile=/etc/realorrug/payout.env -E TURNKEY_API_KEY=/etc/realorrug/turnkey.key /usr/local/bin/realorrug-payout --setup-proof
 ```
 
 It passes only when `whoami` answers, a call to the Pons factory is **denied**,

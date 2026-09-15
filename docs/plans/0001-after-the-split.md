@@ -59,6 +59,16 @@ this is what follows it, in order, each with what proves it.
      site showing ETH with a Robinhood explorer link; Radar's `radar brief`
      reading the new payout shape; and how the token is launched with the
      Turnkey account as creator fee recipient (ADR 0025 §2).
+7. **Standalone from Radar** ([ADR 0026](../adr/0026-realorrug-reads-nothing-from-radar.md)),
+   before the payout timer is enabled. In order: Radar stops reading the reply
+   log and ledger (a Radar pull request); realorrug indexes its own creators
+   from Pons v2 launches and runs its own seven-days-later join; then, with the
+   analyst and server stopped, `data/` moves to `/home/guardian/realorrug`,
+   `analyst.env` to `/etc/realorrug`, and the three units follow. The payout's
+   key and env file are already under `/etc/realorrug`. *Proof:* no unit, env
+   file or code path on the box names `/home/guardian/radar` or `/etc/radar`;
+   the analyst moves its mention cursor after the move; `/v1/public/weeks`
+   lists the same weeks before and after.
 
 ## Handback
 
@@ -203,3 +213,20 @@ this is what follows it, in order, each with what proves it.
     estimates); (2) the Turnkey organisation, wallet, user, API key and
     policy, then `realorrug-payout --setup-proof`; (3) at launch, the gas
     float, the first payout and enabling the timer. 6d before launch.
+- 2026-09-15, seventh session:
+  - **Research 0037 captured** (Josh's yes): a transfer is 21,000 gas with no
+    L1 part, a claim estimates at 42,581, and `claim(0)` reverts `NoBalance()`.
+    A 0.001 ETH float covers about 95 weeks. The key loader now reads the file
+    Turnkey's CLI writes.
+  - **Turnkey, read only:** one root user, no wallet, no policy. Josh's first
+    API key was on the root user and P-256, so it cannot be the payout's.
+  - **Josh chose standalone from Radar**, recorded as ADR 0026 and step 7. The
+    payout's key and env file moved to `/etc/realorrug` in PR #12.
+  - **`deploy/make-payout-key.sh`** makes the key on the box with OpenSSL
+    (Turnkey's CLI is not installed there). Tested against a scratch folder:
+    it refused a second run, and the public key it printed was recomputed from
+    the file it wrote. Running it on the box is Josh's: the agent was refused
+    writing a secret there.
+  - *Next, needing Josh:* run the key script; in Turnkey delete the root P-256
+    key, create the `realorrug-payout` user with the printed public key, the
+    wallet and the policy; then the setup proof.

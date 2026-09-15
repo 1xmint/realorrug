@@ -380,7 +380,7 @@ mod tests {
         let wallet = format!("0x{}", "11".repeat(20));
         let token = format!("0x{}", "22".repeat(20));
         let all = |k: &str| match k {
-            "TURNKEY_API_KEY" => Some("/etc/radar/turnkey.key".to_owned()),
+            "TURNKEY_API_KEY" => Some("/etc/realorrug/turnkey.key".to_owned()),
             "TURNKEY_API_PUBLIC_KEY" => Some("02ab".to_owned()),
             "TURNKEY_ORGANIZATION_ID" => Some("org".to_owned()),
             "RADAR_PAYOUT_ADDRESS" => Some(wallet.clone()),
@@ -391,7 +391,7 @@ mod tests {
         let got = settings_from(&all).expect("complete");
         assert_eq!(got.signing.wallet.to_string(), wallet);
         assert_eq!(got.token.to_string(), token);
-        assert_eq!(got.signing.key_path, "/etc/radar/turnkey.key");
+        assert_eq!(got.signing.key_path, "/etc/realorrug/turnkey.key");
         assert_eq!(got.rpc, "https://rpc");
 
         let names = [
@@ -442,7 +442,7 @@ mod tests {
         // inverting the emptiness check: a complete set is refused.
         let wallet = format!("0x{}", "11".repeat(20));
         let turnkey_only = |k: &str| match k {
-            "TURNKEY_API_KEY" => Some("/etc/radar/turnkey.key".to_owned()),
+            "TURNKEY_API_KEY" => Some("/etc/realorrug/turnkey.key".to_owned()),
             "TURNKEY_API_PUBLIC_KEY" => Some("02ab".to_owned()),
             "TURNKEY_ORGANIZATION_ID" => Some("org".to_owned()),
             "RADAR_PAYOUT_ADDRESS" => Some(wallet.clone()),

@@ -36,7 +36,7 @@ fields and getting its hash and sender
 ([test](../../crates/realorrug-payout/tests/claim_as_mainnet_signed_it.rs)).
 
 - **What the box holds** is a Turnkey API key: a secp256k1 private key in
-  `/etc/radar/turnkey.key`, mode 0400, owner `realorrug-payout`. It stamps each
+  `/etc/realorrug/turnkey.key`, mode 0400, owner `realorrug-payout`. It stamps each
   request; it cannot sign a transaction. The loader refuses a malformed key, one
   outside the curve order, one group or others can read, and one whose public
   key is not the configured one.
