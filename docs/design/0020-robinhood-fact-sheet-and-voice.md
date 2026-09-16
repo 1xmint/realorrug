@@ -640,6 +640,37 @@ re-application of the old bug (temporarily disabling `check_level`) must
 make a previously-refused-only-by-level case pass, proving the new check,
 not the old one, is what is catching it.
 
+### The twin's floor is the template, not a `forbidden.rs` check on the model
+
+**Decided, packet 0038.** Every signal in §3's table gains a `twins` entry on
+`FactSheet` (`sheet.rs`), one sentence per fired signal from an exhaustive
+`match` on `Signal`, printed under its own heading in `render()` so it is
+part of the model's own prompt. `verdict::template` — the floor every path
+that cannot trust the model's reply falls back to — states at least one twin
+at `Sketchy` and `RugMechanicsLive` (the two levels that are adverse and not
+conclusive), states none at `Rugged` (an observed completed event, where
+hedging would be false balance in the other direction), and has none to
+state at `NothingUglyYet` or `CantTell` (no signal fired).
+
+**Rejected: requiring the model's own free-text reply to name a twin,
+enforced in `forbidden.rs`.** The alternative considered and set aside was a
+`check_twin`-shaped function beside `check_target`/`check_level`, refusing
+any `Sketchy`-or-`RugMechanicsLive` reply that did not mention an innocent
+explanation. It fails for the same reason `forbidden.rs`'s existing checks
+are all shape-based, not meaning-based: the check can confirm a *string*
+appears, not that the model's paraphrase of it is honest. A reply that
+quoted a twin's sentence back verbatim would pass; a reply that wrote a
+better, more specific innocent explanation in its own words — the entire
+point of §4's free-text voice — would look, to a string check, exactly like
+a reply that invented one from nothing. Enforcing it would either accept
+verbatim quoting (pushing every reply back toward the templated sameness §4
+exists to avoid) or refuse honest paraphrase alongside dishonest omission,
+with no way to tell the two apart from the string alone. The template
+guarantees the floor unconditionally, because it is built from the sheet
+directly rather than generated and then checked; the model, reading the
+twins on its own sheet, is free to do better than the floor without a check
+standing in the way of trying.
+
 ## 6. What changes, file by file
 
 | file | what changes | why | shape |
