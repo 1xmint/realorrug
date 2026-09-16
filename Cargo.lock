@@ -1185,6 +1185,7 @@ name = "realorrug-types"
 version = "0.0.1"
 dependencies = [
  "bs58",
+ "realorrug-robinhood",
  "schemars",
  "serde",
  "serde_json",

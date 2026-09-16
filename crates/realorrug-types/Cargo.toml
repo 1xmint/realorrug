@@ -14,6 +14,10 @@ bs58.workspace = true
 schemars.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+# `ChainAddress` wraps this chain's own address type beside Solana's. Robinhood
+# holds no key and reads nothing at runtime, so depending on it here does not
+# widen what this crate can do (still no I/O), only what it can name.
+realorrug-robinhood.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

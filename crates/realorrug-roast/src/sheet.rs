@@ -335,7 +335,7 @@ impl FactSheet {
         let creator = dossier
             .launch
             .as_ref()
-            .map(|l| l.creator)
+            .map(|l| realorrug_types::ChainAddress::Solana(l.creator))
             .or_else(|| dossier.curve.as_ref().map(|c| c.creator));
         if let (Some(index), Some(address)) = (creators, creator) {
             let creator = address.to_string();
@@ -429,13 +429,13 @@ impl FactSheet {
         // caught. Compared on the parsed address, not on text: the mint a
         // stranger typed has already been parsed by the time a dossier exists,
         // and two spellings of one address must not be two tokens here.
-        if self_mint == Some(&dossier.mint) {
+        if self_mint.is_some_and(|m| dossier.mint == realorrug_types::ChainAddress::Solana(*m)) {
             withhold_price(&mut facts);
         }
 
         Self {
             mint: dossier.mint.to_string(),
-            read_at: dossier.read_at,
+            read_at: dossier.read_at.and_then(realorrug_types::ReadAt::as_slot),
             facts,
             untrusted,
             unknown,
@@ -1115,7 +1115,7 @@ fn push_curve(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
         );
         return;
     }
-    match curve.capacity_lamports {
+    match curve.quote_capacity {
         Some(l) => {
             let sol = format!("{} SOL", render_sol(l));
             facts.push(
@@ -1470,10 +1470,12 @@ mod tests {
         let mut d = dossier_for([7u8; 32]);
         d.launch = None;
         d.curve = Some(realorrug_onchain::CurveFacts {
-            creator: realorrug_types::Address::new([9u8; 32]),
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
             complete: true,
-            real_sol_reserves: 0,
-            capacity_lamports: None,
+            quote_reserves: 0,
+            quote_capacity: None,
             fees: None,
         });
         d.unavailable.push(realorrug_onchain::dossier::Unavailable {
@@ -1508,7 +1510,7 @@ mod tests {
     /// decided by the mint alone.
     fn dossier_for(mint: [u8; 32]) -> Dossier {
         Dossier {
-            mint: realorrug_types::Address::new(mint),
+            mint: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(mint)),
             read_at: None,
             launch: None,
             curve: None,
@@ -1724,10 +1726,12 @@ mod tests {
         // published reply -- an absence that reads as fine.
         let mut dossier = dossier_for([3u8; 32]);
         dossier.curve = Some(realorrug_onchain::CurveFacts {
-            creator: realorrug_types::Address::new([9u8; 32]),
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
             complete: false,
-            real_sol_reserves: 6_186_150_833,
-            capacity_lamports: Some(303_000_000),
+            quote_reserves: 6_186_150_833,
+            quote_capacity: Some(303_000_000),
             fees: None,
         });
         let rendered = FactSheet::build(&dossier, None, None, None).render();
@@ -1740,10 +1744,12 @@ mod tests {
         // Graduated, and no depth at all: both are statements, not blanks.
         let mut done = dossier_for([3u8; 32]);
         done.curve = Some(realorrug_onchain::CurveFacts {
-            creator: realorrug_types::Address::new([9u8; 32]),
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
             complete: true,
-            real_sol_reserves: 0,
-            capacity_lamports: None,
+            quote_reserves: 0,
+            quote_capacity: None,
             fees: None,
         });
         let rendered = FactSheet::build(&done, None, None, None).render();

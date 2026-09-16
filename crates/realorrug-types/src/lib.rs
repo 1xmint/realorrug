@@ -36,6 +36,7 @@ pub mod civil;
 
 mod address;
 mod asset;
+mod chain;
 mod market;
 mod money;
 mod mutability;
@@ -81,6 +82,7 @@ pub fn build_sha_or_unknown() -> &'static str {
 
 pub use address::{Address, AddressParseError, Signature};
 pub use asset::Asset;
+pub use chain::{ChainAddress, ChainAddressParseError, ReadAt};
 pub use market::Market;
 pub use money::{MicroUsd, SignedMicroUsd};
 pub use mutability::{Latch, LatchReopened, Mutability, Revalidation};
