@@ -189,11 +189,60 @@ pub enum Signal {
     /// Read from the snapshot, not named: research 0024 is the record of the
     /// band moving off six, and a constant here would have fired on the wrong
     /// launches from the day it moved.
+    ///
+    /// **One variant for every chain, deliberately.** Design 0020 §6's table
+    /// first proposed a separate `LaunchBlockBundle` for a Robinhood-shaped
+    /// band, distinct from this Solana-shaped one -- the owner's later
+    /// decision (one bot, one voice, a chain is data the bot carries, not a
+    /// different bot) overrides that: the *meaning* ("this launch block's
+    /// distinct-recipient count lands in the strongest band the current
+    /// snapshot has measured") is identical on every chain, only the
+    /// snapshot the band comes from differs, and the snapshot is already an
+    /// argument (`rates: &BaseRates`), not part of the signal's identity. A
+    /// chain-forked variant here would be a `match venue` waiting to happen
+    /// one call site up.
     LaunchBlockInStrongestBand,
     /// The creator has measured launches and none of them filled over time.
     CreatorNeverGraduatedOrganically,
     /// The creator bought their own token in the launch block.
     CreatorBoughtOwnLaunch,
+    /// The curve's reserves collapsed pre-graduation while holders still hold
+    /// supply they cannot exit through it.
+    ///
+    /// Design 0020 §3: fires only pre-graduation, because `tokenReserve == 0`
+    /// post-graduation is the curve's normal end state, not a drain
+    /// (research 0040 §3). Nothing constructs this yet -- the Robinhood Chain
+    /// read that would (`getReserves()`, `phase`) does not exist in this crate
+    /// today.
+    LiquidityGone,
+    /// The creator held a nonzero balance at some earlier read and now holds
+    /// nothing.
+    ///
+    /// Design 0020 §3: needs a prior observation to mean anything (design
+    /// 0021's job), so on a first-ever read this cannot fire.
+    CreatorSoldOut,
+    /// A simulated sell against the curve reverted.
+    ///
+    /// Design 0020 §3: read via `eth_call`, checking for a revert rather than
+    /// sending a transaction.
+    BuyersCannotSell,
+    /// The creator or a launch-block buyer recurs across many launch blocks
+    /// in a rolling window.
+    ///
+    /// Design 0020 §3, research 0042 port-order item 1. Bands not yet
+    /// measured for Robinhood Chain.
+    RepeatLauncher,
+    /// The largest non-curve holder's share of circulating supply lands above
+    /// a measured threshold.
+    ///
+    /// Design 0020 §3: threshold not yet measured for Pons v2.
+    HolderConcentration,
+    /// An owner-only mint, pause or blacklist selector is present on the
+    /// deployed contract and ownership has not been renounced.
+    ///
+    /// Design 0020 §3: blocked on research 0044's bytecode/ABI check, which
+    /// this design names the slot for without designing.
+    OwnerCanStillMintOrPause,
 }
 
 /// Everything the analyst may assert about one token.
