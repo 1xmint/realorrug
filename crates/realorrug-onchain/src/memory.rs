@@ -125,6 +125,11 @@ impl Fact {
 
     /// Whether this fact is still fresh at `now`, per its kind's shelf life
     /// (§2). A stale fact answers `false` here but is not deleted (§3).
+    ///
+    /// The boundary is strict: `age == shelf_life` exactly is **stale**,
+    /// not fresh (`<`, not `<=`) — a fact's shelf life is how long it may
+    /// be trusted, so the instant it turns that old it is no longer inside
+    /// that window.
     #[must_use]
     pub fn is_fresh(&self, now: SystemTime) -> bool {
         match self.kind.shelf_life() {
@@ -722,5 +727,95 @@ mod tests {
 
         let wider = mem.launches_in_window("CREATOR", 180, now).expect("read");
         assert_eq!(wider, 2, "a wider window catches both");
+    }
+
+    #[test]
+    fn every_kind_round_trips_through_as_str_and_parse() {
+        // Deleting the "daily" arm in `Kind::parse` (or any other arm)
+        // leaves `as_str` and `parse` disagreeing for that kind, but
+        // nothing notices unless every kind is checked, not just the one
+        // a test happened to use elsewhere.
+        for kind in [Kind::Forever, Kind::TenMinutes, Kind::Daily] {
+            let s = kind.as_str();
+            assert_eq!(
+                Kind::parse(s),
+                Some(kind),
+                "{s:?} must parse back to {kind:?}"
+            );
+        }
+        assert_eq!(Kind::parse("bogus"), None);
+    }
+
+    #[test]
+    fn shelf_life_is_exactly_the_designs_chosen_numbers() {
+        // Design 0021 §2 chose 10 minutes and 24 hours; pin the exact
+        // second counts so `10 + 60` or `10 / 60` cannot pass silently in
+        // place of `10 * 60`.
+        assert_eq!(
+            Kind::TenMinutes.shelf_life(),
+            Some(Duration::from_secs(600)),
+            "ten minutes must be exactly 600 seconds"
+        );
+        assert_eq!(
+            Kind::Daily.shelf_life(),
+            Some(Duration::from_secs(86_400)),
+            "a day must be exactly 86,400 seconds"
+        );
+        assert_eq!(Kind::Forever.shelf_life(), None);
+    }
+
+    #[test]
+    fn is_fresh_boundary_is_strict_for_ten_minutes_and_daily() {
+        // Exactly at the shelf life is stale, not fresh: `age < life`, not
+        // `age <= life` (see the comment on `Fact::is_fresh`). Check one
+        // tick on each side of the boundary for both finite kinds. A
+        // nanosecond either side is the letter of the spec, but
+        // `SystemTime` on this target (`+stable-x86_64-pc-windows-gnullvm`)
+        // is a Windows `FILETIME`-backed clock with 100ns resolution, so a
+        // 1ns offset can round away to the boundary itself; a microsecond
+        // (1,000ns) clears that resolution floor while still being far
+        // smaller than either shelf life.
+        let read_at = UNIX_EPOCH;
+        let tick = Duration::from_micros(1);
+
+        let ten_minute_fact = Fact {
+            what: "curve reserves".to_owned(),
+            subject: "TOKEN".to_owned(),
+            block: 1,
+            read_at,
+            kind: Kind::TenMinutes,
+            value: "1".to_owned(),
+        };
+        let ten_minutes = Duration::from_secs(600);
+        assert!(
+            ten_minute_fact.is_fresh(read_at + ten_minutes - tick),
+            "just before the ten-minute shelf life must still be fresh"
+        );
+        assert!(
+            !ten_minute_fact.is_fresh(read_at + ten_minutes),
+            "exactly at the ten-minute shelf life must be stale"
+        );
+        assert!(
+            !ten_minute_fact.is_fresh(read_at + ten_minutes + tick),
+            "just past the ten-minute shelf life must be stale"
+        );
+
+        let daily_fact = Fact {
+            kind: Kind::Daily,
+            ..ten_minute_fact
+        };
+        let one_day = Duration::from_secs(86_400);
+        assert!(
+            daily_fact.is_fresh(read_at + one_day - tick),
+            "just before the daily shelf life must still be fresh"
+        );
+        assert!(
+            !daily_fact.is_fresh(read_at + one_day),
+            "exactly at the daily shelf life must be stale"
+        );
+        assert!(
+            !daily_fact.is_fresh(read_at + one_day + tick),
+            "just past the daily shelf life must be stale"
+        );
     }
 }
