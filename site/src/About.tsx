@@ -25,7 +25,7 @@ export function About() {
       <div className="max-w-2xl">
         <Card className="mb-10 border-[var(--color-edge)]">
           <p className="text-[var(--color-text)]">
-            <strong>Cabal Hunter is an automated account.</strong> It is
+            <strong>Real or Rug is an automated account.</strong> It is
             operated by Josh Fair. It never picks a coin to post about — every
             coin it names, somebody asked it about — it reports what it
             measured on chain, and it is not financial advice.
@@ -36,8 +36,8 @@ export function About() {
           <p>
             When you mention it with a mint address or a ticker, it reads the
             chain at that moment: the token's launch block, its bonding curve,
-            and every other token the same creator has launched since Cabal
-            Hunter started watching in August. Then it answers in the thread with
+            and every other token the same creator has launched since Real or
+            Rug started watching in August. Then it answers in the thread with
             what it found.
           </p>
           <p>
@@ -63,7 +63,7 @@ export function About() {
 
         <Block title="Where the numbers come from">
           <p>
-            Every launch on pump.fun is recorded from the chain directly, by
+            Every launch is recorded from the chain directly, by
             matching the program's instruction bytes — never a vendor's parsed
             feed and never a logged instruction name, both of which have been
             wrong here before. The outcomes are measured again as each token
@@ -109,7 +109,7 @@ export function About() {
             There is a community token, and its rules are the point of it: no dev
             buy, no allocation, no team or treasury supply. The operator holds
             zero tokens and always will. The only money that reaches the operator
-            is pump.fun's creator fee, and all of it becomes the weekly prize.
+            is the token's creator fee, and all of it becomes the weekly prize.
           </p>
           <p>
             The bot answers questions about that token on exactly the same rule
@@ -129,7 +129,7 @@ export function About() {
         <Block title="If you win">
           <p>
             The account replies to you, in your own thread, under the reply that
-            won. You claim by replying to <em>that</em> post with a Solana
+            won. You claim by replying to <em>that</em> post with a
             wallet address, within seven days. There is nothing to connect and
             nothing to sign.
           </p>

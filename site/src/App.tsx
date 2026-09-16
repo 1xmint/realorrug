@@ -24,7 +24,7 @@ function Header() {
           href="/"
           className="font-mono text-xs font-semibold tracking-widest whitespace-nowrap text-[var(--color-text)] uppercase sm:text-sm"
         >
-          Cabal<span className="text-[var(--color-signal)]">Hunter</span>
+          Real<span className="text-[var(--color-signal)]">OrRug</span>
         </Link>
         <nav className="flex items-center gap-0.5 text-xs sm:gap-1 sm:text-sm">
           {nav()
@@ -58,7 +58,7 @@ function Footer() {
     <footer className="relative z-10 border-t border-[var(--color-line)]">
       <div className="mx-auto max-w-5xl px-6 py-10 text-sm text-[var(--color-faint)]">
         <p className="max-w-2xl">
-          Cabal Hunter is an automated account. It reports what it measured on
+          Real or Rug is an automated account. It reports what it measured on
           chain and refuses the rest. <strong>Measured, not predicted.</strong>{" "}
           Nothing here is financial advice, and nothing here is a recommendation
           to buy or sell anything.
