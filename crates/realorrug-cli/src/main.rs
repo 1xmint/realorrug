@@ -27,14 +27,14 @@ commands:
                                  everything the bot can say about one token,
                                  read from the chain on demand. Read-only,
                                  holds no key
-  roast <mint> [--rpc URL] [--rates PATH] [--sheet]
+  roast <mint> [--rpc URL] [--robinhood-rpc URL] [--rates PATH] [--sheet]
                                  the reply the public analyst would post, built
                                  from the dossier and the published base rates.
                                  A check after generation refuses any number
                                  that is not on the fact sheet, and the
                                  deterministic template ships instead. Prints;
                                  never posts
-  analyst --mentions <file.jsonl> [--log <file>]
+  analyst --mentions <file.jsonl> [--log <file>] [--robinhood-rpc URL]
                                  the whole summoned-reply loop over mentions
                                  from a file: strict parse, admission gate,
                                  dossier, reply, log. Dry run -- it holds no

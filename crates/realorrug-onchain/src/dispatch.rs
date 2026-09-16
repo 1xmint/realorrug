@@ -72,6 +72,12 @@ pub enum Error {
 /// default, per read: `answer.rs` already explains why that is not restated
 /// at every call site, and this function is the one place left to restate it
 /// in.
+///
+/// # Errors
+///
+/// [`Error::NotAnAddress`] when `mint_text` is neither shape, and
+/// [`Error::Unreadable`] when it names a real address on a chain that could
+/// not be read -- including a Robinhood address with no endpoint configured.
 pub fn read(mint_text: &str, clients: &Clients<'_>) -> Result<Dossier, Error> {
     let address: ChainAddress = mint_text.parse().map_err(|_| Error::NotAnAddress)?;
     let mut budget = Budget::default();
@@ -198,7 +204,8 @@ mod tests {
         let body = r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_owned();
         let mint = Address::new([1u8; 32]);
 
-        let client_a = RpcClient::with_transport("http://test.invalid", Box::new(Always(body.clone())));
+        let client_a =
+            RpcClient::with_transport("http://test.invalid", Box::new(Always(body.clone())));
         let mut budget_a = Budget::default();
         let direct = SolanaReader.read(&client_a, &mut budget_a, &mint);
 

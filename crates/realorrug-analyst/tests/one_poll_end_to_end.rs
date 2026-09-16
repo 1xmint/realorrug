@@ -485,6 +485,7 @@ fn an_exhausted_budget_stops_the_poll_before_it_costs_anything() {
         None,
         None,
         None,
+        None,
         &paths,
     );
 
@@ -520,6 +521,7 @@ fn with_no_credential_the_loop_does_nothing_at_all() {
         &mut gate,
         &mut spend,
         &no_chain(),
+        None,
         None,
         None,
         None,
@@ -568,6 +570,7 @@ fn tick_against_empty_chain(
         &mut gate,
         &mut spend,
         &client,
+        None,
         None,
         None,
         None,
@@ -764,6 +767,7 @@ fn a_telegram_message_is_answered_into_its_own_log_and_never_into_the_record() {
         None,
         None,
         None,
+        None,
         &paths,
     );
     assert_eq!(answered, 0, "a dry run sends nothing");
@@ -832,6 +836,7 @@ fn a_telegram_reply_that_is_sent_is_counted_and_remembered_by_the_gate() {
         None,
         None,
         None,
+        None,
         &paths,
     );
     assert_eq!(answered, 1, "one message answered and sent");
@@ -847,6 +852,7 @@ fn a_telegram_reply_that_is_sent_is_counted_and_remembered_by_the_gate() {
         &mut gate,
         &mut spend,
         &client,
+        None,
         None,
         None,
         None,
@@ -871,7 +877,7 @@ fn with_no_telegram_token_the_lane_reads_nothing_and_writes_nothing() {
     let client = realorrug_onchain::RpcClient::new(rpc);
     let mut spend = funded(&paths);
     let answered = realorrug_analyst::telegram::tick(
-        None, &DryRun, &mut gate, &mut spend, &client, None, None, None, None, &paths,
+        None, &DryRun, &mut gate, &mut spend, &client, None, None, None, None, None, &paths,
     );
     assert_eq!(answered, 0);
     assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 0);
@@ -1073,6 +1079,7 @@ fn a_second_asker_is_pointed_at_the_answer_rather_than_ignored() {
         None,
         None,
         None,
+        None,
         &paths,
     );
 
@@ -1137,6 +1144,7 @@ fn a_log_that_cannot_be_written_does_not_drop_the_questions_behind_it() {
         None,
         None,
         None,
+        None,
         &paths,
     );
 
@@ -1169,6 +1177,7 @@ fn a_restart_reads_the_days_replies_back_off_disk() {
         &mut gate,
         &mut spend,
         &no_chain(),
+        None,
         None,
         None,
         None,

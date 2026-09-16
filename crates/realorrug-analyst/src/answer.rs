@@ -438,7 +438,7 @@ mod tests {
         // unbounded axis is an unbounded read. Asserted against
         // `realorrug-onchain`'s own constants rather than numbers written here: a
         // test restating them would pass while the two drifted apart.
-        let mut budget = CallBudget::default();
+        let mut budget = realorrug_onchain::Budget::default();
         for i in 0..realorrug_onchain::budget::DEFAULT_MAX_CALLS {
             assert!(budget.take_call().is_ok(), "call {i} is within budget");
         }
@@ -447,7 +447,7 @@ mod tests {
             "the call after the ceiling must be refused"
         );
 
-        let mut pages = CallBudget::default();
+        let mut pages = realorrug_onchain::Budget::default();
         for i in 0..realorrug_onchain::budget::DEFAULT_MAX_PAGES {
             assert!(pages.take_page().is_ok(), "page {i} is within budget");
         }
