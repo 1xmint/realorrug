@@ -24,10 +24,12 @@
 
 use realorrug_onchain::budget::Count;
 use realorrug_onchain::{Dossier, LaunchBlock};
+#[cfg(test)]
 use realorrug_types::Slot;
+use realorrug_types::{ReadAt, SlotDelta};
 
 use crate::baserates::BaseRates;
-use crate::clause::{Kind, Voice};
+use crate::clause::{Clause, Kind, Voice};
 use std::fmt::Write as _;
 
 /// What a fact is a claim about, because one kind is withheld for one mint.
@@ -247,26 +249,18 @@ pub enum Signal {
 pub struct FactSheet {
     /// The mint, as text. Not a number, and never checked as one.
     pub mint: String,
-    /// The slot every figure was read at.
+    /// The point every figure was read at, in the reading chain's own unit.
     ///
-    /// **Left exactly as it was -- `Option<Slot>`, Solana-only -- and that is
-    /// a finding, not an oversight.** Packet 0032 asks for this to become
-    /// `Option<ReadAt>` so a Robinhood sheet's block reaches `verdict::template`
-    /// and `authorised`. Doing that here is impossible without also editing
-    /// `forbidden.rs`: its own test module constructs a `FactSheet` by full
-    /// struct literal (`required_sheet`, around line 1491) and destructures
-    /// this field as a bare [`Slot`] (`check_required_age`, around line 953),
-    /// and it also calls `verdict::template(sheet)` directly (around line
-    /// 1645) -- so retyping this field, or adding a second field beside it,
-    /// or changing `template`'s signature, all fail to compile without a
-    /// `forbidden.rs` edit. The packet and the top-level instructions both
-    /// forbid touching that file, so this field is untouched and a Robinhood
-    /// sheet's `read_at` stays `None`, same as before this task. See this
-    /// task's report for the full explanation -- this is the clearest
-    /// remaining place where a number (the read point) and the chain it was
-    /// read on could not be kept travelling together, because the file that
-    /// would need to change to fix it is owned by the next task.
-    pub read_at: Option<Slot>,
+    /// **`Option<ReadAt>`, not `Option<Slot>`.** Packet 0032 left this
+    /// Solana-only because retyping it also required editing
+    /// `forbidden.rs` (its `required_sheet` built a `FactSheet` by full
+    /// struct literal and `check_required_age` destructured this field as a
+    /// bare [`Slot`]) and that file was out of scope there. This packet owns
+    /// all three files that the change touches, so the field carries
+    /// [`ReadAt`] now: a Robinhood sheet's block number reaches
+    /// [`FactSheet::authorised`], [`crate::verdict::template`] and
+    /// `check_required_age` exactly as a Solana sheet's slot always did.
+    pub read_at: Option<ReadAt>,
     /// The facts, in the order they are shown to the model.
     pub facts: Vec<Fact>,
     /// Creator-supplied strings, kept apart from the facts.
@@ -329,6 +323,25 @@ impl FactSheet {
             // already refuses to call that "did not buy".
             if launch.dev_buy_lamports.is_some_and(|l| l > 0) {
                 signals.push(Signal::CreatorBoughtOwnLaunch);
+            }
+            // **The age, which is not the read point.** "Read at slot
+            // 444007820" says when the camera clicked; it does not say the
+            // token is six hours old. A real age exists only where both ends
+            // of the subtraction are on the same clock: `launch.slot` is
+            // always a Solana slot (pump.fun only), so this only fires for a
+            // `ReadAt::Solana` read, never for a Robinhood block number --
+            // there is no lossy slot-from-block conversion to invent one
+            // with (`ReadAt::as_slot`'s own doc comment makes the same
+            // refusal for the read point). A Robinhood sheet's `unavailable`
+            // entry already says the launch block is unreadable there
+            // (`LaunchBlock` is Solana-slot-shaped), so it has nothing to
+            // subtract from and gets no age fact -- design 0020 §4 records
+            // that as the decision, not an oversight: demoting every ageless
+            // token to `CantTell` was considered and rejected, because it
+            // would throw away every other signal the sheet did read on a
+            // whole chain.
+            if let Some(ReadAt::Solana(read_slot)) = dossier.read_at {
+                push_age(&mut facts, read_slot.saturating_since(launch.slot));
             }
         } else {
             unknown.push("the launch block could not be read".to_owned());
@@ -450,7 +463,7 @@ impl FactSheet {
 
         Self {
             mint: dossier.mint.to_string(),
-            read_at: dossier.read_at.and_then(realorrug_types::ReadAt::as_slot),
+            read_at: dossier.read_at,
             facts,
             untrusted,
             unknown,
@@ -469,8 +482,10 @@ impl FactSheet {
     ///    were written *by Radar* and shown to the model as true. A model citing
     ///    the band it was given has invented nothing, and a check that caught it
     ///    would reject the most careful replies while passing vaguer ones.
-    /// 3. **The slot**, because a reply citing the slot it was read at is doing
-    ///    the thing this account exists to do.
+    /// 3. **The read point**, because a reply citing when the sheet was read
+    ///    is doing the thing this account exists to do -- a slot on Solana, a
+    ///    block number on Robinhood Chain, never the other chain's word for
+    ///    it.
     ///
     /// What is **not** a source is [`FactSheet::untrusted`]. That is the whole
     /// boundary: a creator who names their token "99.9% of holders profited"
@@ -484,22 +499,45 @@ impl FactSheet {
                 .into_iter()
                 .map(|(_, v)| v),
         );
-        if let Some(slot) = self.read_at {
+        if let Some(read_at) = self.read_at {
+            let raw = match read_at {
+                ReadAt::Solana(slot) => slot.get(),
+                ReadAt::Robinhood(block) => block,
+            };
             #[expect(
                 clippy::cast_precision_loss,
-                reason = "a slot is well inside f64's exact integer range and this is a \
-                          comparison against a literal the model wrote, not arithmetic"
+                reason = "a slot or a block number is well inside f64's exact integer range and \
+                          this is a comparison against a literal the model wrote, not arithmetic"
             )]
-            values.push(slot.0 as f64);
+            values.push(raw as f64);
         }
         values
     }
 
     /// The sheet as the model sees it.
     ///
-    /// Facts only. The mint, the slot, and the untrusted strings are fenced
-    /// separately by [`crate::voice`] so that nothing in this block is
-    /// creator-controlled.
+    /// Facts, what could not be read, and the read point. The mint and the
+    /// untrusted strings are fenced separately by [`crate::voice`] so that
+    /// nothing in this block is creator-controlled.
+    ///
+    /// **The read point is here because it is the only way it reaches the
+    /// model at all.** `voice::write` hands the provider exactly
+    /// the mint and this rendering, joined, and nothing else, so a number
+    /// absent from this string is a number the model cannot write -- and
+    /// from this string is a number the model cannot write -- and
+    /// `forbidden::check_required_age` requires a `NothingUglyYet` reply on a
+    /// sheet with no age (every Robinhood sheet today: `LaunchBlock` is
+    /// Solana-slot-shaped) to state the read point. Left out of this block,
+    /// that rule is unsatisfiable by any real model and every such reply
+    /// falls back to the template, which is the free-text voice going silent
+    /// on a whole chain without anything saying so.
+    ///
+    /// Written through [`ReadAt`]'s own `Display` -- "slot 444007820",
+    /// "block 100" -- the single spelling of either word, so the sheet and
+    /// `verdict::template` cannot drift apart on which clock a number is in.
+    /// [`FactSheet::authorised`] already permitted this number before it was
+    /// rendered here; harvesting it twice is harmless, because `authorised`
+    /// is a set of permitted values and not a count.
     #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -508,6 +546,9 @@ impl FactSheet {
         }
         for miss in &self.unknown {
             let _ = writeln!(out, "NOT KNOWN: {miss}");
+        }
+        if let Some(read_at) = self.read_at {
+            let _ = writeln!(out, "read at: {read_at}");
         }
         out
     }
@@ -654,6 +695,59 @@ fn push_launch(facts: &mut Vec<Fact>, untrusted: &mut Vec<(String, String)>, lau
     }
     untrusted.push(("token name".to_owned(), launch.metadata.name.clone()));
     untrusted.push(("token symbol".to_owned(), launch.metadata.symbol.clone()));
+}
+
+/// The age, as a fact of its own -- never a stand-in read off the read point.
+///
+/// Design 0020 §4: "`NothingUglyYet` must state the age -- 'six hours old,'
+/// not just 'clean so far.'" Two numbers, both authorised, and the checkable
+/// one is never dropped in favour of the felt one:
+///
+/// - the slot count itself, exact and reproducible from the two reads it was
+///   subtracted from;
+/// - an approximate wall clock, always hedged ("about"/"roughly") because
+///   Solana's slot time drifts and Alpenglow changes the relationship again
+///   ([`SlotDelta::approx_duration`]'s own 400ms-target doc comment) -- an
+///   exact-sounding hour count nobody could reproduce would be a fabricated
+///   fact under rule 1.
+///
+/// Robinhood Chain's own measured block time is 0.1019s/block (research 0039,
+/// ~100k blocks) rather than Solana's 400ms target, but nothing here reads
+/// it: [`FactSheet::build`] only ever calls this for a `ReadAt::Solana` read,
+/// because `LaunchBlock` is Solana-slot-shaped and a Robinhood sheet has
+/// nothing to subtract (see the call site). The constant is recorded here so
+/// the day a Robinhood launch block becomes readable, the source for its
+/// wall-clock conversion is already written down.
+fn push_age(facts: &mut Vec<Fact>, delta: SlotDelta) {
+    let slots = delta.get();
+    // Rounded to one decimal, the same precision `Fact::share` uses for a
+    // percentage, so the rendered string and the authorised literal are the
+    // same digits -- a model citing "7.1 hours" is citing exactly the value
+    // this fact declared, not a re-rounding of it.
+    let hours = (delta.approx_duration().as_secs_f64() / 3600.0 * 10.0).round() / 10.0;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a slot delta is well inside f64's exact integer range"
+    )]
+    let slots_value = slots as f64;
+    let rendered = format!("{slots} slots (about {hours} hours) since its launch block");
+    facts.push(Fact {
+        about: About::Measurement,
+        kind: Kind::Age,
+        label: "how long ago this token's launch block was, on the chain's own clock".to_owned(),
+        rendered: rendered.clone(),
+        values: vec![slots_value, hours],
+        clauses: vec![
+            Clause::new(
+                Voice::Plain,
+                format!("It launched about {hours} hours ago -- {slots} slots, by the read point."),
+            ),
+            Clause::new(
+                Voice::Blunt,
+                format!("{slots} slots old. Roughly {hours} hours."),
+            ),
+        ],
+    });
 }
 
 /// What this creator's other tokens did.
@@ -1407,6 +1501,99 @@ mod tests {
         // Not a number a reader would call a rounding of 25.1%.
         assert!(!f.values.iter().any(|v| (*v - 68.0).abs() < 1e-9));
         assert_eq!(f.rendered, "25.1%");
+    }
+
+    /// A minimal sheet with exactly one fact, one miss and a read point, so
+    /// `render`'s whole output can be pinned without a fixture that grows.
+    fn pinnable(read_at: realorrug_types::ReadAt) -> FactSheet {
+        FactSheet {
+            mint: "MintOne".to_owned(),
+            read_at: Some(read_at),
+            facts: vec![Fact::exact(
+                Kind::LaunchRecipients,
+                "distinct token accounts receiving the token in its own launch block",
+                11.0,
+                "11",
+            )],
+            untrusted: Vec::new(),
+            unknown: vec!["the bonding curve could not be read".to_owned()],
+            signals: Vec::new(),
+        }
+    }
+
+    /// The hours are arithmetic, and arithmetic is where a mutation hides.
+    ///
+    /// 63954 slots x 400ms = 25581.6s; over 3600 that is 7.106 hours, which
+    /// rounds to one decimal as 7.1. Every operator in that line has a
+    /// mutant, and each one lands on a different number -- 381.6, 1.7, 0.1 --
+    /// so pinning the rendered string and the two authorised values catches
+    /// all of them at once. It also pins the contract the reply depends on:
+    /// the digits a model may cite are the digits this fact declared.
+    #[test]
+    fn the_age_fact_pins_the_hours_it_declares() {
+        let mut facts = Vec::new();
+        push_age(&mut facts, SlotDelta(63_954));
+        assert_eq!(facts.len(), 1);
+        assert_eq!(
+            facts[0].rendered,
+            "63954 slots (about 7.1 hours) since its launch block"
+        );
+        assert_eq!(facts[0].values, vec![63_954.0, 7.1]);
+    }
+
+    #[test]
+    fn a_solana_sheet_renders_byte_for_byte() {
+        // The whole string, not a `contains`. `voice::write` hands the model
+        // the mint and this rendering and nothing else, so every byte here is
+        // the model's entire world -- a line silently added or dropped
+        // changes what the account is able to say, and no other test in this
+        // crate would notice. Pinned whole for that reason; when this
+        // assertion fails, read the diff and decide whether the new line
+        // belongs, rather than weakening it to a `contains`.
+        assert_eq!(
+            pinnable(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820
+            )))
+            .render(),
+            [
+                "distinct token accounts receiving the token in its own launch block: 11",
+                "NOT KNOWN: the bonding curve could not be read",
+                "read at: slot 444007820",
+                "",
+            ]
+            .join(
+                "
+"
+            )
+        );
+    }
+
+    #[test]
+    fn a_robinhood_sheet_carries_its_block_into_the_render_the_template_and_authorised() {
+        // All three surfaces, because the read point reaches the reader by
+        // three different routes and the Robinhood arm of each was the gap:
+        // `render` is the only channel to the model, `template` is what ships
+        // when the model's reply is refused, and `authorised` is what lets a
+        // reply state the number at all. A block number must never wear a
+        // slot's label on any of them -- `ReadAt`'s `Display` is the single
+        // spelling, which is why "block 100" appears here and nowhere else.
+        let sheet = pinnable(realorrug_types::ReadAt::Robinhood(100));
+
+        assert!(
+            sheet.render().contains("read at: block 100"),
+            "{}",
+            sheet.render()
+        );
+        assert!(
+            !sheet.render().contains("slot"),
+            "a block number must not be labelled a slot: {}",
+            sheet.render()
+        );
+
+        let template = crate::verdict::template(&sheet);
+        assert!(template.contains("Read at block 100."), "{template}");
+
+        assert!(sheet.authorised().iter().any(|v| (*v - 100.0).abs() < 1e-9));
     }
 
     #[test]

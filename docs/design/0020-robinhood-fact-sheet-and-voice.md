@@ -110,7 +110,7 @@ compute-unit-costs page).
 |---|---|---|---|---|---|
 | launch record: curve, deployer, creator fee recipient, pair, graduation threshold, creator tax, buyback | `getLaunchedToken(token)` on `FACTORY` (`0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e`), word-decoded per `pons.rs`'s `LaunchedToken::from_return` | 1 `eth_call` | 20 | 26 | **required** |
 | phase (0 = not graduated, 2 = graduated; 1 never observed, 0040 §1) | word 10 of the same `getLaunchedToken` return — **not currently extracted** by `LaunchedToken::from_return` (see §6) | 0 extra (same call) | — | — | **required** |
-| launch block and age | `TokenLaunched` log for this token (topic `0x8d4aad49…`, token is topic1, confirmed indexed in the signature research 0038 §1 quotes), then `eth_getBlockByNumber` on its block for the timestamp | 1 `eth_getLogs` + 1 `eth_getBlockByNumber` | 40 | 80 | **required** — `NothingUglyYet` must state the age (§3), so a sheet that cannot read this must not reach that level |
+| launch block and age | `TokenLaunched` log for this token (topic `0x8d4aad49…`, token is topic1, confirmed indexed in the signature research 0038 §1 quotes), then `eth_getBlockByNumber` on its block for the timestamp | 1 `eth_getLogs` + 1 `eth_getBlockByNumber` | 40 | 80 | **required when it can be read** — `NothingUglyYet` must account for the age (§4), and a sheet that has no age reaches that level only by saying so and naming its read point instead; §4 records why demoting it was rejected |
 | graduation: whether, when, quote raised | factory log topic `0xcdb72f15…`, one indexed field (token), decoded quote-raised and token-transfer-to-factory words (research 0040 §2) — needed only once `phase == 2` | 1 `eth_getLogs`, bounded to the factory address and (launch block, now) | 20 | 60 | optional |
 | curve reserves and progress toward 4.2 ETH | `getReserves()` on the curve (`quoteReserve`/`tokenReserve`, confirmed identical to the two named getters, research 0040 §3) | 1 `eth_call` | 20 | 26 | **required** |
 | holder count and largest non-curve holder's share | sum every `Transfer` log for the token (topic `0xddf252ad…`), skip the zero-address mint (research 0040 §4) | 1 `eth_getLogs` (chunked if the 10,000-log cap is hit, research 0038 §4) | 20+ | 60+ | **required** |
@@ -317,7 +317,9 @@ smaller loss than presenting an observed rug as merely uncertain.
   nothing else, exempts only the deployer (who is also the fee recipient)
   from the snipe tax, holds no trade. If reserves and holders read cleanly
   and no signal fires, the reply states `NothingUglyYet` with the token's
-  age from its launch block's timestamp (§1) — carrying the "yet."
+  age from its launch block's timestamp (§1) — carrying the "yet." Where
+  the age is not readable, §4's tier two carries the "yet" instead, by
+  naming the read point and saying the age is unknown.
 - **`CantTell`.** Any token whose `getLaunchedToken` call lands on a pruned
   block boundary or times out — research 0036 measured `eth_call` state
   pruned past ~57,000 blocks back (`"metadata is not found"`), and research
@@ -399,7 +401,7 @@ which is worse than a shorter reply chosen on purpose.
   > "Zero holders outside the curve. That's either a graveyard or a crowd
   > that changed its mind together. Can't tell you which from here. Sketchy."
 - **`NothingUglyYet`** — warm, genuinely, with the "yet" doing real work and
-  the age stated.
+  the age accounted for, either stated or named as unreadable (§4).
   > "Six hours old, reserves intact, nobody's dumped, nobody's stuck. Clean
   > so far — emphasis on *so far*, it's had six hours to be clean in."
 
@@ -426,12 +428,65 @@ uncited number").
 ### `CantTell` and `NothingUglyYet`'s required lines
 
 `CantTell` must say *what* could not be read — "the holder list," "the
-reserve read," not a bare "can't tell." `NothingUglyYet` must state the
-age — "six hours old," not just "clean so far." Both are enforced the same
-way §1 makes age a required fact: the sheet must carry the line (§1's
-`unknown` list for `CantTell`, §1's launch-block read for `NothingUglyYet`)
-before the model can be asked to say it, and the level check in §5 refuses
-a `NothingUglyYet` reply that contains no age-shaped number from the sheet.
+reserve read," not a bare "can't tell." That is enforced the same way §1
+makes a miss a required line: the sheet carries the `unknown` list before
+the model can be asked to say it.
+
+`NothingUglyYet` must account for how old the token is, and **there are two
+ways to do that, because the chain gives us two different things.** Both are
+enforced by `forbidden::check_required_age`, which reads the level and the
+sheet together.
+
+**Tier one, the age is on the sheet.** The launch-block read produced a
+`Kind::Age` fact — "63954 slots (about 7.1 hours) since its launch block."
+The reply must use an age word (*ago*, *old*, *hour*) **and** state a number
+the age fact itself carries. The read point's own number is deliberately not
+in the set of numbers that satisfy this: a slot number is not an age, and
+counting it would let "read at slot 444007820" pass as "six hours old."
+Those are different claims and only one of them is true.
+
+**Tier two, the age could not be read.** Every Robinhood sheet is ageless
+today, and not because the chain hides the number — research 0039 measured
+Robinhood Chain's block time at 0.1019s over about 100k blocks. It is
+because `LaunchBlock` is Solana-slot-shaped, so `FactSheet::build` computes
+an age only for a Solana read and a Robinhood sheet has nothing to
+subtract (`sheet.rs`'s `push_age` says so at its own call site). So a whole
+chain's sheets carry no age while carrying everything else the verdict
+needs. The reply
+must then do three things, all of them: say in words that the age is not
+known ("how old this token is could not be read"), name the read point in
+words (*slot*, *block*, *read at*), and state the read point's own number.
+Saying "clean so far" and stopping is refused; so is quietly leaving the age
+out and hoping nobody notices what is missing.
+
+Tier two is only satisfiable because `FactSheet::render()` prints the read
+point, and `render()` is the model's entire world — `voice.rs` hands it
+`format!("Token: {mint}\n\n{}", sheet.render())` and nothing else. A rule
+that requires the reply to state a number the model was never shown refuses
+every reply that could ever be written, which is not a strict rule but a
+broken one: it would have taken the free-text voice silently off a whole
+chain, falling back to the template on every Robinhood `NothingUglyYet`
+with nothing anywhere saying so. The sheet must carry a line before the
+check may require it. That is the same discipline as `CantTell`'s
+`unknown` list, and it is why the two tests that pin the read point into
+`render()` sit next to the tests for this rule.
+
+**A sheet with no read point at all fails outright**, at either tier: with
+no clock to anchor to, a "nothing ugly yet" is a claim about a moment we
+cannot name (AGENTS.md rule 8 — absent is not zero, unknown is not safe).
+
+**The alternative that was considered and rejected: demote every ageless
+token to `CantTell`.** It is the tidier rule — the age is a required fact,
+the fact is missing, so the honest verdict is "can't tell." It was rejected
+because on Robinhood the age is missing *by default*, not by accident. Every
+Robinhood token would land on `CantTell` no matter how much the reader did
+see: the reserves, the holder spread, the creator's history, the launch
+block itself, all read successfully and all thrown away over one timestamp
+the chain does not publish. That trades a whole chain's worth of real
+evidence for a uniformity the reader never had, and it would make the
+account's most common Robinhood reply a shrug about tokens it understood
+perfectly well. The two-tier rule keeps the verdict the evidence earned and
+makes the reply say plainly which clock it is reading against.
 
 ### Never a person
 
