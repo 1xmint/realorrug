@@ -24,7 +24,7 @@
 
 use realorrug_pumpfun::curve::BondingCurve;
 use realorrug_pumpfun::{Fees, pda};
-use realorrug_types::{Address, Slot};
+use realorrug_types::{Address, ChainAddress, ReadAt, Slot};
 
 use crate::budget::{Budget, Count};
 use crate::launch::{LaunchBlock, NotALaunch};
@@ -68,14 +68,20 @@ pub struct CurveFacts {
     /// tokens sampled on 2026-09-01 was already complete, so this is the
     /// ordinary case rather than the exotic one.
     pub complete: bool,
-    /// Lamports the curve actually holds.
-    pub real_sol_reserves: u64,
-    /// How much SOL can be spent before price moves by
-    /// [`CAPACITY_IMPACT_BPS`].
+    /// Quote-asset reserves the curve actually holds, in the quote asset's
+    /// smallest unit.
+    ///
+    /// Named for what it is rather than which chain it was read on -- lamports
+    /// on Solana today, and the same figure in whatever unit a future chain's
+    /// quote asset uses. `CurveFacts` itself is not chain-specific; only a
+    /// reader's *source* for this number is.
+    pub quote_reserves: u64,
+    /// How much of the quote asset can be spent before price moves by
+    /// [`CAPACITY_IMPACT_BPS`], in the quote asset's smallest unit.
     ///
     /// `None` means **cannot size into this at all**, never "no limit found"
     /// (rule 9). A complete curve is the common reason.
-    pub capacity_lamports: Option<u64>,
+    pub quote_capacity: Option<u64>,
     /// Who launched the token, read from the curve account itself.
     ///
     /// **The only way to get a creator for a graduated coin.** The launch
@@ -83,7 +89,7 @@ pub struct CurveFacts {
     /// signature walk truncates -- which it does for any coin with real
     /// history, so exactly the coins people ask about. This account carries it
     /// regardless of age, and the dossier already reads it.
-    pub creator: Address,
+    pub creator: ChainAddress,
     /// The venue fee, read from the on-chain schedule rather than assumed.
     ///
     /// Research 0023 measured it at 125 bps a side and found the program's own
@@ -94,16 +100,17 @@ pub struct CurveFacts {
 }
 
 /// Everything the analyst may assert about one token.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Dossier {
     /// The token asked about.
-    pub mint: Address,
-    /// The slot the read was taken at.
+    pub mint: ChainAddress,
+    /// The chain's own read point -- a Solana slot today, and a chain-typed
+    /// value for whichever chain reads this dossier next.
     ///
-    /// **Every published figure carries this.** A number without the slot it was
-    /// read at is unfalsifiable, and the account's entire claim is that its
-    /// numbers can be checked on an explorer.
-    pub read_at: Option<Slot>,
+    /// **Every published figure carries this.** A number without the read
+    /// point it was read at is unfalsifiable, and the account's entire claim
+    /// is that its numbers can be checked on an explorer.
+    pub read_at: Option<ReadAt>,
     /// What the launch block held.
     pub launch: Option<LaunchBlock>,
     /// What the curve says.
@@ -153,7 +160,7 @@ impl Dossier {
 pub fn build(client: &RpcClient, budget: &mut Budget, mint: &Address) -> Result<Dossier, RpcError> {
     let mint_key = mint.to_string();
     let mut dossier = Dossier {
-        mint: *mint,
+        mint: ChainAddress::Solana(*mint),
         read_at: None,
         launch: None,
         curve: None,
@@ -167,7 +174,7 @@ pub fn build(client: &RpcClient, budget: &mut Budget, mint: &Address) -> Result<
     let (signatures, truncated) = client.signatures_back_to_oldest(budget, mint)?;
     match oldest_launch(client, budget, &signatures, truncated, &mint_key) {
         Ok(block) => {
-            dossier.read_at = Some(block.slot);
+            dossier.read_at = Some(ReadAt::Solana(block.slot));
             dossier.launch = Some(block);
         }
         Err(why) => dossier.miss("launch block", why),
@@ -184,7 +191,7 @@ pub fn build(client: &RpcClient, budget: &mut Budget, mint: &Address) -> Result<
             // account may not be. Set only when the launch block did not
             // already supply one, so the earlier read still wins.
             if dossier.read_at.is_none() {
-                dossier.read_at = slot;
+                dossier.read_at = slot.map(ReadAt::Solana);
             }
             dossier.curve = Some(facts);
         }
@@ -212,6 +219,73 @@ pub fn build(client: &RpcClient, budget: &mut Budget, mint: &Address) -> Result<
     dossier.calls = budget.calls_made();
     dossier.elapsed_ms = budget.elapsed().as_millis();
     Ok(dossier)
+}
+
+/// The seam ADR 0028 point 2 names: one chain's reads in, one [`Dossier`] out.
+///
+/// A third chain costs one implementation of this trait, plus an address
+/// parser (`realorrug_types::ChainAddress`) and one `Venue` match arm -- and
+/// nothing else, because everything downstream of a `Dossier` (`FactSheet`,
+/// `Verdict`, the voice) already reads the shape this trait returns, not any
+/// particular chain's client.
+///
+/// `Client` and `Token` are associated types rather than the trait taking
+/// `&RpcClient` and `&Address` directly (Solana's own types) or `&ChainAddress`
+/// (the chain-tagged enum): a fixed `RpcClient`/`Address` signature cannot be
+/// implemented by a second chain at all, since it has neither Solana's client
+/// nor a 32-byte address to put a 20-byte address into. And `&ChainAddress`
+/// would compile for every reader but hand each one addresses that are not
+/// its own, pushing "is this my chain?" into a runtime branch every
+/// implementation has to write and get right. An associated `Token` makes that
+/// a compile error instead of a check -- AGENTS.md section 4's "enforce a
+/// property at the cheapest level that holds it" -- so [`SolanaReader`] below
+/// can only ever be handed a Solana [`Address`], and a Robinhood reader can
+/// only ever be handed a Robinhood one.
+pub trait ChainReader {
+    /// The client this chain's reads go through.
+    type Client;
+    /// This chain's own address type.
+    type Token;
+    /// The error a failed read produces.
+    type Error;
+
+    /// Reads one mint and returns the dossier `build` already produces.
+    ///
+    /// # Errors
+    ///
+    /// When the mint itself cannot be resolved at all -- never for an
+    /// individual missing fact, which lands in [`Dossier::unavailable`]
+    /// instead.
+    fn read(
+        &self,
+        client: &Self::Client,
+        budget: &mut Budget,
+        token: &Self::Token,
+    ) -> Result<Dossier, Self::Error>;
+}
+
+/// The `ChainReader` Solana has always had, wrapping today's [`build`] with no
+/// logic change.
+///
+/// Exists so Solana is on the seam from day one rather than being the one
+/// chain that predates it -- a second chain's reader is written against this
+/// trait, not against a special case for "the chain that came first."
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SolanaReader;
+
+impl ChainReader for SolanaReader {
+    type Client = RpcClient;
+    type Token = Address;
+    type Error = RpcError;
+
+    fn read(
+        &self,
+        client: &RpcClient,
+        budget: &mut Budget,
+        mint: &Address,
+    ) -> Result<Dossier, RpcError> {
+        build(client, budget, mint)
+    }
 }
 
 /// Finds the launch transaction and rebuilds its block.
@@ -308,9 +382,9 @@ fn curve_facts(
     Ok((
         CurveFacts {
             complete: curve.complete,
-            real_sol_reserves: curve.real_sol_reserves,
-            capacity_lamports: capacity,
-            creator: curve.creator,
+            quote_reserves: curve.real_sol_reserves,
+            quote_capacity: capacity,
+            creator: ChainAddress::Solana(curve.creator),
             fees: fee_schedule(client, budget, &curve),
         },
         read.slot,
@@ -356,7 +430,7 @@ mod tests {
     #[test]
     fn a_dossier_names_what_it_could_not_read() {
         let mut dossier = Dossier {
-            mint: Address::new([1u8; 32]),
+            mint: ChainAddress::Solana(Address::new([1u8; 32])),
             read_at: None,
             launch: None,
             curve: None,
@@ -564,5 +638,102 @@ mod tests {
         // apart, the analyst and the kernel publish different numbers for the
         // same token.
         assert_eq!(CAPACITY_IMPACT_BPS, 100);
+    }
+
+    #[test]
+    fn a_solana_reader_answers_exactly_what_build_answers() {
+        // Names the wrong implementation: `SolanaReader::read` growing its own
+        // logic instead of forwarding to `build`, so the two drift the moment
+        // one is edited and not the other. Run on identical clients and fresh
+        // budgets so the only thing that can differ is which function ran.
+        //
+        // The transport here answers every call with an account-shaped
+        // response, which is the wrong shape for the signature list `build`
+        // asks for first -- so both paths fail identically, on the same
+        // malformed-response error, rather than completing a real read. That
+        // is enough: the property under test is that the two call paths agree,
+        // not that this particular mock produces a successful dossier.
+        let response = account_response(&fee_config_account(0, 95, 30));
+        let mint = Address::new([1u8; 32]);
+
+        let client_a =
+            RpcClient::with_transport("http://test.invalid", Box::new(Always(response.clone())));
+        let mut budget_a = Budget::new(60, 3, std::time::Duration::from_secs(30));
+        let direct = build(&client_a, &mut budget_a, &mint);
+
+        let client_b = RpcClient::with_transport("http://test.invalid", Box::new(Always(response)));
+        let mut budget_b = Budget::new(60, 3, std::time::Duration::from_secs(30));
+        let via_reader = SolanaReader.read(&client_b, &mut budget_b, &mint);
+
+        match (direct, via_reader) {
+            (Ok(d), Ok(r)) => {
+                // Compared field by field rather than derived equality on the
+                // whole struct: `elapsed_ms` is wall-clock and is expected to
+                // differ between two separate calls, and asserting it equal
+                // would make this test flaky rather than meaningful.
+                assert_eq!(d.mint, r.mint);
+                assert_eq!(d.read_at, r.read_at);
+                assert_eq!(d.launch, r.launch);
+                assert_eq!(d.curve, r.curve);
+                assert_eq!(d.creator_transactions, r.creator_transactions);
+                assert_eq!(d.unavailable, r.unavailable);
+                assert_eq!(d.calls, r.calls);
+            }
+            (Err(d), Err(r)) => assert_eq!(d.to_string(), r.to_string()),
+            (d, r) => panic!("build and SolanaReader disagreed on success: {d:?} vs {r:?}"),
+        }
+    }
+
+    /// A second, non-Solana `ChainReader`. It never runs a real read -- it
+    /// exists only so this crate compiles it against the trait, which is the
+    /// one thing a Solana-shaped `ChainReader` (the defect this seam fixes)
+    /// could never do. `Client = ()` because this fake makes no calls at all,
+    /// and `Token = realorrug_robinhood::Address` because that 20-byte shape
+    /// is exactly what would not fit in a `&Address` (Solana's 32 bytes) if
+    /// the trait still hard-coded Solana's own types.
+    struct FakeRobinhoodReader;
+
+    impl ChainReader for FakeRobinhoodReader {
+        type Client = ();
+        type Token = realorrug_robinhood::Address;
+        type Error = core::convert::Infallible;
+
+        fn read(
+            &self,
+            _client: &(),
+            _budget: &mut Budget,
+            token: &realorrug_robinhood::Address,
+        ) -> Result<Dossier, core::convert::Infallible> {
+            Ok(Dossier {
+                mint: ChainAddress::Solana(Address::new([9u8; 32])),
+                read_at: None,
+                launch: None,
+                curve: None,
+                creator_transactions: None,
+                unavailable: vec![Unavailable {
+                    fact: "robinhood reads",
+                    why: format!("fake reader, token {:?}", token.0),
+                }],
+                calls: 0,
+                elapsed_ms: 0,
+            })
+        }
+    }
+
+    #[test]
+    fn a_second_chains_reader_compiles_against_the_seam() {
+        // The point of this test is that it compiles at all: a `ChainReader`
+        // whose client is not `RpcClient` and whose token is not Solana's
+        // `Address` implements the trait with no special case. That is the
+        // property ADR 0028 point 2 names, and a runtime assertion on Solana
+        // types alone would never notice it regressing.
+        let token = realorrug_robinhood::Address([7u8; 20]);
+        let mut budget = Budget::new(60, 3, std::time::Duration::from_secs(30));
+        let dossier = FakeRobinhoodReader
+            .read(&(), &mut budget, &token)
+            .expect("the fake reader never fails");
+        assert_eq!(dossier.mint, ChainAddress::Solana(Address::new([9u8; 32])));
+        assert_eq!(dossier.unavailable.len(), 1);
+        assert_eq!(dossier.unavailable[0].fact, "robinhood reads");
     }
 }

@@ -129,7 +129,7 @@ curve
         "  graduated   : {}",
         if curve.complete { "yes" } else { "no" }
     );
-    let _ = writeln!(out, "  reserves    : {} SOL", sol(curve.real_sol_reserves));
+    let _ = writeln!(out, "  reserves    : {} SOL", sol(curve.quote_reserves));
     // Both remaining lines are false about a graduated coin: its capacity is
     // not zero, it is on an AMM Radar does not price, and the curve's fee
     // schedule is not the fee it pays. Printing "cannot size into this" for a
@@ -142,7 +142,7 @@ curve
         );
         return;
     }
-    match curve.capacity_lamports {
+    match curve.quote_capacity {
         Some(l) => {
             let _ = writeln!(
                 out,
@@ -199,7 +199,7 @@ pub fn render(d: &Dossier) -> String {
     // The slot is printed before any figure, because a number without the slot
     // it was read at cannot be checked against an explorer -- and being
     // checkable is the whole of this account's claim.
-    match d.read_at {
+    match d.read_at.and_then(realorrug_types::ReadAt::as_slot) {
         Some(slot) => {
             let _ = writeln!(out, "read at slot  : {}", slot.0);
         }
@@ -284,6 +284,7 @@ not available
 #[cfg(test)]
 mod tests {
     use super::*;
+    use realorrug_types::ChainAddress;
 
     #[test]
     fn creator_controlled_text_cannot_reach_the_terminal_raw() {
@@ -348,10 +349,12 @@ mod tests {
         render_curve(
             &mut out,
             &realorrug_onchain::CurveFacts {
-                creator: realorrug_types::Address::new([9u8; 32]),
+                creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                    [9u8; 32],
+                )),
                 complete: false,
-                real_sol_reserves: 6_186_150_833,
-                capacity_lamports: Some(303_000_000),
+                quote_reserves: 6_186_150_833,
+                quote_capacity: Some(303_000_000),
                 fees: None,
             },
         );
@@ -374,10 +377,12 @@ mod tests {
         render_curve(
             &mut out,
             &realorrug_onchain::CurveFacts {
-                creator: realorrug_types::Address::new([9u8; 32]),
+                creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                    [9u8; 32],
+                )),
                 complete: true,
-                real_sol_reserves: 0,
-                capacity_lamports: None,
+                quote_reserves: 0,
+                quote_capacity: None,
                 fees: None,
             },
         );
@@ -433,7 +438,7 @@ mod tests {
         // printing an empty "not available" heading -- which reads as "we could
         // not check" on an answer where everything was checked.
         let mut d = Dossier {
-            mint: Address::new([1u8; 32]),
+            mint: ChainAddress::Solana(Address::new([1u8; 32])),
             read_at: None,
             launch: None,
             curve: None,
@@ -473,7 +478,7 @@ mod tests {
         // type keeps the distinction all the way here, and one `unwrap_or(0)`
         // in a format string would throw it away at the last step.
         let d = Dossier {
-            mint: Address::new([1u8; 32]),
+            mint: ChainAddress::Solana(Address::new([1u8; 32])),
             read_at: None,
             launch: None,
             curve: None,

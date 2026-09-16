@@ -1155,6 +1155,7 @@ version = "0.0.1"
 dependencies = [
  "realorrug-decode",
  "realorrug-pumpfun",
+ "realorrug-robinhood",
  "realorrug-types",
  "rusqlite",
  "serde",
@@ -1246,6 +1247,7 @@ name = "realorrug-types"
 version = "0.0.1"
 dependencies = [
  "bs58",
+ "realorrug-robinhood",
  "schemars",
  "serde",
  "serde_json",

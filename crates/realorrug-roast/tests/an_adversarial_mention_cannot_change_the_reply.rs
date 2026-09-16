@@ -23,7 +23,7 @@ use realorrug_onchain::dossier::{CurveFacts, Dossier};
 use realorrug_onchain::launch::{LaunchBlock, Metadata};
 use realorrug_roast::sheet::FactSheet;
 use realorrug_roast::{BaseRates, fidelity, forbidden, voice};
-use realorrug_types::{Address, MicroUsd, Slot};
+use realorrug_types::{Address, ChainAddress, MicroUsd, ReadAt, Slot};
 
 const SNAPSHOT: &str = include_str!("../../../docs/research/data/0024-base-rates.json");
 
@@ -48,8 +48,8 @@ impl Provider for Says {
 
 fn dossier_named(name: &str, symbol: &str) -> Dossier {
     Dossier {
-        mint: Address::new([3u8; 32]),
-        read_at: Some(Slot(444_007_820)),
+        mint: ChainAddress::Solana(Address::new([3u8; 32])),
+        read_at: Some(ReadAt::Solana(Slot(444_007_820))),
         launch: Some(LaunchBlock {
             slot: Slot(444_007_820),
             creator: Address::new([9u8; 32]),
@@ -63,10 +63,10 @@ fn dossier_named(name: &str, symbol: &str) -> Dossier {
             },
         }),
         curve: Some(CurveFacts {
-            creator: Address::new([9u8; 32]),
+            creator: ChainAddress::Solana(Address::new([9u8; 32])),
             complete: false,
-            real_sol_reserves: 6_186_150_833,
-            capacity_lamports: Some(303_000_000),
+            quote_reserves: 6_186_150_833,
+            quote_capacity: Some(303_000_000),
             fees: None,
         }),
         creator_transactions: Some(Count::AtLeast(12)),
@@ -341,7 +341,7 @@ fn a_fact_sheet_with_nothing_in_it_still_produces_a_reply() {
     // A mint a stranger invented. Nothing could be read; the reply must say so
     // rather than being empty or implying everything was fine.
     let empty = Dossier {
-        mint: Address::new([4u8; 32]),
+        mint: ChainAddress::Solana(Address::new([4u8; 32])),
         read_at: None,
         launch: None,
         curve: None,
@@ -381,7 +381,7 @@ fn the_slot_is_authorised_so_a_citable_reply_is_not_refused() {
 /// against a real mint.
 fn dossier_that_could_not_be_read() -> Dossier {
     Dossier {
-        mint: Address::new([7u8; 32]),
+        mint: ChainAddress::Solana(Address::new([7u8; 32])),
         read_at: None,
         launch: None,
         curve: None,

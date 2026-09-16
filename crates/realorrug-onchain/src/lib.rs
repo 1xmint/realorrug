@@ -55,7 +55,7 @@ pub mod reserves;
 pub mod rpc;
 
 pub use budget::{Budget, Count, Exhausted};
-pub use dossier::{CurveFacts, Dossier, Unavailable, build};
+pub use dossier::{ChainReader, CurveFacts, Dossier, SolanaReader, Unavailable, build};
 pub use launch::{LaunchBlock, Metadata, NotALaunch};
 pub use memory::{Error as MemoryError, Fact, Kind, Memory, Recorded};
 pub use reserves::{PoolReserves, Role, Unreadable};
