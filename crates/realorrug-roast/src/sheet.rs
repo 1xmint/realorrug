@@ -244,6 +244,67 @@ pub enum Signal {
     OwnerCanStillMintOrPause,
 }
 
+/// The innocent, on-chain-identical reading of a signal, from design 0020
+/// §3's own "innocent twin" column.
+///
+/// **One `match`, exhaustive, no `_ =>` arm.** That absence is the whole
+/// enforcement this function exists for: `Signal` grows a variant, this
+/// function fails to compile, and the packet that lands the new signal
+/// cannot ship without also writing what an innocent reading of it looks
+/// like. Every sentence is phrased as what was read, not as a name for the
+/// signal, because this is the only channel through which the model learns
+/// there is another explanation (`FactSheet::render` never prints the
+/// signal itself) -- and every sentence carries no digit, because
+/// `forbidden.rs` checks every number in a reply against the sheet's facts,
+/// and a number that existed only here would be a fact the model could
+/// state and the check could not source.
+pub(crate) fn twin_for(signal: Signal) -> &'static str {
+    match signal {
+        Signal::LaunchBlockInStrongestBand => {
+            "a launch-block recipient count in this band can also be a launch people were \
+             waiting for; no chain fact tells the two apart"
+        }
+        Signal::CreatorNeverGraduatedOrganically => {
+            "a small number of measured launches reads the same whether none of them ever had \
+             a real chance to graduate or the creator has simply not launched enough yet for \
+             the record to mean much"
+        }
+        Signal::CreatorBoughtOwnLaunch => {
+            "a creator buying into their own launch block reads the same as a creator buying a \
+             token they believe in"
+        }
+        Signal::LiquidityGone => {
+            "reserves that emptied pre-graduation read the same whether the creator drained \
+             them or every buyer simply sold back to the curve on their own"
+        }
+        Signal::CreatorSoldOut => {
+            "a creator wallet that now holds nothing reads the same whether the tokens were \
+             sold or only moved to another wallet the creator still holds them in"
+        }
+        Signal::BuyersCannotSell => {
+            "a simulated sell that fails reads the same whether the curve is broken, the \
+             simulated size was too large for a curve with real but thin depth, or the launch \
+             is still in its opening seconds, when the launchpad's own sell tax is near total \
+             on every token"
+        }
+        Signal::RepeatLauncher => {
+            "a creator who recurs across many launch blocks reads the same whether a person is \
+             launching many tokens themselves or an unnamed relayer or bot is launching them on \
+             other people's behalf, automatically and without coordination"
+        }
+        Signal::HolderConcentration => {
+            "a wallet holding a large share of supply reads the same whether it belongs to a \
+             single holder or is a vesting contract, a bridge or an exchange that nobody has \
+             labelled yet"
+        }
+        Signal::OwnerCanStillMintOrPause => {
+            "an owner-only mint or pause selector being present reads the same whether the \
+             deployer intends to use it or it is simply part of a stock contract template \
+             nobody bothered to strip"
+        }
+    }
+}
+
 /// Everything the analyst may assert about one token.
 #[derive(Clone, Debug)]
 pub struct FactSheet {
@@ -277,6 +338,13 @@ pub struct FactSheet {
     pub unknown: Vec<String>,
     /// The refusal signals the facts carry, in a fixed order. See [`Signal`].
     pub signals: Vec<Signal>,
+    /// The innocent twin of each fired signal, one entry per entry in
+    /// [`Self::signals`], in the same order. See [`twin_for`].
+    ///
+    /// **Never a signal's name.** Each string is a sentence about what was
+    /// read, phrased so the account could say it in public -- the model must
+    /// not learn `Signal` exists, only that another explanation does.
+    pub twins: Vec<String>,
 }
 
 impl FactSheet {
@@ -501,6 +569,14 @@ impl FactSheet {
             withhold_price(&mut facts);
         }
 
+        // One string per fired signal, in the same order the signal fired --
+        // computed from `signals` itself so the two can never drift apart,
+        // rather than pushed alongside each `signals.push` call above.
+        let twins = signals
+            .iter()
+            .map(|&signal| twin_for(signal).to_owned())
+            .collect();
+
         Self {
             mint: dossier.mint.to_string(),
             read_at: dossier.read_at,
@@ -508,6 +584,7 @@ impl FactSheet {
             untrusted,
             unknown,
             signals,
+            twins,
         }
     }
 
@@ -586,6 +663,16 @@ impl FactSheet {
         }
         for miss in &self.unknown {
             let _ = writeln!(out, "NOT KNOWN: {miss}");
+        }
+        // Its own heading, after the facts and after what could not be read,
+        // so the model meets these as context rather than as more facts --
+        // and printed only when a signal actually fired, so a clean sheet
+        // gains no heading at all.
+        if !self.twins.is_empty() {
+            let _ = writeln!(out, "INNOCENT EXPLANATIONS -- not proof either way:");
+            for twin in &self.twins {
+                let _ = writeln!(out, "- {twin}");
+            }
         }
         if let Some(read_at) = self.read_at {
             let _ = writeln!(out, "read at: {read_at}");
@@ -1558,6 +1645,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown: vec!["the bonding curve could not be read".to_owned()],
             signals: Vec::new(),
+            twins: Vec::new(),
         }
     }
 
@@ -1661,6 +1749,7 @@ mod tests {
             untrusted: vec![("token name".to_owned(), "99999 percent safe".to_owned())],
             unknown: Vec::new(),
             signals: Vec::new(),
+            twins: Vec::new(),
         };
         assert!(sheet.authorised().is_empty());
         assert!(!sheet.render().contains("99999"));
@@ -1699,6 +1788,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown: Vec::new(),
             signals: Vec::new(),
+            twins: Vec::new(),
         };
 
         let authorised = sheet.authorised();
@@ -1896,6 +1986,69 @@ mod tests {
         // verdict handed to it.
         let rendered = sheet.render();
         assert!(!rendered.to_lowercase().contains("signal"), "{rendered}");
+        // The twins line up with the signals, same order, one each --
+        // packet 0038.
+        assert_eq!(
+            sheet.twins,
+            [
+                twin_for(Signal::LaunchBlockInStrongestBand).to_owned(),
+                twin_for(Signal::CreatorBoughtOwnLaunch).to_owned(),
+                twin_for(Signal::CreatorNeverGraduatedOrganically).to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_signal_variant_has_a_nonempty_digit_free_twin() {
+        // The whole point of the exhaustive `match` with no `_ =>` arm: a
+        // tenth signal added later has to gain a twin here before the crate
+        // compiles again. This test does not catch that on its own (the
+        // compiler does) -- it catches an empty string or a smuggled digit,
+        // which the match's exhaustiveness cannot.
+        for signal in [
+            Signal::LaunchBlockInStrongestBand,
+            Signal::CreatorNeverGraduatedOrganically,
+            Signal::CreatorBoughtOwnLaunch,
+            Signal::LiquidityGone,
+            Signal::CreatorSoldOut,
+            Signal::BuyersCannotSell,
+            Signal::RepeatLauncher,
+            Signal::HolderConcentration,
+            Signal::OwnerCanStillMintOrPause,
+        ] {
+            let twin = twin_for(signal);
+            assert!(!twin.is_empty(), "{signal:?} has an empty twin");
+            assert!(
+                !twin.chars().any(|c| c.is_ascii_digit()),
+                "{signal:?}'s twin carries a digit, which `forbidden.rs` cannot source: {twin}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fired_signal_renders_its_twin_and_an_unfired_sheet_renders_none() {
+        // Design 0020 §1: the twin belongs to the fact, phrased as a
+        // sentence about what was read, and the model's whole world is
+        // `render()` -- so this is the only way to prove the twin actually
+        // reaches the prompt.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(12), None));
+        let rates = rates_strongest(10, 13);
+        let fired = FactSheet::build(&dossier, Some(&rates), None, None, None);
+        assert_eq!(fired.signals, [Signal::LaunchBlockInStrongestBand]);
+        let rendered = fired.render();
+        assert!(
+            rendered.contains(twin_for(Signal::LaunchBlockInStrongestBand)),
+            "{rendered}"
+        );
+
+        // Same launch, but a snapshot whose strongest band this recipient
+        // count misses: no signal, so no twin heading at all.
+        let quiet = FactSheet::build(&dossier, Some(&rates_strongest(50, 60)), None, None, None);
+        assert!(quiet.signals.is_empty());
+        let rendered = quiet.render();
+        assert!(!rendered.contains("INNOCENT EXPLANATIONS"), "{rendered}");
+        assert!(quiet.twins.is_empty());
     }
 
     /// An index with `filler_count` creators at exactly `floor_value`

@@ -473,6 +473,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown: Vec::new(),
             signals: Vec::new(),
+            twins: Vec::new(),
         }
     }
 

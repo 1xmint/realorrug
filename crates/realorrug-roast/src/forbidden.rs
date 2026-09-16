@@ -1541,6 +1541,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown,
             signals: Vec::new(),
+            twins: Vec::new(),
         }
     }
 
@@ -1561,6 +1562,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown,
             signals: Vec::new(),
+            twins: Vec::new(),
         };
         sheet.facts.push(Fact {
             about: crate::sheet::About::Measurement,

@@ -223,8 +223,8 @@ default when config, or here identification, is missing).
 | signal | measures | read | threshold, and where from | innocent twin |
 |---|---|---|---|---|
 | `LiquidityGone` | reserves no longer support an exit | `getReserves()`'s `tokenReserve` at or near zero while holders still hold supply | `tokenReserve == 0` post-graduation is the curve's *normal* end state (research 0040 §3 — a graduated curve reads `tokenReserve = 0` by design, not by draining), so this signal fires only **pre-graduation**, when `tokenReserve` collapses while `phase == 0` | every buyer sold back to the curve — research 0040 §4 observed exactly this on a real token, 71 `Transfer` logs summing to zero external holders |
-| `CreatorSoldOut` | the creator held and now holds nothing | `balanceOf(creator_fee_recipient)` reads 0, and the creator was seen holding a nonzero balance at some earlier read (from this bot's own memory, design 0021, or from the launch-block buy) | zero, compared against a prior nonzero read; **needs a prior observation to mean anything**, which is design 0021's job (§7) — on a first-ever read this signal cannot fire, only "creator currently holds nothing," which is a different, weaker claim | moved to a second wallet; never held in the first place (the base case, not an edge case — most creators never buy their own launch, research 0036 §3) |
-| `BuyersCannotSell` | a simulated sell reverts | `eth_call` a sell against the curve (`CurveSell`-shaped calldata) at a fixed size, pinned to the current block, checking for a revert rather than sending a transaction | fixed simulated size TBD — no chain fact sizes this yet (open question, §8); a revert on **any** size above dust is the strong form, a revert only above some size is the weak form and needs a sweep, not one call | our simulated size or slippage tolerance was wrong, not the curve's mechanics — a curve with real but thin depth reverts a large sell the same way a broken one does |
+| `CreatorSoldOut` | the creator held and now holds nothing | `balanceOf(creator_fee_recipient)` reads 0, and the creator was seen holding a nonzero balance at some earlier read (from this bot's own memory, design 0021, or from the launch-block buy) | zero, compared against a prior nonzero read; **needs a prior observation to mean anything**, which is design 0021's job (§7) — on a first-ever read this signal cannot fire, only "creator currently holds nothing," which is a different, weaker claim | moved to another wallet the creator still holds them in ("never held in the first place" is not this signal's twin: it only fires after a nonzero read, so that case never reaches it) |
+| `BuyersCannotSell` | a simulated sell reverts | `eth_call` a sell against the curve (`CurveSell`-shaped calldata) at a fixed size, pinned to the current block, checking for a revert rather than sending a transaction | fixed simulated size TBD — no chain fact sizes this yet (open question, §8); a revert on **any** size above dust is the strong form, a revert only above some size is the weak form and needs a sweep, not one call | our simulated size or slippage tolerance was wrong, not the curve's mechanics — a curve with real but thin depth reverts a large sell the same way a broken one does; or the launch is still in its opening seconds, when Pons v2's own snipe tax makes every token's sell fail (research 0044) |
 | `CreatorBoughtOwnLaunch` | creator among launch-block recipients | `CurveBuy` logs in the launch block naming the creator/deployer address, or the launch record's own launch-transaction buy (research 0036 §3) | any nonzero buy by the creator in the launch block | a creator buying a token they believe in — research 0036 §3's own captured launch was exactly this, a dev buy that paid full fees and no snipe tax because the factory exempts the launcher automatically |
 | `LaunchBlockBundle` | launch-block distinct recipient count lands in the strongest measured band | distinct non-zero-balance recipients of `Transfer` logs in the launch block, looked up in a measured snapshot's bands (the same `baserates.rs::band_for` shape, re-derived for Pons v2 — **not yet measured**, §8) | **read from the snapshot, never a constant** — research 0042's first lesson, quoted there: *"Six is a tool's default, not a law. The number will move when whoever is running this changes their configuration, and the detector will go quiet without saying so"* (0008, quoted in 0042), which came true in 0024's re-measurement | a launch people were waiting for — no chain fact distinguishes a bundle bought by insiders from a bundle bought by fans; only the *rate* at which each recipient count precedes an outcome, measured, does |
 | `RepeatLauncher` | this creator has launched many more tokens than the creators around them | the creator's **lifetime** launch count, as the creator index already records it — research 0042's port-order item 1, and *simpler on EVM than on Solana* per that document's table, because an EVM sender address recurs directly, no wallet-to-token-account join needed. Not a rolling window: §7's original plan to ask the read memory for launches-in-the-last-N-minutes was dropped, because the index holds the lifetime count already and a window would be a second, differently-shaped count of the same thing | **the index's own 95th percentile**, nearest-rank (`((n - 1) * 95) / 100` on the ascending sort), computed **after** the named first-party list is excluded, floored at 2, and refused outright under 100 remaining creators — `creator::CreatorIndex::repeat_launcher_floor`, whose doc comment carries the argument for each of those three numbers. **Never Radar's `REPEAT_FLOOR`/`INFRASTRUCTURE_FLOOR` (3, 100)**: those count distinct launch *blocks* in a *90-minute Solana window*, a different population on a different chain, and importing them would look like a measurement while being one | a bot that buys every launch; infrastructure, not coordination — 0042's own table excludes 13 known router/fee-sink addresses covering 42% of Solana launches from this count. The named list (`docs/research/data/first-party-addresses.json`) is the Robinhood equivalent and now exists, but it holds only **named** addresses: an unnamed relayer nobody has captured yet still reads, on this signal alone, exactly like a person launching forty tokens. That is the signal's honest limit |
@@ -639,6 +639,37 @@ level) are the ones ADR 0027 exists to add — i.e. a mutation-style
 re-application of the old bug (temporarily disabling `check_level`) must
 make a previously-refused-only-by-level case pass, proving the new check,
 not the old one, is what is catching it.
+
+### The twin's floor is the template, not a `forbidden.rs` check on the model
+
+**Decided, packet 0038.** Every signal in §3's table gains a `twins` entry on
+`FactSheet` (`sheet.rs`), one sentence per fired signal from an exhaustive
+`match` on `Signal`, printed under its own heading in `render()` so it is
+part of the model's own prompt. `verdict::template` — the floor every path
+that cannot trust the model's reply falls back to — states at least one twin
+at `Sketchy` and `RugMechanicsLive` (the two levels that are adverse and not
+conclusive), states none at `Rugged` (an observed completed event, where
+hedging would be false balance in the other direction), and has none to
+state at `NothingUglyYet` or `CantTell` (no signal fired).
+
+**Rejected: requiring the model's own free-text reply to name a twin,
+enforced in `forbidden.rs`.** The alternative considered and set aside was a
+`check_twin`-shaped function beside `check_target`/`check_level`, refusing
+any `Sketchy`-or-`RugMechanicsLive` reply that did not mention an innocent
+explanation. It fails for the same reason `forbidden.rs`'s existing checks
+are all shape-based, not meaning-based: the check can confirm a *string*
+appears, not that the model's paraphrase of it is honest. A reply that
+quoted a twin's sentence back verbatim would pass; a reply that wrote a
+better, more specific innocent explanation in its own words — the entire
+point of §4's free-text voice — would look, to a string check, exactly like
+a reply that invented one from nothing. Enforcing it would either accept
+verbatim quoting (pushing every reply back toward the templated sameness §4
+exists to avoid) or refuse honest paraphrase alongside dishonest omission,
+with no way to tell the two apart from the string alone. The template
+guarantees the floor unconditionally, because it is built from the sheet
+directly rather than generated and then checked; the model, reading the
+twins on its own sheet, is free to do better than the floor without a check
+standing in the way of trying.
 
 ## 6. What changes, file by file
 
