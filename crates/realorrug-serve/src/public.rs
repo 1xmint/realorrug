@@ -754,6 +754,7 @@ mod tests {
             mention_id: format!("m{at}"),
             summoner: "alice".to_owned(),
             mint: Some("So11111111111111111111111111111111111111112".to_owned()),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(1))),
             read_at_slot: Some(1),
             fact_sheet: String::new(),
             reply: "measured".to_owned(),

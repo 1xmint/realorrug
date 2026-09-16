@@ -381,6 +381,7 @@ pub fn publish_under(
             mention_id: format!("{label}:{n}"),
             summoner: "radar".to_owned(),
             mint: None,
+            read_at: None,
             read_at_slot: None,
             fact_sheet: post.source.clone(),
             // **The sanitised text, and it is what gets posted below.** The

@@ -679,10 +679,14 @@ construction and its direct field access, and `forbidden.rs` is owned by a
 later task. Today a Robinhood sheet's `read_at` is `None` — not wrong, since
 `ReadAt::as_slot` returns `None` for a Robinhood block by design, but the
 consequence is a Robinhood `NothingUglyYet` reply currently has no
-chronological fact on the sheet to cite at all. Fixing this is task 9-15-0032
-(the same gap `crates/realorrug-analyst/src/log.rs`'s `Entry::read_at_slot:
-Option<u64>` has, for the same reason: a stored record that cannot say what
-the bot knew when it spoke about a Robinhood token).
+chronological fact on the sheet to cite at all. Fixing `FactSheet::read_at`
+is a later task; `crates/realorrug-analyst/src/log.rs`'s matching gap — a
+stored record that could not say what the bot knew when it spoke about a
+Robinhood token — was task 9-15-0032: `Entry` now carries a chain-tagged
+`read_at: Option<realorrug_types::ReadAt>` beside the still-present,
+Solana-only `read_at_slot: Option<u64>`, so a Robinhood reply's log line
+keeps its block number instead of losing it to `ReadAt::as_slot`'s honest
+`None`.
 
 ## 7. What this design does not decide
 

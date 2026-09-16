@@ -1008,6 +1008,7 @@ pub fn entry_for(mention: &Mention, at: u64) -> Entry {
         mention_id: mention.id.clone(),
         summoner: mention.author.clone(),
         mint: None,
+        read_at: None,
         read_at_slot: None,
         fact_sheet: String::new(),
         reply: String::new(),

@@ -195,6 +195,11 @@ pub fn answer(mention: &Mention, gate: &mut Gate, ctx: &Answering<'_>) -> Answer
         ctx.self_mint,
     );
 
+    // Computed once. `read_at_slot` below is derived from this same value
+    // rather than re-read from `dossier`, so the two fields can never
+    // disagree with each other.
+    let read_at = dossier.read_at;
+
     Answered::Reply {
         // Read before `reply.text` is moved below. `Billed` is `Copy`, so this
         // is not a borrow that has to outlive anything.
@@ -204,8 +209,8 @@ pub fn answer(mention: &Mention, gate: &mut Gate, ctx: &Answering<'_>) -> Answer
             mention_id: mention.id.clone(),
             summoner: mention.author.clone(),
             mint: Some(mint_text),
-            read_at_slot: dossier
-                .read_at
+            read_at,
+            read_at_slot: read_at
                 .and_then(realorrug_types::ReadAt::as_slot)
                 .map(|s| s.0),
             // The evidence, not only the words. A log of replies without fact

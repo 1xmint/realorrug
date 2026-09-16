@@ -248,6 +248,9 @@ mod tests {
             mention_id: "m1".to_owned(),
             summoner: "alice".to_owned(),
             mint: Some("MintOne".to_owned()),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820,
+            ))),
             read_at_slot: Some(444_007_820),
             fact_sheet: "recipients: 6\n".to_owned(),
             reply: "Six token accounts.".to_owned(),
