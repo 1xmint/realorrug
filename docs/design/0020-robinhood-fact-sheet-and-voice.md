@@ -328,6 +328,10 @@ smaller loss than presenting an observed rug as merely uncertain.
 
 ## 4. The voice
 
+**Corrected by [ADR 0028](../adr/0028-one-bot-every-chain.md), 2026-09-15**:
+this section's recommendation below is now the decision for every chain, not
+only Robinhood — see that ADR for what changes and why, not restated here.
+
 **Architectural note, stated once here rather than re-argued in every
 rule below.** Today's Solana voice pass (`voice.rs`) does not let the model
 write free text: it asks the model to *select* among Radar's own
@@ -349,11 +353,13 @@ operate on arbitrary rendered text (`fidelity::literals(text)`,
 specifically: nothing in either check requires the text to have come from a
 fixed clause list. The cost is real and is named plainly: free text is
 harder to keep witty *and* safe than a vetted clause is, which is exactly
-why §5 exists as a harder check than a word list. **This is a
-recommendation, not a decision already made** — if Josh prefers to keep
-the clause-selection mechanism and write a Robinhood-specific clause library
-instead, the signal set and verdict ladder in §3 are unaffected either way,
-because they feed the sheet the model reads or selects from, not the
+why §5 exists as a harder check than a word list. **This was a
+recommendation when this document was drafted; [ADR 0028](../adr/0028-one-bot-every-chain.md)
+now settles it, for both chains, as free text everywhere** — Solana's
+clause-selection mechanism is retired as a live generation path, not kept
+beside free text, and `clause.rs`'s sentences become the fallback template's
+source material instead. The signal set and verdict ladder in §3 are
+unaffected either way, because they feed the sheet the model reads, not the
 generation mechanism itself.
 
 ### Length, and why
@@ -587,10 +593,10 @@ not the old one, is what is catching it.
 | `crates/realorrug-robinhood/src/pons.rs` or a new module in the same crate | reserve reads (`getReserves`/`quoteReserve`/`tokenReserve`), holder-sum from `Transfer` logs, `balanceOf`, graduation-log decode, launch-block `Transfer`/`CurveBuy` scans | §1's table; none of these reads exist in this crate today, only the launch-record and trade/sweep decoding do | new functions, additive |
 | a new `realorrug-robinhood`-side `dossier`/`build` function, symmetrical to `realorrug_onchain::build` | assembles the reads above into a `Dossier`-shaped value for a Robinhood token | §2's dispatch needs a second `build` to call | new function |
 | `crates/realorrug-roast/src/sheet.rs` | `read_at: Option<Slot>` renamed to a block-number-shaped field (§1); new `push_*` functions for the Robinhood-only facts (reserves, holders, graduation); `self_mint` becomes Robinhood-shaped or `Venue`-shaped | §1, and ADR 0023 decision 2 (the token lives on Robinhood now) | changed field type, new functions, changed constructor parameter |
-| `crates/realorrug-roast/src/sheet.rs` | new `Signal` variants: `LiquidityGone`, `CreatorSoldOut`, `BuyersCannotSell`, `CreatorBoughtOwnLaunch` (Robinhood-shaped, distinct from the existing Solana `CreatorBoughtOwnLaunch`-equivalent if the read differs), `LaunchBlockBundle` (Robinhood band), `RepeatLauncher`, `HolderConcentration` | §3's signal set | new enum variants |
+| `crates/realorrug-roast/src/sheet.rs` | new `Signal` variants: `LiquidityGone`, `CreatorSoldOut`, `BuyersCannotSell`, `CreatorBoughtOwnLaunch`, `LaunchBlockBundle`, `RepeatLauncher`, `HolderConcentration` — one variant each, shared with Solana where the same name already exists, per [ADR 0028](../adr/0028-one-bot-every-chain.md) point 3 (a signal means the same thing on every chain; the read differing is the chain reader's problem, not a reason to fork the variant) | §3's signal set | new enum variants |
 | `crates/realorrug-roast/src/verdict.rs` | `Verdict` gains a `level: Level` field (`Rugged`/`RugMechanicsLive`/`Sketchy`/`NothingUglyYet`/`CantTell`), computed by a new pure function implementing §3's rule over `sheet.signals` and `sheet.unknown`; `Verdict::from` keeps producing `reasons` (the restated facts) alongside the new level | **this is the type ADR 0027 names as the one that changes** | new field, new type (`Level`), new pure function; `reasons` unchanged |
 | `crates/realorrug-roast/src/forbidden.rs` | new `check_target`, `check_level` functions per §5; existing `check`/`RULES` kept during the transition | §5, ADR 0027 point 6 | new functions, additive during transition |
-| `crates/realorrug-roast/src/voice.rs` | (if the free-text recommendation in §4 is taken) a Robinhood-side generation path that sends the rendered sheet to a cheap-tier model and asks for prose, gated by `fidelity::check` and the new `forbidden` functions before publication; the Solana clause-selection path is untouched | §4 | new function, additive; existing `write`/`request_for` unchanged |
+| `crates/realorrug-roast/src/voice.rs` | one free-text generation path, shared by every chain, that sends the rendered sheet to a cheap-tier model and asks for prose, gated by `fidelity::check` and the new `forbidden` functions before publication; per [ADR 0028](../adr/0028-one-bot-every-chain.md) point 1, Solana's clause-selection call (`clause::parse`/`assemble` against a model answer) is retired rather than kept beside it | §4, ADR 0028 | changed function, not additive; existing `write`/`request_for` change shape |
 | `crates/realorrug-roast/src/fidelity.rs` | unchanged | `literals`/`check` already operate on arbitrary text | none |
 | `crates/realorrug-roast/src/baserates.rs` | a Robinhood-shaped analogue of `Band`/`BaseRates`, populated once a Pons v2 recipient-count and repeat-launcher distribution is measured (research 0042 port-order items 1 and 3) — **not part of this design's day-one scope**; §3's `LaunchBlockBundle`/`RepeatLauncher` signals read `None` (no signal fires) until this exists | §3, §7 | new type, additive, not built here |
 | `crates/realorrug-roast/src/creator.rs` | reused as-is; keyed on `creator_fee_recipient` per research 0038 §2, same `CreatorIndex`/`Record`/`Population` shapes | §1's creator-track-record row | none, or a build-pipeline change outside this crate's scope |
@@ -603,7 +609,12 @@ not the old one, is what is catching it.
 `getLaunchedToken`, reserves, holder-sum, graduation log) lives in
 `realorrug-robinhood`; the sheet *shape* (`FactSheet`, `Fact`, `Signal`,
 `Verdict`, `forbidden`, `fidelity`) stays in `realorrug-roast`, unchanged in
-crate ownership from today.** This mirrors the existing Solana split exactly
+crate ownership from today.** This is still the right split, and it is what
+makes [ADR 0028](../adr/0028-one-bot-every-chain.md) point 2's seam possible:
+one reader per chain, in its own chain-side crate, against one shared sheet,
+verdict and voice — a chain-forked builder with a shared shape is exactly
+the boundary a third chain's reader plugs into without touching
+`realorrug-roast`. This mirrors the existing Solana split exactly
 — `realorrug-onchain` reads the chain and returns a `Dossier`;
 `realorrug-roast` turns a `Dossier` into a `FactSheet` and a `Verdict`, and
 never reads the chain itself. No new crate is needed: `realorrug-robinhood`
