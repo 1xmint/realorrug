@@ -980,47 +980,44 @@ fn check_required_age(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violat
         return refused;
     };
 
-    match sheet
+    if let Some(age) = sheet
         .facts
         .iter()
         .find(|f| f.kind == crate::clause::Kind::Age)
     {
-        Some(age) => {
-            // A real age exists. The read point alone must not pass: its
-            // number is deliberately excluded from the values checked here.
-            let lower = text.to_lowercase();
-            let mentions_age_word = AGE_WORDS.iter().any(|w| lower.contains(w));
-            if mentions_age_word && states_one_of(text, &age.values) {
-                Vec::new()
-            } else {
-                refused
-            }
+        // A real age exists. The read point alone must not pass: its
+        // number is deliberately excluded from the values checked here.
+        let lower = text.to_lowercase();
+        let mentions_age_word = AGE_WORDS.iter().any(|w| lower.contains(w));
+        if mentions_age_word && states_one_of(text, &age.values) {
+            Vec::new()
+        } else {
+            refused
         }
-        None => {
-            // Ageless. The reply must say the age is unknown, and must still
-            // cite the read point -- both, not either.
-            let lower = text.to_lowercase();
-            let says_age_unknown = (lower.contains("age") || lower.contains("old"))
-                && (lower.contains("could not be read") || lower.contains("unknown"));
-            let mentions_read_point_word = READ_POINT_WORDS.iter().any(|w| lower.contains(w));
-            let read_point_value = match read_at {
-                realorrug_types::ReadAt::Solana(slot) => slot.get(),
-                realorrug_types::ReadAt::Robinhood(block) => block,
-            };
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "a slot or a block number is well inside f64's exact integer range -- \
-                          the same cast sheet.rs::authorised already makes for the same value"
-            )]
-            let read_point_value = read_point_value as f64;
-            if says_age_unknown
-                && mentions_read_point_word
-                && states_one_of(text, &[read_point_value])
-            {
-                Vec::new()
-            } else {
-                refused
-            }
+    } else {
+        // Ageless. The reply must say the age is unknown, and must still
+        // cite the read point -- both, not either.
+        let lower = text.to_lowercase();
+        let says_age_unknown = (lower.contains("age") || lower.contains("old"))
+            && (lower.contains("could not be read") || lower.contains("unknown"));
+        let mentions_read_point_word = READ_POINT_WORDS.iter().any(|w| lower.contains(w));
+        let read_point_value = match read_at {
+            realorrug_types::ReadAt::Solana(slot) => slot.get(),
+            realorrug_types::ReadAt::Robinhood(block) => block,
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a slot or a block number is well inside f64's exact integer range -- \
+                      the same cast sheet.rs::authorised already makes for the same value"
+        )]
+        let read_point_value = read_point_value as f64;
+        if says_age_unknown
+            && mentions_read_point_word
+            && states_one_of(text, &[read_point_value])
+        {
+            Vec::new()
+        } else {
+            refused
         }
     }
 }
