@@ -1,14 +1,25 @@
-# Progress — packet 0036 (feat/0035-log-read-point)
+# Progress — packet 0039 (task 9-15-0036, branch feat/0038-memory-in-front)
 
-1. [x] `ReadAt` derives `Serialize`/`Deserialize`, externally tagged, no `JsonSchema` — `crates/realorrug-types/src/chain.rs` (6c0fc63)
-2. [x] `Entry` gains `pub read_at: Option<ReadAt>`, `read_at_slot` doc updated, fourth pinned-line test added — `crates/realorrug-analyst/src/log.rs` (2bd7922)
-3. [x] `answer.rs` computes `read_at` once and derives `read_at_slot` from it — `crates/realorrug-analyst/src/answer.rs` (545f327)
-4. [x] Every `Entry` literal updated across the tree (8d67006), including realorrug-serve/src/public.rs which the packet's grep list missed
-5. [x] Tests: Robinhood round-trip keeps block number; Solana entry both fields agree; pre-`read_at` line still loads as `None` (in 2bd7922)
-6. [x] `cargo test -p realorrug-analyst -p realorrug-types` pass; roast/cli/onchain/serve still build
-7. [x] clippy clean on realorrug-types/realorrug-analyst/realorrug-serve; `cargo test -p repo-conformance` passes
-8. [x] `cargo fmt --check` clean as the last command before push (caught one line-wrap in answer.rs, fixed in bc4b1a6)
+- [ ] dossier::build takes `memory: Option<&Memory>`, caches only the launch
+      record (what="launch", subject=mint, block=launch block), skips
+      signature paging on a hit, records on a miss, surfaces record's
+      Conflict refusal as a "launch block" miss.
+- [ ] realorrug-cli's dossier.rs updated to pass `None` for memory (no
+      existing state-path config to open one from).
+- [ ] lib.rs / SolanaReader wiring updated to match build's new signature.
+- [ ] design 0021 updated: §1 boundary (only launch cached, why the other
+      two are deferred + the condition that unblocks them: a sheet read
+      point per fact, not one for the whole sheet) and §3 boundary (memory
+      is never the source of a fact the bot could not read today).
+- [ ] Tests 1-5 from the packet, each verified by deleting the guard it
+      covers and watching it fail.
+- [ ] cargo test -p realorrug-onchain, build checks for -p realorrug-cli,
+      -p realorrug-roast, -p realorrug-analyst.
+- [ ] clippy --all-targets -D warnings on edited crates.
+- [ ] cargo test -p repo-conformance.
+- [ ] cargo fmt --check as the very last command before push.
 
-All done. Pushed to feat/0035-log-read-point. Nothing left undone from the packet.
-
-Watch out for: crates/realorrug-roast/ is owned by another worker — do not touch it.
+Done: nothing committed yet, this checkpoint file only.
+Next: implement memory.rs plumbing into dossier::build.
+Watch out for: rustfmt fn_call_width is 60, not 100 — run fmt --check after
+the FINAL edit, not before.
