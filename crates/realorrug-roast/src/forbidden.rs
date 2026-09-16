@@ -905,6 +905,57 @@ mod tests {
         assert!(check_target("RealOrRug says: rugged").is_empty());
     }
 
+    #[test]
+    fn the_own_name_mask_reaches_a_name_late_in_a_long_reply() {
+        // Re-apply the bug by stopping `mask_case_preserving`'s scan early --
+        // any of the three parts of `i + needle.len() <= bytes.len()` will do
+        // it. The name then stays unmasked, `RealOrRug Says` reads as a
+        // two-word capitalised run, and this sentence's "scam" is refused
+        // when it must not be. The existing own-name test cannot catch that:
+        // its second word is lowercase, so there is no run either way.
+        assert!(check_target("no evidence of a scam here, RealOrRug Says").is_empty());
+    }
+
+    #[test]
+    fn an_at_sign_is_only_a_handle_when_a_name_follows_it() {
+        // The character *after* the `@` decides it, so both halves of
+        // `is_alphanumeric() || == '_'` have to hold: a name makes a handle,
+        // a bare `@` in prose does not.
+        assert!(!check_target("@alice ran a scam").is_empty());
+        assert!(check_target("reply to @ if you think this is a scam").is_empty());
+    }
+
+    #[test]
+    fn one_capitalised_word_is_not_a_named_company() {
+        // Two capitalised words back to back is the shape. One alone is not,
+        // or every sentence would begin with a person.
+        assert!(check_target("Scam tokens exist on every chain").is_empty());
+    }
+
+    #[test]
+    fn an_observed_verb_after_an_address_passes_even_beside_an_accusation_word() {
+        // The worked-example test above has no accusation word in its allowed
+        // half, so it cannot tell whether the verb check fires at all. This
+        // one can: "rug" is in the same sentence, and it must still pass.
+        assert!(
+            check_target("0xdeadbeef sold everything in the last block before the rug").is_empty()
+        );
+    }
+
+    #[test]
+    fn a_bare_0x_with_no_hex_digits_is_not_an_address() {
+        // `0x` alone is two characters of prose, not a subject -- the hex run
+        // after it is what makes it an address.
+        assert!(check_target("0x is a scam").is_empty());
+    }
+
+    #[test]
+    fn an_address_running_to_the_end_of_the_text_is_not_read_past() {
+        // The hex scan's bound is what stops it walking off the end of the
+        // string, and getting that wrong panics rather than answering wrongly.
+        assert!(check_target("nothing here looks like a scam at 0xdeadbeef").is_empty());
+    }
+
     // -----------------------------------------------------------------
     // check_level
     // -----------------------------------------------------------------
