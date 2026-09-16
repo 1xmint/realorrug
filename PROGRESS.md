@@ -13,22 +13,29 @@
   `cargo check -p realorrug-model` clean.
 - `realorrug-onchain/src/rpc.rs`: `RADAR_RPC` -> `REALORRUG_RPC` via
   `env_or_legacy`. `cargo check -p realorrug-onchain` clean.
+- `realorrug-cli`: `model_prices.rs` (`REALORRUG_MODEL_NAME`,
+  `_PRICE_IN`, `_PRICE_OUT`, `_REASONING_EFFORT`, all via `env_or_legacy`,
+  the direct-read gap is fixed), `analyst.rs` and `roast.rs` doc comments.
+  `cargo check`/`clippy -p realorrug-cli` clean, `cargo fmt` run repo-wide
+  (reflowed a few lines in already-committed files harmlessly).
+- `realorrug-payout`: added `realorrug-types` dependency for
+  `env_or_legacy`; `REALORRUG_PAYOUT_ADDRESS`, `REALORRUG_PAYOUT_FLOOR_WEI`,
+  `REALORRUG_CONTEST_DIR` all fall back to their `RADAR_*` names. Added
+  `the_old_payout_address_name_still_works` test (passed:
+  `cargo test -p realorrug-payout the_old_payout_address_name_still_works`).
+  `cargo check -p realorrug-payout` clean. NOTE: did not check whether
+  `RADAR_TRUST_CLOUDFLARE` / `RADAR_CHECK_DAILY_BUDGET` exist in this crate
+  or in `realorrug-serve` -- re-grep before assuming done.
 
 Git grep for `RADAR_[A-Z_0-9]*` (real var names, not prose) now clean in:
 `crates/realorrug-analyst`, `crates/realorrug-model`,
-`crates/realorrug-onchain`.
+`crates/realorrug-onchain`, `crates/realorrug-cli`, `crates/realorrug-payout`
+(only the intentional `old` fallback-argument literals to `env_or_legacy`
+remain in payout's main.rs/lib.rs/tests.rs -- named there explicitly).
 
 ## NOT done yet -- still to rename
 Grep `git grep -n "RADAR_" -- '*.rs' '*.example' '*.yml' '*.toml' '*.ts' '*.md' 'justfile'`
 still hits:
-- `crates/realorrug-cli/src/analyst.rs`, `model_prices.rs`, `roast.rs` --
-  check whether these pass a getter or read `std::env` directly, same
-  `env_or_legacy` pattern.
-- `crates/realorrug-payout/src/lib.rs`, `main.rs`, `tests.rs` --
-  `RADAR_PAYOUT_ADDRESS`, `RADAR_PAYOUT_FLOOR_WEI`, `RADAR_TRUST_CLOUDFLARE`,
-  `RADAR_CHECK_DAILY_BUDGET` (verify exact names via grep before editing --
-  payout is the money-moving crate, AGENTS.md rule 1, be careful and add
-  tests for the new-name path).
 - `crates/realorrug-serve/src/check.rs`, `main.rs`, `public.rs` --
   `RADAR_CHECK_CACHE_DIR`, `RADAR_CONTEST_DIR`, `RADAR_SITE_ORIGIN`,
   `RADAR_X402_PAY_TO`, `RADAR_POPULATION`, `RADAR_BASE_RATES` (verify names).
