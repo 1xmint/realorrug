@@ -173,6 +173,7 @@ impl Chain for Fake {
             graduation_threshold: 0,
             creator_tax_bps: 200,
             buyback: false,
+            phase: 0,
             exists: *token == TOKEN,
         })
     }
