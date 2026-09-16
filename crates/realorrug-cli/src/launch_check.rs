@@ -134,6 +134,7 @@ mod tests {
             graduation_threshold: 0,
             creator_tax_bps: 200,
             buyback: false,
+            phase: 0,
             exists: true,
         };
         let tx = Hash32([9; 32]);
