@@ -59,6 +59,48 @@ pub struct Unavailable {
     pub why: String,
 }
 
+/// A quote asset's display identity: what to call it, and how many decimal
+/// places its smallest unit has.
+///
+/// Exists so that a figure and the unit it is in can never be separated --
+/// `CurveFacts::quote_reserves` and `quote_capacity` are meaningless numbers on
+/// their own (a lamport count and a wei count are both just integers), and this
+/// type is what a renderer must be handed alongside them before it may print
+/// anything. Set by each [`ChainReader`]: the Solana reader always says SOL
+/// with 9 decimals; the Robinhood reader says ETH with 18 for a native-ETH
+/// launch, and `None` -- never a guess -- when the launch record names a quote
+/// token this reader cannot identify (rule 8: unknown is not safe, and a
+/// guessed "ETH" label on a token that is not ETH would be exactly the
+/// fabricated fact AGENTS.md section 3 rule 2 forbids).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuoteAsset {
+    /// The symbol to print beside the amount, e.g. `"SOL"` or `"ETH"`.
+    pub symbol: String,
+    /// How many decimal places the smallest unit has (9 for a lamport, 18 for
+    /// a wei).
+    pub decimals: u8,
+}
+
+impl QuoteAsset {
+    /// Native SOL, lamports, 9 decimals.
+    #[must_use]
+    pub fn sol() -> Self {
+        Self {
+            symbol: "SOL".to_owned(),
+            decimals: 9,
+        }
+    }
+
+    /// Native ETH, wei, 18 decimals.
+    #[must_use]
+    pub fn eth() -> Self {
+        Self {
+            symbol: "ETH".to_owned(),
+            decimals: 18,
+        }
+    }
+}
+
 /// What the curve says right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CurveFacts {
@@ -75,13 +117,25 @@ pub struct CurveFacts {
     /// on Solana today, and the same figure in whatever unit a future chain's
     /// quote asset uses. `CurveFacts` itself is not chain-specific; only a
     /// reader's *source* for this number is.
-    pub quote_reserves: u64,
+    ///
+    /// `u128`, not `u64`: a `u64` tops out at about 18.4 ETH in wei, which
+    /// every token that raised real money on Robinhood Chain exceeds. Lamports
+    /// still fit easily; nothing downstream does arithmetic that can overflow
+    /// a `u128`, only division and formatting.
+    pub quote_reserves: u128,
     /// How much of the quote asset can be spent before price moves by
     /// [`CAPACITY_IMPACT_BPS`], in the quote asset's smallest unit.
     ///
     /// `None` means **cannot size into this at all**, never "no limit found"
     /// (rule 9). A complete curve is the common reason.
-    pub quote_capacity: Option<u64>,
+    pub quote_capacity: Option<u128>,
+    /// What `quote_reserves` and `quote_capacity` are denominated in.
+    ///
+    /// `None` means the launch record named a quote asset this reader could
+    /// not identify -- not native SOL, not native ETH, and not a token this
+    /// reader has a symbol for. A figure with no identified unit must never be
+    /// rendered; the sheet puts it on `unknown` instead (rule 8).
+    pub quote_asset: Option<QuoteAsset>,
     /// Who launched the token, read from the curve account itself.
     ///
     /// **The only way to get a creator for a graduated coin.** The launch
@@ -382,8 +436,9 @@ fn curve_facts(
     Ok((
         CurveFacts {
             complete: curve.complete,
-            quote_reserves: curve.real_sol_reserves,
-            quote_capacity: capacity,
+            quote_reserves: u128::from(curve.real_sol_reserves),
+            quote_capacity: capacity.map(u128::from),
+            quote_asset: Some(QuoteAsset::sol()),
             creator: ChainAddress::Solana(curve.creator),
             fees: fee_schedule(client, budget, &curve),
         },

@@ -25,17 +25,23 @@ use realorrug_types::Address;
 
 use crate::flag;
 
-/// Renders lamports as SOL.
+/// Renders a quote-asset amount, in its own smallest unit, to four decimal
+/// places.
 ///
-/// Integer division for the whole part and a remainder for the fraction, rather
-/// than a float. `realorrug-types` keeps money integral on purpose, and a `u64` of
-/// lamports is past f64's exact range -- a printed figure that has silently
-/// rounded is exactly the kind of number this account must not publish.
-fn sol(lamports: u64) -> String {
+/// Integer division for the whole part and a remainder for the fraction,
+/// rather than a float. `realorrug-types` keeps money integral on purpose, and a
+/// `u128` of lamports or wei is past `f64`'s exact range -- a printed figure
+/// that has silently rounded is exactly the kind of number this account must
+/// not publish. `decimals` is the quote asset's own (9 for a lamport, 18 for
+/// a wei) -- this is the same arithmetic `realorrug-roast::sheet::render_quote`
+/// uses, so a Robinhood curve's ETH reserves print correctly rather than as a
+/// ninth of themselves.
+fn render_quote(units: u128, decimals: u8) -> String {
+    let scale = 10u128.pow(u32::from(decimals));
     format!(
         "{}.{:04}",
-        lamports / 1_000_000_000,
-        (lamports % 1_000_000_000) / 100_000
+        units / scale,
+        (units % scale) / (scale / 10_000)
     )
 }
 
@@ -129,7 +135,23 @@ curve
         "  graduated   : {}",
         if curve.complete { "yes" } else { "no" }
     );
-    let _ = writeln!(out, "  reserves    : {} SOL", sol(curve.quote_reserves));
+    match &curve.quote_asset {
+        Some(asset) => {
+            let _ = writeln!(
+                out,
+                "  reserves    : {} {}",
+                render_quote(curve.quote_reserves, asset.decimals),
+                asset.symbol
+            );
+        }
+        // Rule 8: a number and its unit travel together or not at all. Never
+        // guess SOL for a reserves figure this reader could not name the
+        // asset of.
+        None => out.push_str(
+            "  reserves    : could not be priced -- the quote asset is not one Radar can identify
+",
+        ),
+    }
     // Both remaining lines are false about a graduated coin: its capacity is
     // not zero, it is on an AMM Radar does not price, and the curve's fee
     // schedule is not the fee it pays. Printing "cannot size into this" for a
@@ -142,12 +164,13 @@ curve
         );
         return;
     }
-    match curve.quote_capacity {
-        Some(l) => {
+    match (curve.quote_capacity, &curve.quote_asset) {
+        (Some(l), Some(asset)) => {
             let _ = writeln!(
                 out,
-                "  capacity    : {} SOL at {} bps impact",
-                sol(l),
+                "  capacity    : {} {} at {} bps impact",
+                render_quote(l, asset.decimals),
+                asset.symbol,
                 realorrug_onchain::dossier::CAPACITY_IMPACT_BPS
             );
             // 0022 in one line, next to the number it corrects. STATE.md and
@@ -157,8 +180,15 @@ curve
 ",
             );
         }
+        // A capacity figure exists but the quote asset it is denominated in
+        // could not be identified -- no amount is printed, same rule as the
+        // reserves line above.
+        (Some(_), None) => out.push_str(
+            "  capacity    : could not be priced -- the quote asset is not one Radar can identify
+",
+        ),
         // "cannot exit", never "no limit found".
-        None => out.push_str(
+        (None, _) => out.push_str(
             "  capacity    : none -- cannot size into this
 ",
         ),
@@ -196,15 +226,19 @@ pub fn render(d: &Dossier) -> String {
     let mut out = String::new();
 
     let _ = writeln!(out, "mint          : {}", d.mint);
-    // The slot is printed before any figure, because a number without the slot
-    // it was read at cannot be checked against an explorer -- and being
-    // checkable is the whole of this account's claim.
-    match d.read_at.and_then(realorrug_types::ReadAt::as_slot) {
-        Some(slot) => {
-            let _ = writeln!(out, "read at slot  : {}", slot.0);
+    // The read point is printed before any figure, because a number without
+    // the point it was read at cannot be checked against an explorer -- and
+    // being checkable is the whole of this account's claim. `ReadAt`'s own
+    // `Display` is used rather than unwrapping to a slot: `as_slot` returns
+    // `None` for a Robinhood block deliberately (a block must never wear a
+    // slot's label), and printing "unknown" for every Robinhood read would
+    // say a chain was never read when it was.
+    match d.read_at {
+        Some(read_at) => {
+            let _ = writeln!(out, "read at       : {read_at}");
         }
         None => out.push_str(
-            "read at slot  : unknown
+            "read at       : unknown
 ",
         ),
     }
@@ -230,7 +264,14 @@ launch block
         let _ = writeln!(out, "  transactions: {}", launch.transactions);
         match launch.dev_buy_lamports {
             Some(l) => {
-                let _ = writeln!(out, "  dev buy     : {} SOL", sol(l));
+                // `LaunchBlock` is Solana-shaped only, so this figure is
+                // always lamports -- see the matching note on
+                // `realorrug-roast::sheet`'s own launch-block dev-buy fact.
+                let _ = writeln!(
+                    out,
+                    "  dev buy     : {} SOL",
+                    render_quote(u128::from(l), 9)
+                );
             }
             // Not "0 SOL". Rule 9, and this one is a statement about a person.
             None => out.push_str(
@@ -324,19 +365,23 @@ mod tests {
     }
 
     #[test]
-    fn sol_renders_lamports_by_integer_arithmetic() {
-        // Replacing `sol` with an empty string survived. It is how every SOL
-        // figure in the dossier reaches a reader, and the reason it does not go
-        // through a float is that a u64 of lamports is past f64's exact range:
-        // a figure that has silently rounded is the one thing this account must
-        // not publish.
-        assert_eq!(sol(1_000_000_000), "1.0000");
-        assert_eq!(sol(303_000_000), "0.3030");
-        assert_eq!(sol(6_186_150_833), "6.1861");
-        assert_eq!(sol(0), "0.0000");
+    fn render_quote_renders_by_integer_arithmetic() {
+        // Replacing `render_quote` with an empty string survived. It is how
+        // every quote-asset figure in the dossier reaches a reader, and the
+        // reason it does not go through a float is that a u128 of lamports or
+        // wei is past f64's exact range: a figure that has silently rounded
+        // is the one thing this account must not publish.
+        assert_eq!(render_quote(1_000_000_000, 9), "1.0000");
+        assert_eq!(render_quote(303_000_000, 9), "0.3030");
+        assert_eq!(render_quote(6_186_150_833, 9), "6.1861");
+        assert_eq!(render_quote(0, 9), "0.0000");
         // Sub-precision dust rounds down rather than up: a capacity reported
         // larger than it is would be the expensive direction.
-        assert_eq!(sol(1), "0.0000");
+        assert_eq!(render_quote(1, 9), "0.0000");
+        // A curve holding more than 18.4 ETH in wei -- past u64::MAX -- reads
+        // without error, the reason `quote_reserves` and this function's
+        // `units` parameter are both `u128`.
+        assert_eq!(render_quote(20_000_000_000_000_000_000, 18), "20.0000");
     }
 
     #[test]
@@ -355,11 +400,12 @@ mod tests {
                 complete: false,
                 quote_reserves: 6_186_150_833,
                 quote_capacity: Some(303_000_000),
+                quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
                 fees: None,
             },
         );
-        assert!(out.contains("6.1861"), "{out}");
-        assert!(out.contains("0.3030"), "{out}");
+        assert!(out.contains("6.1861 SOL"), "{out}");
+        assert!(out.contains("0.3030 SOL"), "{out}");
         assert!(out.contains("graduated   : no"), "{out}");
         assert!(out.contains("NOT a venue ceiling"), "{out}");
         assert!(out.contains("could not be read (not assumed)"), "{out}");
@@ -383,6 +429,7 @@ mod tests {
                 complete: true,
                 quote_reserves: 0,
                 quote_capacity: None,
+                quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
                 fees: None,
             },
         );
@@ -488,7 +535,30 @@ mod tests {
             elapsed_ms: 0,
         };
         let text = render(&d);
-        assert!(text.contains("read at slot  : unknown"));
+        assert!(text.contains("read at       : unknown"));
         assert!(!text.contains("dev buy"));
+    }
+
+    #[test]
+    fn a_robinhood_read_point_prints_its_own_block_rather_than_unknown() {
+        // `as_slot` returns `None` for `ReadAt::Robinhood` deliberately (a
+        // block must never wear a slot's label), and a rendering that only
+        // knew how to print a slot used to fall through that `None` straight
+        // to "unknown" -- a Robinhood dossier that was in fact read reporting
+        // as though it never had been. `Display` is used instead so each
+        // chain's own read point survives into the printed dossier.
+        let d = Dossier {
+            mint: ChainAddress::Solana(Address::new([1u8; 32])),
+            read_at: Some(realorrug_types::ReadAt::Robinhood(100)),
+            launch: None,
+            curve: None,
+            creator_transactions: None,
+            unavailable: Vec::new(),
+            calls: 0,
+            elapsed_ms: 0,
+        };
+        let text = render(&d);
+        assert!(text.contains("read at       : block 100"), "{text}");
+        assert!(!text.contains("unknown"), "{text}");
     }
 }

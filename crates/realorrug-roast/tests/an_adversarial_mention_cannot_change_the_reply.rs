@@ -67,6 +67,7 @@ fn dossier_named(name: &str, symbol: &str) -> Dossier {
             complete: false,
             quote_reserves: 6_186_150_833,
             quote_capacity: Some(303_000_000),
+            quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
             fees: None,
         }),
         creator_transactions: Some(Count::AtLeast(12)),

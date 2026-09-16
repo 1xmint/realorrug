@@ -650,6 +650,40 @@ crate, and the new Robinhood reads live in `realorrug-robinhood`, which
 today has no payout code either (the payout key lives in `realorrug-payout`,
 untouched by this document).
 
+### A figure travels with its unit, and the read point is the chain's own
+
+Two narrower corrections, from building §1's sheet rather than designing it.
+
+**A figure and its unit travel together, never apart.** `CurveFacts` used to
+assume SOL, 9 decimals, for every curve — correct for a Solana curve and
+silently wrong for anything else. It now carries `quote_asset:
+Option<QuoteAsset>` (a symbol and a decimal count) beside the reserve and
+capacity amounts, set by each chain's own reader; `sheet.rs` renders an amount
+only when the asset was identified, and says the impact budget "could not be
+priced" rather than guess a unit when it was not (rule 8). Both chains render
+through the same integer-arithmetic function, so a Robinhood curve's ETH and
+a Solana curve's SOL differ only in the `decimals` and `symbol` passed in, not
+in a second code path that could drift from the first. The reserve and
+capacity amounts are `u128`, not `u64`, because a `u64` of wei tops out
+around 18.4 ETH — an ordinary Robinhood curve, not an edge case.
+
+**The read point is the chain's own, not a bare number.** `ReadAt` (already
+in `realorrug-types`) is a `Solana(Slot)` / `Robinhood(u64)` enum rather than
+one shared integer, specifically so a slot and a block number — both,
+underneath, a `u64` counting up roughly once per chain tick — cannot be
+compared or displayed as if they were the same clock. **This document records
+a gap that building it found, rather than one it solved**: `FactSheet::read_at`
+is still `Option<Slot>`, Solana-only, because retyping it (or adding a second
+field beside it) breaks `forbidden.rs`'s full struct-literal test
+construction and its direct field access, and `forbidden.rs` is owned by a
+later task. Today a Robinhood sheet's `read_at` is `None` — not wrong, since
+`ReadAt::as_slot` returns `None` for a Robinhood block by design, but the
+consequence is a Robinhood `NothingUglyYet` reply currently has no
+chronological fact on the sheet to cite at all. Fixing this is task 9-15-0032
+(the same gap `crates/realorrug-analyst/src/log.rs`'s `Entry::read_at_slot:
+Option<u64>` has, for the same reason: a stored record that cannot say what
+the bot knew when it spoke about a Robinhood token).
+
 ## 7. What this design does not decide
 
 - **Design 0021 (the read memory — freshness, caching, credits), not yet
