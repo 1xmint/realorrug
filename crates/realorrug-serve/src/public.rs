@@ -17,7 +17,8 @@
 //!
 //! The site lives on another origin, so a browser needs
 //! `Access-Control-Allow-Origin` to read these. It is set only when
-//! `RADAR_SITE_ORIGIN` names that origin, and to that origin alone -- never
+//! `REALORRUG_SITE_ORIGIN` (falling back to `RADAR_SITE_ORIGIN`) names that
+//! origin, and to that origin alone -- never
 //! `*`. Unset means the header is absent and a browser elsewhere refuses the
 //! response, which is rule 8 applied to who may read: the safe direction, and
 //! the site's fallback makes it a visible one rather than a blank page.
@@ -37,6 +38,7 @@ use realorrug_contest::{Record, Week};
 use realorrug_roast::baserates::BaseRates;
 use realorrug_roast::creator::Summary;
 use realorrug_types::civil::{date_from_days, timestamp_from_seconds};
+use realorrug_types::env::env_or_legacy;
 use serde_json::{Value, json};
 
 /// Where the published files are, and who may read the answers.
@@ -61,13 +63,23 @@ impl Paths {
     /// variables. The defaults are the paths the other binaries write to, so
     /// an instance with nothing configured reads what the timers produce.
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Self {
-        let or = |key: &str, default: &str| get(key).unwrap_or_else(|| default.to_owned());
+        let or = |new: &str, old: &str, default: &str| {
+            env_or_legacy(new, old, get).unwrap_or_else(|| default.to_owned())
+        };
         Self {
-            contest_dir: or("RADAR_CONTEST_DIR", "data/contest"),
-            analyst_dir: or("RADAR_ANALYST_DIR", "data/analyst"),
-            base_rates: or("RADAR_BASE_RATES", realorrug_roast::baserates::DEFAULT_PATH),
-            summary: or("RADAR_POPULATION", realorrug_roast::creator::SUMMARY_PATH),
-            site_origin: get("RADAR_SITE_ORIGIN")
+            contest_dir: or("REALORRUG_CONTEST_DIR", "RADAR_CONTEST_DIR", "data/contest"),
+            analyst_dir: or("REALORRUG_ANALYST_DIR", "RADAR_ANALYST_DIR", "data/analyst"),
+            base_rates: or(
+                "REALORRUG_BASE_RATES",
+                "RADAR_BASE_RATES",
+                realorrug_roast::baserates::DEFAULT_PATH,
+            ),
+            summary: or(
+                "REALORRUG_POPULATION",
+                "RADAR_POPULATION",
+                realorrug_roast::creator::SUMMARY_PATH,
+            ),
+            site_origin: env_or_legacy("REALORRUG_SITE_ORIGIN", "RADAR_SITE_ORIGIN", get)
                 .map(|o| o.trim().to_owned())
                 .filter(|o| !o.is_empty()),
         }
@@ -1194,15 +1206,15 @@ mod tests {
         assert_eq!(none.site_origin, None);
 
         let set = Paths::from_vars(&|k| match k {
-            "RADAR_CONTEST_DIR" => Some("/var/lib/radar/contest".to_owned()),
-            "RADAR_SITE_ORIGIN" => Some("  https://cabalhunter.org ".to_owned()),
+            "REALORRUG_CONTEST_DIR" => Some("/var/lib/radar/contest".to_owned()),
+            "REALORRUG_SITE_ORIGIN" => Some("  https://cabalhunter.org ".to_owned()),
             _ => None,
         });
         assert_eq!(set.contest_dir, "/var/lib/radar/contest");
         assert_eq!(set.site_origin.as_deref(), Some("https://cabalhunter.org"));
         // Blank is unset, not an empty origin that would produce an empty
         // header.
-        let blank = Paths::from_vars(&|k| (k == "RADAR_SITE_ORIGIN").then(|| "  ".to_owned()));
+        let blank = Paths::from_vars(&|k| (k == "REALORRUG_SITE_ORIGIN").then(|| "  ".to_owned()));
         assert_eq!(blank.site_origin, None);
     }
 

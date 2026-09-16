@@ -145,7 +145,7 @@ exclude_re = [
     # now **said out loud**: `None` means the instance can read and cannot post,
     # which `daemon::posture` names on every start --
     #
-    #   "RADAR_X_PUBLISH=on but there is no signing credential, so every reply
+    #   "REALORRUG_X_PUBLISH=on but there is no signing credential, so every reply
     #    will be answered and none delivered."
     #
     # -- and `the_three_states_are_told_apart_in_words` pins that sentence. So a
@@ -184,15 +184,15 @@ exclude_re = [
     'replace - with / in extensions',
 
     # `Telegram::from_env` is the third of the shape, and the same argument: it
-    # reads `RADAR_TELEGRAM_BOT_TOKEN`, `RADAR_TELEGRAM_API_BASE` and
-    # `RADAR_TELEGRAM_CHANNEL` and hands them to `from_vars`, which is tested
+    # reads `REALORRUG_TELEGRAM_BOT_TOKEN`, `REALORRUG_TELEGRAM_API_BASE` and
+    # `REALORRUG_TELEGRAM_CHANNEL` and hands them to `from_vars`, which is tested
     # with the token present, absent and blank, the base defaulted and
     # overridden, and the channel present and blank. The reading cannot be
     # tested without `std::env::set_var`, for the reason above.
     #
     # The mutation's effect is the safe direction and is said out loud:
     # `None` means the lane is off, and `telegram::posture` prints "telegram
-    # off -- no RADAR_TELEGRAM_BOT_TOKEN" on every start.
+    # off -- no REALORRUG_TELEGRAM_BOT_TOKEN" on every start.
     'replace Telegram::from_env -> Option<Self> with None',
 
     # The daemon's two thinnest wrappers, and neither is equivalent -- each is

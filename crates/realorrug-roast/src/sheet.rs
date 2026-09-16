@@ -355,7 +355,7 @@ impl FactSheet {
     /// carries no population context, and the reply says less. Rule 8 — a
     /// missing input is a refusal to claim, not a default.
     ///
-    /// `self_mint` is the analyst's own token, from `RADAR_SELF_MINT`, or
+    /// `self_mint` is the analyst's own token, from `REALORRUG_SELF_MINT`, or
     /// `None` when no token is special. When the dossier is about that mint,
     /// every [`About::Price`] fact is dropped and the sheet says so
     /// ([`withhold_price`]). Everything else about the token is stated on the

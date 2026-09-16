@@ -39,13 +39,15 @@
 //! - **No RPC endpoint configured for the resolved chain** answers `budget`
 //!   for every cold request on that chain — design 0023 §4's own text: "a box
 //!   with no RPC credential set answers every cold request with the
-//!   budget-exhausted message". Robinhood Chain reuses `RADAR_ROBINHOOD_RPC`,
-//!   the same variable `realorrug-analyst`'s daemon and `realorrug roast
+//!   budget-exhausted message". Robinhood Chain reuses
+//!   `REALORRUG_ROBINHOOD_RPC` (falling back to `RADAR_ROBINHOOD_RPC`), the
+//!   same variable `realorrug-analyst`'s daemon and `realorrug roast
 //!   --robinhood-rpc` already read. Solana keeps `realorrug_onchain::RpcClient`'s
 //!   own public-endpoint default (`RpcClient::from_vars`), so a Solana cold
 //!   read needs no extra configuration to be included here — design 0023 §2's
 //!   "if Solana is equally cheap to wire through the same code, include it".
-//! - **The daily cold-read count**, [`RADAR_CHECK_DAILY_BUDGET`](Paths), unset
+//! - **The daily cold-read count**, [`REALORRUG_CHECK_DAILY_BUDGET`](Paths)
+//!   (falling back to `RADAR_CHECK_DAILY_BUDGET`), unset
 //!   or zero refuses every cold read (rule 7 — no budget refuses spending).
 //!   Reserved before the read, released back on a failed read so a network
 //!   error does not permanently shrink the day's budget for nothing learned.
@@ -63,6 +65,7 @@ use realorrug_onchain::{RpcClient, dispatch};
 use realorrug_roast::verdict::{Level, Verdict};
 use realorrug_roast::{BaseRates, FactSheet};
 use realorrug_types::ChainAddress;
+use realorrug_types::env::env_or_legacy;
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -98,8 +101,9 @@ pub struct CheckState {
     /// holds a `Box<dyn Transport>` and is not `Clone`, and constructing one
     /// is cheap (it wraps an HTTP agent, not a connection).
     pub solana_endpoint: String,
-    /// Robinhood Chain's endpoint, or `None` when `RADAR_ROBINHOOD_RPC` is
-    /// unset — every Robinhood cold request then answers `budget`.
+    /// Robinhood Chain's endpoint, or `None` when `REALORRUG_ROBINHOOD_RPC`
+    /// (or the legacy `RADAR_ROBINHOOD_RPC`) is unset — every Robinhood cold
+    /// request then answers `budget`.
     pub robinhood_endpoint: Option<String>,
     /// The base rates a fact sheet is built against, or `None` when the
     /// snapshot could not be loaded — the sheet then simply carries no
@@ -116,7 +120,8 @@ pub struct CheckState {
     /// One lock per in-flight or recently-flighted `(chain, address)` key.
     inflight: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     /// Whether `CF-Connecting-IP` may be trusted for the per-IP limit.
-    /// `false` unless `RADAR_TRUST_CLOUDFLARE` is set — AGENTS.md §3 rule 7:
+    /// `false` unless `REALORRUG_TRUST_CLOUDFLARE` (or the legacy
+    /// `RADAR_TRUST_CLOUDFLARE`) is set — AGENTS.md §3 rule 7:
     /// a header is never trusted by default, only when an operator has said
     /// the box sits behind the proxy that sets it honestly.
     trust_cloudflare: bool,
@@ -138,23 +143,30 @@ impl CheckState {
     /// rule is testable without setting process-wide variables.
     #[must_use]
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Self {
-        let cache_dir = get("RADAR_CHECK_CACHE_DIR")
+        let cache_dir = env_or_legacy("REALORRUG_CHECK_CACHE_DIR", "RADAR_CHECK_CACHE_DIR", get)
             .unwrap_or_else(|| "data/check".to_owned())
             .into();
         let solana_endpoint = RpcClient::from_vars(get).endpoint().to_owned();
-        let robinhood_endpoint = get("RADAR_ROBINHOOD_RPC");
+        let robinhood_endpoint =
+            env_or_legacy("REALORRUG_ROBINHOOD_RPC", "RADAR_ROBINHOOD_RPC", get);
         let rates = BaseRates::load(
-            &get("RADAR_BASE_RATES")
+            &env_or_legacy("REALORRUG_BASE_RATES", "RADAR_BASE_RATES", get)
                 .unwrap_or_else(|| realorrug_roast::baserates::DEFAULT_PATH.to_owned()),
         )
         .ok();
         // Deny by default: an unset or unparseable budget is zero, not
         // "unlimited" — rule 7, a missing config never fails open.
-        let daily_max = get("RADAR_CHECK_DAILY_BUDGET")
-            .and_then(|v| v.trim().parse::<i64>().ok())
-            .unwrap_or(0)
-            .max(0);
-        let trust_cloudflare = get("RADAR_TRUST_CLOUDFLARE").is_some_and(|v| v == "1");
+        let daily_max = env_or_legacy(
+            "REALORRUG_CHECK_DAILY_BUDGET",
+            "RADAR_CHECK_DAILY_BUDGET",
+            get,
+        )
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+        let trust_cloudflare =
+            env_or_legacy("REALORRUG_TRUST_CLOUDFLARE", "RADAR_TRUST_CLOUDFLARE", get)
+                .is_some_and(|v| v == "1");
         Self {
             cache_dir,
             solana_endpoint,
@@ -274,7 +286,7 @@ async fn handle(
 
 /// The IP a request is billed against for the per-minute limit.
 ///
-/// `CF-Connecting-IP` is read only when `RADAR_TRUST_CLOUDFLARE` says the box
+/// `CF-Connecting-IP` is read only when `REALORRUG_TRUST_CLOUDFLARE` says the box
 /// sits behind Cloudflare — otherwise the socket peer address, and never the
 /// header, because an untrusted header is exactly how a visitor would spoof
 /// past their own limit (AGENTS.md §3 rule 7).
@@ -644,7 +656,7 @@ mod tests {
         );
     }
 
-    /// An unset `RADAR_CHECK_DAILY_BUDGET` (rule 7: no budget refuses
+    /// An unset `REALORRUG_CHECK_DAILY_BUDGET` (rule 7: no budget refuses
     /// spending) must refuse every cold read, not silently allow one. If the
     /// `.max(0)` or the `unwrap_or(0)` in `from_vars` were removed or
     /// inverted, this is the test that would catch a cold read slipping
@@ -663,8 +675,9 @@ mod tests {
     /// released reservation (a failed read) is given back rather than lost.
     #[test]
     fn a_configured_daily_budget_is_spent_and_can_be_released() {
-        let state =
-            CheckState::from_vars(&|k| (k == "RADAR_CHECK_DAILY_BUDGET").then(|| "2".to_owned()));
+        let state = CheckState::from_vars(&|k| {
+            (k == "REALORRUG_CHECK_DAILY_BUDGET").then(|| "2".to_owned())
+        });
         assert_eq!(state.reserve_cold_read(1), Ok(()));
         assert_eq!(state.reserve_cold_read(1), Ok(()));
         assert_eq!(
@@ -686,8 +699,9 @@ mod tests {
     /// spent -- the budget is daily, not a one-time allowance.
     #[test]
     fn the_daily_budget_rolls_over_at_a_new_day() {
-        let state =
-            CheckState::from_vars(&|k| (k == "RADAR_CHECK_DAILY_BUDGET").then(|| "1".to_owned()));
+        let state = CheckState::from_vars(&|k| {
+            (k == "REALORRUG_CHECK_DAILY_BUDGET").then(|| "1".to_owned())
+        });
         assert_eq!(state.reserve_cold_read(1), Ok(()));
         assert_eq!(state.reserve_cold_read(1), Err(()));
         assert_eq!(
@@ -794,7 +808,7 @@ mod tests {
         ));
     }
 
-    /// A Robinhood chain read with no `RADAR_ROBINHOOD_RPC` configured must
+    /// A Robinhood chain read with no `REALORRUG_ROBINHOOD_RPC` configured must
     /// answer `budget`, not `cant_read` -- the two are different messages to
     /// a visitor ("we're switched off" versus "we tried and failed"), and
     /// `dispatch`'s own message text is what `unreadable_doc` matches on.
@@ -847,7 +861,7 @@ mod tests {
         assert_eq!(doc["state"], "busy");
     }
 
-    /// Only when `RADAR_TRUST_CLOUDFLARE` is set does the header count; by
+    /// Only when `REALORRUG_TRUST_CLOUDFLARE` is set does the header count; by
     /// default a visitor cannot spoof `CF-Connecting-IP` to dodge the limit.
     #[test]
     fn the_cloudflare_header_is_ignored_unless_trusted() {
@@ -857,7 +871,7 @@ mod tests {
         assert_eq!(client_ip(&untrusting, &headers, None), "unknown");
 
         let trusting =
-            CheckState::from_vars(&|k| (k == "RADAR_TRUST_CLOUDFLARE").then(|| "1".to_owned()));
+            CheckState::from_vars(&|k| (k == "REALORRUG_TRUST_CLOUDFLARE").then(|| "1".to_owned()));
         assert_eq!(client_ip(&trusting, &headers, None), "9.9.9.9");
     }
 
