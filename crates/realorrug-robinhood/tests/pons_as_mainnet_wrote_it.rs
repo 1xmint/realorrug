@@ -132,6 +132,7 @@ fn the_captured_launch_decodes_to_what_research_0036_states() {
             graduation_threshold: 4_200_000_000_000_000_000,
             creator_tax_bps: 100,
             buyback: false,
+            phase: 0,
             exists: true,
         }
     );
