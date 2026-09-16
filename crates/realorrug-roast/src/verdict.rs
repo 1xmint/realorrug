@@ -389,7 +389,11 @@ pub fn template(sheet: &FactSheet) -> String {
     // limit on how far its "clean so far" reaches (rule 8, unknown is not
     // safe). Only a sheet with something chronological at all reaches either
     // line, same as before this task.
-    if let Some(age) = sheet.facts.iter().find(|f| f.kind == crate::clause::Kind::Age) {
+    if let Some(age) = sheet
+        .facts
+        .iter()
+        .find(|f| f.kind == crate::clause::Kind::Age)
+    {
         let _ = writeln!(out, "Launched {}.", age.rendered);
     } else if sheet.read_at.is_some() {
         let _ = writeln!(out, "How old this token is could not be read.");
@@ -457,7 +461,9 @@ mod tests {
     fn a_real_shaped_sheet() -> FactSheet {
         FactSheet {
             mint: "ECQdbWN1jBAQ9GXGFxX9gqvoa6NT3weWe4SCpAaapump".to_owned(),
-            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(444_388_986))),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_388_986,
+            ))),
             facts: vec![
                 // **Every band, in the order the snapshot lists them.** A
                 // fixture carrying only the wanted one cannot catch a lookup
@@ -700,7 +706,9 @@ mod tests {
     fn sheet() -> FactSheet {
         FactSheet {
             mint: "MintOne".to_owned(),
-            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(444_007_820))),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820,
+            ))),
             facts: vec![
                 Fact::exact(Kind::LaunchRecipients, "recipients", 11.0, "11"),
                 Fact::share(

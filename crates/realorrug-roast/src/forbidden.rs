@@ -1011,9 +1011,7 @@ fn check_required_age(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violat
                       the same cast sheet.rs::authorised already makes for the same value"
         )]
         let read_point_value = read_point_value as f64;
-        if says_age_unknown
-            && mentions_read_point_word
-            && states_one_of(text, &[read_point_value])
+        if says_age_unknown && mentions_read_point_word && states_one_of(text, &[read_point_value])
         {
             Vec::new()
         } else {
@@ -1774,7 +1772,8 @@ mod tests {
         let unknown_solana =
             required_sheet_with_age(vec!["the launch block could not be read".to_owned()]);
         let clean_solana = required_sheet_with_age(Vec::new());
-        let unknown_robinhood = required_sheet(vec!["the launch block could not be read".to_owned()]);
+        let unknown_robinhood =
+            required_sheet(vec!["the launch block could not be read".to_owned()]);
         let clean_robinhood = required_sheet(Vec::new());
         for (level, sheet) in [
             (Level::CantTell, &unknown_solana),

@@ -338,7 +338,9 @@ mod tests {
     fn sheet() -> FactSheet {
         FactSheet {
             mint: "MintOne".to_owned(),
-            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(444_007_820))),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820,
+            ))),
             // The real labels, because the template selects on them: a fixture
             // with invented labels would exercise a path the product does not
             // have, and this test caught exactly that when the template stopped

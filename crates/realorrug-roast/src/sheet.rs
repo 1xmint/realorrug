@@ -24,9 +24,9 @@
 
 use realorrug_onchain::budget::Count;
 use realorrug_onchain::{Dossier, LaunchBlock};
-use realorrug_types::{ReadAt, SlotDelta};
 #[cfg(test)]
 use realorrug_types::Slot;
+use realorrug_types::{ReadAt, SlotDelta};
 
 use crate::baserates::BaseRates;
 use crate::clause::{Clause, Kind, Voice};
@@ -742,7 +742,10 @@ fn push_age(facts: &mut Vec<Fact>, delta: SlotDelta) {
                 Voice::Plain,
                 format!("It launched about {hours} hours ago -- {slots} slots, by the read point."),
             ),
-            Clause::new(Voice::Blunt, format!("{slots} slots old. Roughly {hours} hours.")),
+            Clause::new(
+                Voice::Blunt,
+                format!("{slots} slots old. Roughly {hours} hours."),
+            ),
         ],
     });
 }
@@ -1538,8 +1541,10 @@ mod tests {
                 "read at: slot 444007820",
                 "",
             ]
-            .join("
-")
+            .join(
+                "
+"
+            )
         );
     }
 
