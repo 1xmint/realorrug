@@ -37,7 +37,21 @@ pub struct Entry {
     pub summoner: String,
     /// The mint, when one was resolved.
     pub mint: Option<String>,
-    /// The slot the facts were read at.
+    /// When the facts were read, tagged by which chain's clock the number is
+    /// in.
+    ///
+    /// `None` on a line written before this field existed (2026-09-16), the
+    /// same as `read_at_slot` below, and for the same reason -- a missing
+    /// `Option` reads as `None` to serde, not as "unread at slot zero."
+    pub read_at: Option<realorrug_types::ReadAt>,
+    /// The Solana slot the facts were read at, and only that: `None` on a
+    /// Robinhood read, because there is no honest conversion from a block
+    /// number into a slot, and `None` on a line written before this field
+    /// existed. Kept, rather than removed, because lines written before
+    /// 2026-09-16 have it and readers of the log were built against it.
+    /// **`read_at` is the one to read** -- it is the field this one is
+    /// derived from, never the other way round, so the two can never
+    /// disagree.
     pub read_at_slot: Option<u64>,
     /// The fact sheet, rendered, exactly as the model was shown it.
     ///
@@ -196,6 +210,22 @@ mod tests {
         assert_eq!(entry.signals, Some(Vec::new()));
     }
 
+    #[test]
+    fn a_line_written_before_read_at_existed_still_loads_with_it_none() {
+        // The fourth pinned line, in the same style as the three above and
+        // for the same reason: a real line written before 2026-09-16 has no
+        // `read_at` key at all. It must still load, and it must load as
+        // `None` -- not as an error, and not as some invented read point --
+        // because a missing `Option` is `None` to serde, not "read at zero."
+        // Re-apply the defect by deleting the `read_at` field from `Entry`
+        // and this line stops compiling; re-apply it by making the field
+        // non-optional instead and this line fails to parse.
+        let old = r#"{"at":1,"mention_id":"m","summoner":"s","mint":null,"read_at_slot":444007820,"fact_sheet":"","reply":"","fellback":null,"reply_id":null}"#;
+        let entry: super::Entry = serde_json::from_str(old).expect("an old line still loads");
+        assert_eq!(entry.read_at, None);
+        assert_eq!(entry.read_at_slot, Some(444_007_820));
+    }
+
     use super::*;
 
     fn entry() -> Entry {
@@ -204,6 +234,9 @@ mod tests {
             mention_id: "m1".to_owned(),
             summoner: "alice".to_owned(),
             mint: Some("MintOne".to_owned()),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820,
+            ))),
             read_at_slot: Some(444_007_820),
             fact_sheet: "recipients: 6\n".to_owned(),
             reply: "Six token accounts.".to_owned(),
@@ -277,6 +310,73 @@ mod tests {
         // to say it.
         assert_eq!(back[0].fact_sheet, "recipients: 6\n");
         assert_eq!(back[0].read_at_slot, Some(444_007_820));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_solana_entry_carries_both_fields_and_they_agree() {
+        // The non-defect case: on a Solana read, `read_at_slot` is still
+        // filled, and it must name the same slot `read_at` does. Re-apply the
+        // bug this guards -- the old `dossier.read_at.and_then(as_slot)` was
+        // correct for Solana, so this is the case that already worked; it is
+        // here so a future change to `read_at_slot`'s derivation cannot drift
+        // the two apart for the chain that has always had both.
+        let mut e = entry();
+        e.read_at = Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+            444_007_820,
+        )));
+        e.read_at_slot = Some(444_007_820);
+
+        let dir = std::env::temp_dir().join(format!("radar-log-solana-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let path = dir.join("solana.jsonl");
+        let path = path.to_str().expect("a path");
+        let _ = std::fs::remove_file(path);
+
+        append(path, &e).expect("append");
+        let back = read(path).expect("read");
+
+        assert_eq!(back.len(), 1);
+        assert_eq!(
+            back[0].read_at,
+            Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820
+            )))
+        );
+        assert_eq!(back[0].read_at_slot, Some(444_007_820));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_robinhood_entry_round_trips_with_its_block_number_intact() {
+        // The defect packet 0036 exists to fix: before this change, a
+        // Robinhood read logged `read_at_slot: None` and nothing else, so
+        // there was no record of when its facts were read at all. Re-apply
+        // the bug by deleting `read_at` from `Entry` (or from this literal)
+        // and this fails -- the block number is gone from the log entirely,
+        // not merely mislabelled.
+        let mut e = entry();
+        e.read_at = Some(realorrug_types::ReadAt::Robinhood(100));
+        // A Robinhood read has no slot -- the honest, lossy-free answer,
+        // never a block number wearing a slot's label.
+        e.read_at_slot = None;
+
+        let dir = std::env::temp_dir().join(format!("radar-log-robinhood-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let path = dir.join("robinhood.jsonl");
+        let path = path.to_str().expect("a path");
+        let _ = std::fs::remove_file(path);
+
+        append(path, &e).expect("append");
+        let back = read(path).expect("read");
+
+        assert_eq!(back.len(), 1);
+        assert_eq!(
+            back[0].read_at,
+            Some(realorrug_types::ReadAt::Robinhood(100)),
+            "the block number must survive the round trip"
+        );
+        assert_eq!(back[0].read_at_slot, None);
         let _ = std::fs::remove_file(path);
     }
 
