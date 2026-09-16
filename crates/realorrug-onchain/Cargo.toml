@@ -30,8 +30,6 @@ rusqlite = { version = "0.32", default-features = false, features = ["bundled"] 
 
 [dev-dependencies]
 tempfile = "3"
-
-[dev-dependencies]
 # Only the fake, non-Solana `ChainReader` in dossier.rs's tests, which is the
 # proof that the seam seats a second chain's address type.
 realorrug-robinhood.workspace = true
