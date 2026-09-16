@@ -114,9 +114,40 @@ pub enum Answered {
         /// What to say.
         text: String,
     },
-    /// Nothing usable was found in the mention.
+    /// Design 0024's lane 2: a mention naming no address and no ticker,
+    /// outside any thread this bot already stands a verdict in.
+    ///
+    /// A short, in-character reply plus the fixed nudge
+    /// (`crate::lane2::NUDGE`), or `crate::lane2::FALLBACK` when a guardrail
+    /// refused the model's answer or refused the mention outright before a
+    /// call. No chain read, no `FactSheet` -- a sibling of [`Self::Ticker`]
+    /// and [`Self::Followup`], not a reuse of either: those two are plain
+    /// text built with zero model calls, and this one sometimes is and
+    /// sometimes is not, which is exactly why its own guardrails
+    /// (`crate::lane2`, `realorrug_roast::forbidden`) exist.
+    Lane2 {
+        /// The key lane 2's own gate admitted this on.
+        key: String,
+        /// What to say.
+        text: String,
+        /// What the model call (if any was made) owes the meter, same
+        /// reasoning as [`Self::Reply`]'s own field.
+        billed: Billed,
+    },
+    /// Nothing usable was found in the mention, **or** lane 2's own gate
+    /// (`crate::lane2::Gate::admit`) refused it.
+    ///
+    /// Deliberately the same variant for both: `crate::lane2::reply` never
+    /// returns [`Self::Refused`] for its own gate's refusal, because
+    /// `Self::Refused` is reserved for `admission::Gate`'s refusals, which
+    /// the daemon appends to the contest refusals file
+    /// (`contest::RefusalKind::costs_the_week` can disqualify an entrant's
+    /// week on `SummonerDaily`). Lane 2's cap is a much cheaper, off-topic
+    /// budget (design 0024 §3) -- hitting it is not a fact the contest may
+    /// see, so it is answered the way a nothing-mention always was before
+    /// lane 2 existed: silently.
     Nothing,
-    /// The gate refused it.
+    /// `admission::Gate` refused it.
     Refused(Refused),
     /// The mint parsed as base58 but is not an address.
     NotAnAddress,
@@ -135,7 +166,7 @@ impl Answered {
     #[must_use]
     pub const fn billed(&self) -> Billed {
         match self {
-            Self::Reply { billed, .. } => *billed,
+            Self::Reply { billed, .. } | Self::Lane2 { billed, .. } => *billed,
             Self::Ticker { .. }
             | Self::Followup { .. }
             | Self::Nothing
@@ -168,6 +199,7 @@ pub fn answer(
     mention: &Mention,
     gate: &mut Gate,
     threads: &mut crate::followup::ThreadMemory,
+    lane2: &mut crate::lane2::Gate,
     ctx: &Answering<'_>,
 ) -> Answered {
     // **A follow-up that names nothing design 0020 §2 lists** gets design
@@ -218,7 +250,12 @@ pub fn answer(
                 key,
             };
         }
-        Asked::Nothing => return Answered::Nothing,
+        // Design 0024: lane 2 owns every mention naming no address and no
+        // ticker, now that the thread check above has already ruled out
+        // "this is a follow-up in a thread we already stand a verdict in."
+        // `lane2::reply` reads no chain and admits itself on its own,
+        // smaller gate (design 0024 §3) -- `answer.rs` only routes to it.
+        Asked::Nothing => return crate::lane2::reply(mention, lane2, ctx.provider, ctx.now),
     };
 
     if let Admitted::No(why) = gate.admit(&mention.author, &mint_text, ctx.now) {
@@ -332,6 +369,10 @@ mod tests {
         crate::followup::ThreadMemory::new()
     }
 
+    fn lane2_gate() -> crate::lane2::Gate {
+        crate::lane2::Gate::unconfigured()
+    }
+
     fn gate() -> Gate {
         Gate::new(
             Limits {
@@ -373,6 +414,7 @@ mod tests {
             &mention("@radar what about $ABC"),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         match out {
@@ -385,15 +427,65 @@ mod tests {
     }
 
     #[test]
-    fn a_mention_naming_nothing_is_not_an_error() {
+    fn a_mention_naming_nothing_routes_to_lane2_and_is_not_an_error() {
+        // Design 0024: `Asked::Nothing` routes to `lane2::reply`. With no
+        // lane-2 limits configured (`lane2_gate` above is
+        // `Gate::unconfigured()`), rule 7 means that reply is refused -- but
+        // a lane-2 refusal is never `Answered::Refused` (that variant is
+        // reserved for `admission::Gate`, whose refusals the daemon appends
+        // to the contest refusals file). `lane2::reply` maps its own gate's
+        // refusal to `Answered::Nothing`, the same silent-mention outcome
+        // this had before lane 2 existed.
         let client = unreachable_client();
         let out = answer(
             &mention("@radar hello"),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::Nothing), "{out:?}");
+    }
+
+    #[test]
+    fn a_lane2_per_author_cap_refusal_is_nothing_not_a_contest_refusal() {
+        // The bug this fix closes: `daemon::tick` appends every
+        // `Answered::Refused` to the contest refusals file, and
+        // `contest::RefusalKind::costs_the_week` disqualifies the entrant's
+        // whole week on `SummonerDaily`. A sixth off-topic mention in a day
+        // hitting lane 2's own, much smaller per-author cap must not read as
+        // that -- `answer()` must return `Answered::Nothing`, never
+        // `Answered::Refused`, so the daemon's `if let Answered::Refused(why)
+        // = &other` guard at the contest-append call site never fires for it.
+        let client = unreachable_client();
+        let mut g = gate();
+        let mut threads = threads();
+        let mut lane2 = crate::lane2::Gate::new(
+            crate::lane2::Limits {
+                per_author_daily: 1,
+                global_daily: realorrug_types::MicroUsd::from_dollars(5.0),
+                cooldown_seconds: 0,
+            },
+            Vec::new(),
+        );
+        let mut ask = |lane2: &mut crate::lane2::Gate| {
+            answer(
+                &mention("@radar hello"),
+                &mut g,
+                &mut threads,
+                lane2,
+                &ctx(&client),
+            )
+        };
+        let first = ask(&mut lane2);
+        assert!(matches!(first, Answered::Lane2 { .. }), "{first:?}");
+        let second = ask(&mut lane2);
+        assert!(
+            matches!(second, Answered::Nothing),
+            "a lane-2 per-author cap refusal must be Answered::Nothing, \
+             never Answered::Refused, or it lands in the contest refusals \
+             file: {second:?}"
+        );
     }
 
     #[test]
@@ -416,6 +508,7 @@ mod tests {
             &mention("@radar So11111111111111111111111111111111111111112"),
             &mut closed,
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::Refused(_)), "{out:?}");
@@ -427,7 +520,7 @@ mod tests {
         let mut g = gate();
         let mut m = mention("@radar So11111111111111111111111111111111111111112");
         m.author = "radar".to_owned();
-        let out = answer(&m, &mut g, &mut threads(), &ctx(&client));
+        let out = answer(&m, &mut g, &mut threads(), &mut lane2_gate(), &ctx(&client));
         assert!(
             matches!(out, Answered::Refused(Refused::SelfOrIgnored)),
             "{out:?}"
@@ -445,6 +538,7 @@ mod tests {
             &mention("@radar 0x1111111111111111111111111111111111111111"),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::Unreadable(_)), "{out:?}");
@@ -461,6 +555,7 @@ mod tests {
             &mention("@radar 0x1111111111111111111111111111111111111111"),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         let Answered::Unreadable(why) = out else {
@@ -481,6 +576,7 @@ mod tests {
             &mention(&format!("@radar {}", "a".repeat(32))),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::NotAnAddress), "{out:?}");

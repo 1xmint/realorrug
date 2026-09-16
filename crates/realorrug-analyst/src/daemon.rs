@@ -546,6 +546,13 @@ pub fn run() -> ! {
     // -- no path, no config key, same shape as `gate` and `telegram_gate`
     // above.
     let mut threads = crate::followup::ThreadMemory::new();
+    // One lane-2 gate, shared by both platforms -- same reasoning as
+    // `threads` just above: lane 2's own caps (design 0024 §3) are an
+    // account-wide budget, not a per-platform one, so one X mention and one
+    // Telegram mention from the same rolling day draw against the same
+    // per-author and global counters.
+    let mut lane2_gate =
+        crate::lane2::Gate::from_limits(crate::lane2::limits_from(&env), ignored(x.as_ref()));
 
     let Some(prices) = Prices::from_vars(&env) else {
         // Not an exit. A price list is a spending decision and its absence is a
@@ -661,6 +668,7 @@ pub fn run() -> ! {
             provider.as_deref(),
             self_mint.as_ref(),
             &mut threads,
+            &mut lane2_gate,
             &paths,
         );
         let found_telegram = crate::telegram::tick(
@@ -675,6 +683,7 @@ pub fn run() -> ! {
             provider.as_deref(),
             self_mint.as_ref(),
             &mut threads,
+            &mut lane2_gate,
             &paths,
         );
         // The week closes on the tick after Monday 00:00 UTC, once. The
@@ -1378,6 +1387,7 @@ pub fn tick(
     provider: Option<&dyn realorrug_model::Provider>,
     self_mint: Option<&Address>,
     threads: &mut crate::followup::ThreadMemory,
+    lane2: &mut crate::lane2::Gate,
     paths: &Paths,
 ) -> usize {
     let Some(x) = x else {
@@ -1495,7 +1505,7 @@ pub fn tick(
             now: at,
         };
 
-        let outcome = crate::answer::answer(mention, gate, threads, &ctx);
+        let outcome = crate::answer::answer(mention, gate, threads, lane2, &ctx);
         // Settled here rather than inside the arms below. The money is already
         // spent by this point, and the reply's own reservation is a separate
         // ceiling that can be refused -- one must not hold the other open.
@@ -1677,6 +1687,52 @@ pub fn tick(
                             let charged = reply_cost.reserved();
                             spend.settle(reply_cost, charged);
                             gate.record(&mention.author, &key, id, at);
+                            answered += 1;
+                        } else {
+                            spend.release(reply_cost);
+                        }
+                    }
+                    Err(e) => {
+                        spend.release(reply_cost);
+                        eprintln!("realorrug-analyst: cannot write {}: {e}", paths.log);
+                        break;
+                    }
+                }
+            }
+            // Design 0024's lane 2. Published the same way as `Ticker` and
+            // `Followup` above -- no chain read, no `FactSheet` -- but **not**
+            // recorded against `gate` (`admission::Gate`, lane 1's own
+            // counters): lane 2's caps are `lane2::Gate`'s, and
+            // `crate::lane2::reply` already recorded this one, admission and
+            // spend both, before returning it here.
+            Answered::Lane2 { text, .. } => {
+                let Ok(reply_cost) = spend.authorize(Cost::Reply, today) else {
+                    eprintln!(
+                        "realorrug-analyst: reply budget spent; {} not answered",
+                        mention.id
+                    );
+                    break;
+                };
+                let entry = crate::log::Entry {
+                    at,
+                    mention_id: mention.id.clone(),
+                    summoner: mention.author.clone(),
+                    mint: None,
+                    read_at: None,
+                    read_at_slot: None,
+                    fact_sheet: String::new(),
+                    reply: text,
+                    fellback: None,
+                    reply_id: None,
+                    signals: Some(Vec::new()),
+                    pointed_at: None,
+                };
+                match crate::publish::publish(publisher, &paths.log, &mut journal, entry) {
+                    Ok(written) => {
+                        handled.push(&mention.id);
+                        if written.reply_id.is_some() {
+                            let charged = reply_cost.reserved();
+                            spend.settle(reply_cost, charged);
                             answered += 1;
                         } else {
                             spend.release(reply_cost);

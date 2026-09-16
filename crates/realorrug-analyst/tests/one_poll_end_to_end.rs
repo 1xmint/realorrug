@@ -240,6 +240,16 @@ fn threads() -> realorrug_analyst::followup::ThreadMemory {
     realorrug_analyst::followup::ThreadMemory::new()
 }
 
+/// Design 0024's lane-2 gate, unconfigured for every fixture in this file
+/// (rule 7: no `RADAR_LANE2_*` env here, so lane 2 refuses everything and
+/// never touches a provider or a budget none of these end-to-end fixtures
+/// wire up) -- these tests exercise lane 1's dispatch, not lane 2's own
+/// behaviour, which `crates/realorrug-analyst/src/lane2.rs`'s own tests
+/// cover directly.
+fn lane2() -> realorrug_analyst::lane2::Gate {
+    realorrug_analyst::lane2::Gate::unconfigured()
+}
+
 #[test]
 fn one_poll_reads_answers_and_advances_the_cursor() {
     // Two mentions: one naming a symbol, which is answerable without a chain,
@@ -278,6 +288,7 @@ fn one_poll_reads_answers_and_advances_the_cursor() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -393,6 +404,7 @@ fn a_published_reply_is_counted_charged_and_remembered() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -422,6 +434,61 @@ fn a_published_reply_is_counted_charged_and_remembered() {
         realorrug_analyst::read_cursor(&paths.cursor).as_deref(),
         Some("2001")
     );
+}
+
+#[test]
+fn a_lane2_reply_is_counted_the_same_way_a_lane1_reply_is() {
+    // The `Answered::Lane2` arm's own counter, not `Answered::Reply`'s --
+    // mutation testing found `answered += 1` survives as `-=` when only
+    // lane 1's success path is exercised. A mention naming no address takes
+    // no chain read at all, so lane 2 must be configured for this to reach
+    // that arm rather than refuse outright (rule 7).
+    let page = r#"{"data":[{"id":"3001","author_id":"alice","text":"@radar hello there"}]}"#;
+    let (base, _seen) = platform(page);
+    let (rpc, _stop, _requests) = empty_chain();
+
+    let dir = workspace("lane2-counted");
+    let paths = Paths::under(&dir);
+    let mut gate = Gate::new(open_limits(), vec!["radar".to_owned()]);
+    let mut spend = Spend::open(
+        Budget {
+            per_call_max: MicroUsd(50_000),
+            daily_max: MicroUsd(1_000_000),
+        },
+        prices(),
+        paths.ledger.clone(),
+        1,
+    );
+    let mut lane2_gate = realorrug_analyst::lane2::Gate::new(
+        realorrug_analyst::lane2::Limits {
+            per_author_daily: 5,
+            global_daily: MicroUsd::from_dollars(5.0),
+            cooldown_seconds: 0,
+        },
+        vec!["radar".to_owned()],
+    );
+    let x = X::at(base, "tok", "u42");
+
+    let answered = tick(
+        Some(&x),
+        &Posts,
+        &mut gate,
+        &mut spend,
+        &realorrug_onchain::RpcClient::new(rpc),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut threads(),
+        &mut lane2_gate,
+        &paths,
+    );
+
+    assert_eq!(answered, 1, "a published lane-2 reply is counted");
+    let folded = realorrug_analyst::latest(&paths.log).expect("a log");
+    assert_eq!(folded.len(), 1);
+    assert_eq!(folded[0].reply_id.as_deref(), Some("posted-3001"));
 }
 
 #[test]
@@ -470,6 +537,7 @@ fn an_unmatched_followup_in_an_answered_thread_gets_the_fixed_refusal_with_no_ch
         None,
         None,
         &mut memory,
+        &mut lane2(),
         &paths,
     );
     assert_eq!(
@@ -501,6 +569,7 @@ fn an_unmatched_followup_in_an_answered_thread_gets_the_fixed_refusal_with_no_ch
         None,
         None,
         &mut memory,
+        &mut lane2(),
         &paths,
     );
     assert_eq!(second_answered, 1, "the follow-up is answered, not dropped");
@@ -560,6 +629,7 @@ fn the_same_question_in_a_never_answered_thread_is_not_a_followup() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
     // `Answered::Nothing` costs no `Cost::Reply`, so the tick's own count of
@@ -606,6 +676,7 @@ fn a_platform_that_refuses_costs_nothing_and_does_not_move_the_cursor() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -647,6 +718,7 @@ fn an_exhausted_budget_stops_the_poll_before_it_costs_anything() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -688,6 +760,7 @@ fn with_no_credential_the_loop_does_nothing_at_all() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -738,6 +811,7 @@ fn tick_against_empty_chain(
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
     let logged = if std::path::Path::new(&paths.log).exists() {
@@ -932,6 +1006,7 @@ fn a_telegram_message_is_answered_into_its_own_log_and_never_into_the_record() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
     assert_eq!(answered, 0, "a dry run sends nothing");
@@ -1002,6 +1077,7 @@ fn a_telegram_reply_that_is_sent_is_counted_and_remembered_by_the_gate() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
     assert_eq!(answered, 1, "one message answered and sent");
@@ -1023,6 +1099,7 @@ fn a_telegram_reply_that_is_sent_is_counted_and_remembered_by_the_gate() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
     assert_eq!(again, 0, "the gate remembered the mint");
@@ -1054,6 +1131,7 @@ fn with_no_telegram_token_the_lane_reads_nothing_and_writes_nothing() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
     assert_eq!(answered, 0);
@@ -1131,6 +1209,7 @@ fn the_model_call_is_charged_for_the_mention_that_made_one_and_no_other() {
         Some(&Priced),
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -1199,6 +1278,7 @@ fn a_symbol_gets_an_answer_rather_than_silence() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -1260,6 +1340,7 @@ fn a_second_asker_is_pointed_at_the_answer_rather_than_ignored() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -1326,6 +1407,7 @@ fn a_log_that_cannot_be_written_does_not_drop_the_questions_behind_it() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
 
@@ -1364,6 +1446,7 @@ fn a_restart_reads_the_days_replies_back_off_disk() {
         None,
         None,
         &mut threads(),
+        &mut lane2(),
         &paths,
     );
     assert_eq!(gate.sent_today(), 1);

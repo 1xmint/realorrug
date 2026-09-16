@@ -457,6 +457,9 @@ pub fn tick(
     // queried from here -- the parameter exists so `answer` has one call
     // shape across both platforms, not because this lane uses it.
     threads: &mut crate::followup::ThreadMemory,
+    // Shared with the X lane, same reasoning as `threads` above but for real:
+    // lane 2's caps (design 0024 §3) are account-wide, not per-platform.
+    lane2: &mut crate::lane2::Gate,
     paths: &crate::daemon::Paths,
 ) -> usize {
     let Some(bot) = telegram else {
@@ -511,7 +514,7 @@ pub fn tick(
             now: at,
         };
 
-        let outcome = crate::answer::answer(mention, gate, threads, &ctx);
+        let outcome = crate::answer::answer(mention, gate, threads, lane2, &ctx);
         if let Some(commitment) = reserved {
             match outcome.billed() {
                 Billed::NoCall => spend.release(commitment),

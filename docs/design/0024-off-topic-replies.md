@@ -1,10 +1,14 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Design 0024 — off-topic replies
 
-**Status:** recording, not yet built. The decision below is the owner's,
-already made; this document is the reasoning that turns it into a shape for
-`crates/realorrug-analyst` and `crates/realorrug-roast` to build against.
-Nothing in it has been built.
+**Status:** built. `crates/realorrug-analyst/src/lane2.rs` and the new checks
+in `crates/realorrug-roast/src/forbidden.rs` (`check_numerals`,
+`check_no_identification`, `check_any_person_reference`,
+`check_sensitive_topic`) implement §1 through §4 as designed; §3's caps are
+config, deny-by-default, keyed `RADAR_LANE2_*` (`deploy/analyst.env.example`).
+§5 and §8's open items (X's prior-approval requirement, real traffic to size
+§3's numbers against) remain open and are not this document's or the code's
+to close.
 **Date:** 2026-09-16.
 **Depends on:** design 0020 (the fact sheet, the verdict ladder, the voice,
 `forbidden.rs`'s target/level checks) and design 0022 (threaded follow-ups,
@@ -496,9 +500,17 @@ Behaviours that must fail without the guard, one test each:
 9. A sixth lane-2 reply from the same author within the rolling 24-hour
    window is refused before a model call, at the per-author cap.
 10. A lane-2 reply requested after the global daily spend cap is exhausted
-    is refused before a model call, and the refusal is the same
-    `Refused`-shaped outcome `admission.rs` already returns for lane 1's
-    caps.
+    is refused before a model call. This is `Answered::Nothing`, **not**
+    `admission.rs`'s `Refused`-shaped outcome: `lane2::Gate::admit`'s own
+    refusal reason (`admission::Refused`, reused as the error type for its
+    smaller, unrelated budget) is mapped to `Answered::Nothing` before it
+    leaves `lane2::reply`, never returned as `Answered::Refused`. The daemon
+    appends every `Answered::Refused` to the contest refusals file, and
+    `contest::RefusalKind::costs_the_week` disqualifies an entrant's whole
+    week on `SummonerDaily` — a lane-2 cap, sized for a cheap off-topic
+    reply rather than a chain read, must never cost a contest week, so its
+    refusal is answered the same way a nothing-mention always was before
+    lane 2 existed: silently.
 11. A lane-2 reply requested with no configured per-author or global cap
     (`Limits`-shaped config absent) is refused outright — rule 7,
     deny-by-default — never silently uncapped.
