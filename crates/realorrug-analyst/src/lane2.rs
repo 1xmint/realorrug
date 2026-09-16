@@ -359,7 +359,10 @@ pub fn reply(
         // (`Answered::Nothing`). `Answered::Nothing` restores that: the gate's
         // reasoning still runs, it is just never published, never billed and
         // never logged as a refusal a person or a contest rule can see.
-        eprintln!("realorrug-analyst: lane2 refused {}: {why:?}", mention.author);
+        eprintln!(
+            "realorrug-analyst: lane2 refused {}: {why:?}",
+            mention.author
+        );
         return Answered::Nothing;
     }
     let key = format!("lane2:{}", mention.author);
@@ -643,19 +646,13 @@ mod tests {
             assert!(matches!(out, Answered::Lane2 { .. }), "{out:?}");
         }
         let out = reply(&mention("q5"), &mut g, Some(&provider), 1_000 + 5 * 61);
-        assert!(
-            matches!(out, Answered::Nothing),
-            "{out:?}"
-        );
+        assert!(matches!(out, Answered::Nothing), "{out:?}");
     }
 
     #[test]
     fn no_configured_limits_refuses_outright() {
         let out = reply(&mention("hello"), &mut Gate::unconfigured(), None, 1_000);
-        assert!(
-            matches!(out, Answered::Nothing),
-            "{out:?}"
-        );
+        assert!(matches!(out, Answered::Nothing), "{out:?}");
     }
 
     #[test]
@@ -669,10 +666,7 @@ mod tests {
             Vec::new(),
         );
         let out = reply(&mention("hello"), &mut g, None, 1_000);
-        assert!(
-            matches!(out, Answered::Nothing),
-            "{out:?}"
-        );
+        assert!(matches!(out, Answered::Nothing), "{out:?}");
     }
 
     #[test]
@@ -718,10 +712,7 @@ mod tests {
         let mut m = mention("hello");
         m.author = "radar".to_owned();
         let out = reply(&m, &mut g, None, 1_000);
-        assert!(
-            matches!(out, Answered::Nothing),
-            "{out:?}"
-        );
+        assert!(matches!(out, Answered::Nothing), "{out:?}");
     }
 
     #[test]
@@ -733,10 +724,7 @@ mod tests {
         let mut m = mention(FALLBACK);
         m.author = "asker".to_owned();
         let out = reply(&m, &mut g, None, 1_000 + 3_600);
-        assert!(
-            matches!(out, Answered::Nothing),
-            "{out:?}"
-        );
+        assert!(matches!(out, Answered::Nothing), "{out:?}");
     }
 
     #[test]
@@ -788,6 +776,11 @@ mod tests {
             Vec::new(),
         );
         assert!(g.admit("asker", "q1", 1_000).is_ok());
+        // `admit` alone leaves no trace: the cooldown clock starts when the
+        // reply is actually sent, which is `record`'s job, exactly as
+        // `reply()` calls the pair. Without this the second `admit` is
+        // admitted and the test's `unwrap_err` panics.
+        g.record("asker", 1_000, "a reply");
         let err = g.admit("asker", "q2", 1_030).unwrap_err();
         assert!(
             matches!(err, Refused::GlobalRate { per_hour: 60 }),
@@ -829,14 +822,21 @@ mod tests {
         );
         // Spend past the ceiling with successive authors, so the per-author
         // and cooldown checks above never fire before the spend check does.
-        let mut author = 0;
-        let refusal = loop {
+        // Each admitted call is followed by `record`, because that is what
+        // spends the budget -- `admit` only reads it. A bare `admit` loop
+        // never moves `global_spent` and so never terminates.
+        let mut refusal = None;
+        for author in 0..60_000 {
             let name = format!("asker{author}");
             match g.admit(&name, "q", 1_000) {
-                Ok(()) => author += 1,
-                Err(why) => break why,
+                Ok(()) => g.record(&name, 1_000, "a reply"),
+                Err(why) => {
+                    refusal = Some(why);
+                    break;
+                }
             }
-        };
+        }
+        let refusal = refusal.expect("the spend ceiling must refuse within 60000 calls");
         assert!(
             matches!(refusal, Refused::GlobalDaily { cap: 5 }),
             "{refusal:?}"
