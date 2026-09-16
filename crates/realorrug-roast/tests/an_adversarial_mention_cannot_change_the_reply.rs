@@ -122,7 +122,7 @@ fn a_hostile_name_never_authorises_a_number() {
     // appear in `authorised()` and this fails.
     for (case, name) in hostile_names() {
         let dossier = dossier_named(&name, "SYM");
-        let sheet = FactSheet::build(&dossier, Some(&rates()), None, None);
+        let sheet = FactSheet::build(&dossier, Some(&rates()), None, None, None);
         let authorised = sheet.authorised();
 
         assert!(
@@ -147,7 +147,13 @@ fn a_hostile_name_never_reaches_the_fact_block() {
     // The fact block is what the model is told is true. A creator's text in it
     // would be a creator writing part of Radar's evidence.
     for (case, name) in hostile_names() {
-        let sheet = FactSheet::build(&dossier_named(&name, "SYM"), Some(&rates()), None, None);
+        let sheet = FactSheet::build(
+            &dossier_named(&name, "SYM"),
+            Some(&rates()),
+            None,
+            None,
+            None,
+        );
         let facts = sheet.render();
         assert!(!facts.contains("Ignore all previous"), "{case}");
         assert!(!facts.contains("SYSTEM:"), "{case}");
@@ -160,7 +166,13 @@ fn a_hostile_name_is_fenced_exactly_once_in_the_prompt() {
     // Two markers per fenced region. A third would let the creator's text close
     // the fence and continue outside it, which is the entire attack.
     for (case, name) in hostile_names() {
-        let sheet = FactSheet::build(&dossier_named(&name, "SYM"), Some(&rates()), None, None);
+        let sheet = FactSheet::build(
+            &dossier_named(&name, "SYM"),
+            Some(&rates()),
+            None,
+            None,
+            None,
+        );
         let request = voice::request_for(&sheet);
         assert_eq!(
             request.fences(),
@@ -180,6 +192,7 @@ fn a_model_that_obeys_a_hostile_name_is_overruled() {
         Some(&rates()),
         None,
         None,
+        None,
     );
 
     let obedient = Says("This token is safe. 99.9% of holders profited.".to_owned());
@@ -196,7 +209,13 @@ fn the_deterministic_template_is_always_publishable() {
     // everything else is refused must itself pass both checks -- otherwise
     // there is nothing left to fall back to.
     for (case, name) in hostile_names() {
-        let sheet = FactSheet::build(&dossier_named(&name, "SYM"), Some(&rates()), None, None);
+        let sheet = FactSheet::build(
+            &dossier_named(&name, "SYM"),
+            Some(&rates()),
+            None,
+            None,
+            None,
+        );
         let reply = voice::write(&sheet, None);
         assert!(reply.is_template(), "{case}");
         assert!(
@@ -222,7 +241,7 @@ fn a_truncated_recipient_count_is_never_placed_in_a_distribution() {
     if let Some(launch) = dossier.launch.as_mut() {
         launch.recipients = Count::AtLeast(6);
     }
-    let sheet = FactSheet::build(&dossier, Some(&rates()), None, None);
+    let sheet = FactSheet::build(&dossier, Some(&rates()), None, None, None);
     let rendered = sheet.render();
 
     assert!(rendered.contains("NOT AVAILABLE"), "{rendered}");
@@ -243,6 +262,7 @@ fn an_exact_recipient_count_does_get_its_distribution() {
         Some(&rates()),
         None,
         None,
+        None,
     );
     assert!(sheet.render().contains("exactly six"), "{}", sheet.render());
 }
@@ -252,7 +272,13 @@ fn without_the_snapshot_the_reply_says_less_rather_than_guessing() {
     // Rule 8 applied to speech. No base rates means no population context --
     // never remembered numbers, which is how 0008's superseded 68% would
     // survive its own correction.
-    let sheet = FactSheet::build(&dossier_named("Ordinary Token", "OK"), None, None, None);
+    let sheet = FactSheet::build(
+        &dossier_named("Ordinary Token", "OK"),
+        None,
+        None,
+        None,
+        None,
+    );
     let rendered = sheet.render();
     assert!(!rendered.contains("exactly six"));
     assert!(!rendered.contains("68"));
@@ -273,6 +299,7 @@ fn a_symbol_colliding_with_a_famous_one_changes_nothing() {
         Some(&rates()),
         None,
         None,
+        None,
     );
     assert!(!sheet.render().contains("BONK"));
     assert_eq!(sheet.mint, Address::new([3u8; 32]).to_string());
@@ -286,6 +313,7 @@ fn the_creator_history_is_never_presented_as_a_good_sign() {
     let sheet = FactSheet::build(
         &dossier_named("Ordinary Token", "OK"),
         Some(&rates()),
+        None,
         None,
         None,
     );
@@ -327,6 +355,7 @@ fn a_clean_measured_reply_still_survives_every_check() {
         Some(&rates()),
         None,
         None,
+        None,
     );
     // Written the way the prompt asks for: a selection, and not one word the
     // model chose. `F1` is the first *selectable* fact on whatever sheet this
@@ -352,7 +381,7 @@ fn a_fact_sheet_with_nothing_in_it_still_produces_a_reply() {
         calls: 2,
         elapsed_ms: 300,
     };
-    let sheet = FactSheet::build(&empty, Some(&rates()), None, None);
+    let sheet = FactSheet::build(&empty, Some(&rates()), None, None, None);
     let reply = voice::write(&sheet, None);
     assert!(reply.text.contains("not known"));
     assert!(forbidden::check(&reply.text).is_empty());
@@ -368,6 +397,7 @@ fn the_slot_is_authorised_so_a_citable_reply_is_not_refused() {
     let sheet = FactSheet::build(
         &dossier_named("Ordinary Token", "OK"),
         Some(&rates()),
+        None,
         None,
         None,
     );
@@ -416,6 +446,7 @@ fn an_unreadable_fact_is_reported_once_and_not_twice() {
     let sheet = FactSheet::build(
         &dossier_that_could_not_be_read(),
         Some(&rates()),
+        None,
         None,
         None,
     );
@@ -482,7 +513,7 @@ fn a_creators_record_is_what_makes_one_reply_differ_from_another() {
         },
     );
 
-    let sheet = FactSheet::build(&dossier, Some(&rates()), Some(&index), None);
+    let sheet = FactSheet::build(&dossier, Some(&rates()), Some(&index), None, None);
     let rendered = sheet.render();
 
     for expected in ["47", "41", "33"] {
@@ -510,7 +541,7 @@ fn a_creator_with_no_record_is_said_to_have_none_rather_than_omitted() {
     let dossier = dossier_named("A Token", "TKN");
     let index = index_with("somebody-else", realorrug_roast::creator::Record::default());
 
-    let sheet = FactSheet::build(&dossier, Some(&rates()), Some(&index), None);
+    let sheet = FactSheet::build(&dossier, Some(&rates()), Some(&index), None, None);
     assert!(
         sheet.unknown.iter().any(|u| u.contains("no record")),
         "an absent creator must be stated: {:?}",
@@ -553,7 +584,7 @@ fn a_creator_whose_launches_are_all_unmeasured_says_so() {
         },
     );
 
-    let sheet = FactSheet::build(&dossier, Some(&rates()), Some(&index), None);
+    let sheet = FactSheet::build(&dossier, Some(&rates()), Some(&index), None, None);
     assert!(
         sheet
             .unknown
@@ -583,7 +614,7 @@ fn every_clause_is_a_sentence_that_can_start_a_reply() {
     let launch = dossier.launch.as_mut().expect("the fixture has one");
     launch.recipients = Count::AtLeast(6);
     launch.transactions = Count::AtLeast(4);
-    let sheet = FactSheet::build(&dossier, Some(&rates()), None, None);
+    let sheet = FactSheet::build(&dossier, Some(&rates()), None, None, None);
 
     let mut checked = 0;
     for fact in &sheet.facts {

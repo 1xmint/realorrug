@@ -1,0 +1,19 @@
+{
+  "note": "Addresses that launch or receive by design, not by coordination -- excluded from Signal::RepeatLauncher's population before its floor is computed (crates/realorrug-roast/src/firstparty.rs, crates/realorrug-roast/src/creator.rs::repeat_launcher_floor). A reference proposes, a capture disposes (AGENTS.md rule 1): every entry below is captured in this repo, at the source path named. No Solana entry is seeded here. Radar's 13 router/fee-sink addresses (research 0042) live in another repository, uncaptured by this one; an address copied out of a link would be a reference, not a capture, so it is left out on purpose. Whoever adds a Solana entry should capture it the same way these two were captured, not cite Radar's list.",
+  "entries": [
+    {
+      "address": "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e",
+      "chain": "robinhood",
+      "role": "the Pons v2 factory",
+      "source": "crates/realorrug-robinhood/src/pons.rs",
+      "added": "2026-09-15"
+    },
+    {
+      "address": "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e",
+      "chain": "robinhood",
+      "role": "the Pons v2 fee escrow",
+      "source": "crates/realorrug-robinhood/src/escrow.rs",
+      "added": "2026-09-15"
+    }
+  ]
+}

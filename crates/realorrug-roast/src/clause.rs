@@ -145,6 +145,14 @@ pub enum Kind {
     CostBand,
     /// The note that this token's price is never stated.
     SelfMintWithheld,
+    /// How long ago the token launched, on the reading chain's own clock.
+    ///
+    /// Design 0020 §4: the age is a different fact from the read point --
+    /// "read at slot 444007820" says when the camera clicked, not how old
+    /// the token is. Only exists where both ends of the subtraction share a
+    /// clock (`sheet.rs::FactSheet::build`); a sheet with nothing to
+    /// subtract carries no fact with this kind.
+    Age,
 }
 
 /// Which register a clause is written in.
@@ -465,6 +473,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown: Vec::new(),
             signals: Vec::new(),
+            twins: Vec::new(),
         }
     }
 

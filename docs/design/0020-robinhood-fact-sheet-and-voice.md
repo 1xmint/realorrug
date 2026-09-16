@@ -110,7 +110,7 @@ compute-unit-costs page).
 |---|---|---|---|---|---|
 | launch record: curve, deployer, creator fee recipient, pair, graduation threshold, creator tax, buyback | `getLaunchedToken(token)` on `FACTORY` (`0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e`), word-decoded per `pons.rs`'s `LaunchedToken::from_return` | 1 `eth_call` | 20 | 26 | **required** |
 | phase (0 = not graduated, 2 = graduated; 1 never observed, 0040 §1) | word 10 of the same `getLaunchedToken` return — **not currently extracted** by `LaunchedToken::from_return` (see §6) | 0 extra (same call) | — | — | **required** |
-| launch block and age | `TokenLaunched` log for this token (topic `0x8d4aad49…`, token is topic1, confirmed indexed in the signature research 0038 §1 quotes), then `eth_getBlockByNumber` on its block for the timestamp | 1 `eth_getLogs` + 1 `eth_getBlockByNumber` | 40 | 80 | **required** — `NothingUglyYet` must state the age (§3), so a sheet that cannot read this must not reach that level |
+| launch block and age | `TokenLaunched` log for this token (topic `0x8d4aad49…`, token is topic1, confirmed indexed in the signature research 0038 §1 quotes), then `eth_getBlockByNumber` on its block for the timestamp | 1 `eth_getLogs` + 1 `eth_getBlockByNumber` | 40 | 80 | **required when it can be read** — `NothingUglyYet` must account for the age (§4), and a sheet that has no age reaches that level only by saying so and naming its read point instead; §4 records why demoting it was rejected |
 | graduation: whether, when, quote raised | factory log topic `0xcdb72f15…`, one indexed field (token), decoded quote-raised and token-transfer-to-factory words (research 0040 §2) — needed only once `phase == 2` | 1 `eth_getLogs`, bounded to the factory address and (launch block, now) | 20 | 60 | optional |
 | curve reserves and progress toward 4.2 ETH | `getReserves()` on the curve (`quoteReserve`/`tokenReserve`, confirmed identical to the two named getters, research 0040 §3) | 1 `eth_call` | 20 | 26 | **required** |
 | holder count and largest non-curve holder's share | sum every `Transfer` log for the token (topic `0xddf252ad…`), skip the zero-address mint (research 0040 §4) | 1 `eth_getLogs` (chunked if the 10,000-log cap is hit, research 0038 §4) | 20+ | 60+ | **required** |
@@ -223,11 +223,11 @@ default when config, or here identification, is missing).
 | signal | measures | read | threshold, and where from | innocent twin |
 |---|---|---|---|---|
 | `LiquidityGone` | reserves no longer support an exit | `getReserves()`'s `tokenReserve` at or near zero while holders still hold supply | `tokenReserve == 0` post-graduation is the curve's *normal* end state (research 0040 §3 — a graduated curve reads `tokenReserve = 0` by design, not by draining), so this signal fires only **pre-graduation**, when `tokenReserve` collapses while `phase == 0` | every buyer sold back to the curve — research 0040 §4 observed exactly this on a real token, 71 `Transfer` logs summing to zero external holders |
-| `CreatorSoldOut` | the creator held and now holds nothing | `balanceOf(creator_fee_recipient)` reads 0, and the creator was seen holding a nonzero balance at some earlier read (from this bot's own memory, design 0021, or from the launch-block buy) | zero, compared against a prior nonzero read; **needs a prior observation to mean anything**, which is design 0021's job (§7) — on a first-ever read this signal cannot fire, only "creator currently holds nothing," which is a different, weaker claim | moved to a second wallet; never held in the first place (the base case, not an edge case — most creators never buy their own launch, research 0036 §3) |
-| `BuyersCannotSell` | a simulated sell reverts | `eth_call` a sell against the curve (`CurveSell`-shaped calldata) at a fixed size, pinned to the current block, checking for a revert rather than sending a transaction | fixed simulated size TBD — no chain fact sizes this yet (open question, §8); a revert on **any** size above dust is the strong form, a revert only above some size is the weak form and needs a sweep, not one call | our simulated size or slippage tolerance was wrong, not the curve's mechanics — a curve with real but thin depth reverts a large sell the same way a broken one does |
+| `CreatorSoldOut` | the creator held and now holds nothing | `balanceOf(creator_fee_recipient)` reads 0, and the creator was seen holding a nonzero balance at some earlier read (from this bot's own memory, design 0021, or from the launch-block buy) | zero, compared against a prior nonzero read; **needs a prior observation to mean anything**, which is design 0021's job (§7) — on a first-ever read this signal cannot fire, only "creator currently holds nothing," which is a different, weaker claim | moved to another wallet the creator still holds them in ("never held in the first place" is not this signal's twin: it only fires after a nonzero read, so that case never reaches it) |
+| `BuyersCannotSell` | a simulated sell reverts | `eth_call` a sell against the curve (`CurveSell`-shaped calldata) at a fixed size, pinned to the current block, checking for a revert rather than sending a transaction | fixed simulated size TBD — no chain fact sizes this yet (open question, §8); a revert on **any** size above dust is the strong form, a revert only above some size is the weak form and needs a sweep, not one call | our simulated size or slippage tolerance was wrong, not the curve's mechanics — a curve with real but thin depth reverts a large sell the same way a broken one does; or the launch is still in its opening seconds, when Pons v2's own snipe tax makes every token's sell fail (research 0044) |
 | `CreatorBoughtOwnLaunch` | creator among launch-block recipients | `CurveBuy` logs in the launch block naming the creator/deployer address, or the launch record's own launch-transaction buy (research 0036 §3) | any nonzero buy by the creator in the launch block | a creator buying a token they believe in — research 0036 §3's own captured launch was exactly this, a dev buy that paid full fees and no snipe tax because the factory exempts the launcher automatically |
 | `LaunchBlockBundle` | launch-block distinct recipient count lands in the strongest measured band | distinct non-zero-balance recipients of `Transfer` logs in the launch block, looked up in a measured snapshot's bands (the same `baserates.rs::band_for` shape, re-derived for Pons v2 — **not yet measured**, §8) | **read from the snapshot, never a constant** — research 0042's first lesson, quoted there: *"Six is a tool's default, not a law. The number will move when whoever is running this changes their configuration, and the detector will go quiet without saying so"* (0008, quoted in 0042), which came true in 0024's re-measurement | a launch people were waiting for — no chain fact distinguishes a bundle bought by insiders from a bundle bought by fans; only the *rate* at which each recipient count precedes an outcome, measured, does |
-| `RepeatLauncher` | the creator or a launch-block buyer appears across many launch blocks in a window | recurring signer/fee-recipient address across `TokenLaunched` events in a rolling window — research 0042's port-order item 1, and *simpler on EVM than on Solana* per that document's table, because an EVM sender address recurs directly, no wallet-to-token-account join needed | `REPEAT_FLOOR`/`INFRASTRUCTURE_FLOOR`-shaped bands, **not yet measured for Robinhood Chain** — Radar's own bands (3, 100) are Solana-measured and do not transfer, same discipline as the bundle band above | a bot that buys every launch; infrastructure, not coordination — 0042's own table excludes 13 known router/fee-sink addresses covering 42% of Solana launches from this count, and a Robinhood equivalent list does not exist yet |
+| `RepeatLauncher` | this creator has launched many more tokens than the creators around them | the creator's **lifetime** launch count, as the creator index already records it — research 0042's port-order item 1, and *simpler on EVM than on Solana* per that document's table, because an EVM sender address recurs directly, no wallet-to-token-account join needed. Not a rolling window: §7's original plan to ask the read memory for launches-in-the-last-N-minutes was dropped, because the index holds the lifetime count already and a window would be a second, differently-shaped count of the same thing | **the index's own 95th percentile**, nearest-rank (`((n - 1) * 95) / 100` on the ascending sort), computed **after** the named first-party list is excluded, floored at 2, and refused outright under 100 remaining creators — `creator::CreatorIndex::repeat_launcher_floor`, whose doc comment carries the argument for each of those three numbers. **Never Radar's `REPEAT_FLOOR`/`INFRASTRUCTURE_FLOOR` (3, 100)**: those count distinct launch *blocks* in a *90-minute Solana window*, a different population on a different chain, and importing them would look like a measurement while being one | a bot that buys every launch; infrastructure, not coordination — 0042's own table excludes 13 known router/fee-sink addresses covering 42% of Solana launches from this count. The named list (`docs/research/data/first-party-addresses.json`) is the Robinhood equivalent and now exists, but it holds only **named** addresses: an unnamed relayer nobody has captured yet still reads, on this signal alone, exactly like a person launching forty tokens. That is the signal's honest limit |
 | `CreatorNeverGraduatedOrganically` | already a `Signal` variant (`sheet.rs`) | measured launches with none organic, from the creator index | reuses the existing Solana logic unchanged in shape: `record.measured > 0 && record.organic == 0` | small sample — a creator with two measured launches and zero organic has a different confidence than one with fifty, and the sheet states the denominator (already true today, `push_creator`) so the model can read it |
 | `HolderConcentration` | largest non-curve holder's share | `Transfer`-log sum (research 0040 §4), largest balance divided by circulating (total minus curve) | threshold **not yet measured** for Pons v2 — no distribution of real holder-concentration outcomes has been gathered (open question, §8) | a vesting contract, a bridge, an exchange — none of which this design can currently tell apart from a whale, because no label list for Robinhood-chain contracts exists yet (the EVM equivalent of research 0042's "exchange hot wallet, bridge contract, known deployer" label-list idea, itself flagged there as needed and not yet built for Solana either) |
 | `OwnerCanStillMintOrPause` | owner-only mint/pause/blacklist selectors present and ownership not renounced | deployed bytecode scan, or a verified-source ABI read | **blocked on research 0044**; this design names the slot the signal fills (a `Signal` variant, a fact pair "owner address" + "selector present") without designing the bytecode check itself | a stock template with an owner nobody uses — most ERC-20 templates ship an `Ownable` ancestor whether or not the deployer ever calls it |
@@ -317,7 +317,9 @@ smaller loss than presenting an observed rug as merely uncertain.
   nothing else, exempts only the deployer (who is also the fee recipient)
   from the snipe tax, holds no trade. If reserves and holders read cleanly
   and no signal fires, the reply states `NothingUglyYet` with the token's
-  age from its launch block's timestamp (§1) — carrying the "yet."
+  age from its launch block's timestamp (§1) — carrying the "yet." Where
+  the age is not readable, §4's tier two carries the "yet" instead, by
+  naming the read point and saying the age is unknown.
 - **`CantTell`.** Any token whose `getLaunchedToken` call lands on a pruned
   block boundary or times out — research 0036 measured `eth_call` state
   pruned past ~57,000 blocks back (`"metadata is not found"`), and research
@@ -399,7 +401,7 @@ which is worse than a shorter reply chosen on purpose.
   > "Zero holders outside the curve. That's either a graveyard or a crowd
   > that changed its mind together. Can't tell you which from here. Sketchy."
 - **`NothingUglyYet`** — warm, genuinely, with the "yet" doing real work and
-  the age stated.
+  the age accounted for, either stated or named as unreadable (§4).
   > "Six hours old, reserves intact, nobody's dumped, nobody's stuck. Clean
   > so far — emphasis on *so far*, it's had six hours to be clean in."
 
@@ -426,12 +428,65 @@ uncited number").
 ### `CantTell` and `NothingUglyYet`'s required lines
 
 `CantTell` must say *what* could not be read — "the holder list," "the
-reserve read," not a bare "can't tell." `NothingUglyYet` must state the
-age — "six hours old," not just "clean so far." Both are enforced the same
-way §1 makes age a required fact: the sheet must carry the line (§1's
-`unknown` list for `CantTell`, §1's launch-block read for `NothingUglyYet`)
-before the model can be asked to say it, and the level check in §5 refuses
-a `NothingUglyYet` reply that contains no age-shaped number from the sheet.
+reserve read," not a bare "can't tell." That is enforced the same way §1
+makes a miss a required line: the sheet carries the `unknown` list before
+the model can be asked to say it.
+
+`NothingUglyYet` must account for how old the token is, and **there are two
+ways to do that, because the chain gives us two different things.** Both are
+enforced by `forbidden::check_required_age`, which reads the level and the
+sheet together.
+
+**Tier one, the age is on the sheet.** The launch-block read produced a
+`Kind::Age` fact — "63954 slots (about 7.1 hours) since its launch block."
+The reply must use an age word (*ago*, *old*, *hour*) **and** state a number
+the age fact itself carries. The read point's own number is deliberately not
+in the set of numbers that satisfy this: a slot number is not an age, and
+counting it would let "read at slot 444007820" pass as "six hours old."
+Those are different claims and only one of them is true.
+
+**Tier two, the age could not be read.** Every Robinhood sheet is ageless
+today, and not because the chain hides the number — research 0039 measured
+Robinhood Chain's block time at 0.1019s over about 100k blocks. It is
+because `LaunchBlock` is Solana-slot-shaped, so `FactSheet::build` computes
+an age only for a Solana read and a Robinhood sheet has nothing to
+subtract (`sheet.rs`'s `push_age` says so at its own call site). So a whole
+chain's sheets carry no age while carrying everything else the verdict
+needs. The reply
+must then do three things, all of them: say in words that the age is not
+known ("how old this token is could not be read"), name the read point in
+words (*slot*, *block*, *read at*), and state the read point's own number.
+Saying "clean so far" and stopping is refused; so is quietly leaving the age
+out and hoping nobody notices what is missing.
+
+Tier two is only satisfiable because `FactSheet::render()` prints the read
+point, and `render()` is the model's entire world — `voice.rs` hands it
+`format!("Token: {mint}\n\n{}", sheet.render())` and nothing else. A rule
+that requires the reply to state a number the model was never shown refuses
+every reply that could ever be written, which is not a strict rule but a
+broken one: it would have taken the free-text voice silently off a whole
+chain, falling back to the template on every Robinhood `NothingUglyYet`
+with nothing anywhere saying so. The sheet must carry a line before the
+check may require it. That is the same discipline as `CantTell`'s
+`unknown` list, and it is why the two tests that pin the read point into
+`render()` sit next to the tests for this rule.
+
+**A sheet with no read point at all fails outright**, at either tier: with
+no clock to anchor to, a "nothing ugly yet" is a claim about a moment we
+cannot name (AGENTS.md rule 8 — absent is not zero, unknown is not safe).
+
+**The alternative that was considered and rejected: demote every ageless
+token to `CantTell`.** It is the tidier rule — the age is a required fact,
+the fact is missing, so the honest verdict is "can't tell." It was rejected
+because on Robinhood the age is missing *by default*, not by accident. Every
+Robinhood token would land on `CantTell` no matter how much the reader did
+see: the reserves, the holder spread, the creator's history, the launch
+block itself, all read successfully and all thrown away over one timestamp
+the chain does not publish. That trades a whole chain's worth of real
+evidence for a uniformity the reader never had, and it would make the
+account's most common Robinhood reply a shrug about tokens it understood
+perfectly well. The two-tier rule keeps the verdict the evidence earned and
+makes the reply say plainly which clock it is reading against.
 
 ### Never a person
 
@@ -585,6 +640,37 @@ re-application of the old bug (temporarily disabling `check_level`) must
 make a previously-refused-only-by-level case pass, proving the new check,
 not the old one, is what is catching it.
 
+### The twin's floor is the template, not a `forbidden.rs` check on the model
+
+**Decided, packet 0038.** Every signal in §3's table gains a `twins` entry on
+`FactSheet` (`sheet.rs`), one sentence per fired signal from an exhaustive
+`match` on `Signal`, printed under its own heading in `render()` so it is
+part of the model's own prompt. `verdict::template` — the floor every path
+that cannot trust the model's reply falls back to — states at least one twin
+at `Sketchy` and `RugMechanicsLive` (the two levels that are adverse and not
+conclusive), states none at `Rugged` (an observed completed event, where
+hedging would be false balance in the other direction), and has none to
+state at `NothingUglyYet` or `CantTell` (no signal fired).
+
+**Rejected: requiring the model's own free-text reply to name a twin,
+enforced in `forbidden.rs`.** The alternative considered and set aside was a
+`check_twin`-shaped function beside `check_target`/`check_level`, refusing
+any `Sketchy`-or-`RugMechanicsLive` reply that did not mention an innocent
+explanation. It fails for the same reason `forbidden.rs`'s existing checks
+are all shape-based, not meaning-based: the check can confirm a *string*
+appears, not that the model's paraphrase of it is honest. A reply that
+quoted a twin's sentence back verbatim would pass; a reply that wrote a
+better, more specific innocent explanation in its own words — the entire
+point of §4's free-text voice — would look, to a string check, exactly like
+a reply that invented one from nothing. Enforcing it would either accept
+verbatim quoting (pushing every reply back toward the templated sameness §4
+exists to avoid) or refuse honest paraphrase alongside dishonest omission,
+with no way to tell the two apart from the string alone. The template
+guarantees the floor unconditionally, because it is built from the sheet
+directly rather than generated and then checked; the model, reading the
+twins on its own sheet, is free to do better than the floor without a check
+standing in the way of trying.
+
 ## 6. What changes, file by file
 
 | file | what changes | why | shape |
@@ -598,7 +684,7 @@ not the old one, is what is catching it.
 | `crates/realorrug-roast/src/forbidden.rs` | new `check_target`, `check_level` functions per §5; existing `check`/`RULES` kept during the transition | §5, ADR 0027 point 6 | new functions, additive during transition |
 | `crates/realorrug-roast/src/voice.rs` | one free-text generation path, shared by every chain, that sends the rendered sheet to a cheap-tier model and asks for prose, gated by `fidelity::check` and the new `forbidden` functions before publication; per [ADR 0028](../adr/0028-one-bot-every-chain.md) point 1, Solana's clause-selection call (`clause::parse`/`assemble` against a model answer) is retired rather than kept beside it | §4, ADR 0028 | changed function, not additive; existing `write`/`request_for` change shape |
 | `crates/realorrug-roast/src/fidelity.rs` | unchanged | `literals`/`check` already operate on arbitrary text | none |
-| `crates/realorrug-roast/src/baserates.rs` | a Robinhood-shaped analogue of `Band`/`BaseRates`, populated once a Pons v2 recipient-count and repeat-launcher distribution is measured (research 0042 port-order items 1 and 3) — **not part of this design's day-one scope**; §3's `LaunchBlockBundle`/`RepeatLauncher` signals read `None` (no signal fires) until this exists | §3, §7 | new type, additive, not built here |
+| `crates/realorrug-roast/src/baserates.rs` | a Robinhood-shaped analogue of `Band`/`BaseRates`, populated once a Pons v2 recipient-count distribution is measured (research 0042 port-order item 3) — **not part of this design's day-one scope**; §3's `LaunchBlockBundle` signal reads `None` (no signal fires) until this exists. `RepeatLauncher` no longer waits on it: its floor is measured from the creator index's own distribution at the moment it is used, so there is no snapshot to publish and nothing to keep in step | §3, §7 | new type, additive, not built here |
 | `crates/realorrug-roast/src/creator.rs` | reused as-is; keyed on `creator_fee_recipient` per research 0038 §2, same `CreatorIndex`/`Record`/`Population` shapes | §1's creator-track-record row | none, or a build-pipeline change outside this crate's scope |
 | `crates/realorrug-analyst/src/mention.rs` | `first_address`/`read` generalised to the two-shape scan (§2) | §2 | changed function body; `Asked::Mint` keeps its `String` shape unchanged — the text alone carries which shape it is (`0x…` versus base58), so nothing downstream needs a second, disagreeable tag for the same fact |
 | `crates/realorrug-onchain/src/dispatch.rs`, new | a single `read(mint_text, clients)` function: parses `mint_text` into a `ChainAddress` and matches once on its shape, calling `SolanaReader` or `RobinhoodReader` through `ChainReader` — corrected from this row's original plan of a `match` on a `Venue` at each caller, which would have been the same "which chain is this" decision written twice, the exact defect §2 exists to remove | §2 | new module, new function, new `Clients`/`Error` types |
@@ -693,14 +779,15 @@ keeps its block number instead of losing it to `ReadAt::as_slot`'s honest
 - **Design 0021 (the read memory — freshness, caching, credits), not yet
   written.** This document names one interface it needs from 0021:
   `CreatorSoldOut` (§3) requires knowing the creator's balance *before* the
-  current read to say "sold out" rather than "currently holds nothing," and
-  `RepeatLauncher` (§3) requires a rolling window of past launches. Both are
-  memory reads, not fresh chain reads, and 0020 assumes 0021 supplies them
-  as an interface — `has_prior_balance(creator, token) -> Option<u128>`,
-  `launches_in_window(address, minutes) -> u32` shaped — without designing
-  how that memory is stored, refreshed or budgeted. Until 0021 exists,
-  `CreatorSoldOut` and `RepeatLauncher` do not fire (no signal, per rule 9 —
-  absent is not zero), and §3's ladder degrades gracefully: fewer signals
+  current read to say "sold out" rather than "currently holds nothing." That
+  is a memory read, not a fresh chain read, and 0020 assumes 0021 supplies it
+  as an interface — `has_prior_balance(creator, token) -> Option<u128>`
+  shaped — without designing how that memory is stored, refreshed or
+  budgeted. Until 0021 is wired in, `CreatorSoldOut` does not fire (no
+  signal, per rule 9 — absent is not zero). **`RepeatLauncher` was listed
+  here too and no longer belongs**: it was going to ask the memory for
+  `launches_in_window(address, minutes)`, and what shipped reads the lifetime
+  count the creator index already holds, so it needs nothing from 0021, and §3's ladder degrades gracefully: fewer signals
   available means more sheets land at `Sketchy` or below rather than
   reaching `RugMechanicsLive`, never the reverse.
 - **Design 0022 (threaded follow-ups), not yet written.** Out of scope here
@@ -724,11 +811,16 @@ keeps its block number instead of losing it to `ReadAt::as_slot`'s honest
   genuine `Rugged` case (reserves gone *and* a stuck holder together) — the
   worked example in §3 had to show why the closest candidate is actually the
   `LiquidityGone` twin, not a rug, rather than cite a real `Rugged` token.
-- `LaunchBlockBundle`'s band and `RepeatLauncher`'s floors are not measured
-  for Pons v2/Robinhood Chain at all — research 0042 names the port order
-  but the actual distributions (the Robinhood-chain equivalent of research
-  0008/0012/0013's Solana measurements) have not been gathered. Until they
-  are, both signals are designed but cannot fire.
+- `LaunchBlockBundle`'s band is not measured for Pons v2/Robinhood Chain at
+  all — research 0042 names the port order but the actual distribution (the
+  Robinhood-chain equivalent of research 0008/0012/0013's Solana
+  measurements) has not been gathered, so that signal is designed and cannot
+  fire. `RepeatLauncher` is no longer in that position: it takes its floor
+  from whatever creator index it is handed, so it needs no published
+  snapshot. **What is still unmeasured about it** is whether the 95th
+  percentile is the right cut for this population, and how many unnamed
+  relayers sit above it — both answerable only from a real Robinhood creator
+  index, which does not exist yet.
 - `HolderConcentration`'s threshold is not measured — no distribution of
   real holder-concentration-vs-outcome exists for Pons v2 tokens.
 - `BuyersCannotSell`'s simulated sell size and slippage tolerance are not

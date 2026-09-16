@@ -154,6 +154,15 @@ pub struct Verdict {
     /// of them is a recommendation, and the order is the order they are worth
     /// reading rather than a ranking of severity.
     pub reasons: Vec<String>,
+    /// The sheet's own [`FactSheet::twins`], carried alongside the reasons so
+    /// a caller that renders a verdict without the sheet in hand still has
+    /// them.
+    ///
+    /// **A separate field, not folded into `reasons`.** A reason is a fact
+    /// restated; a twin is not a fact -- it is the honest limit of a fact,
+    /// and collapsing the two would let a twin get counted, quoted or
+    /// checked as if it were one of the sheet's measurements.
+    pub twins: Vec<String>,
 }
 
 impl Verdict {
@@ -178,6 +187,7 @@ impl Verdict {
         Self {
             level: level(sheet),
             reasons,
+            twins: sheet.twins.clone(),
         }
     }
 }
@@ -383,8 +393,47 @@ pub fn template(sheet: &FactSheet) -> String {
             cost.rendered
         );
     }
-    if let Some(slot) = sheet.read_at {
-        let _ = writeln!(out, "Read at slot {}.", slot.0);
+    // The age, before the read point, and stated even when there is none to
+    // give a number for -- design 0020 §4: a `NothingUglyYet` reply about a
+    // token whose age is unknown must say so, not stay silent about the
+    // limit on how far its "clean so far" reaches (rule 8, unknown is not
+    // safe). Only a sheet with something chronological at all reaches either
+    // line, same as before this task.
+    if let Some(age) = sheet
+        .facts
+        .iter()
+        .find(|f| f.kind == crate::clause::Kind::Age)
+    {
+        let _ = writeln!(out, "Launched {}.", age.rendered);
+    } else if sheet.read_at.is_some() {
+        let _ = writeln!(out, "How old this token is could not be read.");
+    }
+    // One sentence, true on both chains: `ReadAt`'s own `Display` writes
+    // "slot 444007820" on Solana and "block 100" on Robinhood, and this is
+    // the only place that spells either word -- see `ReadAt`'s doc comment.
+    if let Some(read_at) = sheet.read_at {
+        let _ = writeln!(out, "Read at {read_at}.");
+    }
+    // The floor is what the account publishes when the model's own reply is
+    // refused, so it is the floor on the whole account's honesty too. At
+    // `Sketchy` and `RugMechanicsLive` something fired and it is not proof
+    // (design 0020 §5): stating one twin here is what keeps a template-only
+    // reply from reading as an accusation the sheet never earned. `Rugged`
+    // states none -- a confirmed pair is an observed completed event, and
+    // hedging it would be false balance in the other direction -- and
+    // `NothingUglyYet`/`CantTell` have no signal at all to twin.
+    //
+    // Matched one level per arm, not folded into a single `matches!` guard:
+    // a mutation that flipped which levels qualify would still pass a test
+    // that only checked "a twin appears somewhere," so each level is
+    // asserted against on its own in the tests below.
+    match level(sheet) {
+        Level::Sketchy | Level::RugMechanicsLive => {
+            if let Some(twin) = sheet.twins.first() {
+                let _ = writeln!(out, "An innocent explanation: {twin}.");
+            }
+        }
+        Level::Rugged | Level::NothingUglyYet | Level::CantTell => {}
     }
     out.push_str("Measured, not predicted. Not financial advice.\n");
     out
@@ -443,7 +492,9 @@ mod tests {
     fn a_real_shaped_sheet() -> FactSheet {
         FactSheet {
             mint: "ECQdbWN1jBAQ9GXGFxX9gqvoa6NT3weWe4SCpAaapump".to_owned(),
-            read_at: Some(realorrug_types::Slot(444_388_986)),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_388_986,
+            ))),
             facts: vec![
                 // **Every band, in the order the snapshot lists them.** A
                 // fixture carrying only the wanted one cannot catch a lookup
@@ -506,6 +557,7 @@ mod tests {
             untrusted: vec![("token name".to_owned(), "GOAT".to_owned())],
             unknown: Vec::new(),
             signals: Vec::new(),
+            twins: Vec::new(),
         }
     }
 
@@ -686,7 +738,9 @@ mod tests {
     fn sheet() -> FactSheet {
         FactSheet {
             mint: "MintOne".to_owned(),
-            read_at: Some(realorrug_types::Slot(444_007_820)),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820,
+            ))),
             facts: vec![
                 Fact::exact(Kind::LaunchRecipients, "recipients", 11.0, "11"),
                 Fact::share(
@@ -698,6 +752,7 @@ mod tests {
             untrusted: vec![("token name".to_owned(), "Gay Pepe".to_owned())],
             unknown: vec!["the creator's launch count".to_owned()],
             signals: Vec::new(),
+            twins: Vec::new(),
         }
     }
 
@@ -826,6 +881,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown: vec!["the launch block could not be read".to_owned()],
             signals: Vec::new(),
+            twins: Vec::new(),
         };
         let text = template(&empty);
         assert!(text.contains("not known"));
@@ -835,7 +891,16 @@ mod tests {
 
     /// A sheet carrying only signals and unknowns, for the level-function
     /// tests below -- the facts themselves are irrelevant to [`level`].
+    ///
+    /// Twins are derived from `signals` the same way [`FactSheet::build`]
+    /// derives them, so the `template` tests below (which need a real twin
+    /// on the sheet to assert against) can reuse this fixture rather than
+    /// building a third one.
     fn sheet_with(signals: Vec<Signal>, unknown: Vec<String>) -> FactSheet {
+        let twins = signals
+            .iter()
+            .map(|&signal| crate::sheet::twin_for(signal).to_owned())
+            .collect();
         FactSheet {
             mint: "MintLevel".to_owned(),
             read_at: None,
@@ -843,6 +908,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown,
             signals,
+            twins,
         }
     }
 
@@ -877,6 +943,77 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(level(&sheet), Level::RugMechanicsLive);
+    }
+
+    #[test]
+    fn the_template_states_a_twin_at_sketchy() {
+        // Packet 0038's defect: a single signal earns `Sketchy`, and the
+        // template shipped no hedge at all -- an honest fact with a boring
+        // explanation the bot knew about and never said. Asserted at this
+        // level alone (not folded into a loop over every level) so a
+        // mutation that swapped which levels qualify still fails here.
+        let sheet = sheet_with(vec![Signal::CreatorBoughtOwnLaunch], Vec::new());
+        assert_eq!(level(&sheet), Level::Sketchy);
+        let text = template(&sheet);
+        assert!(
+            text.contains(crate::sheet::twin_for(Signal::CreatorBoughtOwnLaunch)),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_template_states_a_twin_at_rug_mechanics_live_and_none_at_rugged() {
+        let live = sheet_with(
+            vec![
+                Signal::CreatorBoughtOwnLaunch,
+                Signal::LaunchBlockInStrongestBand,
+            ],
+            Vec::new(),
+        );
+        assert_eq!(level(&live), Level::RugMechanicsLive);
+        let text = template(&live);
+        assert!(
+            text.contains(crate::sheet::twin_for(Signal::CreatorBoughtOwnLaunch)),
+            "{text}"
+        );
+
+        // `Rugged` is an observed completed event, never on one reading
+        // alone -- hedging it with a twin would be false balance in the
+        // other direction, so the template must state none. Both twins the
+        // qualifying pair carries are checked absent, not just the first
+        // one, so a mutation that only strips the leading twin cannot hide
+        // behind this assertion.
+        let rugged = sheet_with(
+            vec![Signal::CreatorSoldOut, Signal::BuyersCannotSell],
+            Vec::new(),
+        );
+        assert_eq!(level(&rugged), Level::Rugged);
+        let text = template(&rugged);
+        assert!(
+            !text.contains(crate::sheet::twin_for(Signal::CreatorSoldOut)),
+            "{text}"
+        );
+        assert!(
+            !text.contains(crate::sheet::twin_for(Signal::BuyersCannotSell)),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_template_states_no_twin_when_nothing_fired() {
+        // `NothingUglyYet` and `CantTell` have no signal at all, so there is
+        // nothing to twin -- checked at both levels, not just one, since
+        // they reach the same "no twin" branch by two different routes.
+        let clean = sheet_with(Vec::new(), Vec::new());
+        assert_eq!(level(&clean), Level::NothingUglyYet);
+        assert!(!template(&clean).contains("innocent explanation"));
+
+        let cant_tell = sheet_with(
+            Vec::new(),
+            vec!["the launch block could not be read".to_owned()],
+        );
+        assert_eq!(level(&cant_tell), Level::CantTell);
+        assert!(!template(&cant_tell).contains("innocent explanation"));
     }
 
     #[test]

@@ -330,7 +330,7 @@ pub fn request_for(sheet: &FactSheet) -> Request {
 mod tests {
     use super::*;
     use crate::clause::{Kind, Voice};
-    use crate::sheet::Fact;
+    use crate::sheet::{About, Fact};
     use realorrug_agent::untrusted;
     use realorrug_model::{Answer, Unreachable};
     use realorrug_types::MicroUsd;
@@ -338,7 +338,9 @@ mod tests {
     fn sheet() -> FactSheet {
         FactSheet {
             mint: "MintOne".to_owned(),
-            read_at: Some(realorrug_types::Slot(444_007_820)),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820,
+            ))),
             // The real labels, because the template selects on them: a fixture
             // with invented labels would exercise a path the product does not
             // have, and this test caught exactly that when the template stopped
@@ -363,10 +365,25 @@ mod tests {
                 )
                 .saying(Voice::Plain, "A round trip costs 850 bps all in.")
                 .saying(Voice::Blunt, "850 bps to get in and out."),
+                // Design 0020 §4: the age, a genuine fact separate from the
+                // read point above -- `check_required_age` requires a
+                // `NothingUglyYet` reply to state this, not just the slot it
+                // was read at.
+                Fact {
+                    about: About::Measurement,
+                    kind: Kind::Age,
+                    label: "how long ago this token's launch block was, on the chain's own \
+                            clock"
+                        .to_owned(),
+                    rendered: "63954 slots (about 7.1 hours) since its launch block".to_owned(),
+                    values: vec![63954.0, 7.1],
+                    clauses: Vec::new(),
+                },
             ],
             untrusted: vec![("token name".to_owned(), "Gay Pepe".to_owned())],
             unknown: Vec::new(),
             signals: Vec::new(),
+            twins: Vec::new(),
         }
     }
 
@@ -424,8 +441,8 @@ mod tests {
         let reply = write(
             &sheet(),
             Some(&Says(
-                "Eleven accounts at birth, read at slot 444007820, and the round trip runs \
-                 4200 bps.",
+                "Eleven accounts at birth, about 7.1 hours old, read at slot 444007820, and \
+                 the round trip runs 4200 bps.",
             )),
         );
         assert!(reply.is_template(), "{:?}", reply.text);
@@ -455,7 +472,7 @@ mod tests {
         // computes `NothingUglyYet`, and design 0020 §4 requires that level's
         // reply to say so.
         let good = "Eleven accounts held it at birth, against an 850 bps round trip -- \
-                    thin either way, read at slot 444007820.";
+                    thin either way, about 7.1 hours old, read at slot 444007820.";
         let reply = write(&sheet(), Some(&Says(good)));
         assert!(!reply.is_template(), "{:?}", reply.fellback);
         assert_eq!(reply.text, good);
@@ -577,7 +594,8 @@ mod tests {
         // three levels have no opinion on this text (`check_required` is a
         // no-op for them), so the same sentence still publishes unchanged.
         let good = "Eleven accounts held it at birth, against an 850 bps round trip -- \
-                    thin either way, reserve included, read at slot 444007820.";
+                    thin either way, reserve included, about 7.1 hours old, read at slot \
+                    444007820.";
         let cases: [(Vec<Signal>, Vec<String>); 5] = [
             // CantTell: a required fact was not read.
             (Vec::new(), vec!["reserve could not be read".to_owned()]),
@@ -621,7 +639,7 @@ mod tests {
         let reply = write(
             &sheet(),
             Some(&Says(
-                "11 accounts\u{202e} in the block, read at slot 444007820.",
+                "11 accounts\u{202e} in the block, about 7.1 hours old, read at slot 444007820.",
             )),
         );
         assert!(!reply.text.contains('\u{202e}'), "{:?}", reply.text);
@@ -691,7 +709,7 @@ mod tests {
         let reply = write(
             &sheet(),
             Some(&Priced(
-                "Eleven accounts at birth, 850 bps to trade it, read at slot 444007820.",
+                "Eleven accounts at birth, 850 bps to trade it, about 7.1 hours old, read at slot 444007820.",
                 4_500,
             )),
         );
@@ -708,7 +726,7 @@ mod tests {
         let reply = write(
             &sheet(),
             Some(&Says(
-                "Eleven accounts at birth, 850 bps to trade it, read at slot 444007820.",
+                "Eleven accounts at birth, 850 bps to trade it, about 7.1 hours old, read at slot 444007820.",
             )),
         );
         assert!(!reply.is_template(), "{:?}", reply.fellback);

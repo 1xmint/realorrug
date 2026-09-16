@@ -24,10 +24,12 @@
 
 use realorrug_onchain::budget::Count;
 use realorrug_onchain::{Dossier, LaunchBlock};
+#[cfg(test)]
 use realorrug_types::Slot;
+use realorrug_types::{ReadAt, SlotDelta};
 
 use crate::baserates::BaseRates;
-use crate::clause::{Kind, Voice};
+use crate::clause::{Clause, Kind, Voice};
 use std::fmt::Write as _;
 
 /// What a fact is a claim about, because one kind is withheld for one mint.
@@ -242,31 +244,84 @@ pub enum Signal {
     OwnerCanStillMintOrPause,
 }
 
+/// The innocent, on-chain-identical reading of a signal, from design 0020
+/// §3's own "innocent twin" column.
+///
+/// **One `match`, exhaustive, no `_ =>` arm.** That absence is the whole
+/// enforcement this function exists for: `Signal` grows a variant, this
+/// function fails to compile, and the packet that lands the new signal
+/// cannot ship without also writing what an innocent reading of it looks
+/// like. Every sentence is phrased as what was read, not as a name for the
+/// signal, because this is the only channel through which the model learns
+/// there is another explanation (`FactSheet::render` never prints the
+/// signal itself) -- and every sentence carries no digit, because
+/// `forbidden.rs` checks every number in a reply against the sheet's facts,
+/// and a number that existed only here would be a fact the model could
+/// state and the check could not source.
+pub(crate) fn twin_for(signal: Signal) -> &'static str {
+    match signal {
+        Signal::LaunchBlockInStrongestBand => {
+            "a launch-block recipient count in this band can also be a launch people were \
+             waiting for; no chain fact tells the two apart"
+        }
+        Signal::CreatorNeverGraduatedOrganically => {
+            "a small number of measured launches reads the same whether none of them ever had \
+             a real chance to graduate or the creator has simply not launched enough yet for \
+             the record to mean much"
+        }
+        Signal::CreatorBoughtOwnLaunch => {
+            "a creator buying into their own launch block reads the same as a creator buying a \
+             token they believe in"
+        }
+        Signal::LiquidityGone => {
+            "reserves that emptied pre-graduation read the same whether the creator drained \
+             them or every buyer simply sold back to the curve on their own"
+        }
+        Signal::CreatorSoldOut => {
+            "a creator wallet that now holds nothing reads the same whether the tokens were \
+             sold or only moved to another wallet the creator still holds them in"
+        }
+        Signal::BuyersCannotSell => {
+            "a simulated sell that fails reads the same whether the curve is broken, the \
+             simulated size was too large for a curve with real but thin depth, or the launch \
+             is still in its opening seconds, when the launchpad's own sell tax is near total \
+             on every token"
+        }
+        Signal::RepeatLauncher => {
+            "a creator who recurs across many launch blocks reads the same whether a person is \
+             launching many tokens themselves or an unnamed relayer or bot is launching them on \
+             other people's behalf, automatically and without coordination"
+        }
+        Signal::HolderConcentration => {
+            "a wallet holding a large share of supply reads the same whether it belongs to a \
+             single holder or is a vesting contract, a bridge or an exchange that nobody has \
+             labelled yet"
+        }
+        Signal::OwnerCanStillMintOrPause => {
+            "an owner-only mint or pause selector being present reads the same whether the \
+             deployer intends to use it or it is simply part of a stock contract template \
+             nobody bothered to strip"
+        }
+    }
+}
+
 /// Everything the analyst may assert about one token.
 #[derive(Clone, Debug)]
 pub struct FactSheet {
     /// The mint, as text. Not a number, and never checked as one.
     pub mint: String,
-    /// The slot every figure was read at.
+    /// The point every figure was read at, in the reading chain's own unit.
     ///
-    /// **Left exactly as it was -- `Option<Slot>`, Solana-only -- and that is
-    /// a finding, not an oversight.** Packet 0032 asks for this to become
-    /// `Option<ReadAt>` so a Robinhood sheet's block reaches `verdict::template`
-    /// and `authorised`. Doing that here is impossible without also editing
-    /// `forbidden.rs`: its own test module constructs a `FactSheet` by full
-    /// struct literal (`required_sheet`, around line 1491) and destructures
-    /// this field as a bare [`Slot`] (`check_required_age`, around line 953),
-    /// and it also calls `verdict::template(sheet)` directly (around line
-    /// 1645) -- so retyping this field, or adding a second field beside it,
-    /// or changing `template`'s signature, all fail to compile without a
-    /// `forbidden.rs` edit. The packet and the top-level instructions both
-    /// forbid touching that file, so this field is untouched and a Robinhood
-    /// sheet's `read_at` stays `None`, same as before this task. See this
-    /// task's report for the full explanation -- this is the clearest
-    /// remaining place where a number (the read point) and the chain it was
-    /// read on could not be kept travelling together, because the file that
-    /// would need to change to fix it is owned by the next task.
-    pub read_at: Option<Slot>,
+    /// **`Option<ReadAt>`, not `Option<Slot>`.** Packet 0032 left this
+    /// Solana-only because retyping it also required editing
+    /// `forbidden.rs` (its `required_sheet` built a `FactSheet` by full
+    /// struct literal and `check_required_age` destructured this field as a
+    /// bare [`Slot`]) and that file was out of scope there. This packet owns
+    /// all three files that the change touches, so the field carries
+    /// [`ReadAt`] now: a Robinhood sheet's block number reaches
+    /// [`FactSheet::authorised`], [`crate::verdict::template`] and
+    /// `check_required_age` exactly as a Solana sheet's slot always did.
+    pub read_at: Option<ReadAt>,
     /// The facts, in the order they are shown to the model.
     pub facts: Vec<Fact>,
     /// Creator-supplied strings, kept apart from the facts.
@@ -283,6 +338,13 @@ pub struct FactSheet {
     pub unknown: Vec<String>,
     /// The refusal signals the facts carry, in a fixed order. See [`Signal`].
     pub signals: Vec<Signal>,
+    /// The innocent twin of each fired signal, one entry per entry in
+    /// [`Self::signals`], in the same order. See [`twin_for`].
+    ///
+    /// **Never a signal's name.** Each string is a sentence about what was
+    /// read, phrased so the account could say it in public -- the model must
+    /// not learn `Signal` exists, only that another explanation does.
+    pub twins: Vec<String>,
 }
 
 impl FactSheet {
@@ -299,12 +361,22 @@ impl FactSheet {
     /// ([`withhold_price`]). Everything else about the token is stated on the
     /// same rule as any other coin — ADR 0013 constraint 6 — which is why this
     /// is one filter and not a separate path.
+    ///
+    /// `first_party` is the named-address list `Signal::RepeatLauncher` must
+    /// exclude before it measures a floor (`creator.rs::repeat_launcher_floor`,
+    /// packet 0037). `None` the same way `rates` and `creators` are `None`: not
+    /// configured, or the file did not parse. Passing `None` here does not
+    /// mean "fire `RepeatLauncher` without the exclusions" — it means the
+    /// signal does not fire at all, on any chain (AGENTS.md rule 7); a
+    /// prevalence measured over a population that still contains the launch
+    /// factory would look like a result while being wrong.
     #[must_use]
     pub fn build(
         dossier: &Dossier,
         rates: Option<&BaseRates>,
         creators: Option<&crate::creator::CreatorIndex>,
         self_mint: Option<&realorrug_types::Address>,
+        first_party: Option<&crate::firstparty::FirstPartyList>,
     ) -> Self {
         let mut facts = Vec::new();
         let mut untrusted = Vec::new();
@@ -329,6 +401,25 @@ impl FactSheet {
             // already refuses to call that "did not buy".
             if launch.dev_buy_lamports.is_some_and(|l| l > 0) {
                 signals.push(Signal::CreatorBoughtOwnLaunch);
+            }
+            // **The age, which is not the read point.** "Read at slot
+            // 444007820" says when the camera clicked; it does not say the
+            // token is six hours old. A real age exists only where both ends
+            // of the subtraction are on the same clock: `launch.slot` is
+            // always a Solana slot (pump.fun only), so this only fires for a
+            // `ReadAt::Solana` read, never for a Robinhood block number --
+            // there is no lossy slot-from-block conversion to invent one
+            // with (`ReadAt::as_slot`'s own doc comment makes the same
+            // refusal for the read point). A Robinhood sheet's `unavailable`
+            // entry already says the launch block is unreadable there
+            // (`LaunchBlock` is Solana-slot-shaped), so it has nothing to
+            // subtract from and gets no age fact -- design 0020 §4 records
+            // that as the decision, not an oversight: demoting every ageless
+            // token to `CantTell` was considered and rejected, because it
+            // would throw away every other signal the sheet did read on a
+            // whole chain.
+            if let Some(ReadAt::Solana(read_slot)) = dossier.read_at {
+                push_age(&mut facts, read_slot.saturating_since(launch.slot));
             }
         } else {
             unknown.push("the launch block could not be read".to_owned());
@@ -362,6 +453,36 @@ impl FactSheet {
                 && record.organic == 0
             {
                 signals.push(Signal::CreatorNeverGraduatedOrganically);
+            }
+
+            // RepeatLauncher (design 0020 §3; research 0042's port-order item
+            // 1). The floor is this index's own 95th percentile, measured
+            // *after* the named list excludes the launch factory and its
+            // escrow -- never Radar's Solana `REPEAT_FLOOR`/
+            // `INFRASTRUCTURE_FLOOR` constants, which are a different
+            // population (distinct launch *blocks* in a *90-minute window*),
+            // a different window, and a different chain
+            // (`creator::CreatorIndex::repeat_launcher_floor`'s own doc
+            // comment carries the rest of that argument).
+            //
+            // No list, or no floor (fewer than 100 creators survive the
+            // exclusion), means no signal — AGENTS.md rule 7, deny by
+            // default, not "fire without the exclusion."
+            //
+            // **The innocent twin, per design 0020 §3: a bot that buys every
+            // launch; infrastructure, not coordination.** The named list does
+            // not dispose of this twin — it holds *named* addresses, and an
+            // unnamed relayer nobody has captured yet reads identically, on
+            // this signal alone, to a person launching forty tokens. That is
+            // this signal's honest limit; putting the twin into a reply is a
+            // later packet's job (design 0020 §3's own note), not this one's.
+            if let Some(list) = first_party
+                && let Some(record) = index.get(&creator)
+                && let Some(floor) =
+                    index.repeat_launcher_floor(crate::firstparty::Chain::of(&address), list)
+                && record.launches >= floor
+            {
+                signals.push(Signal::RepeatLauncher);
             }
         }
 
@@ -448,13 +569,22 @@ impl FactSheet {
             withhold_price(&mut facts);
         }
 
+        // One string per fired signal, in the same order the signal fired --
+        // computed from `signals` itself so the two can never drift apart,
+        // rather than pushed alongside each `signals.push` call above.
+        let twins = signals
+            .iter()
+            .map(|&signal| twin_for(signal).to_owned())
+            .collect();
+
         Self {
             mint: dossier.mint.to_string(),
-            read_at: dossier.read_at.and_then(realorrug_types::ReadAt::as_slot),
+            read_at: dossier.read_at,
             facts,
             untrusted,
             unknown,
             signals,
+            twins,
         }
     }
 
@@ -469,8 +599,10 @@ impl FactSheet {
     ///    were written *by Radar* and shown to the model as true. A model citing
     ///    the band it was given has invented nothing, and a check that caught it
     ///    would reject the most careful replies while passing vaguer ones.
-    /// 3. **The slot**, because a reply citing the slot it was read at is doing
-    ///    the thing this account exists to do.
+    /// 3. **The read point**, because a reply citing when the sheet was read
+    ///    is doing the thing this account exists to do -- a slot on Solana, a
+    ///    block number on Robinhood Chain, never the other chain's word for
+    ///    it.
     ///
     /// What is **not** a source is [`FactSheet::untrusted`]. That is the whole
     /// boundary: a creator who names their token "99.9% of holders profited"
@@ -484,22 +616,45 @@ impl FactSheet {
                 .into_iter()
                 .map(|(_, v)| v),
         );
-        if let Some(slot) = self.read_at {
+        if let Some(read_at) = self.read_at {
+            let raw = match read_at {
+                ReadAt::Solana(slot) => slot.get(),
+                ReadAt::Robinhood(block) => block,
+            };
             #[expect(
                 clippy::cast_precision_loss,
-                reason = "a slot is well inside f64's exact integer range and this is a \
-                          comparison against a literal the model wrote, not arithmetic"
+                reason = "a slot or a block number is well inside f64's exact integer range and \
+                          this is a comparison against a literal the model wrote, not arithmetic"
             )]
-            values.push(slot.0 as f64);
+            values.push(raw as f64);
         }
         values
     }
 
     /// The sheet as the model sees it.
     ///
-    /// Facts only. The mint, the slot, and the untrusted strings are fenced
-    /// separately by [`crate::voice`] so that nothing in this block is
-    /// creator-controlled.
+    /// Facts, what could not be read, and the read point. The mint and the
+    /// untrusted strings are fenced separately by [`crate::voice`] so that
+    /// nothing in this block is creator-controlled.
+    ///
+    /// **The read point is here because it is the only way it reaches the
+    /// model at all.** `voice::write` hands the provider exactly
+    /// the mint and this rendering, joined, and nothing else, so a number
+    /// absent from this string is a number the model cannot write -- and
+    /// from this string is a number the model cannot write -- and
+    /// `forbidden::check_required_age` requires a `NothingUglyYet` reply on a
+    /// sheet with no age (every Robinhood sheet today: `LaunchBlock` is
+    /// Solana-slot-shaped) to state the read point. Left out of this block,
+    /// that rule is unsatisfiable by any real model and every such reply
+    /// falls back to the template, which is the free-text voice going silent
+    /// on a whole chain without anything saying so.
+    ///
+    /// Written through [`ReadAt`]'s own `Display` -- "slot 444007820",
+    /// "block 100" -- the single spelling of either word, so the sheet and
+    /// `verdict::template` cannot drift apart on which clock a number is in.
+    /// [`FactSheet::authorised`] already permitted this number before it was
+    /// rendered here; harvesting it twice is harmless, because `authorised`
+    /// is a set of permitted values and not a count.
     #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -508,6 +663,19 @@ impl FactSheet {
         }
         for miss in &self.unknown {
             let _ = writeln!(out, "NOT KNOWN: {miss}");
+        }
+        // Its own heading, after the facts and after what could not be read,
+        // so the model meets these as context rather than as more facts --
+        // and printed only when a signal actually fired, so a clean sheet
+        // gains no heading at all.
+        if !self.twins.is_empty() {
+            let _ = writeln!(out, "INNOCENT EXPLANATIONS -- not proof either way:");
+            for twin in &self.twins {
+                let _ = writeln!(out, "- {twin}");
+            }
+        }
+        if let Some(read_at) = self.read_at {
+            let _ = writeln!(out, "read at: {read_at}");
         }
         out
     }
@@ -654,6 +822,59 @@ fn push_launch(facts: &mut Vec<Fact>, untrusted: &mut Vec<(String, String)>, lau
     }
     untrusted.push(("token name".to_owned(), launch.metadata.name.clone()));
     untrusted.push(("token symbol".to_owned(), launch.metadata.symbol.clone()));
+}
+
+/// The age, as a fact of its own -- never a stand-in read off the read point.
+///
+/// Design 0020 §4: "`NothingUglyYet` must state the age -- 'six hours old,'
+/// not just 'clean so far.'" Two numbers, both authorised, and the checkable
+/// one is never dropped in favour of the felt one:
+///
+/// - the slot count itself, exact and reproducible from the two reads it was
+///   subtracted from;
+/// - an approximate wall clock, always hedged ("about"/"roughly") because
+///   Solana's slot time drifts and Alpenglow changes the relationship again
+///   ([`SlotDelta::approx_duration`]'s own 400ms-target doc comment) -- an
+///   exact-sounding hour count nobody could reproduce would be a fabricated
+///   fact under rule 1.
+///
+/// Robinhood Chain's own measured block time is 0.1019s/block (research 0039,
+/// ~100k blocks) rather than Solana's 400ms target, but nothing here reads
+/// it: [`FactSheet::build`] only ever calls this for a `ReadAt::Solana` read,
+/// because `LaunchBlock` is Solana-slot-shaped and a Robinhood sheet has
+/// nothing to subtract (see the call site). The constant is recorded here so
+/// the day a Robinhood launch block becomes readable, the source for its
+/// wall-clock conversion is already written down.
+fn push_age(facts: &mut Vec<Fact>, delta: SlotDelta) {
+    let slots = delta.get();
+    // Rounded to one decimal, the same precision `Fact::share` uses for a
+    // percentage, so the rendered string and the authorised literal are the
+    // same digits -- a model citing "7.1 hours" is citing exactly the value
+    // this fact declared, not a re-rounding of it.
+    let hours = (delta.approx_duration().as_secs_f64() / 3600.0 * 10.0).round() / 10.0;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a slot delta is well inside f64's exact integer range"
+    )]
+    let slots_value = slots as f64;
+    let rendered = format!("{slots} slots (about {hours} hours) since its launch block");
+    facts.push(Fact {
+        about: About::Measurement,
+        kind: Kind::Age,
+        label: "how long ago this token's launch block was, on the chain's own clock".to_owned(),
+        rendered: rendered.clone(),
+        values: vec![slots_value, hours],
+        clauses: vec![
+            Clause::new(
+                Voice::Plain,
+                format!("It launched about {hours} hours ago -- {slots} slots, by the read point."),
+            ),
+            Clause::new(
+                Voice::Blunt,
+                format!("{slots} slots old. Roughly {hours} hours."),
+            ),
+        ],
+    });
 }
 
 /// What this creator's other tokens did.
@@ -1409,6 +1630,100 @@ mod tests {
         assert_eq!(f.rendered, "25.1%");
     }
 
+    /// A minimal sheet with exactly one fact, one miss and a read point, so
+    /// `render`'s whole output can be pinned without a fixture that grows.
+    fn pinnable(read_at: realorrug_types::ReadAt) -> FactSheet {
+        FactSheet {
+            mint: "MintOne".to_owned(),
+            read_at: Some(read_at),
+            facts: vec![Fact::exact(
+                Kind::LaunchRecipients,
+                "distinct token accounts receiving the token in its own launch block",
+                11.0,
+                "11",
+            )],
+            untrusted: Vec::new(),
+            unknown: vec!["the bonding curve could not be read".to_owned()],
+            signals: Vec::new(),
+            twins: Vec::new(),
+        }
+    }
+
+    /// The hours are arithmetic, and arithmetic is where a mutation hides.
+    ///
+    /// 63954 slots x 400ms = 25581.6s; over 3600 that is 7.106 hours, which
+    /// rounds to one decimal as 7.1. Every operator in that line has a
+    /// mutant, and each one lands on a different number -- 381.6, 1.7, 0.1 --
+    /// so pinning the rendered string and the two authorised values catches
+    /// all of them at once. It also pins the contract the reply depends on:
+    /// the digits a model may cite are the digits this fact declared.
+    #[test]
+    fn the_age_fact_pins_the_hours_it_declares() {
+        let mut facts = Vec::new();
+        push_age(&mut facts, SlotDelta(63_954));
+        assert_eq!(facts.len(), 1);
+        assert_eq!(
+            facts[0].rendered,
+            "63954 slots (about 7.1 hours) since its launch block"
+        );
+        assert_eq!(facts[0].values, vec![63_954.0, 7.1]);
+    }
+
+    #[test]
+    fn a_solana_sheet_renders_byte_for_byte() {
+        // The whole string, not a `contains`. `voice::write` hands the model
+        // the mint and this rendering and nothing else, so every byte here is
+        // the model's entire world -- a line silently added or dropped
+        // changes what the account is able to say, and no other test in this
+        // crate would notice. Pinned whole for that reason; when this
+        // assertion fails, read the diff and decide whether the new line
+        // belongs, rather than weakening it to a `contains`.
+        assert_eq!(
+            pinnable(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820
+            )))
+            .render(),
+            [
+                "distinct token accounts receiving the token in its own launch block: 11",
+                "NOT KNOWN: the bonding curve could not be read",
+                "read at: slot 444007820",
+                "",
+            ]
+            .join(
+                "
+"
+            )
+        );
+    }
+
+    #[test]
+    fn a_robinhood_sheet_carries_its_block_into_the_render_the_template_and_authorised() {
+        // All three surfaces, because the read point reaches the reader by
+        // three different routes and the Robinhood arm of each was the gap:
+        // `render` is the only channel to the model, `template` is what ships
+        // when the model's reply is refused, and `authorised` is what lets a
+        // reply state the number at all. A block number must never wear a
+        // slot's label on any of them -- `ReadAt`'s `Display` is the single
+        // spelling, which is why "block 100" appears here and nowhere else.
+        let sheet = pinnable(realorrug_types::ReadAt::Robinhood(100));
+
+        assert!(
+            sheet.render().contains("read at: block 100"),
+            "{}",
+            sheet.render()
+        );
+        assert!(
+            !sheet.render().contains("slot"),
+            "a block number must not be labelled a slot: {}",
+            sheet.render()
+        );
+
+        let template = crate::verdict::template(&sheet);
+        assert!(template.contains("Read at block 100."), "{template}");
+
+        assert!(sheet.authorised().iter().any(|v| (*v - 100.0).abs() < 1e-9));
+    }
+
     #[test]
     fn quote_renders_by_integer_arithmetic() {
         assert_eq!(render_quote(1_000_000_000, 9), "1.0000");
@@ -1434,6 +1749,7 @@ mod tests {
             untrusted: vec![("token name".to_owned(), "99999 percent safe".to_owned())],
             unknown: Vec::new(),
             signals: Vec::new(),
+            twins: Vec::new(),
         };
         assert!(sheet.authorised().is_empty());
         assert!(!sheet.render().contains("99999"));
@@ -1472,6 +1788,7 @@ mod tests {
             untrusted: Vec::new(),
             unknown: Vec::new(),
             signals: Vec::new(),
+            twins: Vec::new(),
         };
 
         let authorised = sheet.authorised();
@@ -1536,7 +1853,7 @@ mod tests {
             why: "this token has more history than the page budget allows".to_owned(),
         });
 
-        let sheet = FactSheet::build(&d, None, Some(&index_with(record(150, 0))), None);
+        let sheet = FactSheet::build(&d, None, Some(&index_with(record(150, 0))), None, None);
         let rendered = sheet.render();
 
         // The creator's record survived the missing launch block.
@@ -1656,7 +1973,7 @@ mod tests {
         ));
         let rates = rates_strongest(10, 13);
         let index = index_with(record(3, 0));
-        let sheet = FactSheet::build(&dossier, Some(&rates), Some(&index), None);
+        let sheet = FactSheet::build(&dossier, Some(&rates), Some(&index), None, None);
         assert_eq!(
             sheet.signals,
             [
@@ -1669,6 +1986,178 @@ mod tests {
         // verdict handed to it.
         let rendered = sheet.render();
         assert!(!rendered.to_lowercase().contains("signal"), "{rendered}");
+        // The twins line up with the signals, same order, one each --
+        // packet 0038.
+        assert_eq!(
+            sheet.twins,
+            [
+                twin_for(Signal::LaunchBlockInStrongestBand).to_owned(),
+                twin_for(Signal::CreatorBoughtOwnLaunch).to_owned(),
+                twin_for(Signal::CreatorNeverGraduatedOrganically).to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_signal_variant_has_a_nonempty_digit_free_twin() {
+        // The whole point of the exhaustive `match` with no `_ =>` arm: a
+        // tenth signal added later has to gain a twin here before the crate
+        // compiles again. This test does not catch that on its own (the
+        // compiler does) -- it catches an empty string or a smuggled digit,
+        // which the match's exhaustiveness cannot.
+        for signal in [
+            Signal::LaunchBlockInStrongestBand,
+            Signal::CreatorNeverGraduatedOrganically,
+            Signal::CreatorBoughtOwnLaunch,
+            Signal::LiquidityGone,
+            Signal::CreatorSoldOut,
+            Signal::BuyersCannotSell,
+            Signal::RepeatLauncher,
+            Signal::HolderConcentration,
+            Signal::OwnerCanStillMintOrPause,
+        ] {
+            let twin = twin_for(signal);
+            assert!(!twin.is_empty(), "{signal:?} has an empty twin");
+            assert!(
+                !twin.chars().any(|c| c.is_ascii_digit()),
+                "{signal:?}'s twin carries a digit, which `forbidden.rs` cannot source: {twin}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fired_signal_renders_its_twin_and_an_unfired_sheet_renders_none() {
+        // Design 0020 §1: the twin belongs to the fact, phrased as a
+        // sentence about what was read, and the model's whole world is
+        // `render()` -- so this is the only way to prove the twin actually
+        // reaches the prompt.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(12), None));
+        let rates = rates_strongest(10, 13);
+        let fired = FactSheet::build(&dossier, Some(&rates), None, None, None);
+        assert_eq!(fired.signals, [Signal::LaunchBlockInStrongestBand]);
+        let rendered = fired.render();
+        assert!(
+            rendered.contains(twin_for(Signal::LaunchBlockInStrongestBand)),
+            "{rendered}"
+        );
+
+        // Same launch, but a snapshot whose strongest band this recipient
+        // count misses: no signal, so no twin heading at all.
+        let quiet = FactSheet::build(&dossier, Some(&rates_strongest(50, 60)), None, None, None);
+        assert!(quiet.signals.is_empty());
+        let rendered = quiet.render();
+        assert!(!rendered.contains("INNOCENT EXPLANATIONS"), "{rendered}");
+        assert!(quiet.twins.is_empty());
+    }
+
+    /// An index with `filler_count` creators at exactly `floor_value`
+    /// launches each, plus one creator at `target_address` carrying
+    /// `target_launches`.
+    ///
+    /// `filler_count` is chosen (100) so the filler block alone clears the
+    /// refusal floor and dominates the 95th-percentile rank regardless of
+    /// where the single target creator's own count sorts -- so this always
+    /// measures a floor of exactly `floor_value`, and the test using it is
+    /// only about whether `target_launches >= floor_value` fires the signal,
+    /// not about the percentile arithmetic (that is `creator.rs`'s job).
+    fn index_with_floor_and_target(
+        target_address: String,
+        target_launches: u32,
+        floor_value: u32,
+        filler_count: usize,
+    ) -> crate::creator::CreatorIndex {
+        let mut creators = std::collections::BTreeMap::new();
+        for i in 0..filler_count {
+            creators.insert(
+                format!("filler{i}"),
+                crate::creator::Record {
+                    launches: floor_value,
+                    ..crate::creator::Record::default()
+                },
+            );
+        }
+        creators.insert(
+            target_address,
+            crate::creator::Record {
+                launches: target_launches,
+                ..crate::creator::Record::default()
+            },
+        );
+        crate::creator::CreatorIndex {
+            watermark_slot: 444_343_109,
+            built_at: 1_788_000_000,
+            population: None,
+            creators,
+        }
+    }
+
+    fn empty_first_party_list() -> crate::firstparty::FirstPartyList {
+        crate::firstparty::FirstPartyList::parse(r#"{"entries": []}"#).expect("parses")
+    }
+
+    #[test]
+    fn a_creator_at_or_above_the_floor_fires_repeat_launcher_and_one_below_does_not() {
+        // 100 fillers at launches == 5 pin the floor at 5 regardless of the
+        // target's own count (see `index_with_floor_and_target`). Four
+        // values against that one floor: strictly below, exactly at it, and
+        // above -- `>=` is what the sheet uses, so the boundary is asserted
+        // both ways rather than only in the direction that flatters `>`.
+        let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
+        let list = empty_first_party_list();
+        for (target_launches, fires) in [(4u32, false), (5u32, true), (6u32, true)] {
+            let mut dossier = dossier_for([3u8; 32]);
+            dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+            let index =
+                index_with_floor_and_target(creator_address.clone(), target_launches, 5, 100);
+            let sheet = FactSheet::build(&dossier, None, Some(&index), None, Some(&list));
+            assert_eq!(
+                sheet.signals.contains(&Signal::RepeatLauncher),
+                fires,
+                "{target_launches} launches against a floor of 5"
+            );
+        }
+    }
+
+    #[test]
+    fn no_named_list_fires_no_repeat_launcher_signal_even_far_above_any_floor() {
+        // Deny by default (AGENTS.md rule 7): `first_party: None` is the same
+        // "not configured, or did not parse" state whether the file was
+        // absent or malformed -- both reach `FactSheet::build` as `None`, so
+        // this one case covers both halves of "no list, or an unparseable
+        // list, fires no signal."
+        let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        // Far above any plausible floor, so a survivor that fires without a
+        // list cannot hide behind "the count just happened to be too low."
+        let index = index_with_floor_and_target(creator_address, 9_999, 5, 100);
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, None);
+        assert!(
+            !sheet.signals.contains(&Signal::RepeatLauncher),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
+    #[test]
+    fn under_a_hundred_remaining_creators_fires_no_repeat_launcher_signal() {
+        // 40 creators is a real index with a real record, just too small for
+        // the floor to mean anything (`creator.rs::repeat_launcher_floor`'s
+        // own refusal) -- distinct from the "no list" case above, and from
+        // `CreatorNeverGraduatedOrganically`, which this dossier does not
+        // qualify for (`record.measured == 0` here).
+        let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
+        let list = empty_first_party_list();
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        let index = index_with_floor_and_target(creator_address, 9_999, 5, 40);
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, Some(&list));
+        assert!(
+            !sheet.signals.contains(&Signal::RepeatLauncher),
+            "{:?}",
+            sheet.signals
+        );
     }
 
     #[test]
@@ -1683,7 +2172,7 @@ mod tests {
                 realorrug_onchain::budget::Count::Exactly(recipients),
                 None,
             ));
-            let sheet = FactSheet::build(&dossier, Some(&rates), None, None);
+            let sheet = FactSheet::build(&dossier, Some(&rates), None, None, None);
             assert_eq!(
                 sheet.signals.contains(&Signal::LaunchBlockInStrongestBand),
                 fires,
@@ -1704,19 +2193,19 @@ mod tests {
 
         let at_six = rates_strongest(6, 6);
         assert!(
-            FactSheet::build(&twelve, Some(&at_six), None, None)
+            FactSheet::build(&twelve, Some(&at_six), None, None, None)
                 .signals
                 .contains(&Signal::LaunchBlockInStrongestBand),
             "twelve is above six and fires: 'or above' is the rule"
         );
         assert!(
-            FactSheet::build(&six, Some(&at_six), None, None)
+            FactSheet::build(&six, Some(&at_six), None, None, None)
                 .signals
                 .contains(&Signal::LaunchBlockInStrongestBand)
         );
         let at_ten = rates_strongest(10, 13);
         assert!(
-            !FactSheet::build(&six, Some(&at_ten), None, None)
+            !FactSheet::build(&six, Some(&at_ten), None, None, None)
                 .signals
                 .contains(&Signal::LaunchBlockInStrongestBand),
             "six is below ten and does not fire once the band has moved"
@@ -1733,7 +2222,7 @@ mod tests {
         dossier.launch = Some(launch(realorrug_onchain::budget::Count::AtLeast(40), None));
         let rates = rates_strongest(10, 13);
         let unmeasured = index_with(record(0, 0));
-        let sheet = FactSheet::build(&dossier, Some(&rates), Some(&unmeasured), None);
+        let sheet = FactSheet::build(&dossier, Some(&rates), Some(&unmeasured), None, None);
         assert_eq!(sheet.signals, []);
 
         // A dev buy of exactly zero lamports, if a chain ever reported one, is
@@ -1744,7 +2233,7 @@ mod tests {
             Some(0),
         ));
         assert_eq!(
-            FactSheet::build(&zero, None, None, None).signals,
+            FactSheet::build(&zero, None, None, None, None).signals,
             [],
             "no snapshot, no band; a zero buy is not a buy"
         );
@@ -1754,7 +2243,7 @@ mod tests {
         organic.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(2), None));
         let graduated = index_with(record(3, 1));
         assert_eq!(
-            FactSheet::build(&organic, Some(&rates), Some(&graduated), None).signals,
+            FactSheet::build(&organic, Some(&rates), Some(&graduated), None, None).signals,
             []
         );
 
@@ -1764,6 +2253,7 @@ mod tests {
                 &dossier_for([5u8; 32]),
                 Some(&rates),
                 Some(&graduated),
+                None,
                 None
             )
             .signals,
@@ -1788,7 +2278,7 @@ mod tests {
             quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
             fees: None,
         });
-        let rendered = FactSheet::build(&dossier, None, None, None).render();
+        let rendered = FactSheet::build(&dossier, None, None, None, None).render();
         assert!(
             rendered.contains("has the token graduated off the bonding curve: no"),
             "{rendered}"
@@ -1807,7 +2297,7 @@ mod tests {
             quote_asset: None,
             fees: None,
         });
-        let rendered = FactSheet::build(&done, None, None, None).render();
+        let rendered = FactSheet::build(&done, None, None, None, None).render();
         assert!(
             rendered.contains("has the token graduated off the bonding curve: yes"),
             "{rendered}"
@@ -1831,7 +2321,7 @@ mod tests {
             quote_asset: Some(realorrug_onchain::QuoteAsset::eth()),
             fees: None,
         });
-        let rendered = FactSheet::build(&dossier, None, None, None).render();
+        let rendered = FactSheet::build(&dossier, None, None, None, None).render();
         assert!(rendered.contains("2.5000 ETH"), "{rendered}");
         assert!(!rendered.contains("SOL"), "{rendered}");
 
@@ -1848,7 +2338,7 @@ mod tests {
             quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
             fees: None,
         });
-        let rendered = FactSheet::build(&sol, None, None, None).render();
+        let rendered = FactSheet::build(&sol, None, None, None, None).render();
         assert!(rendered.contains("0.3030 SOL"), "{rendered}");
     }
 
@@ -1902,7 +2392,7 @@ mod tests {
             quote_asset: None,
             fees: None,
         });
-        let sheet = FactSheet::build(&dossier, None, None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
         let rendered = sheet.render();
         assert!(!rendered.contains("exit capacity"), "{rendered}");
         assert!(
@@ -1927,7 +2417,7 @@ mod tests {
         // is the fact GOAL.md says leads every reply, and nothing pinned that it
         // was there at all.
         let rates = BaseRates::parse(SNAPSHOT).expect("the published snapshot");
-        let sheet = FactSheet::build(&dossier_for([3u8; 32]), Some(&rates), None, None);
+        let sheet = FactSheet::build(&dossier_for([3u8; 32]), Some(&rates), None, None, None);
         let rendered = sheet.render();
         assert!(
             rendered.contains(
@@ -1967,7 +2457,8 @@ mod tests {
             }),
             creators: std::collections::BTreeMap::new(),
         };
-        let rendered = FactSheet::build(&dossier_for([3u8; 32]), None, Some(&index), None).render();
+        let rendered =
+            FactSheet::build(&dossier_for([3u8; 32]), None, Some(&index), None, None).render();
         assert!(
             rendered.contains(
                 "launches Radar has recorded and measured, which every share below is out of: 506991"
@@ -1991,7 +2482,8 @@ mod tests {
             population: Some(crate::creator::Population::default()),
             ..index
         };
-        let rendered = FactSheet::build(&dossier_for([3u8; 32]), None, Some(&empty), None).render();
+        let rendered =
+            FactSheet::build(&dossier_for([3u8; 32]), None, Some(&empty), None, None).render();
         assert!(
             rendered.contains("NOT AVAILABLE -- no outcome has been measured yet"),
             "{rendered}"
@@ -2008,7 +2500,7 @@ mod tests {
         let other = realorrug_types::Address::new([4u8; 32]);
         let dossier = dossier_for([3u8; 32]);
 
-        let withheld = FactSheet::build(&dossier, None, None, Some(&own));
+        let withheld = FactSheet::build(&dossier, None, None, Some(&own), None);
         assert!(
             withheld.render().contains("never stated"),
             "the configured mint must be told apart: {}",
@@ -2018,7 +2510,7 @@ mod tests {
         // Another coin is answered like any other, with no mention of the rule.
         // A note on every sheet would make every reply about the analyst's own
         // token, which is the opposite of constraint 6.
-        let stranger = FactSheet::build(&dossier, None, None, Some(&other));
+        let stranger = FactSheet::build(&dossier, None, None, Some(&other), None);
         assert!(
             !stranger.render().contains("never stated"),
             "{}",
@@ -2028,7 +2520,7 @@ mod tests {
         // No token configured: no token is special. Rule 8 is not touched --
         // absence means the rule has nothing to apply to, not that a default
         // mint is assumed.
-        let unconfigured = FactSheet::build(&dossier, None, None, None);
+        let unconfigured = FactSheet::build(&dossier, None, None, None, None);
         assert!(
             !unconfigured.render().contains("never stated"),
             "{}",
