@@ -501,6 +501,35 @@ own word for it and to read unambiguously in the nav (`/token` next to
 
 ## 5. Art direction
 
+**Owner's decision, 2026-09-16: the "case file" direction.** Three mockups
+were shown side by side; the owner picked the case file. The site reads as a
+detective's evidence board: a warm near-black ground, cream paper cards
+pinned slightly askew, a rubber verdict stamp, typewriter labels, and gold
+as the one accent. That choice overrides the recommendations below wherever
+they differ, and the differences are these:
+
+- **Type.** Anton (display: headings, stamp, buttons, all caps), Special
+  Elite (typewriter: kickers, card titles, small labels), IBM Plex Sans
+  (body) and JetBrains Mono (addresses and figures). All four are SIL Open
+  Font License faces, self-hosted through Fontsource so a visitor's browser
+  never asks Google for them (`site/src/Privacy.tsx` says the site collects
+  nothing, and a third-party font host would make that sentence false).
+  Space Grotesk, recommended below, is not used.
+- **Ground and text.** A warm ground (`#0c0a09`) and cream text (`#efe6d6`)
+  replace the blue-grey `--color-ink` family, because paper cards on a
+  blue-black ground read as a spreadsheet, not a case file.
+- **Paper.** Cards that carry a verdict or evidence use `--color-paper`
+  (`#e8dbbf`) with `--color-paper-ink` (`#1b1510`) text, and their stamp
+  colours are darkened to hold contrast on paper: rug `#b52f1c` (4.52:1),
+  warn `#94600c` (3.89:1), real `#1a7a3c` (3.93:1), unknown `#5e6168`
+  (4.52:1). The mockup's amber `#b07512` measured 2.84:1 and its green
+  `#1f8a45` 3.20:1, under or at WCAG's 3:1 floor for large text, so both
+  were darkened rather than shipped as drawn.
+
+The ladder colours, the gold accent, the one red string, and every motion
+and reduced-motion rule below stand as written.
+
+
 **Palette** — extending, not replacing, `site/src/index.css`'s existing
 OKLCH system (same colour space, same measured-contrast discipline the
 file's own comment already commits to):
@@ -576,7 +605,6 @@ itself):
 - Paste box focus state: the gold-rim accent (§5) brightens on focus,
   CSS `transition` only, no JS-driven animation — this one is not gated by
   `prefers-reduced-motion` since a colour transition under 200ms is not
-  vestibular-motion territory (WCAG's own distinction), consistent with
   vestibular-motion territory (WCAG's own distinction), consistent with
   how `App.tsx`'s nav already does `transition-colors` unconditionally
   today.
@@ -704,20 +732,19 @@ future slices existing.
    (design 0025 §2 cites `realorrug-payout`'s two-transaction, Pons v2 escrow
    shape), not a guessed Solana-shaped substitute. A later slice or a
    dedicated pass should carry that fix.
-2. **Palette and type system.** File: `site/src/index.css` (§5's colour
-   tokens added alongside, not replacing, the existing ones where kept;
-   `--color-good` updated; Space Grotesk added as the display face,
-   self-hosted or a font-display: swap Google Fonts link, decided at build
-   time). No layout changes yet — this slice is checkable by diffing
+2. **Palette and type system.** **Shipped 2026-09-16, case-file tokens.**
+   File: `site/src/index.css` (§5's colour tokens, retuned to the case file;
+   the four self-hosted faces imported in `site/src/main.tsx`). No layout changes yet — this slice is checkable by diffing
    rendered contrast ratios against WCAG, the same way the existing file's
    comment says the console's palette was checked.
-3. **Nav fix and page renames.** Files: `site/src/routes.ts` (new `short`
+3. **Nav fix and page renames.** **Shipped 2026-09-16.** The old paths
+   redirect to the new ones, so links already posted keep working. Files: `site/src/routes.ts` (new `short`
    labels, `/token` → `/tokenomics`, `/leaderboard` → `/contest`, `/pool` +
    `/history` → `/payouts`), `site/src/App.tsx` (route table, §8's overflow
    fix). Existing page components move/rename, content unchanged from
    slice 1's fixed copy — this slice is the URL and nav restructuring from
    §4, without new page content yet.
-4. **`/how-it-works`, new page.** Files: `site/src/HowItWorks.tsx` (new),
+4. **`/how-it-works`, new page.** **Shipped 2026-09-16.** Files: `site/src/HowItWorks.tsx` (new),
    wired into `App.tsx` and `routes.ts`. Static content only (§4e), no new
    API — ships independently because nothing else depends on it existing
    yet, and it is the page every later share-text and evidence-list link
@@ -767,9 +794,6 @@ future slices existing.
   and never the store) and this new route has the same shape (reads the
   checker's cache, which is not one of the five pre-computed public
   documents) — but the module is not created by this document.
-- Exact font-loading mechanism for Space Grotesk (self-hosted static asset
-  vs. a Google Fonts link) — a build-tooling choice against the performance
-  budget below, not decided here.
 - Whether Robinhood Chain and Solana checking both exist on
   `/check/:address` at launch, or Robinhood Chain ships first — design 0023
   §8 already left this open and this document does not resolve it either;
@@ -780,7 +804,7 @@ future slices existing.
 - First contentful paint on the home paste box: under 1.5s on a mid-tier
   phone over 4G — the box is the page's entire job (§4a), and it must be
   visible before any texture, live feed, or webfont has necessarily
-  finished loading. Space Grotesk loads with `font-display: swap`
+  finished loading. The display faces load with `font-display: swap`
   specifically so the headline text is never blocked on it.
 - Texture/background assets (§5): each under 40KB, tileable, cached
   aggressively (`Cache-Control: public, max-age` matching the existing

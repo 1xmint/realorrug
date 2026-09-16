@@ -96,11 +96,11 @@ export function Heading({
   return (
     <div className="mb-8">
       {kicker && (
-        <div className="mb-3 font-mono text-xs tracking-widest text-[var(--color-signal-dim)] uppercase">
+        <div className="typewriter mb-3 text-sm tracking-widest text-[var(--color-signal)] uppercase">
           {kicker}
         </div>
       )}
-      <h2 className="text-2xl font-semibold tracking-tight text-balance sm:text-3xl">
+      <h2 className="display text-3xl sm:text-4xl">
         {children}
       </h2>
     </div>
@@ -117,7 +117,7 @@ export function Card({
 }) {
   return (
     <div
-      className={`rounded-lg border border-[var(--color-line)] bg-[var(--color-surface)] p-6 ${className}`}
+      className={`rounded-sm border border-[var(--color-line)] bg-[var(--color-surface)] p-6 ${className}`}
     >
       {children}
     </div>

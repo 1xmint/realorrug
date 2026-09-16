@@ -30,7 +30,7 @@ import { memoryLocation } from "wouter/memory-location";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { ROUTES, footer, nav } from "./routes";
+import { MOVED, ROUTES, footer, nav } from "./routes";
 
 /** No endpoint, which is production today and is not what this file tests. */
 beforeEach(() => {
@@ -85,6 +85,23 @@ describe("the shell can show every page it lists", () => {
     renderAt("/not-a-page");
     expect(screen.getByText(/No such page/i)).toBeTruthy();
   });
+});
+
+describe("a page that moved keeps its old address", () => {
+  // Replies already posted on X link to these paths and cannot be edited. A
+  // rename that dropped them would 404 every old link at once.
+  for (const m of MOVED) {
+    it(`sends ${m.from} to ${m.to}`, () => {
+      const { hook, history } = memoryLocation({ path: m.from, record: true });
+      render(
+        <Router hook={hook}>
+          <App />
+        </Router>,
+      );
+      expect(history.at(-1)).toBe(m.to);
+      expect(ROUTES.some((r) => r.path === m.to)).toBe(true);
+    });
+  }
 });
 
 describe("the three trust pages", () => {

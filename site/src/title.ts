@@ -11,13 +11,13 @@
 //! strip is a small failure repeated by every reader.
 //!
 //! The site's name goes **last**. A tab is truncated from the right, so
-//! "Prize pool · Cabal Hunter" keeps the useful half when six tabs are open and
-//! "Cabal Hunter · Prize pool" does not.
+//! "Payouts · Real or Rug" keeps the useful half when six tabs are open and
+//! "Real or Rug · Payouts" does not.
 
 import { useEffect } from "react";
 
 /** The name every title ends with. */
-const SITE = "Cabal Hunter";
+const SITE = "Real or Rug";
 
 /** Sets the document title for as long as the calling page is mounted. */
 export function useTitle(page: string | null): void {

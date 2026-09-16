@@ -117,7 +117,7 @@ export function About() {
           </p>
           <p>
             <Link
-              href="/token"
+              href="/tokenomics"
               className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
             >
               The six rules, the fee ladder, and what has to be true before any
@@ -135,7 +135,7 @@ export function About() {
           </p>
           <p>
             <Link
-              href="/leaderboard"
+              href="/contest"
               className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
             >
               The scoring rule and the claim steps in full →

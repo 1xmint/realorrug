@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The shell: the header, the footer, and which page is showing.
 
-import { Link, Route, Switch, useLocation } from "wouter";
+import { Link, Redirect, Route, Switch, useLocation } from "wouter";
 
 import { About } from "./About";
 import { Contact } from "./Contact";
 import { account, handleHref } from "./honesty";
-import { History } from "./History";
 import { Home } from "./Home";
+import { HowItWorks } from "./HowItWorks";
 import { Leaderboard } from "./Leaderboard";
-import { Pool } from "./Pool";
+import { Payouts } from "./Payouts";
 import { Privacy } from "./Privacy";
-import { footer as footerRoutes, nav } from "./routes";
+import { footer as footerRoutes, MOVED, nav } from "./routes";
 import { Terms } from "./Terms";
 import { Token } from "./Token";
 
@@ -22,9 +22,9 @@ function Header() {
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:gap-4 sm:px-6 sm:py-4">
         <Link
           href="/"
-          className="font-mono text-xs font-semibold tracking-widest whitespace-nowrap text-[var(--color-text)] uppercase sm:text-sm"
+          className="display text-lg whitespace-nowrap text-[var(--color-text)] sm:text-xl"
         >
-          Real<span className="text-[var(--color-signal)]">OrRug</span>
+          Real <span className="text-[var(--color-signal)]">or</span> Rug
         </Link>
         <nav className="flex items-center gap-0.5 text-xs sm:gap-1 sm:text-sm">
           {nav()
@@ -117,14 +117,19 @@ export function App() {
       <main className="flex-1">
         <Switch>
           <Route path="/" component={Home} />
-          <Route path="/leaderboard" component={Leaderboard} />
-          <Route path="/pool" component={Pool} />
-          <Route path="/history" component={History} />
-          <Route path="/token" component={Token} />
+          <Route path="/contest" component={Leaderboard} />
+          <Route path="/payouts" component={Payouts} />
+          <Route path="/how-it-works" component={HowItWorks} />
+          <Route path="/tokenomics" component={Token} />
           <Route path="/about" component={About} />
           <Route path="/privacy" component={Privacy} />
           <Route path="/terms" component={Terms} />
           <Route path="/contact" component={Contact} />
+          {MOVED.map((m) => (
+            <Route key={m.from} path={m.from}>
+              <Redirect to={m.to} replace />
+            </Route>
+          ))}
           <Route>
             {/* Static hosting serves index.html for any path, so an unknown one
                 reaches the router rather than the host. Said plainly: a blank

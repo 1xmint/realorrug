@@ -137,8 +137,8 @@ export function Terms() {
           <p>
             Entry to the weekly contest is free and never requires holding
             anything. The rules, the scoring and the claim steps are on{" "}
-            <Here href="/leaderboard">the leaderboard page</Here>, and the
-            token's rules are on <Here href="/token">the token page</Here>.
+            <Here href="/contest">the contest page</Here>, and the
+            token's rules are on <Here href="/tokenomics">the tokenomics page</Here>.
             Where those pages and this one differ, those pages are the specific
             statement and this is the summary.
           </p>
