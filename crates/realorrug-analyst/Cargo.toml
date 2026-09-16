@@ -17,6 +17,10 @@ authors.workspace = true
 # hundred replies from is not the version that posts them.
 realorrug-onchain.workspace = true
 realorrug-roast.workspace = true
+# Robinhood Chain's own RPC client, so `Answering` can hold one alongside
+# Solana's: the dispatcher decides which chain to read, and this crate is
+# where both entry points that call it live.
+realorrug-robinhood.workspace = true
 # The contest's types and rule: the week-close job reads the reply log and
 # writes a week record, and the metrics reader speaks in the crate's `Metrics`.
 realorrug-contest.workspace = true

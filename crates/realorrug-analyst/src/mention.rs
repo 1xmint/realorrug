@@ -56,13 +56,27 @@ const MAX_TICKER: usize = 16;
 
 /// Reads a mention.
 ///
-/// Text order decides ties: the **first** address wins, and an address anywhere
-/// beats a ticker. A mention naming both is naming one thing precisely and one
-/// thing loosely, and the precise one is the answerable one.
+/// Text order decides ties: the **first** address wins, of either shape, and
+/// an address anywhere beats a ticker. A mention naming both is naming one
+/// thing precisely and one thing loosely, and the precise one is the
+/// answerable one. Design 0020 §2: the two shapes' character sets never
+/// overlap (a Robinhood address always starts `0x`, which is never valid
+/// base58), so there is no ambiguity to resolve -- only which one starts
+/// earlier in the text.
 #[must_use]
 pub fn read(text: &str) -> Asked {
-    if let Some(mint) = first_address(text) {
-        return Asked::Mint(mint);
+    let solana = first_solana_address(text);
+    let robinhood = first_robinhood_address(text);
+    // Whichever run starts earlier in the text wins -- the same "first
+    // address wins" rule the single-shape version already applied, now
+    // evaluated over both candidate shapes instead of one.
+    match (solana, robinhood) {
+        (Some((s_at, s)), Some((r_at, r))) => {
+            return Asked::Mint(if s_at <= r_at { s } else { r });
+        }
+        (Some((_, s)), None) => return Asked::Mint(s),
+        (None, Some((_, r))) => return Asked::Mint(r),
+        (None, None) => {}
     }
     if let Some(ticker) = first_ticker(text) {
         return Asked::Ticker(ticker);
@@ -70,8 +84,9 @@ pub fn read(text: &str) -> Asked {
     Asked::Nothing
 }
 
-/// The first base58 run of address length.
-fn first_address(text: &str) -> Option<String> {
+/// The first base58 run of address length, with the character offset it
+/// starts at.
+fn first_solana_address(text: &str) -> Option<(usize, String)> {
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
     // Bounded by the input length rather than by trusting the cursor to
@@ -103,7 +118,7 @@ fn first_address(text: &str) -> Option<String> {
             let before_ok = start == 0 || !chars[start - 1].is_alphanumeric();
             let after_ok = i >= chars.len() || !chars[i].is_alphanumeric();
             if before_ok && after_ok {
-                return Some(chars[start..i].iter().collect());
+                return Some((start, chars[start..i].iter().collect()));
             }
         }
         // `i == start` means the base58 scan consumed nothing, so the cursor
@@ -116,6 +131,40 @@ fn first_address(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The first `0x` followed by exactly 40 hex digits, with the character
+/// offset it starts at.
+///
+/// A `std` iterator over `"0x"` occurrences rather than a hand-rolled cursor
+/// (AGENTS.md's mutation gate: a cursor that can be made to stand still is a
+/// hang reachable from a mention), so this cannot stall the way the base58
+/// scanner above is written to guarantee it cannot.
+fn first_robinhood_address(text: &str) -> Option<(usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    text.match_indices("0x").find_map(|(byte_at, _)| {
+        // Character offset, not byte offset: `before_ok`/`after_ok` below
+        // index into `chars`, and a mention ahead of the match can hold
+        // multi-byte characters that make the two diverge.
+        let start = text[..byte_at].chars().count();
+        let end = start + 42; // "0x" + 40 hex digits.
+        if end > chars.len() {
+            return None;
+        }
+        let hex = &chars[start + 2..end];
+        if !hex.iter().all(char::is_ascii_hexdigit) {
+            return None;
+        }
+        // Same glue rule the base58 scanner applies: a run inside a URL path
+        // or a longer token is not an address the asker typed.
+        let before_ok = start == 0 || !chars[start - 1].is_alphanumeric();
+        let after_ok = end >= chars.len() || !chars[end].is_alphanumeric();
+        if before_ok && after_ok {
+            Some((start, chars[start..end].iter().collect()))
+        } else {
+            None
+        }
+    })
 }
 
 /// The first `$TICKER`.
@@ -155,6 +204,44 @@ mod tests {
     use super::*;
 
     const REAL: &str = "HtyuZ21b1yjM8RRTJv85YpVndCDrw6TZSkzkcTrxpump";
+    const ROBINHOOD: &str = "0x1111111111111111111111111111111111111111";
+
+    #[test]
+    fn a_robinhood_shaped_mention_is_extracted_whole_leading_0x_and_all() {
+        // The exact failure this whole task chases: the base58 scanner alone
+        // sees a '0' as a character that is never in the base58 alphabet, so
+        // it breaks the run there and would otherwise hand back everything
+        // after the '0' -- a mangled, truncated address, not the real one.
+        assert_eq!(
+            read(&format!("@radar what about {ROBINHOOD} ser")),
+            Asked::Mint(ROBINHOOD.to_owned())
+        );
+    }
+
+    #[test]
+    fn whichever_shape_starts_first_in_the_text_wins() {
+        assert_eq!(
+            read(&format!("{ROBINHOOD} or {REAL}")),
+            Asked::Mint(ROBINHOOD.to_owned())
+        );
+        assert_eq!(
+            read(&format!("{REAL} or {ROBINHOOD}")),
+            Asked::Mint(REAL.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_robinhood_address_glued_inside_a_word_is_not_taken() {
+        assert_eq!(
+            read(&format!("see0x{}xyz", &ROBINHOOD[2..])),
+            Asked::Nothing
+        );
+    }
+
+    #[test]
+    fn a_robinhood_shaped_run_of_the_wrong_length_is_not_taken() {
+        assert_eq!(read("0x1234 is too short"), Asked::Nothing);
+    }
 
     #[test]
     fn a_mint_is_extracted_from_ordinary_text() {

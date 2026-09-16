@@ -267,6 +267,7 @@ fn one_poll_reads_answers_and_advances_the_cursor() {
         None,
         None,
         None,
+        None,
         &paths,
     );
 
@@ -380,6 +381,7 @@ fn a_published_reply_is_counted_charged_and_remembered() {
         None,
         None,
         None,
+        None,
         &paths,
     );
 
@@ -439,6 +441,7 @@ fn a_platform_that_refuses_costs_nothing_and_does_not_move_the_cursor() {
         &mut gate,
         &mut spend,
         &no_chain(),
+        None,
         None,
         None,
         None,
@@ -941,6 +944,7 @@ fn the_model_call_is_charged_for_the_mention_that_made_one_and_no_other() {
         &client,
         None,
         None,
+        None,
         Some(&Priced),
         None,
         &paths,
@@ -1005,6 +1009,7 @@ fn a_symbol_gets_an_answer_rather_than_silence() {
         &mut gate,
         &mut spend,
         &no_chain(),
+        None,
         None,
         None,
         None,

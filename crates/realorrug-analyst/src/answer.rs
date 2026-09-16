@@ -20,7 +20,7 @@
 //! daemon counts them, and neither has to infer what happened from an empty
 //! return.
 
-use realorrug_onchain::{Budget as CallBudget, RpcClient};
+use realorrug_onchain::{RpcClient, dispatch};
 use realorrug_roast::BaseRates;
 use realorrug_types::Address;
 
@@ -34,6 +34,15 @@ use realorrug_roast::Billed;
 pub struct Answering<'a> {
     /// The chain, read on demand.
     pub client: &'a RpcClient,
+    /// Robinhood Chain's endpoint, or `None` when it is not configured.
+    ///
+    /// AGENTS.md §3 rule 7: there is no default (`realorrug-cli`'s
+    /// `launch-check --rpc` is the pattern -- the public endpoint is
+    /// rate-limited, so picking it silently would be picking for the
+    /// operator). A Robinhood address that arrives with this `None` is
+    /// answered [`Answered::Unreadable`], never dispatched to Solana and
+    /// never [`Answered::NotAnAddress`].
+    pub robinhood: Option<&'a realorrug_robinhood::Rpc>,
     /// The published base rates, or `None` when the snapshot is missing.
     ///
     /// `None` makes a reply say less rather than say more: a recipient count
@@ -158,23 +167,24 @@ pub fn answer(mention: &Mention, gate: &mut Gate, ctx: &Answering<'_>) -> Answer
         return Answered::Refused(why);
     }
 
-    let Ok(mint) = mint_text.parse::<Address>() else {
-        return Answered::NotAnAddress;
+    // Dispatched on the address's own shape -- `0x` is always Robinhood's,
+    // anything else is tried as Solana's base58 -- never on configuration and
+    // never guessed. The one function this whole task exists to introduce:
+    // both analyst entry points and the CLI call it rather than each writing
+    // its own "which chain is this" match. It also owns the call budget
+    // (`realorrug-onchain`'s own default, sixty calls, three pages, twenty
+    // seconds) for the same reason `answer.rs` used to build it by hand and
+    // no longer does: a stranger chooses when this runs and how many run at
+    // once, and a second copy of the ceiling is a second thing to forget to
+    // change.
+    let clients = dispatch::Clients {
+        solana: ctx.client,
+        robinhood: ctx.robinhood,
     };
-
-    // `realorrug-onchain`'s own default, which is its three constants: sixty calls,
-    // three pages and twenty seconds. Not restated here, because a stranger
-    // chooses when this runs and how many run at once -- the ceiling is what
-    // stops one prolific creator becoming an unbounded read, and a second copy
-    // of it is a second thing to forget to change.
-    //
-    // An earlier version built the same values by hand. Mutation testing
-    // replaced the whole function with `Default::default()` and nothing failed,
-    // which was correct: they were the same budget written twice.
-    let mut budget = CallBudget::default();
-    let dossier = match realorrug_onchain::build(ctx.client, &mut budget, &mint) {
+    let dossier = match dispatch::read(&mint_text, &clients) {
         Ok(d) => d,
-        Err(e) => return Answered::Unreadable(e.to_string()),
+        Err(dispatch::Error::NotAnAddress) => return Answered::NotAnAddress,
+        Err(dispatch::Error::Unreadable(why)) => return Answered::Unreadable(why),
     };
 
     let (sheet, reply) = realorrug_roast::roast(
@@ -258,6 +268,7 @@ mod tests {
     fn ctx(client: &RpcClient) -> Answering<'_> {
         Answering {
             client,
+            robinhood: None,
             rates: None,
             creators: None,
             provider: None,
@@ -336,6 +347,55 @@ mod tests {
             matches!(out, Answered::Refused(Refused::SelfOrIgnored)),
             "{out:?}"
         );
+    }
+
+    #[test]
+    fn a_robinhood_address_is_not_answered_not_an_address() {
+        // The exact bug this task fixes: a real `0x…` address must not come
+        // back looking like it was never a token at all. With no Robinhood
+        // endpoint configured the chain still cannot be read, but that is a
+        // different, distinguishable answer.
+        let client = unreachable_client();
+        let out = answer(
+            &mention("@radar 0x1111111111111111111111111111111111111111"),
+            &mut gate(),
+            &ctx(&client),
+        );
+        assert!(matches!(out, Answered::Unreadable(_)), "{out:?}");
+    }
+
+    #[test]
+    fn a_robinhood_address_with_no_endpoint_never_attempts_a_solana_read() {
+        // The Solana client here points at an address that would error (or
+        // hang) if it were ever asked -- so a dispatcher that mistakenly fell
+        // through to a Solana read would surface a different failure than
+        // this one.
+        let client = unreachable_client();
+        let out = answer(
+            &mention("@radar 0x1111111111111111111111111111111111111111"),
+            &mut gate(),
+            &ctx(&client),
+        );
+        let Answered::Unreadable(why) = out else {
+            panic!("expected Unreadable, got {out:?}");
+        };
+        assert!(why.contains("Robinhood"), "{why}");
+    }
+
+    #[test]
+    fn a_run_that_is_address_shaped_but_not_a_real_address_is_not_an_address() {
+        // Base58-shaped and the right length by mention.rs's own rules, but
+        // not a string that decodes to a 32-byte key -- neither chain's
+        // parser accepts it, so this must still be `NotAnAddress`, not
+        // `Unreadable`: nothing was configured wrong, the text simply never
+        // named a token.
+        let client = unreachable_client();
+        let out = answer(
+            &mention(&format!("@radar {}", "a".repeat(32))),
+            &mut gate(),
+            &ctx(&client),
+        );
+        assert!(matches!(out, Answered::NotAnAddress), "{out:?}");
     }
 
     #[test]

@@ -443,6 +443,7 @@ pub fn tick(
     gate: &mut Gate,
     spend: &mut Spend,
     client: &realorrug_onchain::RpcClient,
+    robinhood: Option<&realorrug_robinhood::Rpc>,
     rates: Option<&realorrug_roast::BaseRates>,
     creators: Option<&realorrug_roast::CreatorIndex>,
     provider: Option<&dyn realorrug_model::Provider>,
@@ -493,6 +494,7 @@ pub fn tick(
         });
         let ctx = Answering {
             client,
+            robinhood,
             rates,
             creators,
             provider: if reserved.is_some() { provider } else { None },
