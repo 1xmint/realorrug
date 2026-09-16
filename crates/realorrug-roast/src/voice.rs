@@ -53,6 +53,8 @@
 use realorrug_model::{Provider, Request, Unreachable};
 
 use crate::sheet::FactSheet;
+#[cfg(test)]
+use crate::sheet::Signal;
 use crate::{fidelity, forbidden, render, verdict};
 
 /// What the model is told it is doing.
@@ -239,18 +241,26 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
     // legal exposure, a fabricated number is an accuracy one.
     //
     // `forbidden::check` (the old blanket word ban) is retired as this pass's
-    // gate -- design 0020 §5's `check_target` plus `check_level` replaces it,
-    // here only. `check_target` refuses an accusation aimed at a person,
-    // account or company regardless of level; `check_level` refuses a word the
-    // sheet's own computed level has not earned (`verdict::level`, the same
-    // rule `write` never lets the model move), so a reply cannot claim
-    // `Rugged`'s vocabulary for a `Sketchy` sheet. The other eight callers of
-    // `forbidden::check` (`bio.rs`, `weekly.rs`, `verdict.rs`, and the
-    // adversarial-mention tests) check different text for different reasons
-    // and are unchanged by this pass.
+    // gate -- design 0020 §5's `check_target`, `check_level` and
+    // `check_unconditional` replace it between them, here only. `check_target`
+    // refuses an accusation aimed at a person, account or company regardless
+    // of level; `check_level` refuses a word the sheet's own computed level
+    // has not earned (`verdict::level`, the same rule `write` never lets the
+    // model move), so a reply cannot claim `Rugged`'s vocabulary for a
+    // `Sketchy` sheet. Neither of those two has any opinion on advice, a
+    // price prediction, `honeypot`, or a cabal-identity claim (research
+    // 0012) -- §5's "Kept, unchanged in purpose" keeps those as an
+    // unconditional ban, which is what `check_unconditional` is: `check`'s
+    // own RULES scan, minus the phrases the other two now judge instead. All
+    // three run, so what `check` refused before this pass still gets
+    // refused, split by which of target, level or neither decides it. The
+    // other eight callers of `forbidden::check` (`bio.rs`, `weekly.rs`,
+    // `verdict.rs`, and the adversarial-mention tests) check different text
+    // for different reasons and are unchanged by this pass.
     let level = verdict::level(sheet);
     let mut violations = forbidden::check_target(&text);
     violations.extend(forbidden::check_level(&text, level));
+    violations.extend(forbidden::check_unconditional(&text));
     if !violations.is_empty() {
         return Reply {
             text: fallback,
@@ -350,6 +360,17 @@ mod tests {
             untrusted: vec![("token name".to_owned(), "Gay Pepe".to_owned())],
             unknown: Vec::new(),
             signals: Vec::new(),
+        }
+    }
+
+    /// [`sheet`], with `unknown`/`signals` swapped in -- the two fields
+    /// `verdict::level` reads -- so a test can drive the sheet to a chosen
+    /// [`crate::verdict::Level`] without duplicating the whole fixture.
+    fn sheet_with(signals: Vec<Signal>, unknown: Vec<String>) -> FactSheet {
+        FactSheet {
+            unknown,
+            signals,
+            ..sheet()
         }
     }
 
@@ -459,6 +480,120 @@ mod tests {
         );
         assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
         assert!(!reply.text.contains("rugged"));
+    }
+
+    // -----------------------------------------------------------------
+    // Task 9-15-0025: `check_target` + `check_level` alone dropped every
+    // family `forbidden::check` used to refuse unconditionally. Each of
+    // these fails without `forbidden::check_unconditional` in `write`'s gate.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn a_price_prediction_ships_the_template() {
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. This is a 100x.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("100x"));
+    }
+
+    #[test]
+    fn advice_ships_the_template() {
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. You should buy this one.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("should buy"));
+    }
+
+    #[test]
+    fn a_honeypot_claim_ships_the_template() {
+        // 0042: "a word list, not a scan for sell-blocking bytecode" -- kept
+        // as a forbidden phrase until research 0044 ships an actual check.
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. Classic honeypot mechanics.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("honeypot"));
+    }
+
+    #[test]
+    fn a_cabal_identity_claim_ships_the_template() {
+        // Research 0012: recipients are token accounts, not people, so
+        // resolving a count to "people" claims an identity the measurement
+        // cannot see.
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 people bought it in the launch block.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("people bought"));
+    }
+
+    #[test]
+    fn reassurance_below_canttell_still_ships_the_template() {
+        // The default fixture's signal-free, fully-read sheet computes
+        // `NothingUglyYet`; "looks safe" is refused at every level below
+        // `CantTell`'s own row too (`check_level`'s `NOTHINGUGLYYET_WORDS`
+        // carries an unqualified "safe").
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. This one looks safe.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("safe"));
+    }
+
+    #[test]
+    fn a_legitimate_verdict_still_publishes_at_every_level() {
+        // The other half of the fix: a check strict enough to refuse every
+        // dropped family above must not also refuse an ordinary reply that
+        // uses none of their words. One sentence, free of every ceiling word
+        // at every level (no "safe"/"clean"/"fine"/"legit"/"rug"/"rugged"/
+        // "stole"/"stolen"/"guaranteed"), proven to publish unchanged
+        // whichever level the sheet computes.
+        let good = "Eleven accounts held it at birth, against an 850 bps round trip -- \
+                    thin either way.";
+        let cases: [(Vec<Signal>, Vec<String>); 5] = [
+            // CantTell: a required fact was not read.
+            (Vec::new(), vec!["reserve could not be read".to_owned()]),
+            // NothingUglyYet: nothing read, no signal.
+            (Vec::new(), Vec::new()),
+            // Sketchy: one signal, below the two `RugMechanicsLive` needs.
+            (vec![Signal::RepeatLauncher], Vec::new()),
+            // RugMechanicsLive: two live-risk signals, neither `Rugged` pair.
+            (
+                vec![
+                    Signal::CreatorBoughtOwnLaunch,
+                    Signal::LaunchBlockInStrongestBand,
+                ],
+                Vec::new(),
+            ),
+            // Rugged: a qualifying pair.
+            (
+                vec![Signal::LiquidityGone, Signal::HolderConcentration],
+                Vec::new(),
+            ),
+        ];
+        for (signals, unknown) in cases {
+            let sheet = sheet_with(signals, unknown);
+            let level = verdict::level(&sheet);
+            let reply = write(&sheet, Some(&Says(good)));
+            assert!(
+                !reply.is_template(),
+                "{level:?} must still publish a clean reply: {:?}",
+                reply.fellback
+            );
+            assert_eq!(reply.text, good);
+        }
     }
 
     #[test]
