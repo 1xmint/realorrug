@@ -22,6 +22,14 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+# The read memory (design 0021 §4): one file, one writer, an index on the
+# `(what, subject, block)` key for free, atomic commits that survive a crash
+# mid-write. `bundled` compiles SQLite from source instead of linking a system
+# library, which this box does not have and should not need to install.
+rusqlite = { version = "0.32", default-features = false, features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true
