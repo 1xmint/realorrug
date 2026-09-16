@@ -113,8 +113,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
         Duration::from_secs(seconds),
     );
 
+    // No memory: the CLI has no state-path config to open a read cache from
+    // today, and a missing memory only costs speed/budget, never correctness
+    // (the chain stays the authority; see `build`'s doc comment). Adding a
+    // cache file/flag here is a separate decision this packet doesn't make.
     let dossier =
-        realorrug_onchain::build(&client, &mut budget, &mint).map_err(|e| e.to_string())?;
+        realorrug_onchain::build(&client, &mut budget, &mint, None).map_err(|e| e.to_string())?;
     print!("{}", render(&dossier));
     Ok(())
 }

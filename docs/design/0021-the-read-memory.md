@@ -3,7 +3,11 @@
 
 **Status:** recording. The decisions below are the owner's, already made; this
 document writes them up and works the one number he asked for by name (§5).
-Nothing here has been built.
+**Built so far:** the store (`crates/realorrug-onchain/src/memory.rs`), and
+`realorrug_onchain::build` taking an optional memory in front of the Solana
+launch-record read only (§1, "What is served from memory today"). Every
+caller still passes none, so no running path uses it yet: turning it on needs
+a state path for the file on the box, which is its own change.
 **Date:** 2026-09-15.
 **Facts from:** [research 0039](../research/0039-robinhood-chain-data-on-a-budget.md)
 (the cost numbers and the volume assumptions) and
@@ -49,6 +53,17 @@ creator address for creator-scoped facts (prior launches, prior
 graduations) — this is what makes the creator-level saving in §2's "nothing
 bought twice" claim possible: two tokens from the same creator share one
 `(creator track record, creator address, block)` entry, not two.
+
+**What is served from memory today.** Only the launch record. It is the
+costliest read (signature paging back to the oldest one) and a `Forever`
+fact, so serving it cannot make the sheet lie: a sheet states one read point
+for everything on it, and a past launch does not depend on when it was read.
+The reserves and the creator-activity reads are always bought fresh, even
+when a row exists. That is deferred, not rejected: it becomes safe once the
+fact sheet (design 0020) carries a read point per fact instead of one for
+the whole sheet. A stored launch record that disagrees with a fresh read is
+refused as a conflict and the launch is reported unreadable, never resolved
+silently either way.
 
 ## 2. The shelf-life table
 
@@ -99,6 +114,12 @@ document that wires this into the fact sheet (design 0020) should treat
 gates whether a required fact counts as present, folding both "never read"
 and "read but expired" into its negative case rather than only checking for
 a stored value.
+
+The boundary in the other direction: the memory is never the source of a
+fact the bot could not read today. A row is a receipt of a past chain read,
+not a substitute for one. A missing memory, or a row that no longer decodes,
+means read the chain; it makes an answer slower and costlier, never
+different. That is why no memory is not rule 7's deny-by-default case.
 
 ## 4. Where it lives
 

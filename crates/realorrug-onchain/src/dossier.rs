@@ -22,12 +22,16 @@
 //! "Radar has no record" is a thing the analyst is expected to say plainly, and
 //! it can only say it if the absence survives to the top.
 
+use std::time::SystemTime;
+
 use realorrug_pumpfun::curve::BondingCurve;
 use realorrug_pumpfun::{Fees, pda};
 use realorrug_types::{Address, ChainAddress, ReadAt, Slot};
+use serde::{Deserialize, Serialize};
 
 use crate::budget::{Budget, Count};
-use crate::launch::{LaunchBlock, NotALaunch};
+use crate::launch::{LaunchBlock, Metadata, NotALaunch};
+use crate::memory::{Kind, Memory};
 use crate::rpc::{RpcClient, RpcError, Transaction};
 
 /// The impact budget capacity is measured at.
@@ -202,6 +206,23 @@ impl Dossier {
 
 /// Builds a dossier for one mint.
 ///
+/// `memory` is the read memory (design 0021; packet 0039 §1) placed in front
+/// of the launch-block read only — the one read of the three below that is
+/// [`crate::memory::Kind::Forever`] and cannot make the sheet's single read
+/// point lie (see the comment on the launch-block step). The curve read and
+/// the creator-activity read are **never** served from memory, even when a
+/// row for them happens to exist: deferred, not rejected, until the fact
+/// sheet (design 0020) can carry a read point per fact instead of one for
+/// the whole sheet (design 0021 §1, packet 0039).
+///
+/// `None` is not the deny-by-default case AGENTS.md rule 7 governs: a missing
+/// memory makes this function slower and more expensive, never wrong, because
+/// the chain is still read and is still the authority. A caller with no
+/// memory gets exactly today's answers, at today's cost — see
+/// [`crate::memory`]'s own module doc and design 0021 §3 for the boundary
+/// this rests on: a row in the memory is a receipt of a past chain read, not
+/// a substitute for one.
+///
 /// Never returns `Err` for a fact it could not read — a partial dossier is the
 /// product, and the missing halves are named in
 /// [`Dossier::unavailable`]. It returns `Err` only when the mint itself cannot
@@ -211,7 +232,12 @@ impl Dossier {
 /// # Errors
 ///
 /// [`RpcError`] when the token's own signature history cannot be read at all.
-pub fn build(client: &RpcClient, budget: &mut Budget, mint: &Address) -> Result<Dossier, RpcError> {
+pub fn build(
+    client: &RpcClient,
+    budget: &mut Budget,
+    mint: &Address,
+    memory: Option<&Memory>,
+) -> Result<Dossier, RpcError> {
     let mint_key = mint.to_string();
     let mut dossier = Dossier {
         mint: ChainAddress::Solana(*mint),
@@ -224,9 +250,33 @@ pub fn build(client: &RpcClient, budget: &mut Budget, mint: &Address) -> Result<
         elapsed_ms: 0,
     };
 
-    // 1. The launch block, from the oldest signature the mint has.
-    let (signatures, truncated) = client.signatures_back_to_oldest(budget, mint)?;
-    match oldest_launch(client, budget, &signatures, truncated, &mint_key) {
+    // 1. The launch block, from the oldest signature the mint has, or from
+    // the read memory ahead of it (packet 0039 §1). `Kind::Forever`: a past
+    // block cannot become wrong later (AGENTS.md rule 1), so a hit needs no
+    // freshness check and needs no signature-paging call at all -- the
+    // memory's whole point, since paging is the read that costs the most.
+    // The curve and creator-activity reads below are deliberately NOT given
+    // the same treatment: this is the only read `Dossier::read_at` can name
+    // as this sheet's slot without contradicting a fresher number read
+    // elsewhere in the same build (see `dossier.read_at.is_none()` in step 2).
+    let launch_result = if let Some(block) = memory.and_then(|mem| cached_launch(mem, &mint_key)) {
+        Ok(block)
+    } else {
+        let (signatures, truncated) = client.signatures_back_to_oldest(budget, mint)?;
+        oldest_launch(client, budget, &signatures, truncated, &mint_key).and_then(|block| {
+            if let Some(mem) = memory {
+                // `record` refuses to overwrite a `(what, subject, block)`
+                // key with a different value rather than replacing it
+                // (packet 0039 §1, `Memory::record`'s own doc) -- a launch
+                // record that came back different from a fresh read is a
+                // bug (AGENTS.md rule 1) and is surfaced here with its
+                // error text intact, never silently resolved either way.
+                store_launch(mem, &mint_key, &block).map_err(|e| e.to_string())?;
+            }
+            Ok(block)
+        })
+    };
+    match launch_result {
         Ok(block) => {
             dossier.read_at = Some(ReadAt::Solana(block.slot));
             dossier.launch = Some(block);
@@ -338,8 +388,138 @@ impl ChainReader for SolanaReader {
         budget: &mut Budget,
         mint: &Address,
     ) -> Result<Dossier, RpcError> {
-        build(client, budget, mint)
+        // No memory: the seam `dispatch.rs` and `robinhood.rs` both call
+        // through does not carry one today (packet 0039 only owns
+        // `dossier.rs`, `memory.rs`, `lib.rs` and the CLI caller). A `None`
+        // here reads the chain every time, correctly, per `build`'s own doc.
+        build(client, budget, mint, None)
     }
+}
+
+/// The `what` [`Memory::record`]/[`Memory::latest`] use for the launch record
+/// (packet 0039 §1). `memory.rs` uses the same text for
+/// [`Memory::record_launch`]/[`Memory::launches_in_window`], keyed on the
+/// *creator's* address -- a different fact under the same name. The two never
+/// collide: the key also includes `subject`, and this one's subject is always
+/// the *mint*, never a creator address.
+const LAUNCH_RECORD: &str = "launch";
+
+/// [`LaunchBlock`] as [`Memory`] stores it: text in, text out (see
+/// [`crate::memory`]'s own doc on why a fact's value is a string, not a typed
+/// column), and every field that isn't the block number or the mint itself,
+/// since those two are already the key ([`Memory::record`]'s `block` and
+/// `subject`).
+#[derive(Serialize, Deserialize)]
+struct StoredLaunch {
+    creator: String,
+    recipients: StoredCount,
+    transactions: StoredCount,
+    dev_buy_lamports: Option<u64>,
+    name: String,
+    symbol: String,
+    uri: String,
+}
+
+/// [`Count`] has no `Serialize`/`Deserialize` of its own -- it is
+/// `realorrug-onchain`'s own type, not `realorrug-types`', and giving it a
+/// wire format for one caller's cache row is not this packet's call to make.
+/// This mirrors it for [`StoredLaunch`] alone.
+#[derive(Serialize, Deserialize)]
+struct StoredCount {
+    n: u32,
+    truncated: bool,
+}
+
+impl From<Count> for StoredCount {
+    fn from(count: Count) -> Self {
+        Self {
+            n: count.lower_bound(),
+            truncated: count.is_truncated(),
+        }
+    }
+}
+
+impl From<StoredCount> for Count {
+    fn from(stored: StoredCount) -> Self {
+        if stored.truncated {
+            Count::AtLeast(stored.n)
+        } else {
+            Count::Exactly(stored.n)
+        }
+    }
+}
+
+/// Looks up a cached launch record for `mint` (packet 0039 §1).
+///
+/// `Memory::latest`, not an exact-key `get`: the launch block itself is not
+/// known until it has been read once, so there is no block number to key an
+/// exact lookup on before that first read has happened. `(what, subject)`
+/// alone is enough here because a mint has exactly one launch, ever -- the
+/// newest (and only) row `latest` can find *is* the answer.
+///
+/// A row that fails to decode (a schema change, a hand-edited file) is
+/// treated the same as no row at all, never surfaced as an error: design
+/// 0021 §3's boundary is that the memory can only make this function
+/// *slower*, by missing a real hit, never wrong -- the chain read that
+/// follows a `None` here is always the true fallback.
+fn cached_launch(memory: &Memory, mint: &str) -> Option<LaunchBlock> {
+    let fact = memory.latest(LAUNCH_RECORD, mint).ok().flatten()?;
+    let stored: StoredLaunch = serde_json::from_str(&fact.value).ok()?;
+    Some(LaunchBlock {
+        slot: Slot(fact.block),
+        creator: stored.creator.parse().ok()?,
+        recipients: stored.recipients.into(),
+        transactions: stored.transactions.into(),
+        dev_buy_lamports: stored.dev_buy_lamports,
+        metadata: Metadata {
+            name: stored.name,
+            symbol: stored.symbol,
+            uri: stored.uri,
+        },
+    })
+}
+
+/// Records a freshly-read launch block so the next build skips the read
+/// (packet 0039 §1).
+///
+/// `Kind::Forever`: a past block cannot become wrong later (AGENTS.md rule
+/// 1). [`Memory::record`] itself refuses to overwrite a `(what, subject,
+/// block)` key with a different value rather than silently replacing it --
+/// the caller is expected to let that refusal reach whoever asked, intact,
+/// because a launch record that came back different from a fresh read is
+/// exactly the bug that refusal exists to surface, not a race to paper over.
+///
+/// # Errors
+///
+/// Whatever [`Memory::record`] returns: [`crate::memory::Error::Conflict`]
+/// on a same-key, different-value re-read, or [`crate::memory::Error::Sqlite`]
+/// if the write itself fails.
+fn store_launch(
+    memory: &Memory,
+    mint: &str,
+    block: &LaunchBlock,
+) -> Result<crate::memory::Recorded, crate::memory::Error> {
+    let stored = StoredLaunch {
+        creator: block.creator.to_string(),
+        recipients: block.recipients.into(),
+        transactions: block.transactions.into(),
+        dev_buy_lamports: block.dev_buy_lamports,
+        name: block.metadata.name.clone(),
+        symbol: block.metadata.symbol.clone(),
+        uri: block.metadata.uri.clone(),
+    };
+    // `expect` only on a type this module itself defined and fully controls
+    // the shape of -- a `StoredLaunch` cannot fail to serialise to JSON, so
+    // this is not a chain-dependent fallibility being swallowed.
+    let value = serde_json::to_string(&stored).expect("StoredLaunch always serialises");
+    memory.record(
+        LAUNCH_RECORD,
+        mint,
+        block.slot.get(),
+        Kind::Forever,
+        &value,
+        SystemTime::now(),
+    )
 }
 
 /// Finds the launch transaction and rebuilds its block.
@@ -714,7 +894,7 @@ mod tests {
         let client_a =
             RpcClient::with_transport("http://test.invalid", Box::new(Always(response.clone())));
         let mut budget_a = Budget::new(60, 3, std::time::Duration::from_secs(30));
-        let direct = build(&client_a, &mut budget_a, &mint);
+        let direct = build(&client_a, &mut budget_a, &mint, None);
 
         let client_b = RpcClient::with_transport("http://test.invalid", Box::new(Always(response)));
         let mut budget_b = Budget::new(60, 3, std::time::Duration::from_secs(30));
@@ -790,5 +970,330 @@ mod tests {
         assert_eq!(dossier.mint, ChainAddress::Solana(Address::new([9u8; 32])));
         assert_eq!(dossier.unavailable.len(), 1);
         assert_eq!(dossier.unavailable[0].fact, "robinhood reads");
+    }
+
+    // -- packet 0039: the read memory in front of the launch-block read --
+
+    /// A `getSignaturesForAddress` page too large to be the last one, built
+    /// with an iterator rather than a hand-rolled counter (a `+= 1` loop here
+    /// is exactly the shape a mutation can stall on without a test noticing,
+    /// per the packet's mutation-gate notes).
+    fn big_signature_page() -> String {
+        let entries: Vec<String> = (0..1000)
+            .map(|i| format!(r#"{{"signature":"sig{i}","slot":1,"err":null}}"#))
+            .collect();
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":[{}]}}"#,
+            entries.join(",")
+        )
+    }
+
+    /// A transport that tells the mint's own signature history apart from
+    /// every other address it is asked about.
+    ///
+    /// This is why test 1 below can assert against the *budget* rather than
+    /// only the dossier: a transport that answered every address alike could
+    /// not tell "the mint's own, expensive, unboundedly-paging history" from
+    /// "the creator's, comparatively cheap one", so a hit's saved budget could
+    /// end up silently spent by the creator-activity read gaining more room to
+    /// page instead -- two different call counts that add up to the same
+    /// total, which a dossier-only assertion (and a naive budget-only one)
+    /// both miss.
+    struct HitVsMiss(String);
+
+    impl crate::rpc::Transport for HitVsMiss {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            if !body.contains("getSignaturesForAddress") {
+                // Every account read (curve PDA, fee-config) misses cleanly.
+                return Ok(r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_owned());
+            }
+            if body.contains(&self.0) {
+                // The mint's own history: a page too large to be the last,
+                // so paging keeps going until the page budget runs out.
+                Ok(big_signature_page())
+            } else {
+                // Any other address's history (the creator's): one empty,
+                // immediately-final page.
+                Ok(r#"{"jsonrpc":"2.0","id":1,"result":[]}"#.to_owned())
+            }
+        }
+    }
+
+    #[test]
+    fn a_cached_launch_skips_signature_paging_and_spends_no_budget_on_it() {
+        // Test 1 of 5 (packet 0039): the property under test is that a hit
+        // makes the expensive call *at all*, not merely that the returned
+        // dossier looks the same either way -- a mutation that reads the
+        // chain and simply discards the cached value would still produce an
+        // identical `Dossier`, which is why this asserts `calls_made`.
+        let mint = Address::new([2u8; 32]);
+        let mint_key = mint.to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mem = Memory::open(&dir.path().join("mem.sqlite3")).expect("open");
+
+        let cached = LaunchBlock {
+            slot: Slot(500),
+            creator: Address::new([3u8; 32]),
+            recipients: Count::Exactly(1),
+            transactions: Count::Exactly(1),
+            dev_buy_lamports: None,
+            metadata: Metadata {
+                name: "Name".to_owned(),
+                symbol: "SYM".to_owned(),
+                uri: "uri".to_owned(),
+            },
+        };
+        store_launch(&mem, &mint_key, &cached).expect("seed the cache");
+
+        // Page budget of 2: the mint's own history (a page too large to be
+        // last) costs exactly 2 calls before paging is cut off, so a MISS
+        // (paging once, then hitting the creator's empty page in step 3
+        // only if a launch was found -- which it was not) totals fewer calls
+        // than a HIT would if a hit re-read the chain, and *more* than a HIT
+        // that skips step 1 outright and instead pays for step 3's read of
+        // the (now-known) creator's history.
+        let mut miss_budget = Budget::new(60, 2, std::time::Duration::from_secs(30));
+        let client =
+            RpcClient::with_transport("http://test.invalid", Box::new(HitVsMiss(mint_key.clone())));
+        let miss = build(&client, &mut miss_budget, &mint, None).expect("no transport error");
+        // Truncated paging refuses to guess a launch (rule 9), so the miss
+        // path never learns a creator to read step 3 from.
+        assert!(miss.launch.is_none());
+        assert_eq!(miss_budget.calls_made(), 3); // 2 paging + 1 curve miss.
+
+        let mut hit_budget = Budget::new(60, 2, std::time::Duration::from_secs(30));
+        let hit = build(&client, &mut hit_budget, &mint, Some(&mem)).expect("no transport error");
+        assert_eq!(hit.launch.as_ref(), Some(&cached));
+        // 0 paging (the hit) + 1 curve miss + 1 creator history (empty page).
+        assert_eq!(hit_budget.calls_made(), 2);
+        assert!(hit_budget.calls_made() < miss_budget.calls_made());
+    }
+
+    /// A transport that answers `getSignaturesForAddress` and `getTransaction`
+    /// with fixed bodies and everything else (the curve/fee reads) with no
+    /// account there.
+    struct SuccessfulLaunch {
+        signatures: String,
+        transaction: String,
+    }
+
+    impl crate::rpc::Transport for SuccessfulLaunch {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            if body.contains("getSignaturesForAddress") {
+                Ok(self.signatures.clone())
+            } else if body.contains("getTransaction") {
+                Ok(self.transaction.clone())
+            } else {
+                Ok(r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_owned())
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_memory_reads_the_chain_and_the_row_lands_in_memory_afterwards() {
+        // Test 2 of 5 (packet 0039). A genuinely successful read, built from
+        // the same raw pump.fun `create` payload `launch.rs`'s own tests use,
+        // so `assemble` has a real launch to decode rather than a mock that
+        // only exercises the miss branch.
+        let mint = Address::new([4u8; 32]);
+        let creator = Address::new([9u8; 32]);
+
+        let mut discriminator = vec![0x18, 0x1e, 0xc8, 0x28, 0x05, 0x1c, 0x07, 0x77];
+        for s in ["Name", "SYM", "uri"] {
+            discriminator.extend_from_slice(&u32::try_from(s.len()).expect("short").to_le_bytes());
+            discriminator.extend_from_slice(s.as_bytes());
+        }
+        discriminator.extend_from_slice(creator.as_bytes());
+        let data_b58 = base58_encode(&discriminator);
+
+        let program = realorrug_decode::pumpfun::PROGRAM_ID.to_string();
+        let one_signature =
+            r#"{"jsonrpc":"2.0","id":1,"result":[{"signature":"launch-sig","slot":10,"err":null}]}"#
+                .to_owned();
+        let transaction = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"slot":10,"meta":{{"err":null}},
+               "transaction":{{"message":{{"accountKeys":["{creator}"],
+               "instructions":[{{"programId":"{program}","data":"{data_b58}","accounts":[]}}]}}}}}}}}"#
+        );
+
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(SuccessfulLaunch {
+                signatures: one_signature,
+                transaction,
+            }),
+        );
+        let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mem = Memory::open(&dir.path().join("mem.sqlite3")).expect("open");
+
+        let dossier = build(&client, &mut budget, &mint, Some(&mem)).expect("no transport error");
+        let launch = dossier.launch.expect("a launch was read");
+        assert_eq!(launch.slot, Slot(10));
+        assert_eq!(launch.creator, creator);
+
+        // The row is now in memory, so a second build with no transport at
+        // all can still answer.
+        let dead_client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(Always(
+                r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_owned(),
+            )),
+        );
+        let mut second_budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
+        let second =
+            build(&dead_client, &mut second_budget, &mint, Some(&mem)).expect("no transport error");
+        assert_eq!(second.launch, Some(launch));
+    }
+
+    #[test]
+    fn a_none_memory_behaves_exactly_as_today() {
+        // Test 3 of 5 (packet 0039): the `Option` really is optional. Same
+        // transport, same budget shape, with and without a memory that would
+        // have missed anyway -- the two builds must agree in every field
+        // that is not wall-clock.
+        let response = account_response(&fee_config_account(0, 95, 30));
+        let mint = Address::new([5u8; 32]);
+
+        let client_a =
+            RpcClient::with_transport("http://test.invalid", Box::new(Always(response.clone())));
+        let mut budget_a = Budget::new(60, 3, std::time::Duration::from_secs(30));
+        let without_memory = build(&client_a, &mut budget_a, &mint, None);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mem = Memory::open(&dir.path().join("mem.sqlite3")).expect("open");
+        let client_b = RpcClient::with_transport("http://test.invalid", Box::new(Always(response)));
+        let mut budget_b = Budget::new(60, 3, std::time::Duration::from_secs(30));
+        let with_empty_memory = build(&client_b, &mut budget_b, &mint, Some(&mem));
+
+        // This transport answers an account-shaped response to the
+        // signature-page request too (same mock `a_solana_reader_answers_
+        // exactly_what_build_answers` above uses), so both paths fail
+        // identically on the same malformed-response error rather than
+        // completing a real read -- an empty memory that missed cleanly
+        // changes nothing about that outcome.
+        match (without_memory, with_empty_memory) {
+            (Ok(a), Ok(b)) => {
+                assert_eq!(a.launch, b.launch);
+                assert_eq!(a.curve, b.curve);
+                assert_eq!(a.creator_transactions, b.creator_transactions);
+                assert_eq!(a.unavailable, b.unavailable);
+                assert_eq!(a.calls, b.calls);
+            }
+            (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string()),
+            (a, b) => panic!("None vs Some(empty memory) disagreed on success: {a:?} vs {b:?}"),
+        }
+    }
+
+    #[test]
+    fn a_stored_launch_that_disagrees_with_a_fresh_read_is_a_conflict_not_a_silent_pick() {
+        // Test 4 of 5 (packet 0039): `Memory::record`'s refusal must reach
+        // the caller with its own text intact, never resolved either
+        // direction. `store_launch` is exactly the call `build` makes after
+        // a genuine miss, so exercising it directly here tests the same
+        // refusal `build` would surface as a "launch block" miss, without
+        // needing a `cached_launch` hit (keyed on `(what, subject)` alone) to
+        // get out of the way first.
+        let mint = Address::new([6u8; 32]);
+        let mint_key = mint.to_string();
+        let stored_creator = Address::new([7u8; 32]);
+        let fresh_creator = Address::new([8u8; 32]);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mem = Memory::open(&dir.path().join("mem.sqlite3")).expect("open");
+        let block = |creator: Address| LaunchBlock {
+            slot: Slot(10),
+            creator,
+            recipients: Count::Exactly(1),
+            transactions: Count::Exactly(1),
+            dev_buy_lamports: None,
+            metadata: Metadata {
+                name: "Name".to_owned(),
+                symbol: "SYM".to_owned(),
+                uri: "uri".to_owned(),
+            },
+        };
+
+        store_launch(&mem, &mint_key, &block(stored_creator)).expect("first read is recorded");
+        let err = store_launch(&mem, &mint_key, &block(fresh_creator))
+            .expect_err("a same-block, different-creator re-read is a conflict");
+        let text = err.to_string();
+        assert!(text.contains("refusing to overwrite"));
+        assert!(text.contains(&mint_key));
+
+        // Neither value was silently kept: the stored row is exactly what
+        // the first call wrote, untouched by the refused second write.
+        let still_stored = cached_launch(&mem, &mint_key).expect("the first write stands");
+        assert_eq!(still_stored.creator, stored_creator);
+    }
+
+    #[test]
+    fn the_curve_and_creator_reads_are_never_served_from_memory() {
+        // Test 5 of 5 (packet 0039), section 1's boundary: only the launch
+        // record is ever read from memory. Seeded with a "curve" row under
+        // the mint's own key, at the exact block the real curve read below
+        // will name -- if `build` ever grew a memory lookup for the curve
+        // fact, this row would satisfy it and the assertion on `curve.slot`
+        // below (via `read_at`) would see the seeded row's block, 999,
+        // instead of the real one the chain mock reports.
+        let mint = Address::new([12u8; 32]);
+        let mint_key = mint.to_string();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mem = Memory::open(&dir.path().join("mem.sqlite3")).expect("open");
+        mem.record(
+            "curve",
+            &mint_key,
+            999,
+            Kind::TenMinutes,
+            "seeded, never real",
+            SystemTime::now(),
+        )
+        .expect("seed a curve row");
+
+        // Truncated paging (page budget of 0) refuses to name a launch, so
+        // `read_at` can only come from the curve read below -- making this
+        // test fail loudly (a wrong slot) if the curve read were ever served
+        // from the seeded row instead of the chain the mock actually answers.
+        let response = account_response(&fee_config_account(0, 95, 30));
+        let client = RpcClient::with_transport("http://test.invalid", Box::new(Always(response)));
+        let mut budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
+
+        let dossier = build(&client, &mut budget, &mint, Some(&mem)).expect("no transport error");
+        assert!(dossier.launch.is_none());
+        // `account_response(fee_config_account(..))` is fee-config bytes, not
+        // a bonding-curve account, so the real chain read genuinely fails to
+        // parse -- the curve fact stays absent here regardless of memory.
+        // What this test guards is that it is *absent*, never the seeded
+        // string: there is no code path today that could turn a "curve" row
+        // into `dossier.curve`, and this fails loudly the day one is added
+        // without also adding a per-fact read point (design 0021 §1).
+        assert!(dossier.curve.is_none());
+        assert!(dossier.unavailable.iter().any(|u| u.fact == "curve"));
+        assert_ne!(dossier.read_at, Some(ReadAt::Solana(Slot(999))));
+    }
+
+    /// Encodes bytes as base58, mirroring `rpc::decode_base58`'s own alphabet
+    /// -- test-only, so a chain read can be mocked without adding `bs58` as a
+    /// dependency this packet did not ask for.
+    fn base58_encode(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        let mut digits: Vec<u8> = vec![0];
+        for &byte in bytes {
+            let mut carry = u32::from(byte);
+            for digit in &mut digits {
+                carry += u32::from(*digit) << 8;
+                *digit = u8::try_from(carry % 58).unwrap_or(0);
+                carry /= 58;
+            }
+            while carry > 0 {
+                digits.push(u8::try_from(carry % 58).unwrap_or(0));
+                carry /= 58;
+            }
+        }
+        let leading_zeros = bytes.iter().take_while(|&&b| b == 0).count();
+        let mut out: String = std::iter::repeat_n('1', leading_zeros).collect();
+        out.extend(digits.iter().rev().map(|&d| ALPHABET[d as usize] as char));
+        out
     }
 }
