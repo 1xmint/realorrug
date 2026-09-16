@@ -539,6 +539,13 @@ pub fn run() -> ! {
         crate::telegram::posture(telegram.is_some(), telegram_publishing)
     );
     let mut telegram_gate = Gate::new(crate::telegram::limits_from(&env), Vec::new());
+    // One store, shared by both platforms: `answer` only ever records against
+    // a mention's own `conversation`, which is `None` for every Telegram
+    // mention today (`telegram.rs` sets it so), so the two platforms cannot
+    // collide in it. Process-lifetime only, per packet 0040's design 0022 §3
+    // -- no path, no config key, same shape as `gate` and `telegram_gate`
+    // above.
+    let mut threads = crate::followup::ThreadMemory::new();
 
     let Some(prices) = Prices::from_vars(&env) else {
         // Not an exit. A price list is a spending decision and its absence is a
@@ -653,6 +660,7 @@ pub fn run() -> ! {
             creators.as_ref(),
             provider.as_deref(),
             self_mint.as_ref(),
+            &mut threads,
             &paths,
         );
         let found_telegram = crate::telegram::tick(
@@ -666,6 +674,7 @@ pub fn run() -> ! {
             creators.as_ref(),
             provider.as_deref(),
             self_mint.as_ref(),
+            &mut threads,
             &paths,
         );
         // The week closes on the tick after Monday 00:00 UTC, once. The
@@ -1368,6 +1377,7 @@ pub fn tick(
     creators: Option<&realorrug_roast::CreatorIndex>,
     provider: Option<&dyn realorrug_model::Provider>,
     self_mint: Option<&Address>,
+    threads: &mut crate::followup::ThreadMemory,
     paths: &Paths,
 ) -> usize {
     let Some(x) = x else {
@@ -1485,7 +1495,7 @@ pub fn tick(
             now: at,
         };
 
-        let outcome = crate::answer::answer(mention, gate, &ctx);
+        let outcome = crate::answer::answer(mention, gate, threads, &ctx);
         // Settled here rather than inside the arms below. The money is already
         // spent by this point, and the reply's own reservation is a separate
         // ceiling that can be refused -- one must not hold the other open.
@@ -1617,6 +1627,55 @@ pub fn tick(
                             // than re-derived here: two derivations of one key
                             // is how a dedupe map fills with entries nothing
                             // ever looks up.
+                            gate.record(&mention.author, &key, id, at);
+                            answered += 1;
+                        } else {
+                            spend.release(reply_cost);
+                        }
+                    }
+                    Err(e) => {
+                        spend.release(reply_cost);
+                        eprintln!("realorrug-analyst: cannot write {}: {e}", paths.log);
+                        break;
+                    }
+                }
+            }
+            // **A follow-up that names no topic still gets an answer.** Packet
+            // 0040: "ten unmatched questions in one thread gets ten refusal
+            // lines today" only holds if the refusal is actually published,
+            // same as `Ticker` above -- falling into the catch-all below would
+            // log the line to this process's own stderr and never reply.
+            Answered::Followup { key, text } => {
+                let Ok(reply_cost) = spend.authorize(Cost::Reply, today) else {
+                    eprintln!(
+                        "realorrug-analyst: reply budget spent; {} not answered",
+                        mention.id
+                    );
+                    break;
+                };
+                let entry = crate::log::Entry {
+                    at,
+                    mention_id: mention.id.clone(),
+                    summoner: mention.author.clone(),
+                    // No mint: this reply states nothing new about a coin, it
+                    // restates a verdict level already logged against the
+                    // reply that set it.
+                    mint: None,
+                    read_at: None,
+                    read_at_slot: None,
+                    fact_sheet: String::new(),
+                    reply: text,
+                    fellback: None,
+                    reply_id: None,
+                    signals: Some(Vec::new()),
+                    pointed_at: None,
+                };
+                match crate::publish::publish(publisher, &paths.log, &mut journal, entry) {
+                    Ok(written) => {
+                        handled.push(&mention.id);
+                        if let Some(id) = &written.reply_id {
+                            let charged = reply_cost.reserved();
+                            spend.settle(reply_cost, charged);
                             gate.record(&mention.author, &key, id, at);
                             answered += 1;
                         } else {

@@ -96,6 +96,24 @@ pub enum Answered {
         /// What to say.
         text: String,
     },
+    /// A reply inside a thread this bot has already answered in, whose text
+    /// matches none of `followup::Topic`'s phrases.
+    ///
+    /// Design 0022 §1's fixed refusal: no follow-up for that question, and
+    /// the standing verdict restated with no number in it
+    /// (`followup::refusal_sentence`). No model call, no chain read — a
+    /// sibling of [`Self::Ticker`], not a reuse of it, because `Ticker`'s own
+    /// doc comment is specifically about a symbol naming nothing, and this is
+    /// a different reason to say the same *shape* of thing (a plain-text
+    /// reply, built with no model call, for a mention understood but not
+    /// answerable the way the asker hoped).
+    Followup {
+        /// The key the gate admitted this on, matching [`Self::Ticker`]'s own
+        /// reasoning for carrying it here rather than re-deriving it.
+        key: String,
+        /// What to say.
+        text: String,
+    },
     /// Nothing usable was found in the mention.
     Nothing,
     /// The gate refused it.
@@ -113,12 +131,13 @@ impl Answered {
     /// unreadable chain and never reached the provider, so the reservation is
     /// given back. Answered here rather than at each call site because the X
     /// loop and the Telegram lane must not answer it differently, and matched
-    /// exhaustively so a sixth outcome has to say which side it is on.
+    /// exhaustively so a new outcome has to say which side it is on.
     #[must_use]
     pub const fn billed(&self) -> Billed {
         match self {
             Self::Reply { billed, .. } => *billed,
             Self::Ticker { .. }
+            | Self::Followup { .. }
             | Self::Nothing
             | Self::Refused(_)
             | Self::NotAnAddress
@@ -138,7 +157,46 @@ impl Answered {
 /// The gate is consulted here because a refusal must happen **before** the chain
 /// is read: the read is the expensive part, and admitting first would mean a
 /// refused mention still cost a dossier.
-pub fn answer(mention: &Mention, gate: &mut Gate, ctx: &Answering<'_>) -> Answered {
+///
+/// `threads` is packet 0040's addition: the process-lifetime memory of which
+/// conversations this bot has already answered in, and at what verdict level
+/// (`crate::followup::ThreadMemory`). Checked first, before the mint/ticker
+/// parse below, because a follow-up in a remembered thread that matches no
+/// topic never gets that far — it is answered from the standing level alone,
+/// with no chain read.
+pub fn answer(
+    mention: &Mention,
+    gate: &mut Gate,
+    threads: &mut crate::followup::ThreadMemory,
+    ctx: &Answering<'_>,
+) -> Answered {
+    // **A follow-up that names nothing design 0020 §2 lists** gets design
+    // 0022 §1's fixed refusal, before the mint/ticker parse below ever runs.
+    // Only mentions inside a thread this process has already answered in are
+    // eligible — `ThreadMemory::standing` returns `None` for every ordinary
+    // first mention, which falls straight through to today's path
+    // unchanged. A *matched* topic also falls through unchanged: reading the
+    // one fact a matched topic names is design 0022 §2's right column, the
+    // next packet's job, not this one's.
+    if let Some(conversation) = &mention.conversation
+        && let Some(record) = threads.standing(conversation)
+        && crate::followup::match_topic(&mention.text).is_none()
+    {
+        // Gated like a ticker reply, on a key this reply's dedupe can be
+        // recorded against, so a person cannot spend an unbounded number of
+        // free follow-up refusals past the account's ordinary per-summoner
+        // and global caps -- the same reasoning `Asked::Ticker` below already
+        // states for gating a reply that costs no chain read.
+        let key = format!("followup:{conversation}");
+        if let Admitted::No(why) = gate.admit(&mention.author, &key, ctx.now) {
+            return Answered::Refused(why);
+        }
+        return Answered::Followup {
+            text: crate::followup::refusal_sentence(record.level).to_owned(),
+            key,
+        };
+    }
+
     let mint_text = match crate::mention::read(&mention.text) {
         Asked::Mint(m) => m,
         Asked::Ticker(t) => {
@@ -200,6 +258,16 @@ pub fn answer(mention: &Mention, gate: &mut Gate, ctx: &Answering<'_>) -> Answer
     // disagree with each other.
     let read_at = dossier.read_at;
 
+    // Recorded here, where the verdict is computed for the published reply
+    // -- not by reading it back out of the log afterwards, which would make
+    // the log load-bearing for behaviour instead of for audit. A mention
+    // with no conversation id (an ordinary DM-shaped call, a fixture with
+    // the field omitted, or a platform response that dropped it) records
+    // nothing: there is no thread to remember this reply against.
+    if let Some(conversation) = &mention.conversation {
+        threads.record(conversation, &mint_text, realorrug_roast::level(&sheet));
+    }
+
     Answered::Reply {
         // Read before `reply.text` is moved below. `Billed` is `Copy`, so this
         // is not a borrow that has to outlive anything.
@@ -256,6 +324,7 @@ mod tests {
             author: "a1".to_owned(),
             text: text.to_owned(),
             parent: None,
+            conversation: None,
         }
     }
 

@@ -451,6 +451,12 @@ pub fn tick(
     creators: Option<&realorrug_roast::CreatorIndex>,
     provider: Option<&dyn realorrug_model::Provider>,
     self_mint: Option<&realorrug_types::Address>,
+    // Threaded per packet 0040, shared with the X lane: a Telegram mention's
+    // `conversation` is always `None` (Telegram has no matching concept, see
+    // `Mention` construction above), so this store is never populated or
+    // queried from here -- the parameter exists so `answer` has one call
+    // shape across both platforms, not because this lane uses it.
+    threads: &mut crate::followup::ThreadMemory,
     paths: &crate::daemon::Paths,
 ) -> usize {
     let Some(bot) = telegram else {
@@ -505,7 +511,7 @@ pub fn tick(
             now: at,
         };
 
-        let outcome = crate::answer::answer(mention, gate, &ctx);
+        let outcome = crate::answer::answer(mention, gate, threads, &ctx);
         if let Some(commitment) = reserved {
             match outcome.billed() {
                 Billed::NoCall => spend.release(commitment),
