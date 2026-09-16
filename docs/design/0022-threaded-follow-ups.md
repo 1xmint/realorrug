@@ -111,22 +111,43 @@ re-triggering them; not on the token alone across different threads —
 a follow-up in one person's reply chain does not leak into an unrelated
 thread's memory, which would let one thread's reads answer another's
 questions for free while looking, from a reader's side, like the bot did
-work it did not do for *this* conversation. `x.rs`'s `Mention.parent`
-(the post a mention replies to) is the existing field this keys off; today
-it is used only to look up an address in the parent post's text when the
-reply's own text names none (design 0020's `mention::read`, unchanged by
-this document). This design adds using the same chain of `parent` links to
-resolve a stable thread id — the root mention's id — and stores follow-up
-memory against `(root_mention_id, token)`.
+work it did not do for *this* conversation.
 
-**What is stored, per thread:** the standing `Verdict` (level and the
-signals/facts that earned it, design 0020 §3/§6's `Verdict` type), and
-which of §2's fact/signal rows have already been answered in this thread
-(so a second "is it bundled" in the same thread is answered from what is
-already stored, not a second chain read — §5's per-thread cap counts reads,
-not repeated questions, for exactly this reason). It does not store the
-reply text itself beyond what the reply log (`crates/realorrug-analyst/src/log.rs`'s
-`Entry`) already keeps for every reply on the account.
+**Changed by packet 0040, from the paragraph above as originally written:**
+this document originally proposed resolving a stable thread id by walking
+`x.rs`'s `Mention.parent` links up to the root. Packet 0040 does not build
+that: each hop up the chain is a separate platform read at $0.005, on
+every follow-up, forever, and a deep thread is a deep bill. `GET
+/2/users/:id/mentions` — the endpoint the bot already calls — reports
+`conversation_id` directly on the mention, documented as "The ID of the
+conversation this Post belongs to (matches the root Post's ID)"
+(docs.x.com, the user-mention-timeline reference, read 2026-09-15; a
+reference, not a capture — nothing here has been run against the live API,
+because the account and bearer token do not exist yet, AGENTS.md §1). One
+more field (`conversation_id`) added to the request the bot already makes
+costs no extra call. `x.rs`'s `Mention.conversation: Option<String>`
+carries it; `None` when the platform response omits the field takes the
+mention down today's path unchanged, as an ordinary first mention, rather
+than a refusal — a missing thread id costs the bot a read it might have
+skipped, it never makes the bot say something false, and the existing mint
+dedupe in `admission.rs` already bounds the repeat. Thread memory keys on
+`(conversation_id, token)`, not on `(root_mention_id, token)`.
+
+**What is stored, per thread:** packet 0040 stores the standing verdict
+**level** (`realorrug_roast::Level`) alone, not the whole `Verdict` this
+section originally specified. A level is what §4 and the packet's fixed
+refusal sentence actually use; the reply log
+(`crates/realorrug-analyst/src/log.rs`'s `Entry`) already keeps the fact
+sheet and the reply text for audit, and storing a second copy of the
+evidence in thread memory is a second thing that can drift from the
+first. The record also holds which of §2's fact/signal rows have already
+been answered in this thread (so a second "is it bundled" in the same
+thread is answered from what is already stored, not a second chain read —
+§5's per-thread cap counts reads, not repeated questions, for exactly this
+reason) — recorded by packet 0040's `ThreadRecord.answered`, but not yet
+*read* by anything: acting on it is design 0022 §5's territory, the next
+packet's job. It does not store the reply text itself beyond what the
+reply log already keeps for every reply on the account.
 
 **What is dropped, and when:** the per-thread record is dropped once the
 thread hits its cap (§5) or after a fixed idle window with no new
@@ -324,10 +345,10 @@ design's thread memory extends; it is new.
 
 | file | what changes | why |
 |---|---|---|
-| `crates/realorrug-analyst/src/x.rs` | resolve a stable thread id by following `Mention.parent` links to the root; new, additive | §3 needs a thread id to key memory on, and `parent` is the only existing field carrying that chain |
-| a new module in `crates/realorrug-analyst` (name not decided here) | the §2 matcher (fixed phrase list to a design-0020 fact/signal name), the "matches nothing" refusal, the per-thread memory record (standing verdict, facts already answered), the per-thread and per-person caps (§5) | §2, §3, §5; none of this exists today |
+| `crates/realorrug-analyst/src/x.rs` | **done, packet 0040.** `Mention.conversation: Option<String>`, parsed from the `conversation_id` field added to the existing `mentions` request — not the parent-link walk this row originally described (see §3) | §3 needs a thread id to key memory on; `conversation_id` is a free field on the request the bot already makes |
+| `crates/realorrug-analyst/src/followup.rs` | **done, packet 0040**, for the no-chain-read half only. The §2 matcher (`Topic`, fixed phrase list, `match_topic`, earliest-match-wins), `ThreadMemory`/`ThreadRecord` (standing level, facts already answered — see §3), and `refusal_sentence` (design 0022 §1's fixed refusal, one sentence per level). **Not done here:** the per-thread and per-person caps (§5) and the one-thing chain read for a *matched* topic (§2's right column) — both the next packet's job | §2, §3; §5 explicitly deferred |
 | `crates/realorrug-analyst/src/admission.rs` | a second, follow-up-specific `Limits`-shaped config (no default, per rule 7) and a follow-up counter alongside the existing per-summoner/global/dedupe counters | §5's per-person cap, kept distinct from the existing first-mention cap for the reason §5 states |
-| `crates/realorrug-analyst/src/answer.rs` | a new `Answered` variant (or a wrapping type) for a follow-up outcome — matched-and-answered, capped, or matches-nothing — alongside the existing `Reply`/`Ticker`/`Refused` shapes | §1, §2, §5; `Answered` today has no shape for "this mention is a follow-up in an existing thread" |
+| `crates/realorrug-analyst/src/answer.rs` | **partly done, packet 0040**: `Answered::Followup { key, text }`, alongside the existing `Reply`/`Ticker`/`Refused` shapes, for the matches-nothing outcome only — checked before the mint/ticker parse, no chain read, no model call. **Not done:** a matched-and-answered outcome (needs §2's right column) and a capped outcome (needs §5) | §1, §2, §5; `Answered` today has no shape for "this mention is a follow-up in an existing thread" |
 | `crates/realorrug-roast/src/verdict.rs` | (reused, not changed in shape) the pure level-from-signals function is called again with the enlarged sheet after a follow-up's read; §4 needs no new function here, only a second call to the one design 0020 already specifies | §4 |
 | `crates/realorrug-roast/src/voice.rs` or its follow-up-side caller | a level-change-citation check alongside `forbidden::check_level` (§4's "must name the specific fact that changed"), gating publication the same way the template fallback already gates every other unsafe generation | §4 |
 | `crates/realorrug-analyst/src/log.rs` | (reused as-is) `Entry` already records one reply at a time; a follow-up reply is logged the same way, with `pointed_at`-shaped or a new field naming the thread it belongs to, so the log stays the single record of what the account said, per `AGENTS.md` §5 | §3, for auditability, not a required design decision here |
