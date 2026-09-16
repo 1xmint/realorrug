@@ -177,7 +177,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
     let mut threads = realorrug_analyst::followup::ThreadMemory::new();
     for mention in &mentions {
-        answer(mention, &mut gate, &mut threads, &mut lane2, &ctx, &log_path)?;
+        answer(
+            mention,
+            &mut gate,
+            &mut threads,
+            &mut lane2,
+            &ctx,
+            &log_path,
+        )?;
     }
 
     println!(

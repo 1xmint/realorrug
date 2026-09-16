@@ -1,10 +1,14 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Design 0024 — off-topic replies
 
-**Status:** recording, not yet built. The decision below is the owner's,
-already made; this document is the reasoning that turns it into a shape for
-`crates/realorrug-analyst` and `crates/realorrug-roast` to build against.
-Nothing in it has been built.
+**Status:** built. `crates/realorrug-analyst/src/lane2.rs` and the new checks
+in `crates/realorrug-roast/src/forbidden.rs` (`check_numerals`,
+`check_no_identification`, `check_any_person_reference`,
+`check_sensitive_topic`) implement §1 through §4 as designed; §3's caps are
+config, deny-by-default, keyed `RADAR_LANE2_*` (`deploy/analyst.env.example`).
+§5 and §8's open items (X's prior-approval requirement, real traffic to size
+§3's numbers against) remain open and are not this document's or the code's
+to close.
 **Date:** 2026-09-16.
 **Depends on:** design 0020 (the fact sheet, the verdict ladder, the voice,
 `forbidden.rs`'s target/level checks) and design 0022 (threaded follow-ups,

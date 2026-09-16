@@ -1093,10 +1093,11 @@ pub fn check_no_identification(text: &str) -> Vec<Violation> {
                           check one against",
             });
         }
-        let names_one = IDENTIFICATION_WORDS.iter().any(|w| word_occurs(sentence, w));
-        let has_copula = word_occurs(sentence, "is")
-            || word_occurs(sentence, "are")
-            || sentence.contains("'s ");
+        let names_one = IDENTIFICATION_WORDS
+            .iter()
+            .any(|w| word_occurs(sentence, w));
+        let has_copula =
+            word_occurs(sentence, "is") || word_occurs(sentence, "are") || sentence.contains("'s ");
         if names_one && has_copula {
             out.push(Violation {
                 phrase: "token/coin/contract/mint/address claim",
@@ -1150,11 +1151,40 @@ pub fn check_any_person_reference(text: &str) -> Vec<Violation> {
 /// nudge instead of one joke -- the conservative direction rule 7 already
 /// prefers.
 const SENSITIVE_WORDS: &[&str] = &[
-    "died", "death", "dead", "killed", "kill", "suicide", "shooting", "shooter", "massacre",
-    "terrorist", "terrorism", "bombing", "bomb", "genocide", "war", "attack", "murder", "rape",
-    "assault", "tragedy", "disaster", "earthquake", "president", "election", "senator",
-    "congress", "republican", "democrat", "politician", "prime minister",
+    "died",
+    "death",
+    "dead",
+    "killed",
+    "kill",
+    "suicide",
+    "shooting",
+    "shooter",
+    "massacre",
+    "terrorist",
+    "terrorism",
+    "bombing",
+    "bomb",
+    "genocide",
+    "war",
+    "attack",
+    "murder",
+    "rape",
+    "assault",
+    "tragedy",
+    "disaster",
+    "earthquake",
+    "president",
+    "election",
+    "senator",
+    "congress",
+    "republican",
+    "democrat",
+    "politician",
+    "prime minister",
 ];
+
+/// Scans a mention's text for [`SENSITIVE_WORDS`]; a hit means lane 2 must
+/// never attempt a joke about it (design 0024 §2.1).
 #[must_use]
 pub fn check_sensitive_topic(mention: &str) -> Vec<Violation> {
     let lower = mention.to_lowercase();

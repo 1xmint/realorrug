@@ -242,6 +242,11 @@ impl Gate {
     /// window text this account already answered with, in lane 2, gets no
     /// second call), the per-author daily cap, then the global spend
     /// ceiling against [`ESTIMATED_COST`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Refused`] variant naming whichever of those checks
+    /// this admission failed, in the order stated above.
     pub fn admit(&mut self, author: &str, mention_text: &str, now: u64) -> Result<(), Refused> {
         let Some(limits) = self.limits else {
             return Err(Refused::Unconfigured);
@@ -336,7 +341,12 @@ fn violations(text: &str) -> Vec<forbidden::Violation> {
 /// No chain read. A model call only when [`check_sensitive_topic`] finds
 /// nothing in the mention worth refusing outright.
 #[must_use]
-pub fn reply(mention: &Mention, gate: &mut Gate, provider: Option<&dyn Provider>, now: u64) -> Answered {
+pub fn reply(
+    mention: &Mention,
+    gate: &mut Gate,
+    provider: Option<&dyn Provider>,
+    now: u64,
+) -> Answered {
     let key = format!("lane2:{}", mention.author);
     if let Err(why) = gate.admit(&mention.author, &mention.text, now) {
         return Answered::Refused(why);
@@ -457,7 +467,12 @@ mod tests {
 
     #[test]
     fn no_provider_posts_the_fixed_fallback_not_silence() {
-        let out = reply(&mention("are dogs smarter than cats"), &mut gate(), None, 1_000);
+        let out = reply(
+            &mention("are dogs smarter than cats"),
+            &mut gate(),
+            None,
+            1_000,
+        );
         match out {
             Answered::Lane2 { text, .. } => assert_eq!(text, FALLBACK),
             other => panic!("{other:?}"),
@@ -467,7 +482,12 @@ mod tests {
     #[test]
     fn a_clean_model_reply_gets_the_nudge_appended() {
         let provider = Fixed("Dogs learn tricks, cats decide if it's worth it.");
-        let out = reply(&mention("are dogs smarter than cats"), &mut gate(), Some(&provider), 1_000);
+        let out = reply(
+            &mention("are dogs smarter than cats"),
+            &mut gate(),
+            Some(&provider),
+            1_000,
+        );
         match out {
             Answered::Lane2 { text, .. } => {
                 assert!(text.contains("Dogs learn tricks"), "{text}");
@@ -480,7 +500,12 @@ mod tests {
     #[test]
     fn a_reply_with_a_digit_is_refused_and_the_fallback_is_posted() {
         let provider = Fixed("This one's about 100% pineapple discourse.");
-        let out = reply(&mention("pizza toppings"), &mut gate(), Some(&provider), 1_000);
+        let out = reply(
+            &mention("pizza toppings"),
+            &mut gate(),
+            Some(&provider),
+            1_000,
+        );
         match out {
             Answered::Lane2 { text, .. } => assert_eq!(text, FALLBACK),
             other => panic!("{other:?}"),
@@ -490,7 +515,12 @@ mod tests {
     #[test]
     fn a_reply_naming_a_cashtag_is_refused() {
         let provider = Fixed("$DOGE would love this take honestly.");
-        let out = reply(&mention("pizza toppings"), &mut gate(), Some(&provider), 1_000);
+        let out = reply(
+            &mention("pizza toppings"),
+            &mut gate(),
+            Some(&provider),
+            1_000,
+        );
         match out {
             Answered::Lane2 { text, .. } => assert_eq!(text, FALLBACK),
             other => panic!("{other:?}"),
@@ -500,7 +530,12 @@ mod tests {
     #[test]
     fn a_reply_naming_an_handle_is_refused_with_no_accusation_word() {
         let provider = Fixed("Honestly @some_guy would agree with me here.");
-        let out = reply(&mention("pizza toppings"), &mut gate(), Some(&provider), 1_000);
+        let out = reply(
+            &mention("pizza toppings"),
+            &mut gate(),
+            Some(&provider),
+            1_000,
+        );
         match out {
             Answered::Lane2 { text, .. } => assert_eq!(text, FALLBACK),
             other => panic!("{other:?}"),
@@ -510,7 +545,12 @@ mod tests {
     #[test]
     fn a_reply_with_advice_is_refused() {
         let provider = Fixed("You should buy pineapple pizza today.");
-        let out = reply(&mention("pizza toppings"), &mut gate(), Some(&provider), 1_000);
+        let out = reply(
+            &mention("pizza toppings"),
+            &mut gate(),
+            Some(&provider),
+            1_000,
+        );
         match out {
             Answered::Lane2 { text, .. } => assert_eq!(text, FALLBACK),
             other => panic!("{other:?}"),
@@ -547,7 +587,11 @@ mod tests {
             Some(&provider),
             1_000,
         );
-        assert_eq!(provider.0.load(std::sync::atomic::Ordering::SeqCst), 0, "no model call for a sensitive mention");
+        assert_eq!(
+            provider.0.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no model call for a sensitive mention"
+        );
         match out {
             Answered::Lane2 { text, .. } => assert_eq!(text, FALLBACK),
             other => panic!("{other:?}"),
@@ -578,7 +622,12 @@ mod tests {
         let provider = Fixed("harmless joke about pizza and nothing else");
         let mut g = gate();
         for i in 0..5 {
-            let out = reply(&mention(&format!("q{i}")), &mut g, Some(&provider), 1_000 + i * 61);
+            let out = reply(
+                &mention(&format!("q{i}")),
+                &mut g,
+                Some(&provider),
+                1_000 + i * 61,
+            );
             assert!(matches!(out, Answered::Lane2 { .. }), "{out:?}");
         }
         let out = reply(&mention("q5"), &mut g, Some(&provider), 1_000 + 5 * 61);
@@ -591,7 +640,10 @@ mod tests {
     #[test]
     fn no_configured_limits_refuses_outright() {
         let out = reply(&mention("hello"), &mut Gate::unconfigured(), None, 1_000);
-        assert!(matches!(out, Answered::Refused(Refused::Unconfigured)), "{out:?}");
+        assert!(
+            matches!(out, Answered::Refused(Refused::Unconfigured)),
+            "{out:?}"
+        );
     }
 
     #[test]

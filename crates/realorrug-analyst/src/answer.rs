@@ -416,7 +416,12 @@ mod tests {
     }
 
     #[test]
-    fn a_mention_naming_nothing_is_not_an_error() {
+    fn a_mention_naming_nothing_routes_to_lane2_and_is_not_an_error() {
+        // Design 0024: `Asked::Nothing` no longer returns `Answered::Nothing`
+        // silently -- it routes to `lane2::reply`. With no lane-2 limits
+        // configured (`lane2_gate` above is `Gate::unconfigured()`), rule 7
+        // means that reply is refused, not silently dropped -- the routing
+        // change happened, but nothing is spent or posted without a budget.
         let client = unreachable_client();
         let out = answer(
             &mention("@radar hello"),
@@ -425,7 +430,10 @@ mod tests {
             &mut lane2_gate(),
             &ctx(&client),
         );
-        assert!(matches!(out, Answered::Nothing), "{out:?}");
+        assert!(
+            matches!(out, Answered::Refused(Refused::Unconfigured)),
+            "{out:?}"
+        );
     }
 
     #[test]
