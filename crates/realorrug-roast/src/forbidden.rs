@@ -929,57 +929,99 @@ fn check_required_canttell(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<V
 }
 
 /// Words that mark a numeral in the reply as a statement of *when* the sheet
-/// was read, the shape design 0020 §4 asks `NothingUglyYet` to carry.
-///
-/// **What "the age" is on this branch.** Design 0020 §1 adds a dedicated
-/// launch-block/age fact to the Robinhood sheet -- a real elapsed time, read
-/// from a block timestamp -- but that field lives in `sheet.rs` and
-/// `realorrug-robinhood`, both outside this task's owned files and not yet
-/// built here. The only chronological figure the sheet already carries is
-/// [`crate::sheet::FactSheet::read_at`], "the slot every figure was read at"
-/// (`sheet.rs`'s own doc comment) -- not literally an age in hours, but the
-/// nearest thing on the sheet to "when this read happened," and the template
-/// already states it ("Read at slot …"). It stands in for the real age fact
-/// here; when that fact ships, only the value plugged into
-/// [`check_required_age`] changes, not this function's shape.
-const AGE_WORDS: &[&str] = &["slot", "block", "read at"];
+/// was read -- the read point, never the age (they are different facts, see
+/// [`check_required_age`]).
+const READ_POINT_WORDS: &[&str] = &["slot", "block", "read at"];
 
+/// Words that mark a numeral in the reply as a statement of the token's age,
+/// rather than of anything else the sheet authorised.
+const AGE_WORDS: &[&str] = &["ago", "old", "hour"];
+
+/// Whether `text` states one of `values` as a literal `fidelity::check` would
+/// not otherwise flag as fabricated.
+///
+/// Reuses `fidelity::check`'s own notion of "the sheet authorised this
+/// number" rather than a second one: a literal counts as stated when checking
+/// the text against *only* this narrower set does not report it as
+/// fabricated -- i.e. it is left out of the fabricated list, which is the
+/// only public API this module needs to ask.
+fn states_one_of(text: &str, values: &[f64]) -> bool {
+    fidelity::literals(text).len() > fidelity::check(text, values).len()
+}
+
+/// Content design 0020 §4 requires a `NothingUglyYet` reply to carry: the age,
+/// which is not the read point.
+///
+/// "Read at slot 444007820" says when the camera clicked; it does not say the
+/// token is six hours old, and design 0020 §4 asks for the second: the
+/// reassurance is only bounded if the reader learns the thing is new. Three
+/// shapes, matching [`crate::sheet::FactSheet::build`]'s own three cases:
+///
+/// - **A real age exists** ([`crate::clause::Kind::Age`] is on the sheet,
+///   Solana today): the reply must state *that* fact's value, not just the
+///   read point -- a reply citing only `sheet.read_at`'s number is exactly
+///   the defect this function exists to catch.
+/// - **No age, but a read point** (Robinhood today: `LaunchBlock` is
+///   Solana-slot-shaped, so a Robinhood sheet never gets an age fact): the
+///   reply must say how old the token is could not be read, and must still
+///   state the read point. Saying "nothing ugly yet" about a token whose age
+///   is unknown, without saying so, is reassurance with its limit removed --
+///   rule 8, unknown is not safe.
+/// - **Neither exists**: nothing chronological is on this sheet at all --
+///   rule 7, deny by default when the input the requirement needs is
+///   missing, same as before this task.
 fn check_required_age(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violation> {
     let refused = vec![Violation {
         phrase: "nothinguglyyet reply states no age",
         because: "design 0020 §4: a NothingUglyYet reply must state the age, not just \"clean \
                   so far\"",
     }];
-    let Some(slot) = sheet.read_at else {
-        // Nothing chronological is on this sheet at all -- rule 7, deny by
-        // default when the input the requirement needs is missing, rather
-        // than accept any reply because there was nothing to check it
-        // against.
+    let Some(read_at) = sheet.read_at else {
         return refused;
     };
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a slot is well inside f64's exact integer range -- the same cast \
-                  sheet.rs::authorised already makes for the same value"
-    )]
-    let age_value = slot.0 as f64;
 
-    let lower = text.to_lowercase();
-    let mentions_age_word = AGE_WORDS.iter().any(|w| lower.contains(w));
-
-    // Reuses `fidelity::check`'s own notion of "the sheet authorised this
-    // number" rather than a second one, per the packet: a literal counts as
-    // stating the age when `fidelity::check` against *only* the age value
-    // does not report it as fabricated -- i.e. it is left out of the
-    // fabricated list, which only public API this module needs to ask.
-    let literals = fidelity::literals(text);
-    let not_the_age = fidelity::check(text, &[age_value]);
-    let states_the_age = literals.len() > not_the_age.len();
-
-    if mentions_age_word && states_the_age {
-        Vec::new()
-    } else {
-        refused
+    match sheet
+        .facts
+        .iter()
+        .find(|f| f.kind == crate::clause::Kind::Age)
+    {
+        Some(age) => {
+            // A real age exists. The read point alone must not pass: its
+            // number is deliberately excluded from the values checked here.
+            let lower = text.to_lowercase();
+            let mentions_age_word = AGE_WORDS.iter().any(|w| lower.contains(w));
+            if mentions_age_word && states_one_of(text, &age.values) {
+                Vec::new()
+            } else {
+                refused
+            }
+        }
+        None => {
+            // Ageless. The reply must say the age is unknown, and must still
+            // cite the read point -- both, not either.
+            let lower = text.to_lowercase();
+            let says_age_unknown = (lower.contains("age") || lower.contains("old"))
+                && (lower.contains("could not be read") || lower.contains("unknown"));
+            let mentions_read_point_word = READ_POINT_WORDS.iter().any(|w| lower.contains(w));
+            let read_point_value = match read_at {
+                realorrug_types::ReadAt::Solana(slot) => slot.get(),
+                realorrug_types::ReadAt::Robinhood(block) => block,
+            };
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a slot or a block number is well inside f64's exact integer range -- \
+                          the same cast sheet.rs::authorised already makes for the same value"
+            )]
+            let read_point_value = read_point_value as f64;
+            if says_age_unknown
+                && mentions_read_point_word
+                && states_one_of(text, &[read_point_value])
+            {
+                Vec::new()
+            } else {
+                refused
+            }
+        }
     }
 }
 
@@ -1484,13 +1526,17 @@ mod tests {
 
     use crate::sheet::{Fact, FactSheet};
 
-    /// A sheet naming one unread fact and read at a fixed slot, so both
-    /// `check_required_canttell` (against `unknown`) and
-    /// `check_required_age` (against `read_at`) have something to check.
+    /// A sheet naming one unread fact and read at a fixed Robinhood block, so
+    /// `check_required_canttell` (against `unknown`) has something to check.
+    ///
+    /// **Ageless, deliberately.** `LaunchBlock` is Solana-slot-shaped, so a
+    /// Robinhood sheet never carries a [`crate::clause::Kind::Age`] fact --
+    /// this fixture is that shape, and stands in for it in every test that is
+    /// not itself about the age rule.
     fn required_sheet(unknown: Vec<String>) -> FactSheet {
         FactSheet {
             mint: "MintOne".to_owned(),
-            read_at: Some(realorrug_types::Slot(444_007_820)),
+            read_at: Some(realorrug_types::ReadAt::Robinhood(100)),
             facts: vec![Fact::exact(
                 crate::clause::Kind::LaunchRecipients,
                 "distinct token accounts receiving the token in its own launch block",
@@ -1501,6 +1547,36 @@ mod tests {
             unknown,
             signals: Vec::new(),
         }
+    }
+
+    /// A Solana sheet read at a fixed slot, carrying a real age fact -- the
+    /// other tier `check_required_age` has to tell apart from the read point.
+    fn required_sheet_with_age(unknown: Vec<String>) -> FactSheet {
+        let mut sheet = FactSheet {
+            mint: "MintOne".to_owned(),
+            read_at: Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820,
+            ))),
+            facts: vec![Fact::exact(
+                crate::clause::Kind::LaunchRecipients,
+                "distinct token accounts receiving the token in its own launch block",
+                11.0,
+                "11",
+            )],
+            untrusted: Vec::new(),
+            unknown,
+            signals: Vec::new(),
+        };
+        sheet.facts.push(Fact {
+            about: crate::sheet::About::Measurement,
+            kind: crate::clause::Kind::Age,
+            label: "how long ago this token's launch block was, on the chain's own clock"
+                .to_owned(),
+            rendered: "63954 slots (about 7.1 hours) since its launch block".to_owned(),
+            values: vec![63954.0, 7.1],
+            clauses: Vec::new(),
+        });
+        sheet
     }
 
     #[test]
@@ -1553,10 +1629,10 @@ mod tests {
 
     #[test]
     fn a_nothinguglyyet_reply_with_no_age_is_refused() {
-        // Re-apply by deleting the `states_the_age` half of
-        // `check_required_age`'s condition (or hard-coding it `true`): this
-        // starts passing when it must fail.
-        let sheet = required_sheet(Vec::new());
+        // Re-apply by deleting the `states_one_of` half of the `Some(age)`
+        // arm's condition (or hard-coding it `true`): this starts passing
+        // when it must fail.
+        let sheet = required_sheet_with_age(Vec::new());
         assert!(
             !check_required(
                 "Nothing ugly here yet, clean so far.",
@@ -1569,10 +1645,29 @@ mod tests {
 
     #[test]
     fn a_nothinguglyyet_reply_with_the_sheets_age_passes() {
-        let sheet = required_sheet(Vec::new());
+        let sheet = required_sheet_with_age(Vec::new());
         assert!(
             check_required(
-                "Nothing ugly yet. Read at slot 444007820, still early.",
+                "Nothing ugly yet. Launched about 7.1 hours ago -- 63954 slots.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nothinguglyyet_reply_stating_only_the_read_point_is_refused_on_a_sheet_with_an_age() {
+        // The defect this task fixes: the read point is not the age, and a
+        // sheet with a real age fact must not be satisfied by a reply that
+        // cites only when the sheet was read. Re-apply by making the read
+        // point's own number a match for the age check (e.g. reverting to
+        // checking `sheet.read_at` instead of the age fact's values): this
+        // starts passing when it must fail.
+        let sheet = required_sheet_with_age(Vec::new());
+        assert!(
+            !check_required(
+                "Read at slot 444007820, nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
             )
@@ -1585,7 +1680,7 @@ mod tests {
         // The number alone is not enough -- it has to be attached to an age
         // word, or "11 accounts, nothing ugly yet" (an authorised figure
         // that has nothing to do with when the sheet was read) would pass.
-        let sheet = required_sheet(Vec::new());
+        let sheet = required_sheet_with_age(Vec::new());
         assert!(
             !check_required(
                 "11 token accounts, nothing ugly yet.",
@@ -1602,10 +1697,55 @@ mod tests {
         // to be the one the sheet actually authorised, reusing
         // `fidelity::check`'s own notion of "authorised" rather than a
         // second, looser one.
+        let sheet = required_sheet_with_age(Vec::new());
+        assert!(
+            !check_required(
+                "1 hour ago, nothing ugly yet.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nothinguglyyet_reply_on_an_ageless_sheet_saying_nothing_about_the_age_is_refused() {
+        // Robinhood-shaped: no age fact. Citing only the read point, the way
+        // the pre-packet stand-in check accepted, is not enough -- rule 8,
+        // unknown is not safe, so the reply must say the age itself could not
+        // be read.
         let sheet = required_sheet(Vec::new());
         assert!(
             !check_required(
-                "Read at slot 1, nothing ugly yet.",
+                "Read at block 100, nothing ugly yet.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nothinguglyyet_reply_on_an_ageless_sheet_must_still_state_the_read_point() {
+        // Saying the age is unknown is not enough either -- design 0020 §4
+        // keeps the read point required too, on every sheet that has one.
+        let sheet = required_sheet(Vec::new());
+        assert!(
+            !check_required(
+                "How old this token is could not be read. Nothing ugly yet.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nothinguglyyet_reply_on_an_ageless_sheet_stating_both_passes() {
+        let sheet = required_sheet(Vec::new());
+        assert!(
+            check_required(
+                "How old this token is could not be read. Read at block 100, nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
             )
@@ -1625,22 +1765,31 @@ mod tests {
     }
 
     #[test]
-    fn the_template_carries_the_required_line_at_every_level() {
+    fn the_template_carries_the_required_line_at_every_level_on_both_chains() {
         // The packet's expensive-to-miss case: `voice::write` publishes
         // `verdict::template` on every refusal, so if the template itself
         // cannot pass this check, a refusal ships the very thing it exists
-        // to prevent. Tested at all five levels, the way the packet asks --
-        // three of them carry no requirement and pass trivially, but they are
-        // asserted anyway so a future third-level requirement cannot silently
-        // start failing here unnoticed.
-        let unknown_sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
-        let clean_sheet = required_sheet(Vec::new());
+        // to prevent. Tested at all five levels, on a Solana sheet (a real
+        // age) and a Robinhood one (ageless) -- three levels carry no
+        // requirement and pass trivially, but they are asserted anyway so a
+        // future third-level requirement cannot silently start failing here
+        // unnoticed.
+        let unknown_solana =
+            required_sheet_with_age(vec!["the launch block could not be read".to_owned()]);
+        let clean_solana = required_sheet_with_age(Vec::new());
+        let unknown_robinhood = required_sheet(vec!["the launch block could not be read".to_owned()]);
+        let clean_robinhood = required_sheet(Vec::new());
         for (level, sheet) in [
-            (Level::CantTell, &unknown_sheet),
-            (Level::NothingUglyYet, &clean_sheet),
-            (Level::Sketchy, &clean_sheet),
-            (Level::RugMechanicsLive, &clean_sheet),
-            (Level::Rugged, &clean_sheet),
+            (Level::CantTell, &unknown_solana),
+            (Level::NothingUglyYet, &clean_solana),
+            (Level::Sketchy, &clean_solana),
+            (Level::RugMechanicsLive, &clean_solana),
+            (Level::Rugged, &clean_solana),
+            (Level::CantTell, &unknown_robinhood),
+            (Level::NothingUglyYet, &clean_robinhood),
+            (Level::Sketchy, &clean_robinhood),
+            (Level::RugMechanicsLive, &clean_robinhood),
+            (Level::Rugged, &clean_robinhood),
         ] {
             let text = crate::verdict::template(sheet);
             assert!(
