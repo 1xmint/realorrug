@@ -24,12 +24,130 @@
 //! to saying only what it measured, never to saying nothing and never to saying
 //! more.
 
-use crate::sheet::FactSheet;
+use crate::sheet::{FactSheet, Signal};
 use std::fmt::Write as _;
 
+/// The verdict ladder, ADR 0027's five names, decided by code from the sheet
+/// alone.
+///
+/// # Not `Ord`, not `Default`, and that is deliberate
+///
+/// The five names read like a severity scale but are not one: `CantTell` is
+/// an epistemic state (a required fact was unread), not a point between
+/// `Sketchy` and `NothingUglyYet` on a badness axis. A derived `Ord` would
+/// place `CantTell` at some numeric position among the others, and the first
+/// thing anyone would do with that position is compare it -- `level >=
+/// Level::Sketchy` reads as "at least as bad as Sketchy," and there is no
+/// true answer to that question for `CantTell`, which is not on the badness
+/// axis at all. A derived `Default` has the same failure in miniature: it
+/// would silently pick one variant as "the" verdict for an unbuilt value, and
+/// whichever variant that is, ADR 0027's own consequence 4 is that a blind
+/// spot must never read as `NothingUglyYet` -- so there is no safe default to
+/// pick, and the type does not offer one. Compare by matching on the variant,
+/// not by ordering it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    /// It already happened, observed: liquidity removed, creator sold out,
+    /// buyers cannot sell. Never on one signal alone.
+    Rugged,
+    /// The token is live and two or more strong signals fire together.
+    RugMechanicsLive,
+    /// Real red flags with innocent explanations still open: one signal, no
+    /// qualifying combination.
+    Sketchy,
+    /// No bad signal found, and every required fact was read. The reply must
+    /// carry the "yet."
+    NothingUglyYet,
+    /// A fact the ladder needed could not be read. Never presented as clean.
+    CantTell,
+}
+
+/// The live-risk signals design 0020 §3 counts toward `RugMechanicsLive`.
+///
+/// Eight signals, matching §3's own list exactly (`OwnerCanStillMintOrPause`
+/// included, "once it ships"; the launch-block-band member is
+/// [`Signal::LaunchBlockInStrongestBand`], the one variant every chain's
+/// snapshot feeds -- see its doc comment in `sheet.rs`). Named as a list
+/// rather than inlined into [`level`] so the "two or more" rule and the
+/// membership rule are each stated once, in one place, instead of duplicated
+/// across match arms.
+///
+/// **No chain appears here, or anywhere in this function.** A `Signal` means
+/// the same thing on every chain (`sheet.rs`'s own rule, restated by the
+/// owner: one bot, one voice, a chain is data it carries); this list and
+/// [`level`] read signals and `unknown`, never `venue` or anything shaped
+/// like it, and must not grow a `match` on which chain produced the sheet.
+const LIVE_RISK_SIGNALS: &[Signal] = &[
+    Signal::LiquidityGone,
+    Signal::CreatorSoldOut,
+    Signal::BuyersCannotSell,
+    Signal::CreatorBoughtOwnLaunch,
+    Signal::LaunchBlockInStrongestBand,
+    Signal::RepeatLauncher,
+    Signal::HolderConcentration,
+    Signal::OwnerCanStillMintOrPause,
+];
+
+/// Computes the verdict level from the sheet alone.
+///
+/// Pure: no chain read, no model, no I/O. Design 0020 §3's rule, in the
+/// order §3 settles it:
+///
+/// 1. **`Rugged` first, even over a missing fact.** An observed
+///    `Rugged`-qualifying pair (`LiquidityGone` + `HolderConcentration`, or
+///    `CreatorSoldOut` + `BuyersCannotSell`) is checked before `unknown` is
+///    consulted at all -- §3's own precedence section: both qualifying pairs
+///    are built from *optional* facts, so a sheet that observed one but also
+///    failed to read an unrelated required fact must still report the rug it
+///    saw, not bury it under "can't tell."
+/// 2. **`CantTell` whenever a required fact is unread**, once the `Rugged`
+///    check above has already cleared. `sheet.unknown` is exactly the record
+///    of what could not be read (`FactSheet::build`'s `unknown` list), so a
+///    nonempty list here is "a required fact is unread" by construction --
+///    there is no separate "optional-miss" list to consult.
+/// 3. **`RugMechanicsLive`** needs two or more of [`LIVE_RISK_SIGNALS`]. A
+///    single signal cannot reach it, satisfying §3 rule 4 by construction:
+///    the count has to clear two before this arm returns.
+/// 4. **`Sketchy`** is any signal at all, once the stronger levels above have
+///    already been ruled out.
+/// 5. **`NothingUglyYet`** is what is left: every required fact read (step 2
+///    passed), no `Rugged` pair, fewer than two live-risk signals, and no
+///    signal at all.
+#[must_use]
+pub fn level(sheet: &FactSheet) -> Level {
+    let rugged = (sheet.signals.contains(&Signal::LiquidityGone)
+        && sheet.signals.contains(&Signal::HolderConcentration))
+        || (sheet.signals.contains(&Signal::CreatorSoldOut)
+            && sheet.signals.contains(&Signal::BuyersCannotSell));
+    if rugged {
+        return Level::Rugged;
+    }
+
+    if !sheet.unknown.is_empty() {
+        return Level::CantTell;
+    }
+
+    let live_risk_count = LIVE_RISK_SIGNALS
+        .iter()
+        .filter(|signal| sheet.signals.contains(signal))
+        .count();
+    if live_risk_count >= 2 {
+        return Level::RugMechanicsLive;
+    }
+
+    if !sheet.signals.is_empty() {
+        return Level::Sketchy;
+    }
+
+    Level::NothingUglyYet
+}
+
 /// What the rule concluded, as reasons rather than a score.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
+    /// The verdict ladder's level, chosen by [`level`] from the sheet alone.
+    /// The model never moves this (ADR 0027, `AGENTS.md` §3 rule 4).
+    pub level: Level,
     /// Things measured about this token that a reader should know.
     ///
     /// Each is a statement of fact with its number already in the sheet. None
@@ -57,7 +175,10 @@ impl Verdict {
         for miss in &sheet.unknown {
             reasons.push(format!("not known -- {miss}"));
         }
-        Self { reasons }
+        Self {
+            level: level(sheet),
+            reasons,
+        }
     }
 }
 
@@ -710,5 +831,147 @@ mod tests {
         assert!(text.contains("not known"));
         assert!(crate::forbidden::check(&text).is_empty());
         assert!(crate::fidelity::check(&text, &empty.authorised()).is_empty());
+    }
+
+    /// A sheet carrying only signals and unknowns, for the level-function
+    /// tests below -- the facts themselves are irrelevant to [`level`].
+    fn sheet_with(signals: Vec<Signal>, unknown: Vec<String>) -> FactSheet {
+        FactSheet {
+            mint: "MintLevel".to_owned(),
+            read_at: None,
+            facts: Vec::new(),
+            untrusted: Vec::new(),
+            unknown,
+            signals,
+        }
+    }
+
+    #[test]
+    fn a_single_signal_never_reaches_rug_mechanics_live() {
+        // Design 0020 §3 rule 4: a single signal never reaches the top two
+        // levels. Each of the eight live-risk signals, alone, must land at
+        // `Sketchy` -- if the `>= 2` in `level` were mutated to `>= 1`, every
+        // one of these would report `RugMechanicsLive` instead.
+        for signal in LIVE_RISK_SIGNALS {
+            let sheet = sheet_with(vec![*signal], Vec::new());
+            assert_eq!(
+                level(&sheet),
+                Level::Sketchy,
+                "{signal:?} alone reached a top-two level"
+            );
+        }
+    }
+
+    #[test]
+    fn two_live_risk_signals_reach_rug_mechanics_live() {
+        // The positive case beside the negative one above: two signals that
+        // are not a `Rugged`-qualifying pair still clear the "two or more"
+        // bar. Catches a `>=` mutated to `>` (which would need three) as well
+        // as one mutated to `==` (which would stop counting past two).
+        let sheet = sheet_with(
+            vec![
+                Signal::CreatorBoughtOwnLaunch,
+                Signal::LaunchBlockInStrongestBand,
+                Signal::HolderConcentration,
+            ],
+            Vec::new(),
+        );
+        assert_eq!(level(&sheet), Level::RugMechanicsLive);
+    }
+
+    #[test]
+    fn a_missing_required_fact_forces_cant_tell_even_with_several_signals() {
+        // Design 0020 §3's `CantTell` rule: any required fact unread wins over
+        // `Sketchy` and over `RugMechanicsLive`, as long as no `Rugged`-qualifying
+        // pair was also observed (the precedence case is its own test below).
+        // If the `!sheet.unknown.is_empty()` check were dropped, this would
+        // report `RugMechanicsLive` from the three signals instead.
+        let sheet = sheet_with(
+            vec![
+                Signal::CreatorBoughtOwnLaunch,
+                Signal::LaunchBlockInStrongestBand,
+                Signal::RepeatLauncher,
+            ],
+            vec!["the bonding curve could not be read".to_owned()],
+        );
+        assert_eq!(level(&sheet), Level::CantTell);
+    }
+
+    #[test]
+    fn an_observed_rugged_pair_beats_an_unrelated_missing_fact() {
+        // Design 0020 §3's precedence section, named explicitly: an observed
+        // `Rugged`-qualifying pair is built entirely from optional facts, so
+        // a sheet that saw the rug but also failed to read something
+        // unrelated must still report `Rugged`, not `CantTell` -- downgrading
+        // an observed rug to a shrug because of an unrelated missing
+        // timestamp is the worse failure. If the `Rugged` check ran after the
+        // `unknown` check instead of before it, this would report `CantTell`.
+        let sheet = sheet_with(
+            vec![Signal::CreatorSoldOut, Signal::BuyersCannotSell],
+            vec!["the launch block could not be read".to_owned()],
+        );
+        assert_eq!(level(&sheet), Level::Rugged);
+    }
+
+    #[test]
+    fn each_rugged_pair_requires_both_members_not_either_alone() {
+        // §3: "or `CreatorSoldOut` together with `BuyersCannotSell`" -- one of
+        // the pair, alone, must not reach `Rugged`. Catches `&&` mutated to
+        // `||` in either half of the `rugged` check.
+        for lone in [Signal::LiquidityGone, Signal::HolderConcentration] {
+            assert_ne!(level(&sheet_with(vec![lone], Vec::new())), Level::Rugged);
+        }
+        for lone in [Signal::CreatorSoldOut, Signal::BuyersCannotSell] {
+            assert_ne!(level(&sheet_with(vec![lone], Vec::new())), Level::Rugged);
+        }
+        assert_eq!(
+            level(&sheet_with(
+                vec![Signal::LiquidityGone, Signal::HolderConcentration],
+                Vec::new()
+            )),
+            Level::Rugged
+        );
+    }
+
+    #[test]
+    fn nothing_ugly_yet_is_unreachable_when_anything_is_unknown() {
+        // ADR 0027 consequence 4: a blind spot must never read as an
+        // endorsement. Sweeping every unknown-nonempty case here rather than
+        // asserting one: if the `unknown` check were ever skipped for some
+        // shape of sheet, this is where it would show up first.
+        for unknown in [
+            vec!["the launch block could not be read".to_owned()],
+            vec!["the bonding curve could not be read".to_owned()],
+            vec![
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+                "d".to_owned(),
+            ],
+        ] {
+            assert_ne!(
+                level(&sheet_with(Vec::new(), unknown)),
+                Level::NothingUglyYet
+            );
+        }
+    }
+
+    #[test]
+    fn no_signal_and_nothing_unknown_is_nothing_ugly_yet() {
+        // The floor of the ladder, and the only way to reach it: every
+        // required fact read, no signal fired.
+        assert_eq!(
+            level(&sheet_with(Vec::new(), Vec::new())),
+            Level::NothingUglyYet
+        );
+    }
+
+    #[test]
+    fn cant_tell_is_not_equal_to_nothing_ugly_yet() {
+        // The comment on `Level` names the risk; this is the check that would
+        // catch a future edit that gave the two variants the same
+        // discriminant or merged them by accident -- `PartialEq` must treat
+        // them as different, always.
+        assert_ne!(Level::CantTell, Level::NothingUglyYet);
     }
 }
