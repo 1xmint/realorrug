@@ -6,6 +6,7 @@
 //! an operator's working material and stay on the box, so nothing here serves
 //! them.
 
+pub mod check;
 pub mod public;
 
 use axum::routing::get;
@@ -14,8 +15,12 @@ use serde_json::{Value, json};
 
 /// Builds the router.
 ///
-/// Every route is public and read-only, so there is no audience table to keep
-/// in step with it. Anything unrouted is a 404, including other methods.
+/// Every route but one is public, read-only and stateless, so there is no
+/// audience table to keep in step with it. `/v1/check/{address}` is the
+/// exception -- design 0023's checker route, in `check.rs`, which needs its
+/// own shared state (the cache, the rate limiter, the daily budget) and is
+/// merged in rather than added to this router's own state-free routes.
+/// Anything unrouted is a 404, including other methods.
 pub fn app() -> Router {
     Router::new()
         .route("/health", get(health))
@@ -24,6 +29,7 @@ pub fn app() -> Router {
         .route("/v1/public/pool", get(public::pool))
         .route("/v1/public/weeks", get(public::weeks))
         .route("/v1/public/hunters", get(public::hunters))
+        .merge(check::router())
 }
 
 /// `GET /health`: the version and the commit, so "is the running process the
@@ -80,6 +86,15 @@ mod tests {
             let (_, body) = get(path).await;
             assert!(body.starts_with('{'), "{path} is not routed: {body:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_checker_route_is_routed() {
+        // With no RPC configured and no daily budget, this is a cold miss
+        // answered `budget` -- still routed JSON, not a 404, which is what
+        // this test actually pins (`check.rs`'s own tests cover the states).
+        let (_, body) = get("/v1/check/So11111111111111111111111111111111111111112").await;
+        assert!(body.starts_with('{'), "/v1/check is not routed: {body:?}");
     }
 
     #[tokio::test]

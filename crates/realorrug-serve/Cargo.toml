@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "sync"] }
 # The reply log's type, the contest ledger, and the base-rate and population
 # files the documents are built from. Read-only: this server runs neither the
 # analyst nor the payout, it shows what they wrote.
@@ -22,6 +22,11 @@ realorrug-contest.workspace = true
 realorrug-roast.workspace = true
 realorrug-types.workspace = true
 serde_json.workspace = true
+# design 0023's checker route (`check.rs`) only: a live, budget-metered
+# Robinhood Chain or Solana read for an address nobody has asked about
+# before. Neither reaches `realorrug-payout`; `repo-conformance` holds that.
+realorrug-onchain.workspace = true
+realorrug-robinhood.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
