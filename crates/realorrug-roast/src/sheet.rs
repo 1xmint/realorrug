@@ -606,7 +606,13 @@ fn push_launch(facts: &mut Vec<Fact>, untrusted: &mut Vec<(String, String)>, lau
             // `LaunchBlock` is Solana-shaped only (`realorrug-onchain`'s doc
             // comment on the type), so this figure is always lamports -- SOL,
             // 9 decimals, is not an assumption here the way it was for the
-            // curve's quote amount, it is simply what this field is.
+            // curve's quote amount, it is simply what this field is. What
+            // would stop this being safe: the day `LaunchBlock` (or whatever
+            // reads a Robinhood launch block) grows a non-Solana variant, this
+            // stops being "simply what the field is" and becomes exactly the
+            // guess `quote_asset` above exists to avoid -- at that point this
+            // arm needs its own `quote_asset`-shaped unit, not a second
+            // hard-coded string.
             let sol = format!("{} SOL", render_quote(u128::from(l), 9));
             facts.push(
                 Fact::exact(
@@ -1079,7 +1085,11 @@ fn push_base_rates(facts: &mut Vec<Fact>, rates: &BaseRates) {
     );
 }
 
-fn push_curve(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, curve: &realorrug_onchain::CurveFacts) {
+fn push_curve(
+    facts: &mut Vec<Fact>,
+    unknown: &mut Vec<String>,
+    curve: &realorrug_onchain::CurveFacts,
+) {
     facts.push(
         Fact {
             about: About::Measurement,
@@ -1840,6 +1850,40 @@ mod tests {
         });
         let rendered = FactSheet::build(&sol, None, None, None).render();
         assert!(rendered.contains("0.3030 SOL"), "{rendered}");
+    }
+
+    #[test]
+    fn a_solana_curve_renders_byte_for_byte() {
+        // Both chains now render through one function (`push_curve` /
+        // `render_quote`), and `.contains` checks elsewhere would stay green
+        // through a regression that only shifted or reworded the Solana
+        // output. This pins the exact two lines the shared path produces for
+        // a Solana curve, so any change to that path -- intentional or not --
+        // has to touch this assertion.
+        let mut facts = Vec::new();
+        let mut unknown = Vec::new();
+        let curve = realorrug_onchain::CurveFacts {
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
+            complete: false,
+            quote_reserves: 6_186_150_833,
+            quote_capacity: Some(303_000_000),
+            quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
+            fees: None,
+        };
+        push_curve(&mut facts, &mut unknown, &curve);
+        let mut rendered = String::new();
+        for fact in &facts {
+            let _ = writeln!(rendered, "{}: {}", fact.label, fact.rendered);
+        }
+        assert_eq!(
+            rendered,
+            "has the token graduated off the bonding curve: no\n\
+             quote asset that can be bought before price moves 1% -- this is RADAR'S OWN \
+             impact budget, NOT a ceiling the venue imposes (research 0022): 0.3030 SOL\n"
+        );
+        assert!(unknown.is_empty(), "{unknown:?}");
     }
 
     #[test]
