@@ -538,8 +538,7 @@ pub fn holdings(transfers: &[Transfer]) -> Option<BTreeMap<Address, i128>> {
 pub mod curve {
     use crate::{Address, word, word_u128};
 
-    /// `getReserves()`. Return shape **not established** -- see
-    /// [`Reserves::from_return`].
+    /// `getReserves()`. Return shape confirmed -- see [`Reserves::from_return`].
     pub const GET_RESERVES: [u8; 4] = [0x09, 0x02, 0xf1, 0xac];
     /// `quoteReserve()`, returns `uint`. Preferred over `getReserves()`:
     /// unambiguous, a single word.
@@ -560,10 +559,12 @@ pub mod curve {
     /// `LaunchedToken::graduation_threshold` reads from the factory; this is
     /// the curve's own copy.
     pub const GRADUATION_THRESHOLD: [u8; 4] = [0x8b, 0x0b, 0xc5, 0x01];
-    /// `launchedAt()`, returns `uint`. Unit **not established**: seconds or
-    /// block number. A decode of this word is named `launched_at`, never
-    /// `block` or `timestamp`, until a captured call against a known block
-    /// time settles which it is.
+    /// `launchedAt()`, returns `uint`. **Unit confirmed: Unix seconds.** A
+    /// live read against `0x008089e243a611ace236fc4e2127403a3c9e347b` on
+    /// 2026-09-15 returned `0x6aa709ff` = 1,789,647,871: a plausible 2026
+    /// wall-clock Unix timestamp, and about 28x larger than research 0040's
+    /// captured graduation block (~62.2 million) -- too large to be a block
+    /// number on a chain that had not yet produced that many blocks.
     pub const LAUNCHED_AT: [u8; 4] = [0xbf, 0x56, 0xb3, 0x71];
     /// `launchSupply()`, returns `uint`.
     pub const LAUNCH_SUPPLY: [u8; 4] = [0x3f, 0x7e, 0xd6, 0xb7];
@@ -633,47 +634,40 @@ pub mod curve {
 
     /// `getReserves()`'s return.
     ///
-    /// **Not confirmed against a captured call.** The name matches Uniswap
-    /// V2's `(uint112, uint112, uint32)`, but this is a different contract
-    /// and nothing here confirms that layout. Decoded as a length-checked
-    /// read of three ABI words (96 bytes, the shape a Solidity `(uint112,
-    /// uint112, uint32)` or `(uint256, uint256, uint256)` return both take
-    /// once ABI-encoded): `None` on any other length. Prefer
-    /// [`QUOTE_RESERVE`] and [`TOKEN_RESERVE`] as the primary path -- those
-    /// are unambiguous.
+    /// **Confirmed against a live call, on one contract.** Not Uniswap V2's
+    /// `(uint112, uint112, uint32)`, despite the name match -- a live read
+    /// against the curve `0x008089e243a611ace236fc4e2127403a3c9e347b` on
+    /// 2026-09-15 returned exactly two ABI words (64 bytes):
+    /// `0x17508f1956a80000` then `0x0`, and those two words are exactly what
+    /// [`QUOTE_RESERVE`] and [`TOKEN_RESERVE`] returned on the same call
+    /// (`0x...17508f1956a80000` and `0x...0`). So `getReserves()` is
+    /// `(quote, token)`, not a three-word reserves-plus-timestamp pair, on
+    /// the one contract this was read from. Decoded as a length-checked read
+    /// of exactly two ABI words: `None` on any other length, so a return
+    /// that does not fit this shape is refused, not truncated or padded.
+    ///
+    /// That one capture happened to be a graduated curve (`graduated() ==
+    /// true`), so its `token == 0` is a graduated curve's zero, not evidence
+    /// about what a live, pre-graduation curve returns for `token`.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Reserves {
-        /// The first reserve word, decoded as `u128` (wide enough for a
-        /// `uint112` with room to spare).
-        pub reserve0: u128,
-        /// The second reserve word.
-        pub reserve1: u128,
-        /// The third word, if it fits a `u32` the way Uniswap V2's trailing
-        /// timestamp does. `None` when it does not -- this is not confirmed
-        /// to be a timestamp at all.
-        pub third_word_as_u32: Option<u32>,
+        /// The first word: matched a live `quoteReserve()` call exactly.
+        pub quote: u128,
+        /// The second word: matched a live `tokenReserve()` call exactly.
+        pub token: u128,
     }
 
     impl Reserves {
-        /// The reserves a `getReserves()` return holds, if it is exactly
-        /// three words and the first two fit `u128`. `None` on any other
-        /// length: a return that does not fit the assumed shape is refused,
-        /// not truncated or padded.
+        /// The reserves a `getReserves()` return holds, if it is exactly two
+        /// words and both fit `u128`. `None` on any other length.
         #[must_use]
         pub fn from_return(data: &[u8]) -> Option<Self> {
-            if data.len() != 96 {
+            if data.len() != 64 {
                 return None;
             }
-            let reserve0 = word(data, 0).and_then(word_u128)?;
-            let reserve1 = word(data, 1).and_then(word_u128)?;
-            let third_word_as_u32 = word(data, 2)
-                .and_then(word_u128)
-                .and_then(|v| u32::try_from(v).ok());
-            Some(Self {
-                reserve0,
-                reserve1,
-                third_word_as_u32,
-            })
+            let quote = word(data, 0).and_then(word_u128)?;
+            let token = word(data, 1).and_then(word_u128)?;
+            Some(Self { quote, token })
         }
     }
 }
@@ -778,32 +772,37 @@ mod curve_read_tests {
     }
 
     #[test]
-    fn reserves_from_return_rejects_anything_but_three_words() {
-        assert_eq!(Reserves::from_return(&[0u8; 64]), None, "two words");
-        assert_eq!(Reserves::from_return(&[0u8; 128]), None, "four words");
+    fn reserves_from_return_rejects_anything_but_two_words() {
+        assert_eq!(Reserves::from_return(&[0u8; 32]), None, "one word");
+        assert_eq!(Reserves::from_return(&[0u8; 96]), None, "three words");
         assert_eq!(Reserves::from_return(&[]), None, "empty");
     }
 
     #[test]
-    fn reserves_from_return_decodes_three_words() {
-        let mut data = [0u8; 96];
-        data[31] = 10; // reserve0
-        data[63] = 20; // reserve1
-        data[92..96].copy_from_slice(&300u32.to_be_bytes()); // third word
-        let reserves = Reserves::from_return(&data).expect("three words decode");
-        assert_eq!(reserves.reserve0, 10);
-        assert_eq!(reserves.reserve1, 20);
-        assert_eq!(reserves.third_word_as_u32, Some(300));
+    fn reserves_from_return_decodes_two_words() {
+        let mut data = [0u8; 64];
+        data[31] = 10; // quote
+        data[63] = 20; // token
+        let reserves = Reserves::from_return(&data).expect("two words decode");
+        assert_eq!(reserves.quote, 10);
+        assert_eq!(reserves.token, 20);
     }
 
+    /// The live capture from the coordinator's confirming read against
+    /// `0x008089e243a611ace236fc4e2127403a3c9e347b`, 2026-09-15: a graduated
+    /// curve, `getReserves()` returning exactly what `quoteReserve()` and
+    /// `tokenReserve()` returned on the same call (`0x...17508f1956a80000`
+    /// and `0x...0` respectively). `token == 0` here is that graduated
+    /// curve's zero, not a claim about a live curve's token reserve.
     #[test]
-    fn reserves_from_return_leaves_the_third_word_none_when_it_does_not_fit_u32() {
-        let mut data = [0u8; 96];
-        data[31] = 10;
-        data[63] = 20;
-        data[64] = 1; // a high byte in the third word: too big for u32
-        let reserves = Reserves::from_return(&data).expect("first two words still decode");
-        assert_eq!(reserves.third_word_as_u32, None);
+    fn reserves_from_return_matches_the_live_capture() {
+        let data = crate::hex_bytes(
+            "0x00000000000000000000000000000000000000000000000017508f1956a800000000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("valid hex");
+        let reserves = Reserves::from_return(&data).expect("the live capture decodes");
+        assert_eq!(reserves.quote, 1_680_000_000_000_000_000);
+        assert_eq!(reserves.token, 0);
     }
 
     fn log(address: Address, topics: Vec<Hash32>, data: Vec<u8>) -> Log {
