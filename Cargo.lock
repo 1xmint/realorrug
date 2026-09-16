@@ -1080,6 +1080,7 @@ dependencies = [
  "realorrug-onchain",
  "realorrug-provider",
  "realorrug-roast",
+ "realorrug-robinhood",
  "realorrug-types",
  "serde",
  "serde_json",
