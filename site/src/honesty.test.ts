@@ -7,118 +7,17 @@
 
 import { describe, expect, it } from "vitest";
 
-import fixture from "./fixtures/stats.json";
 import {
-  bps,
-  cost,
   count,
-  graduated,
   measuredAgo,
   handleHref,
   mintShaped,
-  mostCoordinated,
-  pct,
   safeHref,
-  share,
   solscanAccount,
   solscanTx,
   summonIntent,
   userHref,
-  type Stats,
 } from "./honesty";
-
-const stats = fixture as unknown as Stats;
-
-describe("share", () => {
-  it("divides by what was measured, never by what was launched", () => {
-    // The gap between the two is Cabal Hunter's own outcome backlog. Dividing
-    // by `launches` folds that lag into a claim about pump.fun and understates
-    // every rate by the size of the queue.
-    //
-    // Half the population unmeasured here, so the wrong denominator halves
-    // every figure -- a 50% rate published as 25%.
-    expect(share(50, 100)).toBeCloseTo(0.5, 12);
-    expect(share(30, 100)).toBeCloseTo(0.3, 12);
-  });
-
-  it("refuses rather than returning zero when nothing was measured", () => {
-    // Rule 9. `0` here is "nothing on this venue ever graduates", which is both
-    // false and the direction that sounds authoritative.
-    expect(share(0, 0)).toBeNull();
-    expect(share(5, 0)).toBeNull();
-    expect(share(1, -1)).toBeNull();
-  });
-});
-
-describe("the figures the landing page leads with", () => {
-  it("matches what was measured on the box", () => {
-    // Checked against the creator index on the production box at slot
-    // 444,637,451, built 2026-09-05T22:55:16Z: 527,490 measured, 9,431 organic,
-    // 5,708 instant, 119,318 stillborn.
-    //
-    // This is the test that would have caught the reply bug shipped on
-    // 2026-09-04: a figure looked up by the wrong key published a cost 6.7x the
-    // real one, and only running it against production data found it.
-    //
-    // It earned its keep again on the refresh above. The strings below were
-    // predicted before the fixture moved and one of them was predicted wrong --
-    // 1.79% was read as the *instant* share, which is 1.08%, and it is the
-    // organic one. The prediction was discarded and these three are what the
-    // code prints. That is the whole arrangement: nobody's arithmetic gets to
-    // decide what this page says.
-    expect(pct(graduated(stats.watched))).toBe("2.87%");
-    expect(pct(share(stats.watched.stillborn, stats.watched.measured))).toBe(
-      "22.6%",
-    );
-    // 9,431 of 527,490 is 1.787902%.
-    expect(pct(share(stats.watched.organic, stats.watched.measured))).toBe(
-      "1.79%",
-    );
-  });
-
-  it("names the band furthest above the base rate rather than assuming one", () => {
-    // The headline claim rests on this row. Hard-coding it would leave the
-    // sentence stating last month's winner beside this month's date.
-    const top = mostCoordinated(stats.bands.rows);
-    expect(top?.name).toBe("ten to thirteen");
-    expect(top?.x_base_instant).toBe(10.1);
-  });
-
-  it("has no band at all to name when there are none", () => {
-    expect(mostCoordinated([])).toBeNull();
-  });
-
-  it("keeps the aftermath figure negative, because that is the point", () => {
-    // Graduating is not winning. Research 0011: organic graduations end at a
-    // median of -3,228 bps. A site that lost this sign would be arguing the
-    // opposite of what the data says.
-    expect(stats.aftermath.organic_median_bps).toBeLessThan(0);
-    expect(bps(stats.aftermath.organic_median_bps)).toBe("-32.3%");
-  });
-});
-
-describe("pct", () => {
-  it("keeps the precision the measurement supports and no more", () => {
-    // 2.81% rounded to 3% loses its meaning; 23.00% claims a precision the
-    // sample does not carry.
-    expect(pct(0.0281)).toBe("2.81%");
-    expect(pct(0.23)).toBe("23.0%");
-    expect(pct(0.0002)).toBe("0.02%");
-  });
-
-  it("renders a missing measurement as words, never as a number", () => {
-    expect(pct(null)).toBe("not measured");
-  });
-});
-
-describe("bps", () => {
-  it("leaves zero unsigned", () => {
-    // `+0.0%` reads as a gain that rounded away.
-    expect(bps(0)).toBe("0.0%");
-    expect(bps(456)).toBe("+4.6%");
-    expect(bps(-3228)).toBe("-32.3%");
-  });
-});
 
 describe("measuredAgo", () => {
   const now = new Date("2026-09-05T00:00:00Z");
@@ -141,21 +40,6 @@ describe("measuredAgo", () => {
 describe("count", () => {
   it("separates thousands, because 508814 is unreadable", () => {
     expect(count(508814)).toMatch(/508.814/);
-  });
-});
-
-describe("cost", () => {
-  it("never signs a charge as though it were a gain", () => {
-    // Shipped as `+4.6%` on the landing page and caught by looking at the page
-    // rather than by a test. A round trip is money that leaves whichever way
-    // the trade goes; `bps` signs returns, where the sign carries meaning.
-    //
-    // It is the flattering direction, on the one figure the page uses to warn
-    // people with.
-    expect(cost(456)).toBe("4.6%");
-    expect(cost(456)).not.toContain("+");
-    // And a cost handed in already negative is still a cost, not a gain.
-    expect(cost(-456)).toBe("4.6%");
   });
 });
 

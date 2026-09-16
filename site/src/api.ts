@@ -1,37 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Reading the three public documents, and what happens when they are absent.
+//! Reading the public documents, and what happens when they are absent.
 //!
-//! # The fallback is a real answer, not a placeholder
+//! # A failed fetch degrades to the honest empty state, never to invented data
 //!
-//! Every figure this site shows arrives with the moment it was measured, and
-//! the committed fixture is a measurement too — taken on 2026-09-04 and dated
-//! as such. So a failed fetch degrades to *older but true*, never to blank and
-//! never to invented.
-//!
-//! That is the opposite of the usual pattern, where a fetch failure shows a
-//! spinner forever or a zero. Both of those have shipped in this repository and
-//! both are recorded: `Analyst.tsx` sat on "reading…" because an empty error
-//! string is falsy, and rule 9 exists because a missing figure rendered as zero
-//! is the default that loses money.
-
-import fixture from "./fixtures/stats.json";
-import type { Stats } from "./honesty";
+//! There is no committed fixture behind these calls (there was, for the
+//! Solana/pump.fun population figures `Home.tsx` no longer shows — see that
+//! file's module comment). Every function here either returns a live read or
+//! the same empty shape its caller renders as "nothing to show yet", and the
+//! page says which. That is the opposite of the usual pattern, where a fetch
+//! failure shows a spinner forever or a zero. Both of those have shipped in
+//! this repository and both are recorded: `Analyst.tsx` sat on "reading…"
+//! because an empty error string is falsy, and rule 9 exists because a
+//! missing figure rendered as zero is the default that loses money.
 
 /** Where the endpoints live. Same origin in the dev proxy; absolute in production. */
 const BASE = import.meta.env["VITE_API_BASE"] ?? "";
 
 /** How long to wait before falling back. */
 const TIMEOUT_MS = 4000;
-
-/** The committed measurement, used when the live one cannot be had. */
-export const FALLBACK = fixture as unknown as Stats;
-
-/** Where a figure on the page came from. */
-export interface Sourced<T> {
-  readonly value: T;
-  /** `true` when this is the committed fixture rather than a live read. */
-  readonly stale: boolean;
-}
 
 /**
  * One week's leaderboard.
@@ -282,22 +268,14 @@ async function get<T>(path: string): Promise<T | null> {
     // rejects a pending `json()` as well as a pending `fetch`.
     return (await response.json()) as T;
   } catch {
-    // Deliberately swallowed. Every caller has a truthful answer without this
-    // request, and a public page must not render a stack trace at a stranger.
-    // The distinction that matters -- live or committed -- is carried in
-    // `Sourced.stale` and shown.
+    // Deliberately swallowed. Every caller has a truthful empty shape without
+    // this request, and a public page must not render a stack trace at a
+    // stranger; each caller below renders that shape as "nothing to show yet"
+    // rather than as an error.
     return null;
   } finally {
     clearTimeout(timer);
   }
-}
-
-/** The population figures, live if possible and committed otherwise. */
-export async function stats(): Promise<Sourced<Stats>> {
-  const live = await get<Stats>("/v1/public/stats");
-  return live
-    ? { value: live, stale: false }
-    : { value: FALLBACK, stale: true };
 }
 
 /**

@@ -1,66 +1,44 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The whole argument, on one page, in six acts.
+//! The whole argument, on one page.
 //!
-//! # The order is the argument, and now it is numbered
+//! # Robinhood Chain, not Solana — and no borrowed numbers
 //!
-//! 01. Coordination is visible before you buy, and here is the picture of it.
-//! 02. This is how much has been watched, so the number means something.
-//! 03. Here is what it costs you to be wrong — including the part nobody says,
-//!     which is that graduating is not winning.
-//! 04. Here is how to ask it about a coin, and here is what it answers.
-//! 05. Here is what it will never say.
-//! 06. Here is the contest and the token.
+//! This page used to lead with Solana/pump.fun base-rate measurements
+//! (`fixtures/stats.json`, `docs/research/data/0024-base-rates.json`): a
+//! launch-block recipient distribution, a graduation rate, a round-trip cost.
+//! Every one of those figures is still true about Solana. None of them is
+//! true about this product any more, which moved to Robinhood Chain (design
+//! 0025 §0, ADR — see `docs/research/0038` through `0040`). A number that is
+//! true about the wrong chain is not a smaller claim than a wrong number; it
+//! is the same failure `honesty.ts` exists to catch, just imported from
+//! somewhere else. So it comes off, in full, rather than staying up relabeled.
 //!
-//! Act 03 is the one a growth-minded version of this page would cut. It is the
-//! reason to trust the rest of it. Act 05 is the second one it would cut.
+//! What replaces it is design 0025 §4a's layout: the paste box (unchanged —
+//! it already reads whatever chain the server tells it to), the product's own
+//! token address (deny-by-default, see `TokenAddress.tsx`), a contest teaser
+//! built from the same `leaderboard()` the `/contest` page uses, and a short
+//! link to `/how-it-works` rather than a restatement of it.
 //!
-//! The acts are numbered on the page because the order *is* the content: a
-//! reader who scrolls past 03 knows they skipped something, which a stack of
-//! undifferentiated sections cannot tell them.
+//! # The live feed is not here, and the gap is the point
+//!
+//! Design 0025 §4a item 5 calls for a short list of recently checked tokens.
+//! No route returns that list today — `/v1/public/stats`, `/leaderboard`,
+//! `/pool` and `/weeks` hold none of it, and `check()` in `api.ts` reads one
+//! address at a time, on demand, never a history. A fake or hard-coded list
+//! here would be exactly the LEARNINGS-5 failure the rest of this site works
+//! to avoid: a section that looks like it ran when nothing did. So there is
+//! no live-feed section below. It comes back once `realorrug-serve` ships the
+//! recency-sorted read design 0025 §4a names as a requirement on that crate.
 
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 
-import { FALLBACK, stats as fetchStats, type Sourced } from "./api";
-import {
-  account,
-  bps,
-  cost,
-  count,
-  graduated,
-  handleHref,
-  measuredAgo,
-  mostCoordinated,
-  pct,
-  share,
-  type Band,
-  type Stats,
-} from "./honesty";
-import {
-  Card,
-  Cta,
-  Figure,
-  Heading,
-  LaunchBlock,
-  Measured,
-  Receipt,
-  Section,
-  CheckBox,
-  Summon,
-} from "./ui";
+import { leaderboard as fetchLeaderboard, type Leaderboard as Data } from "./api";
+import { count } from "./honesty";
+import { TokenAddress } from "./TokenAddress";
+import { Card, Heading, Nothing, Section, CheckBox, Summoner } from "./ui";
 
-/** A real reply, produced by `radar roast` against a live mint on 2026-09-04. */
-const A_REAL_REPLY = `Radar on HWvHqvfFVQdLZ1K3kMygpvhivVZEcrzVShgJFgtXpump:
-- tokens this creator has launched: 93
-- of those, how many ever filled their curve over time: 0
-- token accounts in the launch block (accounts, not people): 3
-- across every launch Radar has measured, how many graduated at all: 2.8%
-- and how many showed almost no activity at all: 23.0%
-Entering and leaving a $20-$200 position: 456 bps (4.6%).
-Read at slot 444390507.
-Measured, not predicted. Not financial advice.`;
-
-/** The small label that numbers an act. */
+/** The small label that numbers an act, in the same idiom the rest of the site uses. */
 function Act({ n, children }: { n: string; children: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-baseline gap-3">
@@ -74,371 +52,135 @@ function Act({ n, children }: { n: string; children: React.ReactNode }) {
   );
 }
 
-/**
- * One band, drawn.
- *
- * The count is in the caption and the squares are `aria-hidden`, so this is a
- * picture for readers who have one and a sentence for readers who do not.
- */
-function BandGlyph({
-  band,
-  tone,
-  caption,
-}: {
-  band: Band;
-  tone: "quiet" | "signal";
-  caption: string;
-}) {
-  return (
-    <div>
-      <LaunchBlock n={band.hi} tone={tone} />
-      <p className="mt-3 text-sm text-[var(--color-text)]">
-        {band.lo}–{band.hi} recipients
-      </p>
-      <p className="mt-1 text-sm text-[var(--color-dim)]">{caption}</p>
-    </div>
-  );
-}
-
-function Hero({ s }: { s: Stats }) {
-  const top = mostCoordinated(s.bands.rows);
-  const quiet = s.bands.rows.find((r) => r.lo === 1);
-
+function Hero() {
   return (
     <Section className="pt-16 pb-8 sm:pt-24">
       <div className="enter">
         <div className="mb-5">
-          <Act n="01">Robinhood Chain · measured since August</Act>
+          <Act n="01">Robinhood Chain · checked, not predicted</Act>
         </div>
-        {/* This read "Most launches are coordinated" until 2026-09-07, with
-            the measurement contradicting it in the card immediately below:
-            70.5% of launches pay one to three recipients, and 0.02% of those
-            are bought out instantly. So the most-read sentence on the property
-            was a verdict, it was the wrong verdict, and the rule this whole
-            product runs on is to publish the measurement and never the
-            verdict — the same rule `radar-roast::forbidden` enforces on every
-            reply the account posts.
-
-            What replaces it is a claim the card underneath can be read as
-            evidence for, rather than one it refutes. */}
+        {/* No "measured since <date>" here. The wireframe (docs/design/0025
+            §"ASCII wireframes") shows one, but nothing in docs/research/0038,
+            0039 or 0040 establishes a date this product started measuring
+            Robinhood Chain -- those documents date the *chain's* factory
+            deployment (2026-08-03) and this session's own read times, not a
+            start date for Real or Rug's coverage of it. Printing one anyway
+            would be exactly the invented figure `honesty.ts` exists to
+            refuse (AGENTS.md rule 8: absent is not zero). */}
         <h1 className="display max-w-3xl text-[length:var(--text-display)] leading-[1.03] font-semibold text-balance">
-          Coordination is visible in the launch block.{" "}
-          <span className="text-[var(--color-signal)]">
-            Before you buy.
-          </span>
+          Check a token{" "}
+          <span className="text-[var(--color-signal)]">before you buy.</span>
         </h1>
         <p className="mt-6 max-w-2xl text-[length:var(--text-lead)] text-[var(--color-dim)]">
-          When capital is committed to a token <em>before</em> it exists, the
-          evidence is sitting in the launch block — the very first block of the
-          coin's life. Real or Rug has been reading every one of them. Most
-          launches show nothing; the ones that do are the point.
+          Paste a Robinhood Chain contract address and Real or Rug reads the
+          chain right then — the launch, the creator&apos;s history, what
+          actually happened — and hands back what it found. Not a prediction,
+          not advice: what the chain shows.
         </p>
         <CheckBox />
-
-        {/* The claim above is only worth as much as the number under it, so the
-            number is immediately under it, it is found in the data rather than
-            written into this sentence, and now it is also drawn: two rows of
-            squares are a claim a reader can check before reading a figure. */}
-        {top && quiet ? (
-          <Card className="mt-10 max-w-2xl">
-            <div className="grid gap-8 sm:grid-cols-2">
-              <BandGlyph
-                band={quiet}
-                tone="quiet"
-                caption={`${pct(quiet.share_of_launches)} of launches. ${pct(
-                  quiet.p_instant,
-                )} bought out instantly.`}
-              />
-              <BandGlyph
-                band={top}
-                tone="signal"
-                caption={`${pct(top.share_of_launches)} of launches. ${pct(
-                  top.p_instant,
-                )} bought out instantly.`}
-              />
-            </div>
-            <p className="mt-6 border-t border-[var(--color-line)] pt-5 text-[var(--color-text)]">
-              A launch block paying{" "}
-              <strong className="text-[var(--color-signal)]">
-                {top.lo}–{top.hi} recipients
-              </strong>{" "}
-              is{" "}
-              <strong className="tnum text-[var(--color-signal)]">
-                {top.x_base_instant.toFixed(1)}×
-              </strong>{" "}
-              likelier to have its curve bought out instantly than the average
-              launch.
-            </p>
-            <p className="mt-4 text-xs text-[var(--color-faint)]">
-              Over {count(s.bands.launches)} launches, measured{" "}
-              {s.bands.measured_on}. A smaller and older sample than the figures
-              below, and it is the weaker of the two measurements here.
-            </p>
-          </Card>
-        ) : (
-          <Card className="mt-10 max-w-2xl border-dashed">
-            <p className="text-[var(--color-dim)]">
-              The recipient distribution has not been measured, so this claim
-              cannot be made.
-            </p>
-          </Card>
-        )}
-      </div>
-    </Section>
-  );
-}
-
-function Watched({ s, stale }: { s: Stats; stale: boolean }) {
-  const w = s.watched;
-  return (
-    <Section id="watched">
-      <Act n="02">What has been watched</Act>
-      <Heading>Every launch, and what became of it</Heading>
-      <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
-        <Figure
-          value={count(w.launches)}
-          label="launches recorded"
-          note={`${count(w.creators)} distinct creators`}
-        />
-        <Figure
-          value={pct(graduated(w))}
-          label="ever graduate"
-          note={`of ${count(w.measured)} measured`}
-          tone="signal"
-        />
-        <Figure
-          value={pct(share(w.stillborn, w.measured))}
-          label="show almost no activity at all"
-          note="five or fewer transfers, then nothing"
-          tone="signal"
-        />
-        <Figure
-          value={pct(share(w.instant, w.measured))}
-          label="filled inside their own launch block"
-          note="bought by capital committed before the coin existed"
-        />
-      </div>
-      <Measured
-        ago={measuredAgo(s.measured_at)}
-        at={`slot ${count(s.watermark_slot)}`}
-      />
-      {stale && (
-        <p className="mt-2 text-xs text-[var(--color-faint)]">
-          Showing the last published measurement — the live figures could not be
-          reached just now.
-        </p>
-      )}
-    </Section>
-  );
-}
-
-function Cost({ s }: { s: Stats }) {
-  return (
-    <Section id="cost">
-      <Act n="03">What it costs to be wrong</Act>
-      <Heading>And graduating is not winning</Heading>
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <div className="tnum text-3xl font-semibold text-[var(--color-text)]">
-            {/* `cost`, not `bps`. This is a charge, not a return, and `bps`
-                would sign it `+4.6%` -- a fee rendered as a gain. */}
-            {cost(s.cost.round_trip_bps)}
-          </div>
-          <p className="mt-3 text-sm text-[var(--color-dim)]">
-            The measured round trip on a {s.cost.band} position: what entering
-            and leaving costs you before the price moves at all.
-          </p>
-        </Card>
-        <Card>
-          <div className="tnum text-3xl font-semibold text-[var(--color-signal)]">
-            {bps(s.aftermath.organic_median_bps)}
-          </div>
-          <p className="mt-3 text-sm text-[var(--color-dim)]">
-            Where tokens that graduated <em>the honest way</em> — filling their
-            curve over time — ended up, at the median.
-          </p>
-        </Card>
-      </div>
-      <p className="mt-8 max-w-2xl text-[var(--color-dim)]">
-        This is the part a page trying to sell you something would leave out.
-        Graduation is the event everybody celebrates, and the median graduated
-        token still ends deep underwater. Real or Rug will tell you a coin looks
-        clean. It will never tell you a coin will go up, because nothing measured
-        here supports that sentence.
-      </p>
-    </Section>
-  );
-}
-
-function Ask({ handle }: { handle: string | null }) {
-  return (
-    <Section id="ask">
-      <Act n="04">How to use it</Act>
-      <Heading>Reply to it with a coin</Heading>
-      <div className="grid items-start gap-8 lg:grid-cols-2">
-        <div>
-          <p className="text-[var(--color-dim)]">
-            Mention the account with a mint address or a{" "}
-            <code className="rounded bg-[var(--color-raised)] px-1.5 py-0.5 font-mono text-sm text-[var(--color-text)]">
-              $TICKER
-            </code>
-            . It reads the chain right then — the launch block, the curve, the
-            creator's whole history — and answers in the thread.
-          </p>
-          <p className="mt-4 text-[var(--color-dim)]">
-            It never picks a coin to post about. Every coin it names, somebody
-            asked it about — and it does not decide what you should do.
-          </p>
-          <div className="mt-6">
-            <Summon handle={handle} />
-          </div>
-        </div>
-        <div>
-          <Receipt>{A_REAL_REPLY}</Receipt>
-          <p className="mt-4 text-xs text-[var(--color-faint)]">
-            Ninety-three launches by one creator, and not one of them ever filled
-            its curve. Against a base rate of 2.8%.
-          </p>
-        </div>
+        <TokenAddress />
       </div>
     </Section>
   );
 }
 
 /**
- * What the bot refuses to say, in words rather than as a list of rule names.
+ * This week's top three, or the honest sentence that no week has closed.
  *
- * The refusals are the product's spine and they are invisible in a reply that
- * simply does not contain them, so they are stated once, here, where a reader
- * deciding whether to trust the account can see the shape of what it will not
- * do. Each line is a group the Rust side enforces; none of them is softened.
+ * Worded to match `Leaderboard.tsx`'s own empty state on purpose — a reader
+ * who follows "See full contest →" should not land on a page that contradicts
+ * what this one just told them.
  */
-function NeverSays() {
-  return (
-    <Section id="never">
-      <Act n="05">What it will never say</Act>
-      <Heading>The refusals are the product</Heading>
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <p className="font-medium text-[var(--color-text)]">
-            That a coin will go up
-          </p>
-          <p className="mt-2 text-sm text-[var(--color-dim)]">
-            No price target, no prediction, no "this one is going to run".
-            Nothing it measures supports a sentence about the future.
-          </p>
-        </Card>
-        <Card>
-          <p className="font-medium text-[var(--color-text)]">
-            That you should buy, sell or hold
-          </p>
-          <p className="mt-2 text-sm text-[var(--color-dim)]">
-            It does not give advice, and a clean reading is a reason to keep
-            reading rather than a reason to buy.
-          </p>
-        </Card>
-        <Card>
-          <p className="font-medium text-[var(--color-text)]">
-            That a coin is safe
-          </p>
-          <p className="mt-2 text-sm text-[var(--color-dim)]">
-            No verdict, no score, no "legit". It reports what it read and lets
-            the numbers say it. A quiet launch block is not a promise.
-          </p>
-        </Card>
-      </div>
-      <p className="mt-8 max-w-2xl text-[var(--color-dim)]">
-        These are enforced in code, on every reply, before it is sent — not a
-        tone of voice it tries to keep. A reply that would break one of them is
-        not softened, it is refused, and the account says nothing instead.
-      </p>
-      <p className="mt-4">
-        <Link
-          href="/about"
-          className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
-        >
-          How it reads a coin, and who runs it →
-        </Link>
-      </p>
-    </Section>
-  );
-}
-
-function Contest({ handle }: { handle: string | null }) {
-  return (
-    <Section id="contest">
-      <Act n="06">The contest</Act>
-      <Heading>The best question each week wins the pool</Heading>
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <p className="text-[var(--color-text)]">
-            Every coin you ask it about is an entry. The week closes Monday at
-            00:00 UTC, the account posts what it found, and the winner claims by
-            replying with a wallet address.
-          </p>
-          <p className="mt-4">
-            <Link
-              href="/contest"
-              className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
-            >
-              The rule, the leaderboard and how to claim →
-            </Link>
-          </p>
-        </Card>
-        <Card>
-          <p className="text-[var(--color-text)]">
-            The prize is the token's entire creator fee. The operator holds none
-            of it, takes none of it, and the bot will never tell you its price.
-          </p>
-          <p className="mt-4">
-            <Link
-              href="/tokenomics"
-              className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
-            >
-              What the token is, and the six rules →
-            </Link>
-          </p>
-        </Card>
-      </div>
-      {handle !== null && (
-        <div className="mt-10">
-          <Cta href={handleHref(handle)}>Follow @{handle} on X →</Cta>
-        </div>
-      )}
-    </Section>
-  );
-}
-
-export function Home() {
-  // Starts on the committed measurement so the page has content on the first
-  // paint, then upgrades if the live document can be reached. There is no
-  // loading state because there is nothing to wait for -- a spinner over a page
-  // that already has true content would be a page pretending not to.
-  const [s, setStats] = useState<Sourced<Stats>>({
-    value: FALLBACK,
-    stale: true,
-  });
+function ContestTeaser() {
+  const [data, setData] = useState<Data | null>(null);
 
   useEffect(() => {
     let live = true;
-    void fetchStats().then((next) => {
-      if (live) setStats(next);
+    void fetchLeaderboard().then((next) => {
+      if (live) setData(next);
     });
     return () => {
       live = false;
     };
   }, []);
 
-  const handle = account();
+  const top3 = data?.entries.slice(0, 3) ?? [];
 
   return (
+    <Section id="contest">
+      <Act n="02">The contest</Act>
+      <Heading>This week&apos;s top three</Heading>
+      {data === null ? null : top3.length === 0 ? (
+        <Nothing
+          what="No week has run yet."
+          why="The account is live and answering, and no week has closed yet. When one does, the best question of the week wins the whole prize pool."
+        />
+      ) : (
+        <Card className="max-w-2xl">
+          <ol className="space-y-3">
+            {top3.map((e) => (
+              <li
+                key={`${e.rank}-${e.summoner}`}
+                className="flex items-center justify-between gap-4 text-sm"
+              >
+                <span className="flex items-center gap-3">
+                  <span className="tnum text-[var(--color-faint)]">
+                    {e.rank}
+                  </span>
+                  <Summoner id={e.summoner} handle={e.handle} />
+                </span>
+                <span className="tnum text-[var(--color-dim)]">
+                  {e.score === null ? "—" : `${count(e.score)} pts`}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </Card>
+      )}
+      <p className="mt-6">
+        <Link
+          href="/contest"
+          className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
+        >
+          See full contest →
+        </Link>
+      </p>
+    </Section>
+  );
+}
+
+/** What it will never do, in one paragraph, with the page that says the rest. */
+function NeverSays() {
+  return (
+    <Section id="never">
+      <Act n="03">What it will never say</Act>
+      <Heading>The refusals are the product</Heading>
+      <p className="max-w-2xl text-[var(--color-dim)]">
+        No price target, no "buy" or "sell", no "this one is safe". Real or
+        Rug reports what the chain shows and lets the numbers say it —
+        enforced in code, on every reply, before it is sent.
+      </p>
+      <p className="mt-4">
+        <Link
+          href="/how-it-works"
+          className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
+        >
+          How it decides, and what it will never do →
+        </Link>
+      </p>
+    </Section>
+  );
+}
+
+export function Home() {
+  return (
     <>
-      <Hero s={s.value} />
-      <Watched s={s.value} stale={s.stale} />
-      <Cost s={s.value} />
-      <Ask handle={handle} />
+      <Hero />
+      {/* Live feed of latest verdicts: design 0025 §4a item 5. No route
+          exists yet to read "recently checked tokens" -- see the module
+          comment above. Nothing renders here until one does. */}
+      <ContestTeaser />
       <NeverSays />
-      <Contest handle={handle} />
     </>
   );
 }

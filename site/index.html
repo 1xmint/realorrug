@@ -3,11 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Real or Rug — see the cabal before you buy</title>
+    <title>Real or Rug — checked, not predicted</title>
     <meta
       name="description"
-      content="528,871 launches watched. 2.87% ever graduate. A launch block with 10-13 recipients is 10.1x likelier to be bought out instantly than the average launch. Measured, not predicted."
+      content="Real or Rug reads a Robinhood Chain token's launch and history right when you ask, and hands back what the chain shows. Checked, not predicted. Not financial advice."
     />
+    <!--
+      cabalhunter.org, not a Robinhood-Chain-named domain: the new domain is
+      not bought yet, and which one to buy is the owner's decision, not one
+      this rewrite makes for them. Canonical, og:url and og:image stay pointed
+      here until the owner picks and buys one.
+    -->
     <link rel="canonical" href="https://cabalhunter.org/" />
     <meta name="theme-color" content="#0c0a09" />
 
@@ -20,31 +26,31 @@
       nobody was ever meant to share it.
 
       `summary_large_image` rather than `summary`: the card is the first thing
-      anybody sees of this product, and it should carry the headline number.
+      anybody sees of this product.
     -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Real or Rug" />
     <meta property="og:url" content="https://cabalhunter.org/" />
     <meta
       property="og:title"
-      content="Real or Rug — see the cabal before you buy"
+      content="Real or Rug — checked, not predicted"
     />
     <meta
       property="og:description"
-      content="528,871 launches watched. 2.87% ever graduate. Coordination is visible in the launch block, before you buy."
+      content="Paste a Robinhood Chain contract address. Real or Rug reads the launch and the creator's history right then, and says what it found."
     />
     <meta property="og:image" content="https://cabalhunter.org/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta
       property="og:image:alt"
-      content="Real or Rug: 528,871 launches watched, 2.87% ever graduate."
+      content="Real or Rug: checked, not predicted."
     />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Real or Rug — see the cabal before you buy" />
+    <meta name="twitter:title" content="Real or Rug — checked, not predicted" />
     <meta
       name="twitter:description"
-      content="528,871 launches watched. 2.87% ever graduate. Coordination is visible in the launch block, before you buy."
+      content="Paste a Robinhood Chain contract address. Real or Rug reads the launch and the creator's history right then, and says what it found."
     />
     <meta name="twitter:image" content="https://cabalhunter.org/og.png" />
   </head>
@@ -57,33 +63,29 @@
       product depends on, and telling them nothing while telling a browser
       everything is the kind of gap that goes unnoticed for months.
 
-      Everything below is true and dated, and it is checked by the same test that
-      checks the rendered page.
+      Everything below is true, and it is checked against `Home.tsx` by
+      `figures.test.ts` so the two cannot drift apart.
     -->
     <noscript>
       <h1>Real or Rug</h1>
       <!--
-        This sentence said "Most launches on pump.fun are coordinated" until
-        2026-09-07, and the list directly under it said otherwise: 70.5% of
-        launches pay one to three recipients, and 0.02% of those are bought out
-        instantly. The most-read sentence on the property was a verdict, it was
-        the wrong verdict, and the account's own rule is to publish the
-        measurement and never the verdict.
+        No population figures here. The Solana/pump.fun launch-block numbers
+        this block used to carry (528,871 launches, 2.87% graduate, and so on)
+        were true about Solana and are not true about this product, which
+        moved to Robinhood Chain -- see Home.tsx's module comment. Rather than
+        relabel true-about-the-wrong-chain numbers as though they were
+        Robinhood Chain figures, this block says only what is true regardless
+        of which chain: what the account does and what it will not say.
       -->
       <p>
-        Coordination is visible in the launch block, before you buy. Real or
-        Rug reads every one of them.
+        Real or Rug checks a Robinhood Chain token before you buy. Paste a
+        contract address and it reads the launch and the creator's history
+        right then, and says what it found.
       </p>
-      <ul>
-        <li>528,871 launches watched, across 121,445 creators.</li>
-        <li>2.87% of measured launches ever graduate.</li>
-        <li>22.6% show almost no activity at all.</li>
-        <li>
-          A launch block with 10–13 recipients is 10.1× likelier to be bought
-          out instantly than the average launch.
-        </li>
-      </ul>
-      <p>Measured on 2026-09-05. Measured, not predicted. Not financial advice.</p>
+      <p>
+        It never states a price target, tells you to buy or sell, or calls a
+        coin safe. Checked, not predicted. Not financial advice.
+      </p>
     </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>

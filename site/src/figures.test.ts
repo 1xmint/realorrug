@@ -1,34 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Every figure this site publishes, against the file it came from.
+//! Every figure this site still publishes, against the file it came from.
 //!
-//! # This file is here because a comment said it already was
+//! # Most of this file is gone, and that is the point
 //!
-//! `index.html` has carried the sentence "checked by the same test that checks
-//! the rendered page" since the `<noscript>` block was written, and no such test
-//! existed. The block is the version of the page that link unfurlers and search
-//! crawlers read — the readers this product's distribution actually depends on —
-//! so it was the copy of the figures least likely to be looked at and most
-//! likely to go stale. That is finding S15, and this is the fix.
+//! Until the Robinhood Chain move, this file pinned `index.html` and
+//! `Home.tsx` to `fixtures/stats.json`, which was itself pinned to
+//! `docs/research/data/0024-base-rates.json` — the Solana/pump.fun
+//! launch-block figures. Those figures came off the home page (see
+//! `Home.tsx`'s module comment) and the fixture they were pinned to is
+//! deleted with them, so the tests that checked them are deleted too rather
+//! than left pinning a file that no longer exists. What is left is the
+//! figures the site still publishes: the fee ladder and the share-card image
+//! dimensions, plus the verdict-language check, which is not a figure at all
+//! but earned its place in this file for the same reason.
 //!
-//! # What is pinned where, and why not all of it is pinned here
-//!
-//! - `index.html` against `fixtures/stats.json`, through the same `honesty.ts`
-//!   functions the rendered page uses. Not against literals: a test that
-//!   restated the numbers would be a third copy to update.
-//! - `fixtures/stats.json`'s band, cost and aftermath blocks against
-//!   `docs/research/data/0024-base-rates.json`, which is where they were
-//!   measured. Read with `node:fs` because it lives outside the site's module
-//!   graph and should not be bundled into a page.
-//! - The fee ladder is **not** checked here. Its capture is hex, and decoding it
-//!   in TypeScript would be a second implementation of `radar-pumpfun`'s fee
-//!   parser. That check lives in that crate, in
+//! - `index.html` no longer carries any measured figure — see it directly.
+//! - The fee ladder is **not** checked against the chain here. Its capture is
+//!   hex, and decoding it in TypeScript would be a second implementation of
+//!   `radar-pumpfun`'s fee parser. That check lives in that crate, in
 //!   `the_site_publishes_the_ladder_this_crate_decodes.rs`, where the decoder
 //!   already is. Named here so the absence reads as a decision.
-//!
-//! The `watched` block is deliberately not pinned to a file: it is read off the
-//! production box's creator index, which is not in the repository. Its derived
-//! strings are pinned in `honesty.test.ts` instead, which is the check that
-//! caught the last refresh.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -36,10 +27,6 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import ladder from "./fixtures/fee-ladder.json";
-import stats from "./fixtures/stats.json";
-import { count, graduated, pct, share, type Stats } from "./honesty";
-
-const s = stats as Stats;
 
 /**
  * A file from the repository, by path relative to `site/`.
@@ -54,105 +41,7 @@ function repoFile(relative: string): string {
 }
 
 const INDEX_HTML = repoFile("index.html");
-
-describe("index.html states what the fixture says", () => {
-  // Derived here the same way the page derives them. If `pct` changes its
-  // rounding, this fails and the HTML has to be regenerated -- which is
-  // correct, because the two would otherwise disagree silently.
-  const launches = count(s.watched.launches);
-  const creators = count(s.watched.creators);
-  const graduate = pct(graduated(s.watched));
-  const stillborn = pct(share(s.watched.stillborn, s.watched.measured));
-
-  it("uses the fixture's counts in the noscript block", () => {
-    expect(INDEX_HTML).toContain(
-      `${launches} launches watched, across ${creators} creators.`,
-    );
-    expect(INDEX_HTML).toContain(`${graduate} of measured launches ever graduate.`);
-    expect(INDEX_HTML).toContain(`${stillborn} show almost no activity at all.`);
-  });
-
-  it("uses the fixture's counts in the meta description and the card", () => {
-    // Three copies of the headline figures live in the head -- description,
-    // og:description and twitter:description -- plus the image alt. Every one
-    // of them is a claim to a stranger who never loads the page.
-    const claim = `${launches} launches watched. ${graduate} ever graduate.`;
-    const copies = INDEX_HTML.split(claim).length - 1;
-    expect(copies).toBe(3);
-    expect(INDEX_HTML).toContain(
-      `content="Real or Rug: ${launches} launches watched, ${graduate} ever graduate."`,
-    );
-  });
-
-  it("dates the noscript figures with the day they were measured", () => {
-    // "Measured on <date>" with no date, or with a date that is not the
-    // fixture's, is the failure 0024 records in capitals.
-    const day = s.measured_at.slice(0, 10);
-    expect(INDEX_HTML).toContain(`Measured on ${day}.`);
-  });
-
-  it("names the band the data actually leads with", () => {
-    // Hard-coded in the HTML because there is no JavaScript in a noscript
-    // block. Pinned so it cannot state last month's winner.
-    const top = s.bands.rows.reduce((a, b) =>
-      b.x_base_instant > a.x_base_instant ? b : a,
-    );
-    expect(INDEX_HTML).toContain(`${top.lo}–${top.hi} recipients`);
-    expect(INDEX_HTML).toContain(`${top.x_base_instant.toFixed(1)}×`);
-  });
-});
-
-describe("the fixture states what 0024 measured", () => {
-  const base = JSON.parse(repoFile("../docs/research/data/0024-base-rates.json"));
-
-  it("carries 0024's bands, under this site's own field names", () => {
-    // `fires_on` there, `share_of_launches` here. The rename is the reason to
-    // check rather than a reason not to: two names for one quantity is exactly
-    // where a copy drifts.
-    const measured = base.launch_block.bands as {
-      name: string;
-      lo: number;
-      hi: number;
-      fires_on: number;
-      p_instant: number;
-      x_base_instant: number;
-    }[];
-    for (const row of s.bands.rows) {
-      const from = measured.find((m) => m.name === row.name);
-      expect(from, `0024 has no band called ${row.name}`).toBeTruthy();
-      expect(row.lo).toBe(from!.lo);
-      expect(row.hi).toBe(from!.hi);
-      expect(row.share_of_launches).toBe(from!.fires_on);
-      expect(row.p_instant).toBe(from!.p_instant);
-      expect(row.x_base_instant).toBe(from!.x_base_instant);
-    }
-  });
-
-  it("carries 0024's population, date and base rate for the bands", () => {
-    expect(s.bands.measured_on).toBe(base.measured_on);
-    expect(s.bands.launches).toBe(base.launch_block.launches);
-    expect(s.bands.base_rate_instant).toBe(base.launch_block.base_rate_instant);
-  });
-
-  it("quotes the round trip for the band it names, not another one", () => {
-    // 0024 records five bands and STATE.md warns never to publish one without
-    // knowing which. Looking the figure up by the band the site names is what
-    // stops the page quoting $2-$20's 250 bps beside the words "$20-$200".
-    const bands = base.round_trip_bps.by_notional as {
-      band: string;
-      round_trip: number;
-    }[];
-    const row = bands.find((b) => b.band === s.cost.band);
-    expect(row, `0024 has no round trip for ${s.cost.band}`).toBeTruthy();
-    expect(s.cost.round_trip_bps).toBe(row!.round_trip);
-  });
-
-  it("carries 0024's aftermath median", () => {
-    expect(s.aftermath.organic_median_bps).toBe(
-      base.aftermath.organic_median_bps,
-    );
-  });
-});
+const HOME = repoFile("src/Home.tsx");
 
 describe("the card that unfurls when the link is shared", () => {
   const png = readFileSync(resolve(process.cwd(), "public/og.png"));
@@ -189,22 +78,15 @@ describe("the fee ladder the tokenomics page renders", () => {
 
 describe("the page states measurements rather than verdicts", () => {
   // Finding H4. The hero said "Most launches are coordinated" while the card
-  // directly under it measured the opposite: 70.5% of launches pay one to three
-  // recipients and 0.02% of those are bought out instantly. The most-read
-  // sentence on the property was a verdict, it was the wrong verdict, and it
-  // contradicted its own evidence.
+  // directly under it measured the opposite. That sentence and the card it
+  // contradicted are both gone with the Solana figures, but the rule it
+  // established outlives them: no page states a verdict about launches in
+  // general, on Solana's numbers or on any other chain's.
   //
   // **Comments are stripped before the check**, and the first version of this
   // test was not — it failed on the comment that explains why the sentence was
   // removed, which is the one place the old wording legitimately survives. A
   // check on published copy has to read published copy.
-  //
-  // Asserted as an absence, which is the weaker kind of test and the right one
-  // here: the sentence that replaces it is prose and will be edited, and pinning
-  // its wording would fail on every rewrite. What must not come back is the
-  // shape. The positive half is the test under it.
-  const HOME = repoFile("src/Home.tsx");
-
   /** Source with its comments removed: HTML, JSX and line comments. */
   function copyOnly(text: string): string {
     return text
@@ -233,15 +115,5 @@ describe("the page states measurements rather than verdicts", () => {
       "coordinated",
     );
     expect(copyOnly("most launches are coordinated")).toContain("coordinated");
-  });
-
-  it("the band the hero cites is still the one the fixture measures", () => {
-    // The positive half. An absence test alone would pass on a page that had
-    // deleted the claim entirely, and the claim is the product.
-    const top = s.bands.rows.reduce((a, b) =>
-      b.x_base_instant > a.x_base_instant ? b : a,
-    );
-    expect(top.x_base_instant).toBeGreaterThan(1);
-    expect(INDEX_HTML).toContain(`${top.lo}\u2013${top.hi} recipients`);
   });
 });
