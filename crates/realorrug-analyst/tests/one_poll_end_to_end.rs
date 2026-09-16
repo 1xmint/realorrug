@@ -425,6 +425,151 @@ fn a_published_reply_is_counted_charged_and_remembered() {
 }
 
 #[test]
+fn an_unmatched_followup_in_an_answered_thread_gets_the_fixed_refusal_with_no_chain_read() {
+    // Packet 0040's one shipping behaviour, driven through the full loop
+    // rather than through `answer()` alone: a first mention builds a reply
+    // and records the thread's standing level (`answer::answer`'s call to
+    // `ThreadMemory::record`); a second mention in the same conversation,
+    // whose text matches none of `followup::Topic`'s phrases, must come back
+    // as the fixed refusal naming that level -- with **no** chain read (the
+    // second tick's client points at a closed port, which the mint/ticker
+    // path would hang on for many seconds; the followup path in
+    // `answer::answer` returns before ever reaching it) and **no** model
+    // call (no `provider` is supplied to either tick).
+    let mint = "So11111111111111111111111111111111111111112";
+    let first_page = format!(
+        r#"{{"data":[{{"id":"3001","author_id":"alice","text":"@radar what is {mint}","conversation_id":"conv-1"}}]}}"#
+    );
+    let (base, _seen) = platform(&first_page);
+    let (rpc, _stop, _requests) = empty_chain();
+
+    let dir = workspace("followup-refusal");
+    let paths = Paths::under(&dir);
+    let mut gate = Gate::new(open_limits(), vec!["radar".to_owned()]);
+    let mut spend = Spend::open(
+        Budget {
+            per_call_max: MicroUsd(50_000),
+            daily_max: MicroUsd(1_000_000),
+        },
+        prices(),
+        paths.ledger.clone(),
+        1,
+    );
+    let mut memory = threads();
+
+    let x = X::at(base, "tok", "u42");
+    let first_answered = tick(
+        Some(&x),
+        &Posts,
+        &mut gate,
+        &mut spend,
+        &realorrug_onchain::RpcClient::new(rpc),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut memory,
+        &paths,
+    );
+    assert_eq!(first_answered, 1, "the first mention gets an ordinary reply");
+    let level = memory
+        .standing("conv-1")
+        .expect("the thread is recorded after the first reply")
+        .level;
+
+    // A second poll, a different platform (the fake only ever serves one
+    // fixed page), same conversation id, text matching none of the seven
+    // topics -- and a chain client pointed at a closed port, exactly
+    // `no_chain()`'s own purpose: proving the answer never touched it.
+    let second_page = r#"{"data":[{"id":"3002","author_id":"bob","text":"@radar is this legit or what","conversation_id":"conv-1"}]}"#;
+    let (base2, _seen2) = platform(second_page);
+    let x2 = X::at(base2, "tok", "u42");
+
+    let second_answered = tick(
+        Some(&x2),
+        &Posts,
+        &mut gate,
+        &mut spend,
+        &no_chain(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut memory,
+        &paths,
+    );
+    assert_eq!(second_answered, 1, "the follow-up is answered, not dropped");
+
+    let folded = realorrug_analyst::latest(&paths.log).expect("a log");
+    let reply = folded
+        .iter()
+        .find(|e| e.mention_id == "3002")
+        .expect("the follow-up was logged");
+    assert_eq!(
+        reply.reply,
+        realorrug_analyst::followup::refusal_sentence(level),
+        "the exact pinned sentence for the standing level, not merely some sentence"
+    );
+    assert!(
+        !reply.reply.chars().any(|c| c.is_ascii_digit()),
+        "no digit anywhere in the refusal: {}",
+        reply.reply
+    );
+}
+
+#[test]
+fn the_same_question_in_a_never_answered_thread_is_not_a_followup() {
+    // The other direction of the behaviour above: a conversation this
+    // process has never recorded a reply in takes today's path unchanged,
+    // even though the text is exactly the kind of thing a follow-up refusal
+    // would otherwise be triggered by. `ThreadMemory::standing` returns
+    // `None` for `conv-unseen`, so `answer::answer` falls straight through
+    // to the ordinary mint/ticker parse -- which finds neither in this text,
+    // so the mention is answered `Nothing`.
+    let page = r#"{"data":[{"id":"4001","author_id":"carol","text":"@radar is this legit or what","conversation_id":"conv-unseen"}]}"#;
+    let (base, _seen) = platform(page);
+
+    let dir = workspace("followup-never-answered");
+    let paths = Paths::under(&dir);
+    let mut gate = Gate::new(open_limits(), vec!["radar".to_owned()]);
+    let mut spend = Spend::open(
+        Budget {
+            per_call_max: MicroUsd(50_000),
+            daily_max: MicroUsd(1_000_000),
+        },
+        prices(),
+        paths.ledger.clone(),
+        1,
+    );
+    let x = X::at(base, "tok", "u42");
+
+    let answered = tick(
+        Some(&x),
+        &DryRun,
+        &mut gate,
+        &mut spend,
+        &no_chain(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut threads(),
+        &paths,
+    );
+    // `Answered::Nothing` costs no `Cost::Reply`, so the tick's own count of
+    // mentions it *answered* is 0 -- the mention was read and understood,
+    // just not the shape of anything (mint, ticker, or follow-up) this loop
+    // replies to.
+    assert_eq!(
+        answered, 0,
+        "a mention that names nothing and belongs to no remembered thread is not counted as answered"
+    );
+}
+
+#[test]
 fn a_platform_that_refuses_costs_nothing_and_does_not_move_the_cursor() {
     // The two properties that matter when the account's access breaks: no
     // charge for a page that never arrived, and no cursor movement past
