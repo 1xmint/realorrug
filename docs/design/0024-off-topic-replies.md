@@ -5,7 +5,7 @@
 in `crates/realorrug-roast/src/forbidden.rs` (`check_numerals`,
 `check_no_identification`, `check_any_person_reference`,
 `check_sensitive_topic`) implement §1 through §4 as designed; §3's caps are
-config, deny-by-default, keyed `RADAR_LANE2_*` (`deploy/analyst.env.example`).
+config, deny-by-default, keyed `REALORRUG_LANE2_*` (`deploy/analyst.env.example`).
 §5 and §8's open items (X's prior-approval requirement, real traffic to size
 §3's numbers against) remain open and are not this document's or the code's
 to close.

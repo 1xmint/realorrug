@@ -75,7 +75,7 @@ undocumented and would otherwise first be tested after a live claim. Its result 
 ### 2. The Turnkey account is the creator fee recipient
 
 Every run reads the factory and refuses unless `creator_fee_recipient` equals
-`RADAR_PAYOUT_ADDRESS`, the token is known, and its fees are paid in ETH. Before
+`REALORRUG_PAYOUT_ADDRESS`, the token is known, and its fees are paid in ETH. Before
 launch `REALORRUG_TOKEN` is unset and nothing runs. The wallet holds only ETH:
 the gas float, and a claimed prize for the seconds before it is sent (ADR 0013
 constraint 2). How the token is launched with this recipient is plan 0001 6d.

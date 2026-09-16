@@ -69,7 +69,7 @@ not make.
 5. **The analyst never states the token's price or market capitalisation.** It
    reports the vault balance, the prize, the winner and the transaction — facts
    about money that moved. This is enforced rather than instructed: the mint is
-   configured as `RADAR_SELF_MINT`, and a price or market-cap fact for that mint
+   configured as `REALORRUG_SELF_MINT`, and a price or market-cap fact for that mint
    is dropped from the fact sheet **before the model sees it**, so the number is
    not in the set the fidelity check would authorise.
 6. **The token is roasted like anything else**, on the same rule and the same

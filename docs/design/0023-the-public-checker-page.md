@@ -458,7 +458,7 @@ whichever visitor happens to ask first.
   page's exact title in `site/src/routes.ts` — the API route landed at
   `GET /v1/check/{address}`; the page route is `site/`'s call, still open.
 - **Settled by the route build:** the cache in §3 is a flat file per
-  `(chain, address)` key under `RADAR_CHECK_CACHE_DIR` (default
+  `(chain, address)` key under `REALORRUG_CHECK_CACHE_DIR` (default
   `data/check`), matching the existing four documents — an embedded store was
   not needed.
 - **Settled by the route build, as a stand-in:** design 0021's per-fact
@@ -487,13 +487,13 @@ whichever visitor happens to ask first.
   the site's front page) — outside this document's scope, which is the page
   itself.
 - New environment variables the route build added, none named above: a
-  Robinhood Chain endpoint reuses `RADAR_ROBINHOOD_RPC` (the same variable
+  Robinhood Chain endpoint reuses `REALORRUG_ROBINHOOD_RPC` (the same variable
   `realorrug-analyst`'s daemon already reads); new to this route are
-  `RADAR_CHECK_CACHE_DIR` (cache location, defaults to `data/check`),
-  `RADAR_CHECK_DAILY_BUDGET` (cold reads allowed per UTC day, unset or
-  non-positive refuses every cold read — rule 7), `RADAR_BASE_RATES` (the
+  `REALORRUG_CHECK_CACHE_DIR` (cache location, defaults to `data/check`),
+  `REALORRUG_CHECK_DAILY_BUDGET` (cold reads allowed per UTC day, unset or
+  non-positive refuses every cold read — rule 7), `REALORRUG_BASE_RATES` (the
   fact sheet's population snapshot path, defaults to
-  `realorrug_roast::baserates::DEFAULT_PATH`), and `RADAR_TRUST_CLOUDFLARE`
+  `realorrug_roast::baserates::DEFAULT_PATH`), and `REALORRUG_TRUST_CLOUDFLARE`
   (set to `1` only on a box that actually sits behind Cloudflare, so
   `CF-Connecting-IP` may be trusted for the per-IP limit instead of the
   socket peer address).

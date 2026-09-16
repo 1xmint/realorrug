@@ -191,7 +191,7 @@ export function summonIntent(handle: string, mint: string): string | null {
  * this function rather than an omission.
  *
  * Nothing on the Rust side needs a handle: the analyst identifies the account
- * by `RADAR_X_USER_ID`, and `radar-serve` builds reply links as
+ * by `REALORRUG_X_USER_ID`, and `realorrug-serve` builds reply links as
  * `x.com/i/web/status/<id>` precisely so it never has to know one. This site is
  * the only surface that wants a name, and a name is the one thing about the
  * account that can change without anything breaking loudly. Hard-coding it

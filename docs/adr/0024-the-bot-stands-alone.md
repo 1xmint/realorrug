@@ -56,6 +56,9 @@ names it.
 
 - **Environment variables keep their `RADAR_` prefix**, so an existing
   `/etc/radar/analyst.env` works unchanged. New ones, like `REALORRUG_BIND`, do not.
+  Superseded: every `RADAR_*` variable is being renamed to `REALORRUG_*` (same
+  suffix), each still read as a fallback when the new name is absent
+  (`crates/realorrug-types/src/env.rs`), so this no longer holds as written.
 - **The data contract with Radar is two published files**: the creator index
   with its population summary, and the base-rate snapshot (`deploy/README.md`).
 
