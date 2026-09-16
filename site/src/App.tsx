@@ -10,6 +10,7 @@ import { Home } from "./Home";
 import { HowItWorks } from "./HowItWorks";
 import { Leaderboard } from "./Leaderboard";
 import { Payouts } from "./Payouts";
+import { Check } from "./Check";
 import { Privacy } from "./Privacy";
 import { footer as footerRoutes, MOVED, nav } from "./routes";
 import { Terms } from "./Terms";
@@ -122,6 +123,10 @@ export function App() {
           <Route path="/how-it-works" component={HowItWorks} />
           <Route path="/tokenomics" component={Token} />
           <Route path="/about" component={About} />
+          {/* Not in ROUTES on purpose: a check is reached from the paste box or a
+              shared link, never from the header, and ROUTES is the header and
+              the footer. routes.test.tsx holds that table to exactly those. */}
+          <Route path="/check/:address" component={Check} />
           <Route path="/privacy" component={Privacy} />
           <Route path="/terms" component={Terms} />
           <Route path="/contact" component={Contact} />

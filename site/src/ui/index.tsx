@@ -20,9 +20,9 @@
 //! comment is the note saying so.
 
 import { useState, type ReactNode } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 
-import { mintShaped, summonIntent, userHref } from "../honesty";
+import { evmShaped, mintShaped, summonIntent, userHref } from "../honesty";
 
 /**
  * A figure, its label, and where it came from.
@@ -482,5 +482,63 @@ export function Summoner({
     >
       {shown}
     </a>
+  );
+}
+
+/**
+ * The paste box: an address in, the checker page out (design 0025 §4a).
+ *
+ * It navigates rather than fetching, so the verdict lives at a URL a visitor
+ * can share, and the page they land on is the one that does the reading. The
+ * gold rim is the one accent on the home page, because this box is the page's
+ * whole job.
+ */
+export function CheckBox() {
+  const [, navigate] = useLocation();
+  const [text, setText] = useState("");
+  const [wrong, setWrong] = useState(false);
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const address = text.trim();
+    if (!evmShaped(address) && !mintShaped(address)) {
+      setWrong(true);
+      return;
+    }
+    navigate(`/check/${address}`);
+  };
+  return (
+    <form onSubmit={submit} className="mt-8 max-w-2xl" role="search">
+      <label htmlFor="check-address" className="typewriter mb-2 block text-sm text-[var(--color-dim)]">
+        Paste a token&apos;s contract address
+      </label>
+      <div className="flex flex-col gap-2 border-2 border-[var(--color-gold)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[#f0c95a] sm:flex-row">
+        <input
+          id="check-address"
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setWrong(false);
+          }}
+          placeholder="0x…"
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={wrong}
+          aria-describedby={wrong ? "check-address-error" : undefined}
+          className="min-w-0 flex-1 bg-transparent px-3 py-2.5 font-mono text-sm text-[var(--color-text)] placeholder:text-[var(--color-faint)] focus:outline-none"
+        />
+        <button
+          type="submit"
+          className="display bg-[var(--color-gold)] px-6 py-2.5 text-lg text-[var(--color-ink)] hover:bg-[#f0c95a]"
+        >
+          Check it
+        </button>
+      </div>
+      {wrong && (
+        <p id="check-address-error" className="mt-2 text-sm text-[var(--color-danger)]">
+          That is not a contract address. It should start with 0x and be 42
+          characters long.
+        </p>
+      )}
+    </form>
   );
 }

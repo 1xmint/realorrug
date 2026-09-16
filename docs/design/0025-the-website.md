@@ -757,6 +757,13 @@ future slices existing.
    is the slice this document cannot ship ahead of `realorrug-serve`'s new
    route — named as a dependency, not a blocker on this document's own
    work, since the route's existence is design 0023's deliverable.
+   **Shipped 2026-09-16 (site side).** The page draws every state the
+   route returns, and one it cannot: an unreachable server, which is drawn
+   as no answer, never as a verdict. `cant_read` and any level the page does
+   not know fall to the grey "Can't tell" rung. The route is not in
+   `site/src/routes.ts`, because that table is the header and footer; it is
+   wired in `site/src/App.tsx` alone. The stamp words come from the ladder
+   on `/how-it-works`, so the two pages cannot disagree.
 6. **Home live feed + art pass.** Files: `site/src/Home.tsx` (live feed
    section, §4a item 5, depending on the new recency-list route named in
    that section), texture/motion assets (§5) applied across all pages,
