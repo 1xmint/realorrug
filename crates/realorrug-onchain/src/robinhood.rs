@@ -361,7 +361,9 @@ mod tests {
         data.extend(word_addr(&record.curve));
         data.extend(word_addr(&record.deployer));
         data.extend(word_addr(&record.creator_fee_recipient));
-        data.extend(word_addr(record.pair.as_ref().unwrap_or(&RobinhoodAddress::ZERO)));
+        data.extend(word_addr(
+            record.pair.as_ref().unwrap_or(&RobinhoodAddress::ZERO),
+        ));
         data.extend(word_u(record.graduation_threshold));
         data.extend(word_u(0)); // pool fee, unread
         data.extend(word_u(0)); // tick spacing, unread
