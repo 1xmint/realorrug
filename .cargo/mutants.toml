@@ -231,6 +231,11 @@ exclude_re = [
     # reason, which is why that module exists at all.
     'replace main with \(\)',
 
+    # `realorrug-serve`'s `main` binds a socket and serves until killed, so a
+    # test that ran it would not return. What it decides -- the bind address --
+    # is `bind_address`, which has its own tests.
+    'replace main -> ExitCode with Default::default\(\)',
+
     # `creator_index::build` keeps the latest measurement of a mint:
     #
     #     if outcome.measured_at > held.measured_at { *held = outcome; }

@@ -355,7 +355,7 @@ async fn check(state: &Arc<CheckState>, raw_address: &str, ip: &str) -> (StatusC
         return (StatusCode::OK, doc);
     }
 
-    let today = now_secs() / 86_400;
+    let today = day_of(now_secs());
     if state.reserve_cold_read(today).is_err() {
         return (StatusCode::SERVICE_UNAVAILABLE, budget_doc(raw_address));
     }
@@ -538,6 +538,12 @@ fn cache_key(key: &str) -> String {
         .collect()
 }
 
+/// The UTC day number a Unix time falls in: the key the daily cold-read budget
+/// resets on.
+fn day_of(secs: u64) -> u64 {
+    secs / 86_400
+}
+
 /// Reads the cached document at `path`, if one exists and every fact in it is
 /// still inside [`CACHE_TTL_SECS`] — a stale file is a cache miss, not a
 /// silent reuse of a number that may no longer be true (design 0023 §3).
@@ -597,6 +603,27 @@ mod tests {
         );
         // A different IP has its own window, unaffected by the first's limit.
         assert!(state.allow("5.6.7.8", now), "a fresh IP has its own budget");
+    }
+
+    /// A request exactly one window old still counts: it leaves only once it
+    /// is *older* than the window. `>=` here would free a slot a moment early.
+    #[test]
+    fn a_request_exactly_one_window_old_still_counts() {
+        let state = CheckState::from_vars(&no_env);
+        let start = Instant::now();
+        for _ in 0..PER_IP_LIMIT {
+            assert!(state.allow("7.7.7.7", start));
+        }
+        assert!(!state.allow("7.7.7.7", start + PER_IP_WINDOW));
+    }
+
+    /// The budget resets at UTC midnight, not at some multiple of a day.
+    #[test]
+    fn the_budget_day_is_the_utc_day() {
+        assert_eq!(day_of(0), 0);
+        assert_eq!(day_of(86_399), 0);
+        assert_eq!(day_of(86_400), 1);
+        assert_eq!(day_of(2 * 86_400 + 5), 2);
     }
 
     /// The window is rolling: once the oldest request falls outside
@@ -850,6 +877,12 @@ mod tests {
         );
         assert!(
             fresh_cached(&path, 1_000 + CACHE_TTL_SECS - 1).is_some(),
+            "a document one second short of its TTL is still fresh"
+        );
+        // Exactly at the TTL is still fresh: the rule is "older than", so a
+        // `>=` here would throw away a document on its last valid second.
+        assert!(
+            fresh_cached(&path, 1_000 + CACHE_TTL_SECS).is_some(),
             "an entry inside the TTL must be a hit"
         );
     }
