@@ -158,14 +158,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 eprintln!("    {} is not on the fact sheet", fab.literal);
             }
         }
-        Some(Fellback::NotSelected(why)) => {
-            // The line to read first when a batch of replies is being checked by
-            // hand. "Wrote a sentence", "named a fact it was not offered" and
-            // "asked for a register nobody authored" are different drifts and
-            // want different changes -- the first to the prompt, the last to the
-            // clause list.
-            eprintln!("(deterministic template: the model {why})");
-        }
     }
     Ok(())
 }
