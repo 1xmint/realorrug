@@ -78,31 +78,33 @@ impl ApiKey {
     /// four, and an operator setting these up is doing it at the point where
     /// nothing works yet.
     pub fn from_vars(key: String, get: &impl Fn(&str) -> Option<String>) -> Result<Self, String> {
-        let endpoint = non_empty(get, "RADAR_MODEL_ENDPOINT");
-        let model = non_empty(get, "RADAR_MODEL_NAME");
-        let price_in = non_empty(get, "RADAR_MODEL_PRICE_IN").and_then(|v| v.parse::<u64>().ok());
-        let price_out = non_empty(get, "RADAR_MODEL_PRICE_OUT").and_then(|v| v.parse::<u64>().ok());
+        let endpoint = non_empty(get, "REALORRUG_MODEL_ENDPOINT", "RADAR_MODEL_ENDPOINT");
+        let model = non_empty(get, "REALORRUG_MODEL_NAME", "RADAR_MODEL_NAME");
+        let price_in = non_empty(get, "REALORRUG_MODEL_PRICE_IN", "RADAR_MODEL_PRICE_IN")
+            .and_then(|v| v.parse::<u64>().ok());
+        let price_out = non_empty(get, "REALORRUG_MODEL_PRICE_OUT", "RADAR_MODEL_PRICE_OUT")
+            .and_then(|v| v.parse::<u64>().ok());
 
         let mut missing = Vec::new();
         if endpoint.is_none() {
-            missing.push("RADAR_MODEL_ENDPOINT");
+            missing.push("REALORRUG_MODEL_ENDPOINT");
         }
         if model.is_none() {
-            missing.push("RADAR_MODEL_NAME");
+            missing.push("REALORRUG_MODEL_NAME");
         }
         // Prices have no default, and that is deliberate. A default price is a
         // spending decision made by whoever wrote this file rather than by
         // whoever runs it, and it would be wrong the week the vendor changes
         // its rate card -- silently, in the direction of under-counting.
         if price_in.is_none() {
-            missing.push("RADAR_MODEL_PRICE_IN");
+            missing.push("REALORRUG_MODEL_PRICE_IN");
         }
         if price_out.is_none() {
-            missing.push("RADAR_MODEL_PRICE_OUT");
+            missing.push("REALORRUG_MODEL_PRICE_OUT");
         }
         if !missing.is_empty() {
             return Err(format!(
-                "RADAR_MODEL_API_KEY is set but {} {} missing (micro-dollars per million tokens)",
+                "REALORRUG_MODEL_API_KEY is set but {} {} missing (micro-dollars per million tokens)",
                 missing.join(", "),
                 if missing.len() == 1 { "is" } else { "are" }
             ));
@@ -254,12 +256,12 @@ mod tests {
             "sk-not-a-real-key".to_owned(),
             &vars(&[
                 (
-                    "RADAR_MODEL_ENDPOINT",
+                    "REALORRUG_MODEL_ENDPOINT",
                     "https://example.invalid/v1/messages",
                 ),
-                ("RADAR_MODEL_NAME", "a-model"),
-                ("RADAR_MODEL_PRICE_IN", "3000000"),
-                ("RADAR_MODEL_PRICE_OUT", "15000000"),
+                ("REALORRUG_MODEL_NAME", "a-model"),
+                ("REALORRUG_MODEL_PRICE_IN", "3000000"),
+                ("REALORRUG_MODEL_PRICE_OUT", "15000000"),
             ]),
         )
         .expect("fully configured")
@@ -286,10 +288,10 @@ mod tests {
         let why = ApiKey::from_vars("sk-not-a-real-key".to_owned(), &vars(&[]))
             .expect_err("nothing else is set");
         for name in [
-            "RADAR_MODEL_ENDPOINT",
-            "RADAR_MODEL_NAME",
-            "RADAR_MODEL_PRICE_IN",
-            "RADAR_MODEL_PRICE_OUT",
+            "REALORRUG_MODEL_ENDPOINT",
+            "REALORRUG_MODEL_NAME",
+            "REALORRUG_MODEL_PRICE_IN",
+            "REALORRUG_MODEL_PRICE_OUT",
         ] {
             assert!(why.contains(name), "{name} is not named in {why}");
         }
@@ -302,14 +304,14 @@ mod tests {
         let why = ApiKey::from_vars(
             "sk-not-a-real-key".to_owned(),
             &vars(&[
-                ("RADAR_MODEL_ENDPOINT", "https://example.invalid"),
-                ("RADAR_MODEL_NAME", "m"),
-                ("RADAR_MODEL_PRICE_IN", "three dollars"),
-                ("RADAR_MODEL_PRICE_OUT", "15000000"),
+                ("REALORRUG_MODEL_ENDPOINT", "https://example.invalid"),
+                ("REALORRUG_MODEL_NAME", "m"),
+                ("REALORRUG_MODEL_PRICE_IN", "three dollars"),
+                ("REALORRUG_MODEL_PRICE_OUT", "15000000"),
             ]),
         )
         .expect_err("that is not a number");
-        assert!(why.contains("RADAR_MODEL_PRICE_IN"), "{why}");
+        assert!(why.contains("REALORRUG_MODEL_PRICE_IN"), "{why}");
     }
 
     #[test]

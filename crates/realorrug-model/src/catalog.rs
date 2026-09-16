@@ -57,7 +57,7 @@ pub const REACHABLE: [&str; 2] = ["openai", "anthropic"];
 pub struct Listed {
     /// The provider it was found under.
     pub provider: String,
-    /// The model id, exactly as `RADAR_MODEL_NAME` wants it.
+    /// The model id, exactly as `REALORRUG_MODEL_NAME` wants it.
     pub id: String,
     /// Micro-dollars per million input tokens.
     pub input: MicroUsd,
@@ -67,7 +67,7 @@ pub struct Listed {
     ///
     /// Carried because it decides a second variable. Reasoning tokens bill at
     /// the output rate and never reach the reply, so a reasoning model asked
-    /// for three sentences needs `RADAR_MODEL_REASONING_EFFORT=none` or it is
+    /// for three sentences needs `REALORRUG_MODEL_REASONING_EFFORT=none` or it is
     /// paying for thinking nobody reads.
     pub reasoning: bool,
 }

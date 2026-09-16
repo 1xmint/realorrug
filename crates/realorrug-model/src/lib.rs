@@ -203,15 +203,15 @@ fn boxed(provider: impl Provider + 'static) -> Box<dyn Provider> {
 /// variant is a refusal: nothing here falls back to a cheaper model, to a free
 /// tier, or to the other path.
 pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Result<Box<dyn Provider>, Selection> {
-    let codex = non_empty(get, "RADAR_MODEL_CODEX");
-    let anthropic = non_empty(get, "RADAR_MODEL_API_KEY");
-    let openai = non_empty(get, "RADAR_MODEL_OPENAI_KEY");
+    let codex = non_empty(get, "REALORRUG_MODEL_CODEX", "RADAR_MODEL_CODEX");
+    let anthropic = non_empty(get, "REALORRUG_MODEL_API_KEY", "RADAR_MODEL_API_KEY");
+    let openai = non_empty(get, "REALORRUG_MODEL_OPENAI_KEY", "RADAR_MODEL_OPENAI_KEY");
 
     // Named rather than counted, so the refusal can say which ones it found.
     let set: Vec<&str> = [
-        codex.as_ref().map(|_| "RADAR_MODEL_CODEX"),
-        anthropic.as_ref().map(|_| "RADAR_MODEL_API_KEY"),
-        openai.as_ref().map(|_| "RADAR_MODEL_OPENAI_KEY"),
+        codex.as_ref().map(|_| "REALORRUG_MODEL_CODEX"),
+        anthropic.as_ref().map(|_| "REALORRUG_MODEL_API_KEY"),
+        openai.as_ref().map(|_| "REALORRUG_MODEL_OPENAI_KEY"),
     ]
     .into_iter()
     .flatten()
@@ -246,7 +246,7 @@ pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Result<Box<dyn Provid
 /// in a file, not authorised in a browser.
 #[must_use]
 pub fn codex_from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Codex> {
-    let command = non_empty(get, "RADAR_MODEL_CODEX")?;
+    let command = non_empty(get, "REALORRUG_MODEL_CODEX", "RADAR_MODEL_CODEX")?;
     // Deliberately silent on failure. `from_vars` is the function that reports a
     // misconfiguration; two callers reporting the same one is two chances to
     // report it differently.
@@ -255,7 +255,7 @@ pub fn codex_from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Codex> {
 
 /// Reads the day's model budget from the environment.
 ///
-/// `None` when `RADAR_MODEL_DAILY_USD` is unset, and the caller must then not
+/// `None` when `REALORRUG_MODEL_DAILY_USD` is unset, and the caller must then not
 /// build an agent at all. AGENTS.md rule 8 names this case in as many words —
 /// *a spend meter with no budget loaded refuses everything* — and this is the
 /// first place in the running system where that clause is enforced rather than
@@ -267,7 +267,7 @@ pub fn codex_from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Codex> {
 /// bill, and the direction it would be wrong in is the expensive one.
 #[must_use]
 pub fn budget_from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<realorrug_agent::Budget> {
-    let daily = non_empty(get, "RADAR_MODEL_DAILY_USD")?
+    let daily = non_empty(get, "REALORRUG_MODEL_DAILY_USD", "RADAR_MODEL_DAILY_USD")?
         .parse::<f64>()
         .ok()
         .map(MicroUsd::from_dollars)
@@ -276,7 +276,7 @@ pub fn budget_from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<realorr
     // A per-call ceiling catches a mispriced call before the daily one does.
     // Defaulting it to the daily maximum makes it inert rather than wrong: the
     // day is still bounded, and an operator who wants the tighter check sets it.
-    let per_call = non_empty(get, "RADAR_MODEL_PER_CALL_USD")
+    let per_call = non_empty(get, "REALORRUG_MODEL_PER_CALL_USD", "RADAR_MODEL_PER_CALL_USD")
         .and_then(|v| v.parse::<f64>().ok())
         .map(MicroUsd::from_dollars)
         .filter(|c| *c > MicroUsd::ZERO)
@@ -293,8 +293,12 @@ pub fn budget_from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<realorr
 /// A variable set to the empty string is what a shell leaves behind when an
 /// expansion produced nothing. Treating that as configured is how an unset
 /// credential becomes an authenticated-looking call with an empty header.
-pub(crate) fn non_empty(get: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
-    get(name).filter(|v| !v.trim().is_empty())
+pub(crate) fn non_empty(
+    get: &impl Fn(&str) -> Option<String>,
+    new: &str,
+    old: &str,
+) -> Option<String> {
+    realorrug_types::env::env_or_legacy(new, old, get).filter(|v| !v.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -312,14 +316,14 @@ mod tests {
 
     fn full_key() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("RADAR_MODEL_API_KEY", "sk-not-a-real-key"),
+            ("REALORRUG_MODEL_API_KEY", "sk-not-a-real-key"),
             (
-                "RADAR_MODEL_ENDPOINT",
+                "REALORRUG_MODEL_ENDPOINT",
                 "https://example.invalid/v1/messages",
             ),
-            ("RADAR_MODEL_NAME", "a-model"),
-            ("RADAR_MODEL_PRICE_IN", "3000000"),
-            ("RADAR_MODEL_PRICE_OUT", "15000000"),
+            ("REALORRUG_MODEL_NAME", "a-model"),
+            ("REALORRUG_MODEL_PRICE_IN", "3000000"),
+            ("REALORRUG_MODEL_PRICE_OUT", "15000000"),
         ]
     }
 
@@ -336,23 +340,23 @@ mod tests {
         // the subscription, and forgot to unset the old variable, is still on
         // the subscription -- and nothing tells them, because it works.
         let mut pairs = full_key();
-        pairs.push(("RADAR_MODEL_CODEX", "codex"));
+        pairs.push(("REALORRUG_MODEL_CODEX", "codex"));
         let Some(Selection::Ambiguous(named)) = from_vars(&vars(&pairs)).err() else {
             panic!("two providers is a contradiction, not a preference");
         };
-        assert!(named.contains("RADAR_MODEL_CODEX"), "{named}");
-        assert!(named.contains("RADAR_MODEL_API_KEY"), "{named}");
+        assert!(named.contains("REALORRUG_MODEL_CODEX"), "{named}");
+        assert!(named.contains("REALORRUG_MODEL_API_KEY"), "{named}");
 
         // And the pair this repository is actually about to have on the box:
         // an OpenAI key today, an Anthropic one the day the model changes, and
         // the failure mode of leaving both set is paying two vendors while
         // believing you moved.
         let mut both_keys = full_key();
-        both_keys.push(("RADAR_MODEL_OPENAI_KEY", "sk-proj-not-a-real-key"));
+        both_keys.push(("REALORRUG_MODEL_OPENAI_KEY", "sk-proj-not-a-real-key"));
         let Some(Selection::Ambiguous(named)) = from_vars(&vars(&both_keys)).err() else {
             panic!("two metered keys is a contradiction too");
         };
-        assert!(named.contains("RADAR_MODEL_OPENAI_KEY"), "{named}");
+        assert!(named.contains("REALORRUG_MODEL_OPENAI_KEY"), "{named}");
     }
 
     #[test]
@@ -363,9 +367,9 @@ mod tests {
         // moment rather than as a refusal at startup.
         for blank in ["", "   ", "\t\n"] {
             let pairs = [
-                ("RADAR_MODEL_API_KEY", blank),
-                ("RADAR_MODEL_CODEX", blank),
-                ("RADAR_MODEL_OPENAI_KEY", blank),
+                ("REALORRUG_MODEL_API_KEY", blank),
+                ("REALORRUG_MODEL_CODEX", blank),
+                ("REALORRUG_MODEL_OPENAI_KEY", blank),
             ];
             assert_eq!(
                 from_vars(&vars(&pairs)).err(),
@@ -380,16 +384,16 @@ mod tests {
         // A key with no endpoint is not a usable provider, and the refusal has
         // to name the variable: an operator reading "incomplete" at 3am learns
         // nothing they did not already know.
-        let half = vars(&[("RADAR_MODEL_API_KEY", "sk-not-a-real-key")]);
+        let half = vars(&[("REALORRUG_MODEL_API_KEY", "sk-not-a-real-key")]);
         let Some(Selection::Incomplete(why)) = from_vars(&half).err() else {
             panic!("a key alone is not a provider");
         };
-        assert!(why.contains("RADAR_MODEL_ENDPOINT"), "names it: {why}");
+        assert!(why.contains("REALORRUG_MODEL_ENDPOINT"), "names it: {why}");
     }
 
     #[test]
     fn each_path_builds_when_fully_configured() {
-        let codex = from_vars(&vars(&[("RADAR_MODEL_CODEX", "codex exec")]))
+        let codex = from_vars(&vars(&[("REALORRUG_MODEL_CODEX", "codex exec")]))
             .expect("a command is the whole configuration");
         assert_eq!(codex.name(), "codex");
 
@@ -406,9 +410,9 @@ mod tests {
         // moving to Anthropic had to find it.
         let mut openai: Vec<(&str, &str)> = full_key()
             .into_iter()
-            .filter(|(k, _)| *k != "RADAR_MODEL_API_KEY")
+            .filter(|(k, _)| *k != "REALORRUG_MODEL_API_KEY")
             .collect();
-        openai.push(("RADAR_MODEL_OPENAI_KEY", "sk-proj-not-a-real-key"));
+        openai.push(("REALORRUG_MODEL_OPENAI_KEY", "sk-proj-not-a-real-key"));
         let built = from_vars(&vars(&openai)).expect("fully configured");
         assert_eq!(built.name(), "openai");
         assert!(built.estimate().get() > 0);
@@ -426,10 +430,10 @@ mod tests {
         // direction.
         for pairs in [
             vec![],
-            vec![("RADAR_MODEL_DAILY_USD", "")],
-            vec![("RADAR_MODEL_DAILY_USD", "0")],
-            vec![("RADAR_MODEL_DAILY_USD", "-5")],
-            vec![("RADAR_MODEL_DAILY_USD", "lots")],
+            vec![("REALORRUG_MODEL_DAILY_USD", "")],
+            vec![("REALORRUG_MODEL_DAILY_USD", "0")],
+            vec![("REALORRUG_MODEL_DAILY_USD", "-5")],
+            vec![("REALORRUG_MODEL_DAILY_USD", "lots")],
         ] {
             assert_eq!(
                 budget_from_vars(&vars(&pairs)),
@@ -444,14 +448,14 @@ mod tests {
         // Inert rather than wrong: the day is still bounded. The clamp is the
         // part worth testing -- a per-call ceiling above the daily one reads as
         // a limit and is not one.
-        let only_daily = budget_from_vars(&vars(&[("RADAR_MODEL_DAILY_USD", "2.00")]))
+        let only_daily = budget_from_vars(&vars(&[("REALORRUG_MODEL_DAILY_USD", "2.00")]))
             .expect("a daily budget is the whole requirement");
         assert_eq!(only_daily.daily_max, MicroUsd(2_000_000));
         assert_eq!(only_daily.per_call_max, MicroUsd(2_000_000));
 
         let absurd = budget_from_vars(&vars(&[
-            ("RADAR_MODEL_DAILY_USD", "2.00"),
-            ("RADAR_MODEL_PER_CALL_USD", "50.00"),
+            ("REALORRUG_MODEL_DAILY_USD", "2.00"),
+            ("REALORRUG_MODEL_PER_CALL_USD", "50.00"),
         ]))
         .expect("configured");
         assert_eq!(
@@ -461,8 +465,8 @@ mod tests {
         );
 
         let tighter = budget_from_vars(&vars(&[
-            ("RADAR_MODEL_DAILY_USD", "2.00"),
-            ("RADAR_MODEL_PER_CALL_USD", "0.25"),
+            ("REALORRUG_MODEL_DAILY_USD", "2.00"),
+            ("REALORRUG_MODEL_PER_CALL_USD", "0.25"),
         ]))
         .expect("configured");
         assert_eq!(tighter.per_call_max, MicroUsd(250_000));
@@ -474,8 +478,8 @@ mod tests {
         // setting it and is what an operator who typed it meant.
         for typo in ["0", "0.00", "-1", "cheap"] {
             let budget = budget_from_vars(&vars(&[
-                ("RADAR_MODEL_DAILY_USD", "2.00"),
-                ("RADAR_MODEL_PER_CALL_USD", typo),
+                ("REALORRUG_MODEL_DAILY_USD", "2.00"),
+                ("REALORRUG_MODEL_PER_CALL_USD", typo),
             ]))
             .expect("the day is still configured");
             assert_eq!(
