@@ -46,7 +46,13 @@ async fn main() -> ExitCode {
         }
     };
     println!("realorrug-serve listening on http://{bind}");
-    match axum::serve(listener, realorrug_serve::app()).await {
+    // `into_make_service_with_connect_info`, not `into_make_service`: the
+    // checker route's per-IP rate limit (design 0023 §4) needs the socket
+    // peer address when `RADAR_TRUST_CLOUDFLARE` is unset -- without this the
+    // route would fall back to a fixed placeholder for every visitor, and the
+    // "10 a minute per IP" limit would not exist for anyone at all.
+    let app = realorrug_serve::app().into_make_service_with_connect_info::<SocketAddr>();
+    match axum::serve(listener, app).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("realorrug-serve: {e}");

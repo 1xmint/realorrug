@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Design 0023 — the public checker page
 
-**Status:** recording, not yet built. The decisions below are the owner's,
-already made; this document is the reasoning that turns them into a shape for
-`site/` and `crates/realorrug-serve` to build against. Nothing in it has been
-built, bought or launched.
+**Status:** the route is built. `crates/realorrug-serve/src/check.rs` serves
+`GET /v1/check/{address}` per §1, §3, §4, §6 and §7; `site/`'s page against
+this contract is separate, still not built. §8 below records what the route
+build settled that this document had left open.
 **Date:** 2026-09-15.
 **Depends on:** design 0020 (the fact sheet, the address-shape dispatch rule,
 the signal set, the verdict ladder and the voice) and design 0021 (per-fact
@@ -455,23 +455,54 @@ whichever visitor happens to ask first.
 ## 8. What this does not decide
 
 - The exact route path and page URL (`/check/...` or otherwise) and the
-  page's exact title in `site/src/routes.ts`.
-- The exact daily RPC-credit budget figure and the exact per-IP number
-  beyond the starting points named in §4 — those are a first cut reasoned
-  from research 0039's per-call cost and the existing edge-cache cadence,
-  not a number tuned against real traffic, because there is none yet.
-- Whether the cache in §3 is a flat file per key (matching the existing four
-  documents) or a small embedded store — either satisfies "computed once,
-  served to everybody until stale"; which is cheaper to operate on the
-  current box is an implementation choice, not a product one.
+  page's exact title in `site/src/routes.ts` — the API route landed at
+  `GET /v1/check/{address}`; the page route is `site/`'s call, still open.
+- **Settled by the route build:** the cache in §3 is a flat file per
+  `(chain, address)` key under `RADAR_CHECK_CACHE_DIR` (default
+  `data/check`), matching the existing four documents — an embedded store was
+  not needed.
+- **Settled by the route build, as a stand-in:** design 0021's per-fact
+  shelf life is not on `origin/main` yet, so the cache freshness check in §3
+  is, for now, a single fixed TTL (`realorrug-serve::check::CACHE_TTL_SECS`,
+  600 seconds) applied to the whole cached document rather than per fact.
+  Replace this with a per-fact shelf-life check once design 0021 merges;
+  until then a cached verdict can be up to ten minutes stale on any one fact,
+  not just the ones actually still fresh.
+- **Settled by the route build:** the daily cold-read count is a small
+  in-process counter (`realorrug-serve::check::CheckState`'s `DailyBudget`),
+  not `realorrug-provider`'s `Meter`/`Budget`/`Ledger` — that machinery is
+  USD-denominated for metering model spend, and a plain "reads left today"
+  count fit a read-count budget more directly without a new dependency. The
+  exact daily figure and the exact per-IP number (10/minute, `PER_IP_LIMIT`)
+  beyond the starting points named in §4 are still a first cut, not a number
+  tuned against real traffic, because there is none yet.
 - Whether Robinhood Chain and Solana checking ship together or Robinhood
-  Chain follows once design 0020's dispatcher exists — this document
-  assumes both eventually, not which lands first.
+  Chain follows once design 0020's dispatcher exists — **settled by the route
+  build**: `realorrug-onchain::dispatch` already reads both addresses shapes
+  through one call, so both ship together; there was no separate cost to
+  including Solana.
 - The unfurl card design and any OG-image work for the shared link — the
   share text (§5) is decided; the image is not.
 - How a visitor is told about the page at all (nav placement, whether it is
   the site's front page) — outside this document's scope, which is the page
   itself.
+- New environment variables the route build added, none named above: a
+  Robinhood Chain endpoint reuses `RADAR_ROBINHOOD_RPC` (the same variable
+  `realorrug-analyst`'s daemon already reads); new to this route are
+  `RADAR_CHECK_CACHE_DIR` (cache location, defaults to `data/check`),
+  `RADAR_CHECK_DAILY_BUDGET` (cold reads allowed per UTC day, unset or
+  non-positive refuses every cold read — rule 7), `RADAR_BASE_RATES` (the
+  fact sheet's population snapshot path, defaults to
+  `realorrug_roast::baserates::DEFAULT_PATH`), and `RADAR_TRUST_CLOUDFLARE`
+  (set to `1` only on a box that actually sits behind Cloudflare, so
+  `CF-Connecting-IP` may be trusted for the per-IP limit instead of the
+  socket peer address).
+- `dispatch::Error::Unreadable` is a `String`, not a typed error, so
+  `check.rs` tells "wrong chain" (`not_a_token`) apart from "no RPC
+  configured" (`budget`) and everything else (`cant_read`) by matching
+  substrings of that message — documented as a known fragility in
+  `check.rs`'s own doc comment, not fixed here, because widening
+  `realorrug-onchain`'s error type is a larger, separate change.
 
 ## Not established
 
