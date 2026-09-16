@@ -227,6 +227,10 @@ mod tests {
         // match a Robinhood-only entry.
         assert!(!list.contains(Chain::Solana, "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e"));
         assert!(!list.contains(Chain::Robinhood, "0xnotlisted"));
+        // The empty-list test alone cannot tell a real count from one
+        // hard-wired to zero or a hard-wired `true`.
+        assert_eq!(list.len(), 1);
+        assert!(!list.is_empty());
     }
 
     #[test]
