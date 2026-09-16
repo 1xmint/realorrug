@@ -855,6 +855,7 @@ mod tests {
             mention_id: mention.to_owned(),
             summoner: who.to_owned(),
             mint: Some(mint.to_owned()),
+            read_at: None,
             read_at_slot: None,
             fact_sheet: String::new(),
             reply: "said something".to_owned(),

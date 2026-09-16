@@ -1593,6 +1593,7 @@ pub fn tick(
                     // No mint, and that is the *content* of the reply rather
                     // than a gap in the record: a symbol identifies nothing.
                     mint: None,
+                    read_at: None,
                     read_at_slot: None,
                     // Nothing was read, so there is no evidence to carry. An
                     // empty sheet beside a reply that states no fact about a
@@ -1666,6 +1667,7 @@ pub fn tick(
                         mention_id: mention.id.clone(),
                         summoner: mention.author.clone(),
                         mint: None,
+                        read_at: None,
                         read_at_slot: None,
                         fact_sheet: String::new(),
                         reply: pointer_reply(reply_id),
