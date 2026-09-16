@@ -134,9 +134,20 @@ pub enum Answered {
         /// reasoning as [`Self::Reply`]'s own field.
         billed: Billed,
     },
-    /// Nothing usable was found in the mention.
+    /// Nothing usable was found in the mention, **or** lane 2's own gate
+    /// (`crate::lane2::Gate::admit`) refused it.
+    ///
+    /// Deliberately the same variant for both: `crate::lane2::reply` never
+    /// returns [`Self::Refused`] for its own gate's refusal, because
+    /// `Self::Refused` is reserved for `admission::Gate`'s refusals, which
+    /// the daemon appends to the contest refusals file
+    /// (`contest::RefusalKind::costs_the_week` can disqualify an entrant's
+    /// week on `SummonerDaily`). Lane 2's cap is a much cheaper, off-topic
+    /// budget (design 0024 §3) -- hitting it is not a fact the contest may
+    /// see, so it is answered the way a nothing-mention always was before
+    /// lane 2 existed: silently.
     Nothing,
-    /// The gate refused it.
+    /// `admission::Gate` refused it.
     Refused(Refused),
     /// The mint parsed as base58 but is not an address.
     NotAnAddress,
@@ -417,11 +428,14 @@ mod tests {
 
     #[test]
     fn a_mention_naming_nothing_routes_to_lane2_and_is_not_an_error() {
-        // Design 0024: `Asked::Nothing` no longer returns `Answered::Nothing`
-        // silently -- it routes to `lane2::reply`. With no lane-2 limits
-        // configured (`lane2_gate` above is `Gate::unconfigured()`), rule 7
-        // means that reply is refused, not silently dropped -- the routing
-        // change happened, but nothing is spent or posted without a budget.
+        // Design 0024: `Asked::Nothing` routes to `lane2::reply`. With no
+        // lane-2 limits configured (`lane2_gate` above is
+        // `Gate::unconfigured()`), rule 7 means that reply is refused -- but
+        // a lane-2 refusal is never `Answered::Refused` (that variant is
+        // reserved for `admission::Gate`, whose refusals the daemon appends
+        // to the contest refusals file). `lane2::reply` maps its own gate's
+        // refusal to `Answered::Nothing`, the same silent-mention outcome
+        // this had before lane 2 existed.
         let client = unreachable_client();
         let out = answer(
             &mention("@radar hello"),
@@ -430,9 +444,47 @@ mod tests {
             &mut lane2_gate(),
             &ctx(&client),
         );
+        assert!(matches!(out, Answered::Nothing), "{out:?}");
+    }
+
+    #[test]
+    fn a_lane2_per_author_cap_refusal_is_nothing_not_a_contest_refusal() {
+        // The bug this fix closes: `daemon::tick` appends every
+        // `Answered::Refused` to the contest refusals file, and
+        // `contest::RefusalKind::costs_the_week` disqualifies the entrant's
+        // whole week on `SummonerDaily`. A sixth off-topic mention in a day
+        // hitting lane 2's own, much smaller per-author cap must not read as
+        // that -- `answer()` must return `Answered::Nothing`, never
+        // `Answered::Refused`, so the daemon's `if let Answered::Refused(why)
+        // = &other` guard at the contest-append call site never fires for it.
+        let client = unreachable_client();
+        let mut g = gate();
+        let mut threads = threads();
+        let mut lane2 = crate::lane2::Gate::new(
+            crate::lane2::Limits {
+                per_author_daily: 1,
+                global_daily: realorrug_types::MicroUsd::from_dollars(5.0),
+                cooldown_seconds: 0,
+            },
+            Vec::new(),
+        );
+        let mut ask = |lane2: &mut crate::lane2::Gate| {
+            answer(
+                &mention("@radar hello"),
+                &mut g,
+                &mut threads,
+                lane2,
+                &ctx(&client),
+            )
+        };
+        let first = ask(&mut lane2);
+        assert!(matches!(first, Answered::Lane2 { .. }), "{first:?}");
+        let second = ask(&mut lane2);
         assert!(
-            matches!(out, Answered::Refused(Refused::Unconfigured)),
-            "{out:?}"
+            matches!(second, Answered::Nothing),
+            "a lane-2 per-author cap refusal must be Answered::Nothing, \
+             never Answered::Refused, or it lands in the contest refusals \
+             file: {second:?}"
         );
     }
 

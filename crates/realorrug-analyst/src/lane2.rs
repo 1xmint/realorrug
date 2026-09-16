@@ -347,10 +347,22 @@ pub fn reply(
     provider: Option<&dyn Provider>,
     now: u64,
 ) -> Answered {
-    let key = format!("lane2:{}", mention.author);
     if let Err(why) = gate.admit(&mention.author, &mention.text, now) {
-        return Answered::Refused(why);
+        // A lane-2 refusal must never reach the contest refusals file
+        // (design 0024 §5, AGENTS.md rule 1): `daemon::tick` appends every
+        // `Answered::Refused` there, and `contest::RefusalKind::costs_the_week`
+        // disqualifies the entrant's whole week on `SummonerDaily`. Lane 2 is
+        // an off-topic, no-chain-read reply with its own small, cheap-to-spam
+        // budget (design 0024 §3) -- a person's sixth "gm" hitting that budget
+        // is not a fact about their contest entry, and before this lane
+        // existed the same mention (`Asked::Nothing`) was answered silently
+        // (`Answered::Nothing`). `Answered::Nothing` restores that: the gate's
+        // reasoning still runs, it is just never published, never billed and
+        // never logged as a refusal a person or a contest rule can see.
+        eprintln!("realorrug-analyst: lane2 refused {}: {why:?}", mention.author);
+        return Answered::Nothing;
     }
+    let key = format!("lane2:{}", mention.author);
 
     // Design 0024 §2.1: a sensitive-topic mention never reaches a model
     // call at all -- cheaper than generating and discarding a joke, and it
@@ -632,7 +644,7 @@ mod tests {
         }
         let out = reply(&mention("q5"), &mut g, Some(&provider), 1_000 + 5 * 61);
         assert!(
-            matches!(out, Answered::Refused(Refused::SummonerDaily { cap: 5 })),
+            matches!(out, Answered::Nothing),
             "{out:?}"
         );
     }
@@ -641,7 +653,7 @@ mod tests {
     fn no_configured_limits_refuses_outright() {
         let out = reply(&mention("hello"), &mut Gate::unconfigured(), None, 1_000);
         assert!(
-            matches!(out, Answered::Refused(Refused::Unconfigured)),
+            matches!(out, Answered::Nothing),
             "{out:?}"
         );
     }
@@ -658,7 +670,7 @@ mod tests {
         );
         let out = reply(&mention("hello"), &mut g, None, 1_000);
         assert!(
-            matches!(out, Answered::Refused(Refused::GlobalDaily { .. })),
+            matches!(out, Answered::Nothing),
             "{out:?}"
         );
     }
@@ -697,7 +709,7 @@ mod tests {
             calls_after_first,
             "the second call inside the cooldown must never reach the provider"
         );
-        assert!(matches!(second, Answered::Refused(_)), "{second:?}");
+        assert!(matches!(second, Answered::Nothing), "{second:?}");
     }
 
     #[test]
@@ -707,7 +719,7 @@ mod tests {
         m.author = "radar".to_owned();
         let out = reply(&m, &mut g, None, 1_000);
         assert!(
-            matches!(out, Answered::Refused(Refused::SelfOrIgnored)),
+            matches!(out, Answered::Nothing),
             "{out:?}"
         );
     }
@@ -722,7 +734,7 @@ mod tests {
         m.author = "asker".to_owned();
         let out = reply(&m, &mut g, None, 1_000 + 3_600);
         assert!(
-            matches!(out, Answered::Refused(Refused::SelfOrIgnored)),
+            matches!(out, Answered::Nothing),
             "{out:?}"
         );
     }
@@ -748,5 +760,86 @@ mod tests {
         };
         assert_eq!(a, b);
         assert_eq!(a, FALLBACK);
+    }
+
+    #[test]
+    fn a_second_call_exactly_at_the_cooldown_boundary_is_admitted() {
+        // `since < cooldown_seconds` refuses; `since == cooldown_seconds`
+        // must not -- a `<=` here would refuse a caller who waited the full,
+        // documented cooldown.
+        let mut g = gate(); // cooldown_seconds: 60
+        assert!(g.admit("asker", "q1", 1_000).is_ok());
+        assert!(
+            g.admit("asker", "q2", 1_000 + 60).is_ok(),
+            "exactly one cooldown period later must be admitted"
+        );
+    }
+
+    #[test]
+    fn the_rate_refusal_reports_the_hourly_rate_the_cooldown_implies() {
+        // 3_600 / cooldown_seconds, not the cooldown itself and not their
+        // product -- a 60-second cooldown allows 60 replies an hour.
+        let mut g = Gate::new(
+            Limits {
+                per_author_daily: 100,
+                global_daily: MicroUsd::from_dollars(5.0),
+                cooldown_seconds: 60,
+            },
+            Vec::new(),
+        );
+        assert!(g.admit("asker", "q1", 1_000).is_ok());
+        let err = g.admit("asker", "q2", 1_030).unwrap_err();
+        assert!(
+            matches!(err, Refused::GlobalRate { per_hour: 60 }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_call_landing_exactly_on_the_global_spend_ceiling_is_admitted() {
+        // `saturating_add(ESTIMATED_COST) > global_daily` refuses; equal to
+        // the ceiling must not -- a `>=` here would refuse the call that
+        // exactly spends the configured budget to zero.
+        let mut g = Gate::new(
+            Limits {
+                per_author_daily: 5,
+                global_daily: ESTIMATED_COST,
+                cooldown_seconds: 0,
+            },
+            Vec::new(),
+        );
+        assert!(
+            g.admit("asker", "q1", 1_000).is_ok(),
+            "a call costing exactly the remaining budget must be admitted"
+        );
+    }
+
+    #[test]
+    fn the_daily_refusal_reports_the_ceiling_in_whole_dollars() {
+        // global_daily.0 / 1_000_000, not `%` and not `*` -- five dollars
+        // reports as 5, not as the micro-dollar remainder or a scaled-up
+        // figure.
+        let mut g = Gate::new(
+            Limits {
+                per_author_daily: 5,
+                global_daily: MicroUsd::from_dollars(5.0),
+                cooldown_seconds: 0,
+            },
+            Vec::new(),
+        );
+        // Spend past the ceiling with successive authors, so the per-author
+        // and cooldown checks above never fire before the spend check does.
+        let mut author = 0;
+        let refusal = loop {
+            let name = format!("asker{author}");
+            match g.admit(&name, "q", 1_000) {
+                Ok(()) => author += 1,
+                Err(why) => break why,
+            }
+        };
+        assert!(
+            matches!(refusal, Refused::GlobalDaily { cap: 5 }),
+            "{refusal:?}"
+        );
     }
 }

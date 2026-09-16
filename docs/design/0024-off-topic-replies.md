@@ -500,9 +500,17 @@ Behaviours that must fail without the guard, one test each:
 9. A sixth lane-2 reply from the same author within the rolling 24-hour
    window is refused before a model call, at the per-author cap.
 10. A lane-2 reply requested after the global daily spend cap is exhausted
-    is refused before a model call, and the refusal is the same
-    `Refused`-shaped outcome `admission.rs` already returns for lane 1's
-    caps.
+    is refused before a model call. This is `Answered::Nothing`, **not**
+    `admission.rs`'s `Refused`-shaped outcome: `lane2::Gate::admit`'s own
+    refusal reason (`admission::Refused`, reused as the error type for its
+    smaller, unrelated budget) is mapped to `Answered::Nothing` before it
+    leaves `lane2::reply`, never returned as `Answered::Refused`. The daemon
+    appends every `Answered::Refused` to the contest refusals file, and
+    `contest::RefusalKind::costs_the_week` disqualifies an entrant's whole
+    week on `SummonerDaily` — a lane-2 cap, sized for a cheap off-topic
+    reply rather than a chain read, must never cost a contest week, so its
+    refusal is answered the same way a nothing-mention always was before
+    lane 2 existed: silently.
 11. A lane-2 reply requested with no configured per-author or global cap
     (`Limits`-shaped config absent) is refused outright — rule 7,
     deny-by-default — never silently uncapped.

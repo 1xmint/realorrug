@@ -437,6 +437,61 @@ fn a_published_reply_is_counted_charged_and_remembered() {
 }
 
 #[test]
+fn a_lane2_reply_is_counted_the_same_way_a_lane1_reply_is() {
+    // The `Answered::Lane2` arm's own counter, not `Answered::Reply`'s --
+    // mutation testing found `answered += 1` survives as `-=` when only
+    // lane 1's success path is exercised. A mention naming no address takes
+    // no chain read at all, so lane 2 must be configured for this to reach
+    // that arm rather than refuse outright (rule 7).
+    let page = r#"{"data":[{"id":"3001","author_id":"alice","text":"@radar hello there"}]}"#;
+    let (base, _seen) = platform(page);
+    let (rpc, _stop, _requests) = empty_chain();
+
+    let dir = workspace("lane2-counted");
+    let paths = Paths::under(&dir);
+    let mut gate = Gate::new(open_limits(), vec!["radar".to_owned()]);
+    let mut spend = Spend::open(
+        Budget {
+            per_call_max: MicroUsd(50_000),
+            daily_max: MicroUsd(1_000_000),
+        },
+        prices(),
+        paths.ledger.clone(),
+        1,
+    );
+    let mut lane2_gate = realorrug_analyst::lane2::Gate::new(
+        realorrug_analyst::lane2::Limits {
+            per_author_daily: 5,
+            global_daily: MicroUsd::from_dollars(5.0),
+            cooldown_seconds: 0,
+        },
+        vec!["radar".to_owned()],
+    );
+    let x = X::at(base, "tok", "u42");
+
+    let answered = tick(
+        Some(&x),
+        &Posts,
+        &mut gate,
+        &mut spend,
+        &realorrug_onchain::RpcClient::new(rpc),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut threads(),
+        &mut lane2_gate,
+        &paths,
+    );
+
+    assert_eq!(answered, 1, "a published lane-2 reply is counted");
+    let folded = realorrug_analyst::latest(&paths.log).expect("a log");
+    assert_eq!(folded.len(), 1);
+    assert_eq!(folded[0].reply_id.as_deref(), Some("posted-3001"));
+}
+
+#[test]
 fn an_unmatched_followup_in_an_answered_thread_gets_the_fixed_refusal_with_no_chain_read() {
     // Packet 0040's one shipping behaviour, driven through the full loop
     // rather than through `answer()` alone: a first mention builds a reply

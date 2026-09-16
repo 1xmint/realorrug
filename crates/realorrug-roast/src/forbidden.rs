@@ -2009,4 +2009,74 @@ mod tests {
             );
         }
     }
+
+    // -----------------------------------------------------------------
+    // Design 0024's lane-2 guardrails (`has_cashtag`, `check_no_identification`,
+    // `check_any_person_reference`). Each test below isolates one branch of
+    // an `||` (or the top-level `&&`) so a mutant that widens or narrows it
+    // fails exactly one of these, not by accident.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn has_cashtag_needs_the_dollar_immediately_before_an_alphanumeric() {
+        assert!(!has_cashtag("ab"), "no dollar sign at all is not a cashtag");
+        assert!(
+            !has_cashtag("$"),
+            "a dollar with nothing after it is not a cashtag"
+        );
+        assert!(
+            has_cashtag("$5"),
+            "a dollar directly before an alphanumeric is a cashtag"
+        );
+    }
+
+    #[test]
+    fn check_no_identification_needs_both_a_named_thing_and_a_copula() {
+        // `names_one && has_copula` -- exactly one true must not be enough.
+        assert!(
+            check_no_identification("it is great").is_empty(),
+            "a copula with nothing identified is not a claim"
+        );
+        assert!(
+            check_no_identification("drop a contract address").is_empty(),
+            "the nudge line itself: identified, but no copula, so it must \
+             pass -- design 0024 §2.1's own worked example"
+        );
+        // Each `||` inside `has_copula` triggered alone, with the other two
+        // false, so a mutant narrowing it to `&&` loses exactly this case.
+        assert!(
+            !check_no_identification("the token is great").is_empty(),
+            "\"is\" alone must trigger the copula"
+        );
+        assert!(
+            !check_no_identification("this coin are great").is_empty(),
+            "\"are\" alone must trigger the copula"
+        );
+        assert!(
+            !check_no_identification("this coin's great").is_empty(),
+            "\"'s \" alone must trigger the copula"
+        );
+    }
+
+    #[test]
+    fn check_any_person_reference_fires_on_any_one_shape_alone() {
+        // Each `||` term triggered alone, with the other three false, so a
+        // mutant narrowing any one `||` to `&&` loses exactly that case.
+        assert!(
+            !check_any_person_reference("the dev thinks so").is_empty(),
+            "a PERSON_WORDS hit alone must fire"
+        );
+        assert!(
+            !check_any_person_reference("Totally Legit here").is_empty(),
+            "a capitalized run alone must fire"
+        );
+        assert!(
+            !check_any_person_reference("0x1234 is a fraud").is_empty(),
+            "an address-as-subject alone must fire"
+        );
+        assert!(
+            check_any_person_reference("nothing notable happening here").is_empty(),
+            "none of the shapes present must not fire"
+        );
+    }
 }
