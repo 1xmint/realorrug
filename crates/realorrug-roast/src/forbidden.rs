@@ -40,6 +40,7 @@
 //! to read negation would be a checker arguing about meaning, and the point of
 //! this one is that it does not argue.
 
+use crate::fidelity;
 use crate::verdict::Level;
 
 /// A phrase the reply may not contain, and why.
@@ -679,6 +680,81 @@ const RUGMECHANICSLIVE_WORDS: &[LevelRule] = &[
         "stolen",
         "the mechanics are live, not yet used -- \"stole\" is past tense Rugged alone has earned",
     ),
+    // The reassurance words. §5 folds these into `check_level`, "conditional
+    // on level rather than absolute," but the fold missed this row: two or
+    // more live-risk signals are firing right now, which earns none of them.
+    // Without this row a reply computed as `RugMechanicsLive` could say
+    // "looks safe" and nothing here refused it -- the mechanics being live
+    // is exactly the case reassurance is most dangerous in.
+    (
+        "is safe",
+        "reassurance -- live rug mechanics are not reassurance-earning",
+    ),
+    (
+        "looks safe",
+        "reassurance -- live rug mechanics are not reassurance-earning",
+    ),
+    (
+        "totally safe",
+        "reassurance -- live rug mechanics are not reassurance-earning",
+    ),
+    (
+        "legit",
+        "reassurance -- live rug mechanics are not reassurance-earning",
+    ),
+    (
+        "trustworthy",
+        "reassurance -- live rug mechanics are not reassurance-earning",
+    ),
+    (
+        "looks clean",
+        "reassurance -- live rug mechanics are not reassurance-earning",
+    ),
+    (
+        "is clean",
+        "reassurance -- live rug mechanics are not reassurance-earning",
+    ),
+];
+
+/// `Rugged`'s ceiling. Not empty, and that is the fix this row exists for:
+/// `Rugged` has earned every *accusing* word ("rug," "stole," and their
+/// siblings sit at no ceiling here, on purpose -- see [`check_level`]'s own
+/// doc comment) but it has earned none of the *reassuring* ones. Before this
+/// row existed `check_level(_, Level::Rugged)` returned `&[]` for every word,
+/// which meant a reply about a token the code had already judged rugged
+/// could say "looks legit" and nothing in this file refused it -- the worst
+/// sentence this account could publish, reachable because the level that
+/// earns the most damning words was mistaken for the level that earns no
+/// ceiling at all.
+const RUGGED_WORDS: &[LevelRule] = &[
+    (
+        "is safe",
+        "reassurance -- this token is Rugged, the level that earns \"rug\"/\"stole\", never \"safe\"",
+    ),
+    (
+        "looks safe",
+        "reassurance -- this token is Rugged, the level that earns \"rug\"/\"stole\", never \"safe\"",
+    ),
+    (
+        "totally safe",
+        "reassurance -- this token is Rugged, the level that earns \"rug\"/\"stole\", never \"safe\"",
+    ),
+    (
+        "legit",
+        "reassurance -- this token is Rugged, the level that earns \"rug\"/\"stole\", never \"legit\"",
+    ),
+    (
+        "trustworthy",
+        "reassurance -- this token is Rugged, the level that earns \"rug\"/\"stole\", never \"trustworthy\"",
+    ),
+    (
+        "looks clean",
+        "reassurance -- this token is Rugged, the level that earns \"rug\"/\"stole\", never \"clean\"",
+    ),
+    (
+        "is clean",
+        "reassurance -- this token is Rugged, the level that earns \"rug\"/\"stole\", never \"clean\"",
+    ),
 ];
 
 /// [`RULES`] phrases design 0020 §5 migrates to [`check_target`] (an
@@ -751,10 +827,12 @@ pub fn check_unconditional(reply: &str) -> Vec<Violation> {
 /// Refuses a word above the ceiling the sheet's computed level earned,
 /// regardless of who or what it is aimed at -- design 0020 §5's level check.
 ///
-/// `Rugged` has no ceiling of its own: it is the level "rugged" and its
-/// siblings are earned *at*, so nothing in this file's vocabulary is refused
-/// there. Runs on the own-name-masked, lowercased text, same as `check`, so
-/// `realorrug` is never caught by "rug."
+/// `Rugged` has no ceiling on the *accusing* words: it is the level "rug,"
+/// "rugged" and their siblings are earned *at*, so none of them is refused
+/// there. It does have a ceiling on the *reassuring* ones ([`RUGGED_WORDS`]):
+/// nothing about earning "rugged" also earns "looks legit." Runs on the
+/// own-name-masked, lowercased text, same as `check`, so `realorrug` is never
+/// caught by "rug."
 ///
 /// Word, not substring: unlike `check`'s deliberate substring bluntness,
 /// "rug" must not fire on "rugged" (they are different, separately-earned
@@ -768,7 +846,7 @@ pub fn check_level(text: &str, level: Level) -> Vec<Violation> {
         Level::NothingUglyYet => NOTHINGUGLYYET_WORDS,
         Level::Sketchy => SKETCHY_WORDS,
         Level::RugMechanicsLive => RUGMECHANICSLIVE_WORDS,
-        Level::Rugged => &[],
+        Level::Rugged => RUGGED_WORDS,
     };
     rules
         .iter()
@@ -778,6 +856,131 @@ pub fn check_level(text: &str, level: Level) -> Vec<Violation> {
             because,
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Design 0020 §4: the two required lines.
+//
+// The opposite shape from everything above. `check`, `check_target`,
+// `check_level` and `check_unconditional` all refuse a phrase the reply
+// *has*; this refuses an *absence* -- a `CantTell` reply that never says
+// what could not be read, or a `NothingUglyYet` reply that never states the
+// age. Kept as its own function rather than folded into `check_level`
+// because the two shapes take different questions ("is this word present"
+// vs. "is this content present") and different inputs (`check_level` takes
+// only the level; this needs the sheet itself) -- a check that answered both
+// would be a check nobody could read.
+// ---------------------------------------------------------------------------
+
+/// Content design 0020 §4 requires a reply to carry, and it did not.
+///
+/// Reuses [`Violation`] rather than a new type: both are "the reply may not
+/// publish, and here is why," and a caller gating on `Fellback::Forbidden`
+/// (`voice.rs`) does not need a second variant to also handle this case.
+#[must_use]
+pub fn check_required(text: &str, level: Level, sheet: &crate::sheet::FactSheet) -> Vec<Violation> {
+    match level {
+        Level::CantTell => check_required_canttell(text, sheet),
+        Level::NothingUglyYet => check_required_age(text, sheet),
+        // §4 names a requirement at exactly these two levels. Nothing else on
+        // the ladder has one -- adding a third would be a rule design 0020
+        // §4 does not state, which the packet's scope boundary refuses.
+        Level::Sketchy | Level::RugMechanicsLive | Level::Rugged => Vec::new(),
+    }
+}
+
+/// The suffix `sheet.rs::phrase_for` writes on every reason it can name
+/// ("the launch block **could not be read**"). Stripped so the comparison is
+/// against the topic itself -- "the launch block" -- and a reply naming the
+/// topic in different words around it ("the launch-block read came back
+/// empty") still counts as naming the same thing `sheet.unknown` does.
+const UNKNOWN_SUFFIX: &str = " could not be read";
+
+/// The topic named by one of `sheet.unknown`'s phrases.
+fn topic(phrase: &str) -> &str {
+    phrase.strip_suffix(UNKNOWN_SUFFIX).unwrap_or(phrase)
+}
+
+fn check_required_canttell(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violation> {
+    if sheet.unknown.is_empty() {
+        // Dead in production: `verdict::level` returns `CantTell` exactly
+        // when `sheet.unknown` is non-empty (`verdict.rs`'s own `level`), so
+        // a real `CantTell` sheet always has something to name. Kept as a
+        // real branch rather than `unreachable!` because this function is
+        // also callable directly against a hand-built sheet (this file's own
+        // tests, or any future caller), and a panic there would be a worse
+        // failure than "nothing was required."
+        return Vec::new();
+    }
+    let lower = text.to_lowercase();
+    let named = sheet
+        .unknown
+        .iter()
+        .any(|miss| lower.contains(&topic(miss).to_lowercase()));
+    if named {
+        Vec::new()
+    } else {
+        vec![Violation {
+            phrase: "canttell reply names nothing that could not be read",
+            because: "design 0020 §4: a CantTell reply must say what could not be read, not a \
+                      bare \"can't tell\"",
+        }]
+    }
+}
+
+/// Words that mark a numeral in the reply as a statement of *when* the sheet
+/// was read, the shape design 0020 §4 asks `NothingUglyYet` to carry.
+///
+/// **What "the age" is on this branch.** Design 0020 §1 adds a dedicated
+/// launch-block/age fact to the Robinhood sheet -- a real elapsed time, read
+/// from a block timestamp -- but that field lives in `sheet.rs` and
+/// `realorrug-robinhood`, both outside this task's owned files and not yet
+/// built here. The only chronological figure the sheet already carries is
+/// [`crate::sheet::FactSheet::read_at`], "the slot every figure was read at"
+/// (`sheet.rs`'s own doc comment) -- not literally an age in hours, but the
+/// nearest thing on the sheet to "when this read happened," and the template
+/// already states it ("Read at slot …"). It stands in for the real age fact
+/// here; when that fact ships, only the value plugged into
+/// [`check_required_age`] changes, not this function's shape.
+const AGE_WORDS: &[&str] = &["slot", "block", "read at"];
+
+fn check_required_age(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violation> {
+    let refused = vec![Violation {
+        phrase: "nothinguglyyet reply states no age",
+        because: "design 0020 §4: a NothingUglyYet reply must state the age, not just \"clean \
+                  so far\"",
+    }];
+    let Some(slot) = sheet.read_at else {
+        // Nothing chronological is on this sheet at all -- rule 7, deny by
+        // default when the input the requirement needs is missing, rather
+        // than accept any reply because there was nothing to check it
+        // against.
+        return refused;
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a slot is well inside f64's exact integer range -- the same cast \
+                  sheet.rs::authorised already makes for the same value"
+    )]
+    let age_value = slot.0 as f64;
+
+    let lower = text.to_lowercase();
+    let mentions_age_word = AGE_WORDS.iter().any(|w| lower.contains(w));
+
+    // Reuses `fidelity::check`'s own notion of "the sheet authorised this
+    // number" rather than a second one, per the packet: a literal counts as
+    // stating the age when `fidelity::check` against *only* the age value
+    // does not report it as fabricated -- i.e. it is left out of the
+    // fabricated list, which only public API this module needs to ask.
+    let literals = fidelity::literals(text);
+    let not_the_age = fidelity::check(text, &[age_value]);
+    let states_the_age = literals.len() > not_the_age.len();
+
+    if mentions_age_word && states_the_age {
+        Vec::new()
+    } else {
+        refused
+    }
 }
 
 #[cfg(test)]
@@ -1081,6 +1284,37 @@ mod tests {
     }
 
     #[test]
+    fn reassurance_is_refused_at_rugmechanicslive_even_though_it_is_not_earned() {
+        // The gap this task closes: two live-risk signals are firing right
+        // now, which earns none of the reassurance vocabulary. Delete the
+        // reassurance rows from `RUGMECHANICSLIVE_WORDS` and this fails.
+        for said in ["this one looks safe", "totally legit", "looks clean so far"] {
+            assert!(
+                !check_level(said, Level::RugMechanicsLive).is_empty(),
+                "{said:?} must be refused at RugMechanicsLive"
+            );
+        }
+    }
+
+    #[test]
+    fn reassurance_is_refused_at_rugged_but_rug_and_stole_are_still_earned() {
+        // The worst sentence this account could publish, until `RUGGED_WORDS`
+        // existed: a token already judged Rugged, called "legit" and nothing
+        // refusing it. Delete `RUGGED_WORDS` (swap it back for `&[]`) and the
+        // first loop's assertions fail.
+        for said in ["looks safe to me", "totally legit", "is clean now"] {
+            assert!(
+                !check_level(said, Level::Rugged).is_empty(),
+                "{said:?} must be refused at Rugged"
+            );
+        }
+        // Rugged is still where "rug"/"stole" are earned -- this row must not
+        // turn into a second accusing-word ceiling by accident.
+        assert!(check_level("this token got rugged", Level::Rugged).is_empty());
+        assert!(check_level("the buyers were stolen from", Level::Rugged).is_empty());
+    }
+
+    #[test]
     fn word_occurs_matches_whole_words_only_so_rug_does_not_fire_on_rugged() {
         // Re-apply by swapping `word_occurs` for a plain `.contains`: this
         // sentence contains only "rugged", never bare "rug", and a substring
@@ -1242,5 +1476,177 @@ mod tests {
             "the old ban has no opinion on \"fine\""
         );
         assert!(!check_level(text, Level::CantTell).is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // check_required
+    // -----------------------------------------------------------------
+
+    use crate::sheet::{Fact, FactSheet};
+
+    /// A sheet naming one unread fact and read at a fixed slot, so both
+    /// `check_required_canttell` (against `unknown`) and
+    /// `check_required_age` (against `read_at`) have something to check.
+    fn required_sheet(unknown: Vec<String>) -> FactSheet {
+        FactSheet {
+            mint: "MintOne".to_owned(),
+            read_at: Some(realorrug_types::Slot(444_007_820)),
+            facts: vec![Fact::exact(
+                crate::clause::Kind::LaunchRecipients,
+                "distinct token accounts receiving the token in its own launch block",
+                11.0,
+                "11",
+            )],
+            untrusted: Vec::new(),
+            unknown,
+            signals: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_canttell_reply_naming_nothing_is_refused() {
+        // The packet's own wording: "the holder list," "the reserve read" --
+        // not a bare "can't tell." Re-apply by deleting the call inside
+        // `check_required_canttell` that scans `sheet.unknown`: this starts
+        // passing when it must fail.
+        let sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
+        assert!(
+            !check_required(
+                "Can't tell on this one, nothing to go on.",
+                Level::CantTell,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_canttell_reply_naming_a_thing_on_the_unknown_list_passes() {
+        let sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
+        assert!(
+            check_required(
+                "The launch block couldn't be pulled, so this one's a shrug.",
+                Level::CantTell,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_canttell_reply_naming_a_different_unknown_thing_still_passes() {
+        // Any one of `unknown`'s topics is enough -- the packet says "at
+        // least one," not "all."
+        let sheet = required_sheet(vec![
+            "the launch block could not be read".to_owned(),
+            "the bonding curve could not be read".to_owned(),
+        ]);
+        assert!(
+            check_required(
+                "The bonding curve came back empty, so no read here.",
+                Level::CantTell,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nothinguglyyet_reply_with_no_age_is_refused() {
+        // Re-apply by deleting the `states_the_age` half of
+        // `check_required_age`'s condition (or hard-coding it `true`): this
+        // starts passing when it must fail.
+        let sheet = required_sheet(Vec::new());
+        assert!(
+            !check_required(
+                "Nothing ugly here yet, clean so far.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nothinguglyyet_reply_with_the_sheets_age_passes() {
+        let sheet = required_sheet(Vec::new());
+        assert!(
+            check_required(
+                "Nothing ugly yet. Read at slot 444007820, still early.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nothinguglyyet_reply_with_an_unrelated_number_is_still_refused() {
+        // The number alone is not enough -- it has to be attached to an age
+        // word, or "11 accounts, nothing ugly yet" (an authorised figure
+        // that has nothing to do with when the sheet was read) would pass.
+        let sheet = required_sheet(Vec::new());
+        assert!(
+            !check_required(
+                "11 token accounts, nothing ugly yet.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_nothinguglyyet_reply_with_an_age_word_but_a_fabricated_number_is_refused() {
+        // The age word alone is not enough either -- the number beside it has
+        // to be the one the sheet actually authorised, reusing
+        // `fidelity::check`'s own notion of "authorised" rather than a
+        // second, looser one.
+        let sheet = required_sheet(Vec::new());
+        assert!(
+            !check_required(
+                "Read at slot 1, nothing ugly yet.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn check_required_has_no_opinion_at_the_other_three_levels() {
+        let sheet = required_sheet(Vec::new());
+        for level in [Level::Sketchy, Level::RugMechanicsLive, Level::Rugged] {
+            assert!(
+                check_required("anything at all", level, &sheet).is_empty(),
+                "{level:?} must carry no requirement from this function"
+            );
+        }
+    }
+
+    #[test]
+    fn the_template_carries_the_required_line_at_every_level() {
+        // The packet's expensive-to-miss case: `voice::write` publishes
+        // `verdict::template` on every refusal, so if the template itself
+        // cannot pass this check, a refusal ships the very thing it exists
+        // to prevent. Tested at all five levels, the way the packet asks --
+        // three of them carry no requirement and pass trivially, but they are
+        // asserted anyway so a future third-level requirement cannot silently
+        // start failing here unnoticed.
+        let unknown_sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
+        let clean_sheet = required_sheet(Vec::new());
+        for (level, sheet) in [
+            (Level::CantTell, &unknown_sheet),
+            (Level::NothingUglyYet, &clean_sheet),
+            (Level::Sketchy, &clean_sheet),
+            (Level::RugMechanicsLive, &clean_sheet),
+            (Level::Rugged, &clean_sheet),
+        ] {
+            let text = crate::verdict::template(sheet);
+            assert!(
+                check_required(&text, level, sheet).is_empty(),
+                "the template must pass check_required at {level:?}: {text:?}"
+            );
+        }
     }
 }

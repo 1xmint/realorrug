@@ -261,6 +261,13 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
     let mut violations = forbidden::check_target(&text);
     violations.extend(forbidden::check_level(&text, level));
     violations.extend(forbidden::check_unconditional(&text));
+    // Design 0020 §4's required lines: a `CantTell` reply that never says
+    // what could not be read, or a `NothingUglyYet` reply that never states
+    // the age, is the one shape none of the three checks above catches --
+    // each of them refuses a phrase the reply *has*, and this is the one
+    // that refuses an absence. A miss here is a fallback, same as the other
+    // three, not a distinct error path.
+    violations.extend(forbidden::check_required(&text, level, sheet));
     if !violations.is_empty() {
         return Reply {
             text: fallback,
@@ -417,7 +424,8 @@ mod tests {
         let reply = write(
             &sheet(),
             Some(&Says(
-                "Eleven accounts at birth and the round trip runs 4200 bps.",
+                "Eleven accounts at birth, read at slot 444007820, and the round trip runs \
+                 4200 bps.",
             )),
         );
         assert!(reply.is_template(), "{:?}", reply.text);
@@ -442,9 +450,12 @@ mod tests {
     #[test]
     fn a_clean_free_text_answer_ships_exactly_as_written() {
         // The positive case: a sentence nobody pre-wrote, citing only sheet
-        // figures and no person, ships verbatim once cleaned.
+        // figures and no person, ships verbatim once cleaned. It also states
+        // the age (read at slot 444007820) because this fixture's sheet
+        // computes `NothingUglyYet`, and design 0020 §4 requires that level's
+        // reply to say so.
         let good = "Eleven accounts held it at birth, against an 850 bps round trip -- \
-                    thin either way.";
+                    thin either way, read at slot 444007820.";
         let reply = write(&sheet(), Some(&Says(good)));
         assert!(!reply.is_template(), "{:?}", reply.fellback);
         assert_eq!(reply.text, good);
@@ -559,9 +570,14 @@ mod tests {
         // uses none of their words. One sentence, free of every ceiling word
         // at every level (no "safe"/"clean"/"fine"/"legit"/"rug"/"rugged"/
         // "stole"/"stolen"/"guaranteed"), proven to publish unchanged
-        // whichever level the sheet computes.
+        // whichever level the sheet computes. It also names "reserve" (the
+        // CantTell case's unknown item) and states the age (the
+        // NothingUglyYet case's read-at slot), so design 0020 §4's two
+        // required lines are satisfied everywhere they apply; the other
+        // three levels have no opinion on this text (`check_required` is a
+        // no-op for them), so the same sentence still publishes unchanged.
         let good = "Eleven accounts held it at birth, against an 850 bps round trip -- \
-                    thin either way.";
+                    thin either way, reserve included, read at slot 444007820.";
         let cases: [(Vec<Signal>, Vec<String>); 5] = [
             // CantTell: a required fact was not read.
             (Vec::new(), vec!["reserve could not be read".to_owned()]),
@@ -602,7 +618,12 @@ mod tests {
         // a true sentence into a different one without changing a character any
         // checker reads. The model has a prose position now, so this is the
         // free-text path's own version of the attack `render.rs` exists for.
-        let reply = write(&sheet(), Some(&Says("11 accounts\u{202e} in the block.")));
+        let reply = write(
+            &sheet(),
+            Some(&Says(
+                "11 accounts\u{202e} in the block, read at slot 444007820.",
+            )),
+        );
         assert!(!reply.text.contains('\u{202e}'), "{:?}", reply.text);
         assert!(!reply.is_template(), "and it is still published: {reply:?}");
     }
@@ -670,7 +691,7 @@ mod tests {
         let reply = write(
             &sheet(),
             Some(&Priced(
-                "Eleven accounts at birth, 850 bps to trade it.",
+                "Eleven accounts at birth, 850 bps to trade it, read at slot 444007820.",
                 4_500,
             )),
         );
@@ -686,7 +707,9 @@ mod tests {
         // meter never moves -- while the bill does.
         let reply = write(
             &sheet(),
-            Some(&Says("Eleven accounts at birth, 850 bps to trade it.")),
+            Some(&Says(
+                "Eleven accounts at birth, 850 bps to trade it, read at slot 444007820.",
+            )),
         );
         assert!(!reply.is_template(), "{:?}", reply.fellback);
         assert_eq!(reply.billed, Billed::Unreported);
