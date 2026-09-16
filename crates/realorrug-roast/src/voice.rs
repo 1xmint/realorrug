@@ -706,7 +706,7 @@ mod tests {
         let reply = write(
             &sheet(),
             Some(&Priced(
-                "Eleven accounts at birth, 850 bps to trade it, read at slot 444007820.",
+                "Eleven accounts at birth, 850 bps to trade it, about 7.1 hours old, read at slot 444007820.",
                 4_500,
             )),
         );
@@ -723,7 +723,7 @@ mod tests {
         let reply = write(
             &sheet(),
             Some(&Says(
-                "Eleven accounts at birth, 850 bps to trade it, read at slot 444007820.",
+                "Eleven accounts at birth, 850 bps to trade it, about 7.1 hours old, read at slot 444007820.",
             )),
         );
         assert!(!reply.is_template(), "{:?}", reply.fellback);

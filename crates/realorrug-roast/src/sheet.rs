@@ -516,9 +516,28 @@ impl FactSheet {
 
     /// The sheet as the model sees it.
     ///
-    /// Facts only. The mint, the slot, and the untrusted strings are fenced
-    /// separately by [`crate::voice`] so that nothing in this block is
-    /// creator-controlled.
+    /// Facts, what could not be read, and the read point. The mint and the
+    /// untrusted strings are fenced separately by [`crate::voice`] so that
+    /// nothing in this block is creator-controlled.
+    ///
+    /// **The read point is here because it is the only way it reaches the
+    /// model at all.** `voice::write` hands the provider exactly
+    /// the mint and this rendering, joined, and nothing else, so a number
+    /// absent from this string is a number the model cannot write -- and
+    /// from this string is a number the model cannot write -- and
+    /// `forbidden::check_required_age` requires a `NothingUglyYet` reply on a
+    /// sheet with no age (every Robinhood sheet today: `LaunchBlock` is
+    /// Solana-slot-shaped) to state the read point. Left out of this block,
+    /// that rule is unsatisfiable by any real model and every such reply
+    /// falls back to the template, which is the free-text voice going silent
+    /// on a whole chain without anything saying so.
+    ///
+    /// Written through [`ReadAt`]'s own `Display` -- "slot 444007820",
+    /// "block 100" -- the single spelling of either word, so the sheet and
+    /// `verdict::template` cannot drift apart on which clock a number is in.
+    /// [`FactSheet::authorised`] already permitted this number before it was
+    /// rendered here; harvesting it twice is harmless, because `authorised`
+    /// is a set of permitted values and not a count.
     #[must_use]
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -527,6 +546,9 @@ impl FactSheet {
         }
         for miss in &self.unknown {
             let _ = writeln!(out, "NOT KNOWN: {miss}");
+        }
+        if let Some(read_at) = self.read_at {
+            let _ = writeln!(out, "read at: {read_at}");
         }
         out
     }
@@ -1476,6 +1498,77 @@ mod tests {
         // Not a number a reader would call a rounding of 25.1%.
         assert!(!f.values.iter().any(|v| (*v - 68.0).abs() < 1e-9));
         assert_eq!(f.rendered, "25.1%");
+    }
+
+    /// A minimal sheet with exactly one fact, one miss and a read point, so
+    /// `render`'s whole output can be pinned without a fixture that grows.
+    fn pinnable(read_at: realorrug_types::ReadAt) -> FactSheet {
+        FactSheet {
+            mint: "MintOne".to_owned(),
+            read_at: Some(read_at),
+            facts: vec![Fact::exact(
+                Kind::LaunchRecipients,
+                "distinct token accounts receiving the token in its own launch block",
+                11.0,
+                "11",
+            )],
+            untrusted: Vec::new(),
+            unknown: vec!["the bonding curve could not be read".to_owned()],
+            signals: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_solana_sheet_renders_byte_for_byte() {
+        // The whole string, not a `contains`. `voice::write` hands the model
+        // the mint and this rendering and nothing else, so every byte here is
+        // the model's entire world -- a line silently added or dropped
+        // changes what the account is able to say, and no other test in this
+        // crate would notice. Pinned whole for that reason; when this
+        // assertion fails, read the diff and decide whether the new line
+        // belongs, rather than weakening it to a `contains`.
+        assert_eq!(
+            pinnable(realorrug_types::ReadAt::Solana(realorrug_types::Slot(
+                444_007_820
+            )))
+            .render(),
+            [
+                "distinct token accounts receiving the token in its own launch block: 11",
+                "NOT KNOWN: the bonding curve could not be read",
+                "read at: slot 444007820",
+                "",
+            ]
+            .join("
+")
+        );
+    }
+
+    #[test]
+    fn a_robinhood_sheet_carries_its_block_into_the_render_the_template_and_authorised() {
+        // All three surfaces, because the read point reaches the reader by
+        // three different routes and the Robinhood arm of each was the gap:
+        // `render` is the only channel to the model, `template` is what ships
+        // when the model's reply is refused, and `authorised` is what lets a
+        // reply state the number at all. A block number must never wear a
+        // slot's label on any of them -- `ReadAt`'s `Display` is the single
+        // spelling, which is why "block 100" appears here and nowhere else.
+        let sheet = pinnable(realorrug_types::ReadAt::Robinhood(100));
+
+        assert!(
+            sheet.render().contains("read at: block 100"),
+            "{}",
+            sheet.render()
+        );
+        assert!(
+            !sheet.render().contains("slot"),
+            "a block number must not be labelled a slot: {}",
+            sheet.render()
+        );
+
+        let template = crate::verdict::template(&sheet);
+        assert!(template.contains("Read at block 100."), "{template}");
+
+        assert!(sheet.authorised().iter().any(|v| (*v - 100.0).abs() < 1e-9));
     }
 
     #[test]
