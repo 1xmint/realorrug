@@ -76,11 +76,11 @@ describe("index.html states what the fixture says", () => {
     // Three copies of the headline figures live in the head -- description,
     // og:description and twitter:description -- plus the image alt. Every one
     // of them is a claim to a stranger who never loads the page.
-    const claim = `${launches} pump.fun launches watched. ${graduate} ever graduate.`;
+    const claim = `${launches} launches watched. ${graduate} ever graduate.`;
     const copies = INDEX_HTML.split(claim).length - 1;
     expect(copies).toBe(3);
     expect(INDEX_HTML).toContain(
-      `content="Cabal Hunter: ${launches} launches watched, ${graduate} ever graduate."`,
+      `content="Real or Rug: ${launches} launches watched, ${graduate} ever graduate."`,
     );
   });
 

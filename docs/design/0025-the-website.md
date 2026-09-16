@@ -676,14 +676,34 @@ Each slice ships and is checkable on its own; later slices do not block on
 future slices existing.
 
 1. **Fix the stuck `Reading…` states and the brand text, no new pages.**
-   Files: `site/src/Leaderboard.tsx`, `site/src/Pool.tsx` (the timeout/error
-   fallback bug, §0), `site/src/App.tsx` (wordmark), `site/src/Home.tsx`,
-   `site/src/About.tsx`, `site/src/Token.tsx` (every "Cabal Hunter" /
-   "Solana" / "pump.fun" string replaced with the realorrug / Robinhood
-   Chain equivalent). No new routes, no new art. This ships first because
-   every later slice reuses these files' data-fetching and copy patterns —
-   building the noir reskin on top of the stuck-spinner bug ships the same
-   bug in nicer clothes.
+   **Shipped 2026-09-16.** Files: `site/src/Leaderboard.tsx`, `site/src/Pool.tsx`
+   (the timeout/error fallback bug, §0), `site/src/App.tsx` (wordmark),
+   `site/src/Home.tsx`, `site/src/About.tsx`, `site/src/Token.tsx` (every
+   "Cabal Hunter" / "Solana" / "pump.fun" string replaced with the realorrug /
+   Robinhood Chain equivalent). No new routes, no new art. This ships first
+   because every later slice reuses these files' data-fetching and copy
+   patterns — building the noir reskin on top of the stuck-spinner bug ships
+   the same bug in nicer clothes.
+
+   The fetch fix: `site/src/api.ts`'s `get()` cleared its 4s abort timer as
+   soon as the response headers arrived, before reading the body. A server
+   that sent headers and then stalled was never aborted, `pool()` and
+   `leaderboard()` never settled, and the page read `Reading…` forever. The
+   timer now runs until the body is read (cleared in a `finally`), so every
+   call settles within `TIMEOUT_MS` and falls back as it always meant to.
+   `site/src/api.test.ts` stalls the body behind a fake `fetch` that honours
+   the abort signal, and fails if the timer is cleared early again.
+
+   Left unfixed, out of this slice's scope: `site/src/Leaderboard.tsx` and
+   `site/src/Pool.tsx` still carry unrelated Solana/pump.fun-specific mechanic
+   copy (`SOL` units, `solscan.io` links, the pump.fun fee schedule, "a Solana
+   wallet address"), as does `site/src/Contact.tsx`, `site/src/Privacy.tsx`,
+   `site/src/Terms.tsx`, `site/src/History.tsx` and `site/src/title.ts`'s
+   `SITE` constant — none of these were named in this document's §0, and
+   replacing them correctly needs the actual Robinhood Chain payout mechanic
+   (design 0025 §2 cites `realorrug-payout`'s two-transaction, Pons v2 escrow
+   shape), not a guessed Solana-shaped substitute. A later slice or a
+   dedicated pass should carry that fix.
 2. **Palette and type system.** File: `site/src/index.css` (§5's colour
    tokens added alongside, not replacing, the existing ones where kept;
    `--color-good` updated; Space Grotesk added as the display face,

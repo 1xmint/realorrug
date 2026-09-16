@@ -105,7 +105,7 @@ function Money() {
         <Steps
           steps={[
             {
-              what: "Somebody trades the token. pump.fun charges a fee on the trade.",
+              what: "Somebody trades the token. A fee is charged on the trade.",
             },
             {
               what: "Part of that fee is the creator's, and the creator is this token's vault.",

@@ -107,7 +107,7 @@ function Hero({ s }: { s: Stats }) {
     <Section className="pt-16 pb-8 sm:pt-24">
       <div className="enter">
         <div className="mb-5">
-          <Act n="01">Solana · pump.fun · measured since August</Act>
+          <Act n="01">Robinhood Chain · measured since August</Act>
         </div>
         {/* This read "Most launches are coordinated" until 2026-09-07, with
             the measurement contradicting it in the card immediately below:
@@ -129,7 +129,7 @@ function Hero({ s }: { s: Stats }) {
         <p className="mt-6 max-w-2xl text-[length:var(--text-lead)] text-[var(--color-dim)]">
           When capital is committed to a token <em>before</em> it exists, the
           evidence is sitting in the launch block — the very first block of the
-          coin's life. Cabal Hunter has been reading every one of them. Most
+          coin's life. Real or Rug has been reading every one of them. Most
           launches show nothing; the ones that do are the point.
         </p>
 
@@ -260,7 +260,7 @@ function Cost({ s }: { s: Stats }) {
       <p className="mt-8 max-w-2xl text-[var(--color-dim)]">
         This is the part a page trying to sell you something would leave out.
         Graduation is the event everybody celebrates, and the median graduated
-        token still ends deep underwater. Cabal Hunter will tell you a coin looks
+        token still ends deep underwater. Real or Rug will tell you a coin looks
         clean. It will never tell you a coin will go up, because nothing measured
         here supports that sentence.
       </p>
