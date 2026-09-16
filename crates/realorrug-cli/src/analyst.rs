@@ -42,8 +42,9 @@ use crate::flag;
 /// actually receives, which would make reading two hundred dry-run replies a
 /// test of the fixture rather than of the bot.
 ///
-/// `parent` is read here too, under the platform's own field name, so a fixture
-/// can exercise the reply-chain path without an account.
+/// `parent` and `conversation_id` are read here too, under the platform's own
+/// field names, so a fixture can exercise the reply-chain and thread-memory
+/// paths without an account.
 fn parse_mention(line: &str) -> Option<Mention> {
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
     Some(Mention {
@@ -52,6 +53,10 @@ fn parse_mention(line: &str) -> Option<Mention> {
         text: value.get("text")?.as_str()?.to_owned(),
         parent: value
             .get("parent")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        conversation: value
+            .get("conversation_id")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
     })
@@ -150,8 +155,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         self_mint: self_mint.as_ref(),
         now,
     };
+    let mut threads = realorrug_analyst::followup::ThreadMemory::new();
     for mention in &mentions {
-        answer(mention, &mut gate, &ctx, &log_path)?;
+        answer(mention, &mut gate, &mut threads, &ctx, &log_path)?;
     }
 
     println!(
@@ -179,6 +185,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 fn answer(
     mention: &Mention,
     gate: &mut Gate,
+    threads: &mut realorrug_analyst::followup::ThreadMemory,
     ctx: &Answering<'_>,
     log_path: &str,
 ) -> Result<(), String> {
@@ -193,9 +200,9 @@ fn answer(
     // mint or a symbol.
     println!("    {}", safe(&mention.text, 120));
 
-    let entry = match realorrug_analyst::answer(mention, gate, ctx) {
+    let entry = match realorrug_analyst::answer(mention, gate, threads, ctx) {
         Answered::Reply { entry, .. } => *entry,
-        Answered::Ticker { text: reply, .. } => {
+        Answered::Ticker { text: reply, .. } | Answered::Followup { text: reply, .. } => {
             println!("--> {reply}");
             return Ok(());
         }
