@@ -472,7 +472,10 @@ fn an_unmatched_followup_in_an_answered_thread_gets_the_fixed_refusal_with_no_ch
         &mut memory,
         &paths,
     );
-    assert_eq!(first_answered, 1, "the first mention gets an ordinary reply");
+    assert_eq!(
+        first_answered, 1,
+        "the first mention gets an ordinary reply"
+    );
     let level = memory
         .standing("conv-1")
         .expect("the thread is recorded after the first reply")
@@ -1040,7 +1043,18 @@ fn with_no_telegram_token_the_lane_reads_nothing_and_writes_nothing() {
     let client = realorrug_onchain::RpcClient::new(rpc);
     let mut spend = funded(&paths);
     let answered = realorrug_analyst::telegram::tick(
-        None, &DryRun, &mut gate, &mut spend, &client, None, None, None, None, None, &mut threads(), &paths,
+        None,
+        &DryRun,
+        &mut gate,
+        &mut spend,
+        &client,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &mut threads(),
+        &paths,
     );
     assert_eq!(answered, 0);
     assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 0);

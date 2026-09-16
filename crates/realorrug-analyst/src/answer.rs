@@ -387,7 +387,12 @@ mod tests {
     #[test]
     fn a_mention_naming_nothing_is_not_an_error() {
         let client = unreachable_client();
-        let out = answer(&mention("@radar hello"), &mut gate(), &mut threads(), &ctx(&client));
+        let out = answer(
+            &mention("@radar hello"),
+            &mut gate(),
+            &mut threads(),
+            &ctx(&client),
+        );
         assert!(matches!(out, Answered::Nothing), "{out:?}");
     }
 
