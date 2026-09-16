@@ -95,7 +95,10 @@ impl Prices {
                 .map(MicroUsd)
         };
         Some(Self {
-            mention_read: read("REALORRUG_X_PRICE_MENTION_READ", "RADAR_X_PRICE_MENTION_READ")?,
+            mention_read: read(
+                "REALORRUG_X_PRICE_MENTION_READ",
+                "RADAR_X_PRICE_MENTION_READ",
+            )?,
             post_read: read("REALORRUG_X_PRICE_POST_READ", "RADAR_X_PRICE_POST_READ")?,
             reply: read("REALORRUG_X_PRICE_REPLY", "RADAR_X_PRICE_REPLY")?,
             post: read("REALORRUG_X_PRICE_POST", "RADAR_X_PRICE_POST")?,

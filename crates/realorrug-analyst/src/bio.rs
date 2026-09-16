@@ -353,8 +353,7 @@ mod tests {
         // configuration time rather than producing a bio that is only a lead.
         assert_eq!(Bio::from_vars(&|_| Some("x".repeat(MAX))), None);
 
-        let set =
-            Bio::from_vars(&|k| (k == "REALORRUG_BIO_LEAD").then(|| "  hello  ".to_owned()));
+        let set = Bio::from_vars(&|k| (k == "REALORRUG_BIO_LEAD").then(|| "  hello  ".to_owned()));
         assert_eq!(set.expect("set").lead, "hello");
     }
 

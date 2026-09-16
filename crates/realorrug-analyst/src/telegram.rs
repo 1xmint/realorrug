@@ -108,14 +108,22 @@ impl Telegram {
     /// [`Self::from_env`] with a getter, so the rule can be tested.
     #[must_use]
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Self> {
-        let token = env_or_legacy("REALORRUG_TELEGRAM_BOT_TOKEN", "RADAR_TELEGRAM_BOT_TOKEN", get)?;
+        let token = env_or_legacy(
+            "REALORRUG_TELEGRAM_BOT_TOKEN",
+            "RADAR_TELEGRAM_BOT_TOKEN",
+            get,
+        )?;
         if token.trim().is_empty() {
             return None;
         }
         Some(Self {
             token: token.trim().to_owned(),
-            base: env_or_legacy("REALORRUG_TELEGRAM_API_BASE", "RADAR_TELEGRAM_API_BASE", get)
-                .unwrap_or_else(|| API.to_owned()),
+            base: env_or_legacy(
+                "REALORRUG_TELEGRAM_API_BASE",
+                "RADAR_TELEGRAM_API_BASE",
+                get,
+            )
+            .unwrap_or_else(|| API.to_owned()),
             channel: env_or_legacy("REALORRUG_TELEGRAM_CHANNEL", "RADAR_TELEGRAM_CHANNEL", get)
                 .map(|c| c.trim().to_owned())
                 .filter(|c| !c.is_empty()),
@@ -704,8 +712,8 @@ mod tests {
     fn no_token_is_no_bot_and_a_blank_token_is_no_token() {
         assert!(Telegram::from_vars(&vars(&[])).is_none());
         assert!(Telegram::from_vars(&vars(&[("REALORRUG_TELEGRAM_BOT_TOKEN", "  ")])).is_none());
-        let bot =
-            Telegram::from_vars(&vars(&[("REALORRUG_TELEGRAM_BOT_TOKEN", " 1:a ")])).expect("a bot");
+        let bot = Telegram::from_vars(&vars(&[("REALORRUG_TELEGRAM_BOT_TOKEN", " 1:a ")]))
+            .expect("a bot");
         assert_eq!(bot.base, API);
         assert!(
             bot.updates_url(None)
@@ -729,7 +737,10 @@ mod tests {
         assert_eq!(publisher_for(Some(bot()), true).name(), "telegram");
         assert_eq!(publisher_for(Some(bot()), false).name(), "dry-run");
         assert_eq!(publisher_for(None, true).name(), "dry-run");
-        assert!(may_publish(&vars(&[("REALORRUG_TELEGRAM_PUBLISH", " ON ")])));
+        assert!(may_publish(&vars(&[(
+            "REALORRUG_TELEGRAM_PUBLISH",
+            " ON "
+        )])));
         for value in ["", "true", "1", "yes", "onn"] {
             assert!(
                 !may_publish(&vars(&[("REALORRUG_TELEGRAM_PUBLISH", value)])),
@@ -745,8 +756,8 @@ mod tests {
         // channel is kept and the bot would post into "" -- the first
         // assertion fails.
         let token = ("REALORRUG_TELEGRAM_BOT_TOKEN", "1:a");
-        let blank =
-            Telegram::from_vars(&vars(&[token, ("REALORRUG_TELEGRAM_CHANNEL", "  ")])).expect("a bot");
+        let blank = Telegram::from_vars(&vars(&[token, ("REALORRUG_TELEGRAM_CHANNEL", "  ")]))
+            .expect("a bot");
         assert_eq!(blank.channel(), None);
         assert!(matches!(blank.post("x"), Err(Undeliverable::Unconfigured)));
         let none = Telegram::from_vars(&vars(&[token])).expect("a bot");

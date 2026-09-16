@@ -120,7 +120,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Same reasoning as `limits` above: stated, not defaulted. A dry run that
     // left lane 2 unconfigured would never show Josh the reply design 0024
     // adds, and one that invented a number here would make this command's
-    // budget diverge from the daemon's own (`RADAR_LANE2_*`, read by
+    // budget diverge from the daemon's own (`REALORRUG_LANE2_*`, read by
     // `lane2::limits_from` in the daemon).
     let lane2_limits = realorrug_analyst::lane2::Limits {
         per_author_daily: flag(args, "--lane2-per-author")

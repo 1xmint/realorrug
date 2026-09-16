@@ -276,11 +276,15 @@ pub fn budget_from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<realorr
     // A per-call ceiling catches a mispriced call before the daily one does.
     // Defaulting it to the daily maximum makes it inert rather than wrong: the
     // day is still bounded, and an operator who wants the tighter check sets it.
-    let per_call = non_empty(get, "REALORRUG_MODEL_PER_CALL_USD", "RADAR_MODEL_PER_CALL_USD")
-        .and_then(|v| v.parse::<f64>().ok())
-        .map(MicroUsd::from_dollars)
-        .filter(|c| *c > MicroUsd::ZERO)
-        .unwrap_or(daily);
+    let per_call = non_empty(
+        get,
+        "REALORRUG_MODEL_PER_CALL_USD",
+        "RADAR_MODEL_PER_CALL_USD",
+    )
+    .and_then(|v| v.parse::<f64>().ok())
+    .map(MicroUsd::from_dollars)
+    .filter(|c| *c > MicroUsd::ZERO)
+    .unwrap_or(daily);
 
     Some(realorrug_agent::Budget {
         per_call_max: per_call.min(daily),

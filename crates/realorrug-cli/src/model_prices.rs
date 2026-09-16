@@ -24,6 +24,7 @@
 
 use realorrug_model::catalog::{self, Listed};
 use realorrug_types::MicroUsd;
+use realorrug_types::env::env_or_legacy;
 
 /// Seconds to wait for the catalog.
 const TIMEOUT_SECONDS: u64 = 20;
@@ -33,7 +34,7 @@ const USAGE: &str = "usage: realorrug model-prices <model>            the lines 
        realorrug model-prices --list              every model, cheapest first
        realorrug model-prices [<model>] --check   does the environment still match
 
---check with no model named reads RADAR_MODEL_NAME.";
+--check with no model named reads REALORRUG_MODEL_NAME.";
 
 /// What the arguments ask for.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -50,7 +51,7 @@ pub enum Asked {
 
 /// Reads the arguments.
 ///
-/// `env_model` is `RADAR_MODEL_NAME`, supplied rather than read so this can be
+/// `env_model` is `REALORRUG_MODEL_NAME`, supplied rather than read so this can be
 /// driven without setting a process-wide variable that parallel tests would
 /// fight over — the shape `Prices::from_vars` uses, and for the same reason.
 ///
@@ -91,7 +92,11 @@ pub fn asked(args: &[String], env_model: Option<&str>) -> Asked {
 pub fn run(args: &[String]) -> Result<(), String> {
     // Read before the fetch. A command that downloads four megabytes and then
     // prints its usage has wasted somebody's time and somebody's bandwidth.
-    let asked = asked(args, std::env::var("RADAR_MODEL_NAME").ok().as_deref());
+    let get = |k: &str| std::env::var(k).ok();
+    let asked = asked(
+        args,
+        env_or_legacy("REALORRUG_MODEL_NAME", "RADAR_MODEL_NAME", get).as_deref(),
+    );
     if asked == Asked::Usage {
         return Err(USAGE.to_owned());
     }
@@ -119,13 +124,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         Asked::Check(model) => {
             let listed = catalog::find(&document, &model)?;
-            let read =
-                |name: &str| -> Option<u64> { std::env::var(name).ok()?.trim().parse().ok() };
+            let read = |new: &str, old: &str| -> Option<u64> {
+                env_or_legacy(new, old, get)?.trim().parse().ok()
+            };
             let found = drift(
                 &listed,
-                read("RADAR_MODEL_PRICE_IN"),
-                read("RADAR_MODEL_PRICE_OUT"),
-                &std::env::var("RADAR_MODEL_REASONING_EFFORT").unwrap_or_default(),
+                read("REALORRUG_MODEL_PRICE_IN", "RADAR_MODEL_PRICE_IN"),
+                read("REALORRUG_MODEL_PRICE_OUT", "RADAR_MODEL_PRICE_OUT"),
+                &env_or_legacy(
+                    "REALORRUG_MODEL_REASONING_EFFORT",
+                    "RADAR_MODEL_REASONING_EFFORT",
+                    get,
+                )
+                .unwrap_or_default(),
             );
             if found.is_empty() {
                 println!("{}/{} matches the catalog.", listed.provider, listed.id);
@@ -157,10 +168,10 @@ pub fn lines_for(m: &Listed) -> String {
          # from {}\n\
          #\n\
          # Paste into /etc/realorrug/analyst.env, replacing any existing\n\
-         # RADAR_MODEL_ lines. Restart the unit afterwards.\n\n\
-         RADAR_MODEL_NAME={}\n\
-         RADAR_MODEL_PRICE_IN={}\n\
-         RADAR_MODEL_PRICE_OUT={}\n",
+         # REALORRUG_MODEL_ lines. Restart the unit afterwards.\n\n\
+         REALORRUG_MODEL_NAME={}\n\
+         REALORRUG_MODEL_PRICE_IN={}\n\
+         REALORRUG_MODEL_PRICE_OUT={}\n",
         m.provider,
         m.id,
         dollars(m.input),
@@ -175,14 +186,14 @@ pub fn lines_for(m: &Listed) -> String {
         // output rate and never reach the reply, so a reasoning model asked for
         // three sentences pays for thinking nobody reads -- and can spend the
         // whole ceiling on it, return nothing, and ship the template.
-        out.push_str("RADAR_MODEL_REASONING_EFFORT=none\n");
+        out.push_str("REALORRUG_MODEL_REASONING_EFFORT=none\n");
         out.push_str(
             "\n# That last line is not optional for this model. It reasons by default,\n\
              # reasoning tokens bill at the OUTPUT rate, and none of them reach the reply.\n",
         );
     } else {
         out.push_str(
-            "\n# Do NOT set RADAR_MODEL_REASONING_EFFORT for this model: it does not\n\
+            "\n# Do NOT set REALORRUG_MODEL_REASONING_EFFORT for this model: it does not\n\
              # reason, and the field is a 400.\n",
         );
     }
@@ -202,8 +213,8 @@ pub fn drift(
 ) -> Vec<String> {
     let mut found = Vec::new();
     for (name, set, listed) in [
-        ("RADAR_MODEL_PRICE_IN", price_in, m.input),
-        ("RADAR_MODEL_PRICE_OUT", price_out, m.output),
+        ("REALORRUG_MODEL_PRICE_IN", price_in, m.input),
+        ("REALORRUG_MODEL_PRICE_OUT", price_out, m.output),
     ] {
         match set {
             Some(set) if set == listed.get() => {}
@@ -224,14 +235,14 @@ pub fn drift(
     let effort = reasoning_effort.trim();
     if m.reasoning && effort.is_empty() {
         found.push(
-            "RADAR_MODEL_REASONING_EFFORT is unset and this model reasons by default, \
+            "REALORRUG_MODEL_REASONING_EFFORT is unset and this model reasons by default, \
              so it is billing output tokens that never reach a reply"
                 .to_owned(),
         );
     }
     if !m.reasoning && !effort.is_empty() {
         found.push(format!(
-            "RADAR_MODEL_REASONING_EFFORT is {effort:?} and this model does not reason, \
+            "REALORRUG_MODEL_REASONING_EFFORT is {effort:?} and this model does not reason, \
              which the provider answers with a 400"
         ));
     }
@@ -344,14 +355,20 @@ mod tests {
         // transcription. So the assertion is on the exact bytes: a missing zero
         // here under-counts a bill tenfold and nothing downstream would notice.
         let out = lines_for(&luna());
-        assert!(out.contains("\nRADAR_MODEL_NAME=gpt-5.6-luna\n"), "{out}");
-        assert!(out.contains("\nRADAR_MODEL_PRICE_IN=200000\n"), "{out}");
-        assert!(out.contains("\nRADAR_MODEL_PRICE_OUT=1200000\n"), "{out}");
+        assert!(
+            out.contains("\nREALORRUG_MODEL_NAME=gpt-5.6-luna\n"),
+            "{out}"
+        );
+        assert!(out.contains("\nREALORRUG_MODEL_PRICE_IN=200000\n"), "{out}");
+        assert!(
+            out.contains("\nREALORRUG_MODEL_PRICE_OUT=1200000\n"),
+            "{out}"
+        );
         // Every non-comment line is a variable assignment, so the block can be
         // pasted whole without reading it.
         for line in out.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
             assert!(line.contains('='), "not pasteable: {line:?}");
-            assert!(line.starts_with("RADAR_MODEL_"), "stray line: {line:?}");
+            assert!(line.starts_with("REALORRUG_MODEL_"), "stray line: {line:?}");
         }
     }
 
@@ -360,8 +377,8 @@ mod tests {
         // And a non-reasoning one must NOT, because the field is a 400 there.
         // Re-apply by emitting it unconditionally: the second assertion fails,
         // and on the box every reply would become the template.
-        assert!(lines_for(&luna()).contains("RADAR_MODEL_REASONING_EFFORT=none"));
-        assert!(!lines_for(&mini()).contains("RADAR_MODEL_REASONING_EFFORT=none"));
+        assert!(lines_for(&luna()).contains("REALORRUG_MODEL_REASONING_EFFORT=none"));
+        assert!(!lines_for(&mini()).contains("REALORRUG_MODEL_REASONING_EFFORT=none"));
         assert!(
             lines_for(&mini()).contains("Do NOT set"),
             "and it says so rather than staying quiet"
@@ -380,13 +397,13 @@ mod tests {
         // drift and a wrong one reports none.
         let one = drift(&luna(), Some(20_000), Some(1_200_000), "none");
         assert_eq!(one.len(), 1, "{one:?}");
-        assert!(one[0].contains("RADAR_MODEL_PRICE_IN"), "{one:?}");
+        assert!(one[0].contains("REALORRUG_MODEL_PRICE_IN"), "{one:?}");
         assert!(one[0].contains("20000"), "what is set: {one:?}");
         assert!(one[0].contains("200000"), "what it should be: {one:?}");
 
         let other = drift(&luna(), Some(200_000), Some(999), "none");
         assert_eq!(other.len(), 1, "{other:?}");
-        assert!(other[0].contains("RADAR_MODEL_PRICE_OUT"), "{other:?}");
+        assert!(other[0].contains("REALORRUG_MODEL_PRICE_OUT"), "{other:?}");
 
         // Unset is its own message. "is 0" would be a lie about what is there.
         let missing = drift(&luna(), None, None, "none");

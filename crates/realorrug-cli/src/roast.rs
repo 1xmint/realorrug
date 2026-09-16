@@ -90,7 +90,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     // No provider is the ordinary case on a machine with no credential, and it
-    // is not an error: the deterministic template ships. `RADAR_MODEL_CODEX` is
+    // is not an error: the deterministic template ships. `REALORRUG_MODEL_CODEX` is
     // marked private-use-only, so a public analyst must go through the metered
     // API-key path -- but that choice belongs to `realorrug-model`, which reads the
     // environment, not to this file.
