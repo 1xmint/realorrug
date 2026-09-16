@@ -239,6 +239,22 @@ mod tests {
     }
 
     #[test]
+    fn a_robinhood_run_glued_on_only_one_side_is_still_not_taken() {
+        // Both halves of the glue rule, one at a time. The test above this
+        // one glues both sides at once, so swapping `&&` for `||` in
+        // `first_robinhood_address` still rejects it and the swap survives.
+        // Each case here has exactly one side glued, which is the only shape
+        // that tells the two operators apart.
+        //
+        // Glued in front only -- the run ends at a space, so `after_ok`
+        // holds and `before_ok` does not.
+        assert_eq!(read(&format!("see{ROBINHOOD} here")), Asked::Nothing);
+        // Glued behind only -- the run starts the text, so `before_ok` holds
+        // and `after_ok` does not.
+        assert_eq!(read(&format!("{ROBINHOOD}xyz")), Asked::Nothing);
+    }
+
+    #[test]
     fn a_robinhood_shaped_run_of_the_wrong_length_is_not_taken() {
         assert_eq!(read("0x1234 is too short"), Asked::Nothing);
     }
