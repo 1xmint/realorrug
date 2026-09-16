@@ -73,6 +73,16 @@ the failure. Say whether you are recommending or recording.
 - This is checked out on the owner's workstation, which is in use while you work. **No
   `cargo mutants` locally, no release builds, one cargo process at a time,
   scoped to the crate you are editing.** Push and let CI run the heavy checks.
+- **CI runs the test suites, not this machine** (the owner's instruction,
+  2026-09-16). `cargo check -p <crate>`, `cargo clippy -p <crate>`, `cargo fmt`
+  and a single named test are yours to run; `cargo test -p <crate>` and
+  anything wider belong to CI. Push the branch and read
+  `gh pr checks <n> --watch --interval 60`. A suite here costs an hour of a
+  machine the owner is using and proves what CI proves in five minutes.
+- **Kill leftovers before any cargo command.** An agent that stops mid-run
+  leaves its `cargo`/`rustc`/test binaries alive; stale ones stack up under the
+  next run and read as a hang. Check with
+  `Get-Process cargo,rustc -ErrorAction SilentlyContinue` first.
 - **Stage by path** (no `git add -A`), read the staged diff before committing,
   and never commit to `main`.
 - **Do not push while a CI run you are waiting on is in flight**: the workflow
