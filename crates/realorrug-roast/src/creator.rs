@@ -210,6 +210,82 @@ impl CreatorIndex {
         self.creators.is_empty()
     }
 
+    /// The floor above which `record.launches` counts as
+    /// [`crate::sheet::Signal::RepeatLauncher`], measured from **this
+    /// index's own distribution** -- never from Radar's Solana constants.
+    ///
+    /// # Why not `REPEAT_FLOOR`/`INFRASTRUCTURE_FLOOR`
+    ///
+    /// Those are real, measured numbers about a different thing: distinct
+    /// launch *blocks* a transfer-signing wallet appears in over a
+    /// *90-minute window*, on *Solana*. `launches` here is a creator's
+    /// **lifetime** count, over this index's whole watermark, on whichever
+    /// chain the address is. Same words ("repeat", "launcher"), different
+    /// population, different window, different chain — design 0020 §3 names
+    /// this trap twice, quoting research 0008's warning that came true in
+    /// 0024: *"Six is a tool's default, not a law."* Importing either
+    /// constant was considered for this packet and rejected for exactly that
+    /// reason.
+    ///
+    /// # Order: excluded first, then measured
+    ///
+    /// `list` is applied **before** the percentile is taken, not after. The
+    /// Pons v2 factory and its fee escrow launch or receive on every token by
+    /// design; leaving either in the population a floor is measured against
+    /// makes the floor a measurement about the factory. Research 0042
+    /// records the Solana version doing exclusion first: its
+    /// `Infrastructure` band *"excludes 13 router/fee-sink addresses
+    /// covering 42% of launches"* before the bands mean anything.
+    /// Computing the floor first and excluding afterwards would fit the
+    /// floor to a contaminated population, and nothing downstream could tell
+    /// that it happened — which is the defect this method exists to prevent.
+    ///
+    /// # The percentile, and why it is stated this exactly
+    ///
+    /// The 95th percentile of the remaining creators' `launches`, by the
+    /// **nearest-rank** convention: sort ascending and take the value at
+    /// index `((n - 1) * 95) / 100`, integer arithmetic, i.e. the value at or
+    /// below that rank. There are several percentile conventions in common
+    /// use (nearest-rank, several flavours of linear interpolation) and they
+    /// disagree at the edges of a population this size, so this is written
+    /// out rather than left to a library default: a reply that cites "the
+    /// 95th percentile" has to mean one specific number, reproducibly, from
+    /// a recording.
+    ///
+    /// The floor is that value, or **2**, whichever is larger — a creator
+    /// with one launch cannot be a repeat launcher under the plain meaning of
+    /// the word, and a percentile that lands on 1 is telling you the
+    /// population is mostly first-timers, not that everyone is a repeat
+    /// launcher.
+    ///
+    /// # Refuses below 100 remaining creators
+    ///
+    /// Returns `None` when fewer than 100 creators survive the exclusion.
+    /// Under that, the 95th percentile is one of the top five values in the
+    /// population and moves by a whole launch every time one creator is
+    /// added — a threshold that jumps when the index grows is a threshold
+    /// about the index, not about creators, and `Signal::RepeatLauncher`
+    /// must not fire on one.
+    #[must_use]
+    pub fn repeat_launcher_floor(
+        &self,
+        chain: crate::firstparty::Chain,
+        list: &crate::firstparty::FirstPartyList,
+    ) -> Option<u32> {
+        let mut launches: Vec<u32> = self
+            .creators
+            .iter()
+            .filter(|(address, _)| !list.contains(chain, address))
+            .map(|(_, record)| record.launches)
+            .collect();
+        if launches.len() < 100 {
+            return None;
+        }
+        launches.sort_unstable();
+        let index = (launches.len() - 1) * 95 / 100;
+        Some(launches[index].max(2))
+    }
+
     /// The totals, for a reader that needs five numbers and not 116,000
     /// records.
     ///
@@ -324,6 +400,136 @@ impl Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::firstparty::{Chain, FirstPartyList};
+
+    /// A `CreatorIndex` with one record per `1..=n`, addressed `c0`..`c{n-1}`
+    /// -- `launches` set to its position, `1..=n`, so an assertion about the
+    /// floor is also an assertion about which creator earned it.
+    fn index_of_launches(counts: &[u32]) -> CreatorIndex {
+        let mut creators = BTreeMap::new();
+        for (i, &n) in counts.iter().enumerate() {
+            creators.insert(
+                format!("c{i}"),
+                Record {
+                    launches: n,
+                    ..Record::default()
+                },
+            );
+        }
+        CreatorIndex {
+            watermark_slot: 1,
+            built_at: 0,
+            population: None,
+            creators,
+        }
+    }
+
+    fn empty_list() -> FirstPartyList {
+        FirstPartyList::parse(r#"{"entries": []}"#).expect("parses")
+    }
+
+    #[test]
+    fn the_95th_percentile_is_pinned_to_an_exact_number() {
+        // 250 creators, launches 1..=250. `(250 - 1) * 95 / 100 == 236`
+        // (integer division: 249 * 95 = 23655, 23655 / 100 == 236, not 237),
+        // and the value at that 0-based rank in `1..=250` is 237.
+        //
+        // The numbers are chosen so the three ways this arithmetic is
+        // commonly mutated each land on a different answer, not 237:
+        // dropping the `- 1` gives 237/100*250=... -> index 237, value 238;
+        // `* 94` instead of `* 95` gives index 234, value 235; `/ 99` instead
+        // of `/ 100` gives index 239, value 240. A survivor changing any one
+        // of them is caught by the pinned number, not just a direction.
+        let counts: Vec<u32> = (1..=250).collect();
+        let index = index_of_launches(&counts);
+        assert_eq!(
+            index.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
+            Some(237)
+        );
+    }
+
+    #[test]
+    fn a_percentile_below_two_is_raised_to_the_floor_of_two() {
+        // 150 creators who have all launched exactly once: the 95th
+        // percentile of a population of all-1s is 1, and "1" cannot be the
+        // floor for a *repeat* launcher, so this must read 2 -- pinned
+        // exactly, not just asserted `> 1`, so a mutant that turns `.max(2)`
+        // into `.max(1)` (or drops it) is caught by the number rather than a
+        // direction.
+        let counts = vec![1u32; 150];
+        let index = index_of_launches(&counts);
+        assert_eq!(
+            index.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn exactly_a_hundred_remaining_creators_computes_a_floor_and_ninety_nine_refuses() {
+        // The boundary is "below 100", not "at or below" -- one creator
+        // apart, asserted both ways, so a mutant that turns `<` into `<=`
+        // (refusing at exactly 100 too) or into `>` (never refusing) is
+        // caught by a concrete `Some`/`None` on either side, not by a single
+        // direction that a `&&`-vs-`||` swap could also satisfy.
+        let ninety_nine = index_of_launches(&vec![5u32; 99]);
+        assert_eq!(
+            ninety_nine.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
+            None,
+            "99 remaining creators must refuse"
+        );
+
+        let hundred = index_of_launches(&vec![5u32; 100]);
+        assert_eq!(
+            hundred.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
+            Some(5),
+            "100 remaining creators must compute a floor"
+        );
+    }
+
+    #[test]
+    fn the_named_list_is_excluded_before_the_floor_is_computed_not_after() {
+        // 150 ordinary creators (launches 1..=150) plus two named addresses
+        // holding an enormous count each -- the shape research 0042 records
+        // for Radar's own `Infrastructure` band, which "excludes 13
+        // router/fee-sink addresses" *before* computing its bands.
+        //
+        // Order matters here in a way a single assertion can catch: exclude
+        // first and 150 ordinary creators remain, giving floor 142
+        // (`(150-1)*95/100 == 141`, value 142 at that rank in `1..=150`).
+        // Compute first and exclude after -- i.e. delete the exclusion --
+        // and the floor is measured over all 152 entries instead, landing on
+        // 144. The two numbers are different by construction, so this test
+        // fails if the exclusion is removed, which is the defect this
+        // packet exists to prevent.
+        let mut counts: Vec<u32> = (1..=150).collect();
+        counts.push(500_000); // "the factory"
+        counts.push(500_000); // "the escrow"
+        let index = index_of_launches(&counts);
+
+        let list = FirstPartyList::parse(
+            r#"{"entries": [
+                {"address": "c150", "chain": "robinhood", "role": "the factory", "source": "test", "added": "2026-09-15"},
+                {"address": "c151", "chain": "robinhood", "role": "the escrow", "source": "test", "added": "2026-09-15"}
+            ]}"#,
+        )
+        .expect("parses");
+
+        assert_eq!(
+            index.repeat_launcher_floor(Chain::Robinhood, &list),
+            Some(142),
+            "excluding first must give the ordinary population's own floor"
+        );
+
+        // Re-applying the bug: the same index, with no exclusion at all, is
+        // measured over the contaminated population and lands on a
+        // different number.
+        assert_eq!(
+            index.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
+            Some(144),
+            "an empty list excludes nothing, so this is the contaminated floor \
+             the real signal must never use"
+        );
+    }
 
     #[test]
     fn the_summary_is_written_beside_the_index_and_only_when_there_is_one() {
