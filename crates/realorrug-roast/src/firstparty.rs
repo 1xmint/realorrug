@@ -225,10 +225,7 @@ mod tests {
         // Same text, wrong chain: re-applying the bug that drops the chain
         // check out of `contains` would let a Solana lookup on this string
         // match a Robinhood-only entry.
-        assert!(!list.contains(
-            Chain::Solana,
-            "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e"
-        ));
+        assert!(!list.contains(Chain::Solana, "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e"));
         assert!(!list.contains(Chain::Robinhood, "0xnotlisted"));
     }
 

@@ -293,12 +293,22 @@ impl FactSheet {
     /// ([`withhold_price`]). Everything else about the token is stated on the
     /// same rule as any other coin — ADR 0013 constraint 6 — which is why this
     /// is one filter and not a separate path.
+    ///
+    /// `first_party` is the named-address list `Signal::RepeatLauncher` must
+    /// exclude before it measures a floor (`creator.rs::repeat_launcher_floor`,
+    /// packet 0037). `None` the same way `rates` and `creators` are `None`: not
+    /// configured, or the file did not parse. Passing `None` here does not
+    /// mean "fire `RepeatLauncher` without the exclusions" — it means the
+    /// signal does not fire at all, on any chain (AGENTS.md rule 7); a
+    /// prevalence measured over a population that still contains the launch
+    /// factory would look like a result while being wrong.
     #[must_use]
     pub fn build(
         dossier: &Dossier,
         rates: Option<&BaseRates>,
         creators: Option<&crate::creator::CreatorIndex>,
         self_mint: Option<&realorrug_types::Address>,
+        first_party: Option<&crate::firstparty::FirstPartyList>,
     ) -> Self {
         let mut facts = Vec::new();
         let mut untrusted = Vec::new();
@@ -375,6 +385,36 @@ impl FactSheet {
                 && record.organic == 0
             {
                 signals.push(Signal::CreatorNeverGraduatedOrganically);
+            }
+
+            // RepeatLauncher (design 0020 §3; research 0042's port-order item
+            // 1). The floor is this index's own 95th percentile, measured
+            // *after* the named list excludes the launch factory and its
+            // escrow -- never Radar's Solana `REPEAT_FLOOR`/
+            // `INFRASTRUCTURE_FLOOR` constants, which are a different
+            // population (distinct launch *blocks* in a *90-minute window*),
+            // a different window, and a different chain
+            // (`creator::CreatorIndex::repeat_launcher_floor`'s own doc
+            // comment carries the rest of that argument).
+            //
+            // No list, or no floor (fewer than 100 creators survive the
+            // exclusion), means no signal — AGENTS.md rule 7, deny by
+            // default, not "fire without the exclusion."
+            //
+            // **The innocent twin, per design 0020 §3: a bot that buys every
+            // launch; infrastructure, not coordination.** The named list does
+            // not dispose of this twin — it holds *named* addresses, and an
+            // unnamed relayer nobody has captured yet reads identically, on
+            // this signal alone, to a person launching forty tokens. That is
+            // this signal's honest limit; putting the twin into a reply is a
+            // later packet's job (design 0020 §3's own note), not this one's.
+            if let Some(list) = first_party
+                && let Some(record) = index.get(&creator)
+                && let Some(floor) =
+                    index.repeat_launcher_floor(crate::firstparty::Chain::of(&address), list)
+                && record.launches >= floor
+            {
+                signals.push(Signal::RepeatLauncher);
             }
         }
 
@@ -1723,7 +1763,7 @@ mod tests {
             why: "this token has more history than the page budget allows".to_owned(),
         });
 
-        let sheet = FactSheet::build(&d, None, Some(&index_with(record(150, 0))), None);
+        let sheet = FactSheet::build(&d, None, Some(&index_with(record(150, 0))), None, None);
         let rendered = sheet.render();
 
         // The creator's record survived the missing launch block.
@@ -1843,7 +1883,7 @@ mod tests {
         ));
         let rates = rates_strongest(10, 13);
         let index = index_with(record(3, 0));
-        let sheet = FactSheet::build(&dossier, Some(&rates), Some(&index), None);
+        let sheet = FactSheet::build(&dossier, Some(&rates), Some(&index), None, None);
         assert_eq!(
             sheet.signals,
             [
@@ -1858,6 +1898,115 @@ mod tests {
         assert!(!rendered.to_lowercase().contains("signal"), "{rendered}");
     }
 
+    /// An index with `filler_count` creators at exactly `floor_value`
+    /// launches each, plus one creator at `target_address` carrying
+    /// `target_launches`.
+    ///
+    /// `filler_count` is chosen (100) so the filler block alone clears the
+    /// refusal floor and dominates the 95th-percentile rank regardless of
+    /// where the single target creator's own count sorts -- so this always
+    /// measures a floor of exactly `floor_value`, and the test using it is
+    /// only about whether `target_launches >= floor_value` fires the signal,
+    /// not about the percentile arithmetic (that is `creator.rs`'s job).
+    fn index_with_floor_and_target(
+        target_address: String,
+        target_launches: u32,
+        floor_value: u32,
+        filler_count: usize,
+    ) -> crate::creator::CreatorIndex {
+        let mut creators = std::collections::BTreeMap::new();
+        for i in 0..filler_count {
+            creators.insert(
+                format!("filler{i}"),
+                crate::creator::Record {
+                    launches: floor_value,
+                    ..crate::creator::Record::default()
+                },
+            );
+        }
+        creators.insert(
+            target_address,
+            crate::creator::Record {
+                launches: target_launches,
+                ..crate::creator::Record::default()
+            },
+        );
+        crate::creator::CreatorIndex {
+            watermark_slot: 444_343_109,
+            built_at: 1_788_000_000,
+            population: None,
+            creators,
+        }
+    }
+
+    fn empty_first_party_list() -> crate::firstparty::FirstPartyList {
+        crate::firstparty::FirstPartyList::parse(r#"{"entries": []}"#).expect("parses")
+    }
+
+    #[test]
+    fn a_creator_at_or_above_the_floor_fires_repeat_launcher_and_one_below_does_not() {
+        // 100 fillers at launches == 5 pin the floor at 5 regardless of the
+        // target's own count (see `index_with_floor_and_target`). Four
+        // values against that one floor: strictly below, exactly at it, and
+        // above -- `>=` is what the sheet uses, so the boundary is asserted
+        // both ways rather than only in the direction that flatters `>`.
+        let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
+        let list = empty_first_party_list();
+        for (target_launches, fires) in [(4u32, false), (5u32, true), (6u32, true)] {
+            let mut dossier = dossier_for([3u8; 32]);
+            dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+            let index =
+                index_with_floor_and_target(creator_address.clone(), target_launches, 5, 100);
+            let sheet = FactSheet::build(&dossier, None, Some(&index), None, Some(&list));
+            assert_eq!(
+                sheet.signals.contains(&Signal::RepeatLauncher),
+                fires,
+                "{target_launches} launches against a floor of 5"
+            );
+        }
+    }
+
+    #[test]
+    fn no_named_list_fires_no_repeat_launcher_signal_even_far_above_any_floor() {
+        // Deny by default (AGENTS.md rule 7): `first_party: None` is the same
+        // "not configured, or did not parse" state whether the file was
+        // absent or malformed -- both reach `FactSheet::build` as `None`, so
+        // this one case covers both halves of "no list, or an unparseable
+        // list, fires no signal."
+        let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        // Far above any plausible floor, so a survivor that fires without a
+        // list cannot hide behind "the count just happened to be too low."
+        let index = index_with_floor_and_target(creator_address, 9_999, 5, 100);
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, None);
+        assert!(
+            !sheet.signals.contains(&Signal::RepeatLauncher),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
+    #[test]
+    fn under_a_hundred_remaining_creators_fires_no_repeat_launcher_signal() {
+        // 40 creators is a real index with a real record, just too small for
+        // the floor to mean anything (`creator.rs::repeat_launcher_floor`'s
+        // own refusal) -- distinct from the "no list" case above, and from
+        // `CreatorNeverGraduatedOrganically`, which this dossier does not
+        // qualify for (`record.measured == 0` here).
+        let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
+        let list = empty_first_party_list();
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        let index = index_with_floor_and_target(creator_address, 9_999, 5, 40);
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, Some(&list));
+        assert!(
+            !sheet.signals.contains(&Signal::RepeatLauncher),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
     #[test]
     fn above_the_strongest_band_counts_and_below_it_does_not() {
         // "Ten to thirteen or above": 14 is above and fires; 9 is below and
@@ -1870,7 +2019,7 @@ mod tests {
                 realorrug_onchain::budget::Count::Exactly(recipients),
                 None,
             ));
-            let sheet = FactSheet::build(&dossier, Some(&rates), None, None);
+            let sheet = FactSheet::build(&dossier, Some(&rates), None, None, None);
             assert_eq!(
                 sheet.signals.contains(&Signal::LaunchBlockInStrongestBand),
                 fires,
@@ -1891,19 +2040,19 @@ mod tests {
 
         let at_six = rates_strongest(6, 6);
         assert!(
-            FactSheet::build(&twelve, Some(&at_six), None, None)
+            FactSheet::build(&twelve, Some(&at_six), None, None, None)
                 .signals
                 .contains(&Signal::LaunchBlockInStrongestBand),
             "twelve is above six and fires: 'or above' is the rule"
         );
         assert!(
-            FactSheet::build(&six, Some(&at_six), None, None)
+            FactSheet::build(&six, Some(&at_six), None, None, None)
                 .signals
                 .contains(&Signal::LaunchBlockInStrongestBand)
         );
         let at_ten = rates_strongest(10, 13);
         assert!(
-            !FactSheet::build(&six, Some(&at_ten), None, None)
+            !FactSheet::build(&six, Some(&at_ten), None, None, None)
                 .signals
                 .contains(&Signal::LaunchBlockInStrongestBand),
             "six is below ten and does not fire once the band has moved"
@@ -1920,7 +2069,7 @@ mod tests {
         dossier.launch = Some(launch(realorrug_onchain::budget::Count::AtLeast(40), None));
         let rates = rates_strongest(10, 13);
         let unmeasured = index_with(record(0, 0));
-        let sheet = FactSheet::build(&dossier, Some(&rates), Some(&unmeasured), None);
+        let sheet = FactSheet::build(&dossier, Some(&rates), Some(&unmeasured), None, None);
         assert_eq!(sheet.signals, []);
 
         // A dev buy of exactly zero lamports, if a chain ever reported one, is
@@ -1931,7 +2080,7 @@ mod tests {
             Some(0),
         ));
         assert_eq!(
-            FactSheet::build(&zero, None, None, None).signals,
+            FactSheet::build(&zero, None, None, None, None).signals,
             [],
             "no snapshot, no band; a zero buy is not a buy"
         );
@@ -1941,7 +2090,7 @@ mod tests {
         organic.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(2), None));
         let graduated = index_with(record(3, 1));
         assert_eq!(
-            FactSheet::build(&organic, Some(&rates), Some(&graduated), None).signals,
+            FactSheet::build(&organic, Some(&rates), Some(&graduated), None, None).signals,
             []
         );
 
@@ -1951,6 +2100,7 @@ mod tests {
                 &dossier_for([5u8; 32]),
                 Some(&rates),
                 Some(&graduated),
+                None,
                 None
             )
             .signals,
@@ -1975,7 +2125,7 @@ mod tests {
             quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
             fees: None,
         });
-        let rendered = FactSheet::build(&dossier, None, None, None).render();
+        let rendered = FactSheet::build(&dossier, None, None, None, None).render();
         assert!(
             rendered.contains("has the token graduated off the bonding curve: no"),
             "{rendered}"
@@ -1994,7 +2144,7 @@ mod tests {
             quote_asset: None,
             fees: None,
         });
-        let rendered = FactSheet::build(&done, None, None, None).render();
+        let rendered = FactSheet::build(&done, None, None, None, None).render();
         assert!(
             rendered.contains("has the token graduated off the bonding curve: yes"),
             "{rendered}"
@@ -2018,7 +2168,7 @@ mod tests {
             quote_asset: Some(realorrug_onchain::QuoteAsset::eth()),
             fees: None,
         });
-        let rendered = FactSheet::build(&dossier, None, None, None).render();
+        let rendered = FactSheet::build(&dossier, None, None, None, None).render();
         assert!(rendered.contains("2.5000 ETH"), "{rendered}");
         assert!(!rendered.contains("SOL"), "{rendered}");
 
@@ -2035,7 +2185,7 @@ mod tests {
             quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
             fees: None,
         });
-        let rendered = FactSheet::build(&sol, None, None, None).render();
+        let rendered = FactSheet::build(&sol, None, None, None, None).render();
         assert!(rendered.contains("0.3030 SOL"), "{rendered}");
     }
 
@@ -2089,7 +2239,7 @@ mod tests {
             quote_asset: None,
             fees: None,
         });
-        let sheet = FactSheet::build(&dossier, None, None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
         let rendered = sheet.render();
         assert!(!rendered.contains("exit capacity"), "{rendered}");
         assert!(
@@ -2114,7 +2264,7 @@ mod tests {
         // is the fact GOAL.md says leads every reply, and nothing pinned that it
         // was there at all.
         let rates = BaseRates::parse(SNAPSHOT).expect("the published snapshot");
-        let sheet = FactSheet::build(&dossier_for([3u8; 32]), Some(&rates), None, None);
+        let sheet = FactSheet::build(&dossier_for([3u8; 32]), Some(&rates), None, None, None);
         let rendered = sheet.render();
         assert!(
             rendered.contains(
@@ -2154,7 +2304,8 @@ mod tests {
             }),
             creators: std::collections::BTreeMap::new(),
         };
-        let rendered = FactSheet::build(&dossier_for([3u8; 32]), None, Some(&index), None).render();
+        let rendered =
+            FactSheet::build(&dossier_for([3u8; 32]), None, Some(&index), None, None).render();
         assert!(
             rendered.contains(
                 "launches Radar has recorded and measured, which every share below is out of: 506991"
@@ -2178,7 +2329,8 @@ mod tests {
             population: Some(crate::creator::Population::default()),
             ..index
         };
-        let rendered = FactSheet::build(&dossier_for([3u8; 32]), None, Some(&empty), None).render();
+        let rendered =
+            FactSheet::build(&dossier_for([3u8; 32]), None, Some(&empty), None, None).render();
         assert!(
             rendered.contains("NOT AVAILABLE -- no outcome has been measured yet"),
             "{rendered}"
@@ -2195,7 +2347,7 @@ mod tests {
         let other = realorrug_types::Address::new([4u8; 32]);
         let dossier = dossier_for([3u8; 32]);
 
-        let withheld = FactSheet::build(&dossier, None, None, Some(&own));
+        let withheld = FactSheet::build(&dossier, None, None, Some(&own), None);
         assert!(
             withheld.render().contains("never stated"),
             "the configured mint must be told apart: {}",
@@ -2205,7 +2357,7 @@ mod tests {
         // Another coin is answered like any other, with no mention of the rule.
         // A note on every sheet would make every reply about the analyst's own
         // token, which is the opposite of constraint 6.
-        let stranger = FactSheet::build(&dossier, None, None, Some(&other));
+        let stranger = FactSheet::build(&dossier, None, None, Some(&other), None);
         assert!(
             !stranger.render().contains("never stated"),
             "{}",
@@ -2215,7 +2367,7 @@ mod tests {
         // No token configured: no token is special. Rule 8 is not touched --
         // absence means the rule has nothing to apply to, not that a default
         // mint is assumed.
-        let unconfigured = FactSheet::build(&dossier, None, None, None);
+        let unconfigured = FactSheet::build(&dossier, None, None, None, None);
         assert!(
             !unconfigured.render().contains("never stated"),
             "{}",

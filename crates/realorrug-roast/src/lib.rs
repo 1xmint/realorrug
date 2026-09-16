@@ -43,6 +43,7 @@ pub mod baserates;
 pub mod clause;
 pub mod creator;
 pub mod fidelity;
+pub mod firstparty;
 pub mod forbidden;
 pub mod render;
 pub mod sheet;
@@ -80,7 +81,12 @@ pub fn roast(
     provider: Option<&dyn Provider>,
     self_mint: Option<&Address>,
 ) -> (FactSheet, Reply) {
-    let sheet = FactSheet::build(dossier, rates, creators, self_mint);
+    // No named-list argument here: threading a real one through to this
+    // public entry point (and from it into `realorrug-analyst`/`realorrug-cli`)
+    // is packet 0037's next packet's job, not this one's. `None` here means
+    // `RepeatLauncher` cannot fire yet from this call path -- deny by default
+    // (AGENTS.md rule 7), same as an unconfigured `rates` or `creators`.
+    let sheet = FactSheet::build(dossier, rates, creators, self_mint, None);
     let reply = write(&sheet, provider);
     (sheet, reply)
 }
