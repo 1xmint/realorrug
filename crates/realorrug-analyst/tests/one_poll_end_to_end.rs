@@ -241,7 +241,7 @@ fn threads() -> realorrug_analyst::followup::ThreadMemory {
 }
 
 /// Design 0024's lane-2 gate, unconfigured for every fixture in this file
-/// (rule 7: no `RADAR_LANE2_*` env here, so lane 2 refuses everything and
+/// (rule 7: no `REALORRUG_LANE2_*` env here, so lane 2 refuses everything and
 /// never touches a provider or a budget none of these end-to-end fixtures
 /// wire up) -- these tests exercise lane 1's dispatch, not lane 2's own
 /// behaviour, which `crates/realorrug-analyst/src/lane2.rs`'s own tests

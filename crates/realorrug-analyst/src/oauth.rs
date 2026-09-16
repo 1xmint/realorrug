@@ -47,6 +47,7 @@ use std::fmt::Write as _;
 
 use base64::Engine as _;
 use hmac::{Hmac, KeyInit as _, Mac as _};
+use realorrug_types::env::env_or_legacy;
 use sha1::Sha1;
 
 /// The four values the X developer portal hands over.
@@ -99,16 +100,16 @@ impl Credentials {
     /// The rule, over a getter, so it is testable without process-wide state.
     #[must_use]
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Self> {
-        let read = |k: &str| {
-            get(k)
+        let read = |new: &str, old: &str| {
+            env_or_legacy(new, old, get)
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
         Some(Self {
-            consumer_key: read("RADAR_X_API_KEY")?,
-            consumer_secret: read("RADAR_X_API_SECRET")?,
-            token: read("RADAR_X_ACCESS_TOKEN")?,
-            token_secret: read("RADAR_X_ACCESS_SECRET")?,
+            consumer_key: read("REALORRUG_X_API_KEY", "RADAR_X_API_KEY")?,
+            consumer_secret: read("REALORRUG_X_API_SECRET", "RADAR_X_API_SECRET")?,
+            token: read("REALORRUG_X_ACCESS_TOKEN", "RADAR_X_ACCESS_TOKEN")?,
+            token_secret: read("REALORRUG_X_ACCESS_SECRET", "RADAR_X_ACCESS_SECRET")?,
         })
     }
 }
@@ -479,10 +480,10 @@ mod tests {
     #[test]
     fn all_four_credentials_or_none() {
         const FULL: [(&str, &str); 4] = [
-            ("RADAR_X_API_KEY", "k"),
-            ("RADAR_X_API_SECRET", "s"),
-            ("RADAR_X_ACCESS_TOKEN", "t"),
-            ("RADAR_X_ACCESS_SECRET", "ts"),
+            ("REALORRUG_X_API_KEY", "k"),
+            ("REALORRUG_X_API_SECRET", "s"),
+            ("REALORRUG_X_ACCESS_TOKEN", "t"),
+            ("REALORRUG_X_ACCESS_SECRET", "ts"),
         ];
         let all = |k: &str| {
             FULL.iter()
@@ -516,11 +517,11 @@ mod tests {
 
     #[test]
     fn a_blank_credential_is_a_missing_one() {
-        // An env file with `RADAR_X_API_SECRET=` in it is the shape a
+        // An env file with `REALORRUG_X_API_SECRET=` in it is the shape a
         // half-finished edit leaves behind, and it must not read as configured.
         let get = |k: &str| {
             Some(match k {
-                "RADAR_X_API_SECRET" => "   ".to_owned(),
+                "REALORRUG_X_API_SECRET" => "   ".to_owned(),
                 _ => "value".to_owned(),
             })
         };

@@ -38,6 +38,7 @@ use realorrug_model::{Provider, Request, Unreachable};
 use realorrug_roast::Billed;
 use realorrug_roast::forbidden;
 use realorrug_types::MicroUsd;
+use realorrug_types::env::env_or_legacy;
 
 use crate::admission::Refused;
 use crate::answer::Answered;
@@ -125,7 +126,7 @@ pub struct Limits {
     /// A currency ceiling, not a reply count, because design 0024 §3 states
     /// it as a dollar figure an operator can reason about directly ("$5.00
     /// buys roughly 49,000 lane-2 replies"), independent of the account's
-    /// other, larger model budget (`RADAR_MODEL_DAILY_USD`) -- this is a
+    /// other, larger model budget (`REALORRUG_MODEL_DAILY_USD`) -- this is a
     /// tighter sub-ceiling lane 2 alone must respect.
     pub global_daily: MicroUsd,
     /// Seconds one author must wait between lane-2 replies.
@@ -161,15 +162,36 @@ struct AuthorState {
 /// sent" but only one honestly reports that nothing was configured.
 ///
 /// Config keys, named for `deploy/analyst.env.example`:
-/// `RADAR_LANE2_PER_AUTHOR_DAILY`, `RADAR_LANE2_GLOBAL_DAILY_USD`,
-/// `RADAR_LANE2_COOLDOWN_SECONDS`. All three must parse for lane 2 to run at
-/// all -- one present and two missing is exactly the half-configured state
+/// `REALORRUG_LANE2_PER_AUTHOR_DAILY`, `REALORRUG_LANE2_GLOBAL_DAILY_USD`,
+/// `REALORRUG_LANE2_COOLDOWN_SECONDS`. All three must parse for lane 2 to run
+/// at all -- one present and two missing is exactly the half-configured state
 /// rule 7 exists to refuse, not to guess a default for.
 #[must_use]
 pub fn limits_from(get: &impl Fn(&str) -> Option<String>) -> Option<Limits> {
-    let per_author_daily = get("RADAR_LANE2_PER_AUTHOR_DAILY")?.trim().parse().ok()?;
-    let global_daily_usd: f64 = get("RADAR_LANE2_GLOBAL_DAILY_USD")?.trim().parse().ok()?;
-    let cooldown_seconds = get("RADAR_LANE2_COOLDOWN_SECONDS")?.trim().parse().ok()?;
+    let per_author_daily = env_or_legacy(
+        "REALORRUG_LANE2_PER_AUTHOR_DAILY",
+        "RADAR_LANE2_PER_AUTHOR_DAILY",
+        get,
+    )?
+    .trim()
+    .parse()
+    .ok()?;
+    let global_daily_usd: f64 = env_or_legacy(
+        "REALORRUG_LANE2_GLOBAL_DAILY_USD",
+        "RADAR_LANE2_GLOBAL_DAILY_USD",
+        get,
+    )?
+    .trim()
+    .parse()
+    .ok()?;
+    let cooldown_seconds = env_or_legacy(
+        "REALORRUG_LANE2_COOLDOWN_SECONDS",
+        "RADAR_LANE2_COOLDOWN_SECONDS",
+        get,
+    )?
+    .trim()
+    .parse()
+    .ok()?;
     Some(Limits {
         per_author_daily,
         global_daily: MicroUsd::from_dollars(global_daily_usd),
