@@ -227,7 +227,7 @@ default when config, or here identification, is missing).
 | `BuyersCannotSell` | a simulated sell reverts | `eth_call` a sell against the curve (`CurveSell`-shaped calldata) at a fixed size, pinned to the current block, checking for a revert rather than sending a transaction | fixed simulated size TBD — no chain fact sizes this yet (open question, §8); a revert on **any** size above dust is the strong form, a revert only above some size is the weak form and needs a sweep, not one call | our simulated size or slippage tolerance was wrong, not the curve's mechanics — a curve with real but thin depth reverts a large sell the same way a broken one does |
 | `CreatorBoughtOwnLaunch` | creator among launch-block recipients | `CurveBuy` logs in the launch block naming the creator/deployer address, or the launch record's own launch-transaction buy (research 0036 §3) | any nonzero buy by the creator in the launch block | a creator buying a token they believe in — research 0036 §3's own captured launch was exactly this, a dev buy that paid full fees and no snipe tax because the factory exempts the launcher automatically |
 | `LaunchBlockBundle` | launch-block distinct recipient count lands in the strongest measured band | distinct non-zero-balance recipients of `Transfer` logs in the launch block, looked up in a measured snapshot's bands (the same `baserates.rs::band_for` shape, re-derived for Pons v2 — **not yet measured**, §8) | **read from the snapshot, never a constant** — research 0042's first lesson, quoted there: *"Six is a tool's default, not a law. The number will move when whoever is running this changes their configuration, and the detector will go quiet without saying so"* (0008, quoted in 0042), which came true in 0024's re-measurement | a launch people were waiting for — no chain fact distinguishes a bundle bought by insiders from a bundle bought by fans; only the *rate* at which each recipient count precedes an outcome, measured, does |
-| `RepeatLauncher` | the creator or a launch-block buyer appears across many launch blocks in a window | recurring signer/fee-recipient address across `TokenLaunched` events in a rolling window — research 0042's port-order item 1, and *simpler on EVM than on Solana* per that document's table, because an EVM sender address recurs directly, no wallet-to-token-account join needed | `REPEAT_FLOOR`/`INFRASTRUCTURE_FLOOR`-shaped bands, **not yet measured for Robinhood Chain** — Radar's own bands (3, 100) are Solana-measured and do not transfer, same discipline as the bundle band above | a bot that buys every launch; infrastructure, not coordination — 0042's own table excludes 13 known router/fee-sink addresses covering 42% of Solana launches from this count, and a Robinhood equivalent list does not exist yet |
+| `RepeatLauncher` | this creator has launched many more tokens than the creators around them | the creator's **lifetime** launch count, as the creator index already records it — research 0042's port-order item 1, and *simpler on EVM than on Solana* per that document's table, because an EVM sender address recurs directly, no wallet-to-token-account join needed. Not a rolling window: §7's original plan to ask the read memory for launches-in-the-last-N-minutes was dropped, because the index holds the lifetime count already and a window would be a second, differently-shaped count of the same thing | **the index's own 95th percentile**, nearest-rank (`((n - 1) * 95) / 100` on the ascending sort), computed **after** the named first-party list is excluded, floored at 2, and refused outright under 100 remaining creators — `creator::CreatorIndex::repeat_launcher_floor`, whose doc comment carries the argument for each of those three numbers. **Never Radar's `REPEAT_FLOOR`/`INFRASTRUCTURE_FLOOR` (3, 100)**: those count distinct launch *blocks* in a *90-minute Solana window*, a different population on a different chain, and importing them would look like a measurement while being one | a bot that buys every launch; infrastructure, not coordination — 0042's own table excludes 13 known router/fee-sink addresses covering 42% of Solana launches from this count. The named list (`docs/research/data/first-party-addresses.json`) is the Robinhood equivalent and now exists, but it holds only **named** addresses: an unnamed relayer nobody has captured yet still reads, on this signal alone, exactly like a person launching forty tokens. That is the signal's honest limit |
 | `CreatorNeverGraduatedOrganically` | already a `Signal` variant (`sheet.rs`) | measured launches with none organic, from the creator index | reuses the existing Solana logic unchanged in shape: `record.measured > 0 && record.organic == 0` | small sample — a creator with two measured launches and zero organic has a different confidence than one with fifty, and the sheet states the denominator (already true today, `push_creator`) so the model can read it |
 | `HolderConcentration` | largest non-curve holder's share | `Transfer`-log sum (research 0040 §4), largest balance divided by circulating (total minus curve) | threshold **not yet measured** for Pons v2 — no distribution of real holder-concentration outcomes has been gathered (open question, §8) | a vesting contract, a bridge, an exchange — none of which this design can currently tell apart from a whale, because no label list for Robinhood-chain contracts exists yet (the EVM equivalent of research 0042's "exchange hot wallet, bridge contract, known deployer" label-list idea, itself flagged there as needed and not yet built for Solana either) |
 | `OwnerCanStillMintOrPause` | owner-only mint/pause/blacklist selectors present and ownership not renounced | deployed bytecode scan, or a verified-source ABI read | **blocked on research 0044**; this design names the slot the signal fills (a `Signal` variant, a fact pair "owner address" + "selector present") without designing the bytecode check itself | a stock template with an owner nobody uses — most ERC-20 templates ship an `Ownable` ancestor whether or not the deployer ever calls it |
@@ -653,7 +653,7 @@ not the old one, is what is catching it.
 | `crates/realorrug-roast/src/forbidden.rs` | new `check_target`, `check_level` functions per §5; existing `check`/`RULES` kept during the transition | §5, ADR 0027 point 6 | new functions, additive during transition |
 | `crates/realorrug-roast/src/voice.rs` | one free-text generation path, shared by every chain, that sends the rendered sheet to a cheap-tier model and asks for prose, gated by `fidelity::check` and the new `forbidden` functions before publication; per [ADR 0028](../adr/0028-one-bot-every-chain.md) point 1, Solana's clause-selection call (`clause::parse`/`assemble` against a model answer) is retired rather than kept beside it | §4, ADR 0028 | changed function, not additive; existing `write`/`request_for` change shape |
 | `crates/realorrug-roast/src/fidelity.rs` | unchanged | `literals`/`check` already operate on arbitrary text | none |
-| `crates/realorrug-roast/src/baserates.rs` | a Robinhood-shaped analogue of `Band`/`BaseRates`, populated once a Pons v2 recipient-count and repeat-launcher distribution is measured (research 0042 port-order items 1 and 3) — **not part of this design's day-one scope**; §3's `LaunchBlockBundle`/`RepeatLauncher` signals read `None` (no signal fires) until this exists | §3, §7 | new type, additive, not built here |
+| `crates/realorrug-roast/src/baserates.rs` | a Robinhood-shaped analogue of `Band`/`BaseRates`, populated once a Pons v2 recipient-count distribution is measured (research 0042 port-order item 3) — **not part of this design's day-one scope**; §3's `LaunchBlockBundle` signal reads `None` (no signal fires) until this exists. `RepeatLauncher` no longer waits on it: its floor is measured from the creator index's own distribution at the moment it is used, so there is no snapshot to publish and nothing to keep in step | §3, §7 | new type, additive, not built here |
 | `crates/realorrug-roast/src/creator.rs` | reused as-is; keyed on `creator_fee_recipient` per research 0038 §2, same `CreatorIndex`/`Record`/`Population` shapes | §1's creator-track-record row | none, or a build-pipeline change outside this crate's scope |
 | `crates/realorrug-analyst/src/mention.rs` | `first_address`/`read` generalised to the two-shape scan (§2) | §2 | changed function body; `Asked::Mint` keeps its `String` shape unchanged — the text alone carries which shape it is (`0x…` versus base58), so nothing downstream needs a second, disagreeable tag for the same fact |
 | `crates/realorrug-onchain/src/dispatch.rs`, new | a single `read(mint_text, clients)` function: parses `mint_text` into a `ChainAddress` and matches once on its shape, calling `SolanaReader` or `RobinhoodReader` through `ChainReader` — corrected from this row's original plan of a `match` on a `Venue` at each caller, which would have been the same "which chain is this" decision written twice, the exact defect §2 exists to remove | §2 | new module, new function, new `Clients`/`Error` types |
@@ -748,14 +748,15 @@ keeps its block number instead of losing it to `ReadAt::as_slot`'s honest
 - **Design 0021 (the read memory — freshness, caching, credits), not yet
   written.** This document names one interface it needs from 0021:
   `CreatorSoldOut` (§3) requires knowing the creator's balance *before* the
-  current read to say "sold out" rather than "currently holds nothing," and
-  `RepeatLauncher` (§3) requires a rolling window of past launches. Both are
-  memory reads, not fresh chain reads, and 0020 assumes 0021 supplies them
-  as an interface — `has_prior_balance(creator, token) -> Option<u128>`,
-  `launches_in_window(address, minutes) -> u32` shaped — without designing
-  how that memory is stored, refreshed or budgeted. Until 0021 exists,
-  `CreatorSoldOut` and `RepeatLauncher` do not fire (no signal, per rule 9 —
-  absent is not zero), and §3's ladder degrades gracefully: fewer signals
+  current read to say "sold out" rather than "currently holds nothing." That
+  is a memory read, not a fresh chain read, and 0020 assumes 0021 supplies it
+  as an interface — `has_prior_balance(creator, token) -> Option<u128>`
+  shaped — without designing how that memory is stored, refreshed or
+  budgeted. Until 0021 is wired in, `CreatorSoldOut` does not fire (no
+  signal, per rule 9 — absent is not zero). **`RepeatLauncher` was listed
+  here too and no longer belongs**: it was going to ask the memory for
+  `launches_in_window(address, minutes)`, and what shipped reads the lifetime
+  count the creator index already holds, so it needs nothing from 0021, and §3's ladder degrades gracefully: fewer signals
   available means more sheets land at `Sketchy` or below rather than
   reaching `RugMechanicsLive`, never the reverse.
 - **Design 0022 (threaded follow-ups), not yet written.** Out of scope here
@@ -779,11 +780,16 @@ keeps its block number instead of losing it to `ReadAt::as_slot`'s honest
   genuine `Rugged` case (reserves gone *and* a stuck holder together) — the
   worked example in §3 had to show why the closest candidate is actually the
   `LiquidityGone` twin, not a rug, rather than cite a real `Rugged` token.
-- `LaunchBlockBundle`'s band and `RepeatLauncher`'s floors are not measured
-  for Pons v2/Robinhood Chain at all — research 0042 names the port order
-  but the actual distributions (the Robinhood-chain equivalent of research
-  0008/0012/0013's Solana measurements) have not been gathered. Until they
-  are, both signals are designed but cannot fire.
+- `LaunchBlockBundle`'s band is not measured for Pons v2/Robinhood Chain at
+  all — research 0042 names the port order but the actual distribution (the
+  Robinhood-chain equivalent of research 0008/0012/0013's Solana
+  measurements) has not been gathered, so that signal is designed and cannot
+  fire. `RepeatLauncher` is no longer in that position: it takes its floor
+  from whatever creator index it is handed, so it needs no published
+  snapshot. **What is still unmeasured about it** is whether the 95th
+  percentile is the right cut for this population, and how many unnamed
+  relayers sit above it — both answerable only from a real Robinhood creator
+  index, which does not exist yet.
 - `HolderConcentration`'s threshold is not measured — no distribution of
   real holder-concentration-vs-outcome exists for Pons v2 tokens.
 - `BuyersCannotSell`'s simulated sell size and slippage tolerance are not
