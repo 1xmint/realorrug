@@ -210,7 +210,9 @@ pub fn answer(mention: &Mention, gate: &mut Gate, ctx: &Answering<'_>) -> Answer
             summoner: mention.author.clone(),
             mint: Some(mint_text),
             read_at,
-            read_at_slot: read_at.and_then(realorrug_types::ReadAt::as_slot).map(|s| s.0),
+            read_at_slot: read_at
+                .and_then(realorrug_types::ReadAt::as_slot)
+                .map(|s| s.0),
             // The evidence, not only the words. A log of replies without fact
             // sheets records what Radar said and not whether it was entitled to say
             // it, and the second is the half that settles an argument.
