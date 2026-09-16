@@ -573,7 +573,10 @@ impl FactSheet {
         // One string per fired signal, in the same order the signal fired --
         // computed from `signals` itself so the two can never drift apart,
         // rather than pushed alongside each `signals.push` call above.
-        let twins = signals.iter().map(|&signal| twin_for(signal).to_owned()).collect();
+        let twins = signals
+            .iter()
+            .map(|&signal| twin_for(signal).to_owned())
+            .collect();
 
         Self {
             mint: dossier.mint.to_string(),
