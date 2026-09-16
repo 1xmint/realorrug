@@ -58,6 +58,30 @@ pub struct Mention {
     /// the post it was made under, which is how somebody actually asks: they
     /// reply "@radar what is this" to a tweet that names the coin.
     pub parent: Option<String>,
+    /// The id of the conversation (thread) this mention belongs to, when the
+    /// platform reported one.
+    ///
+    /// This is **not** built by walking `parent` links to the root — design
+    /// 0022 §3 and §7 describe that walk, and packet 0040 overrides it: each
+    /// hop up the chain is a separate platform read at $0.005, on every
+    /// follow-up, forever, and a deep thread is a deep bill. X returns the
+    /// root post's id on the mention itself, documented as "The ID of the
+    /// conversation this Post belongs to (matches the root Post's ID)"
+    /// (docs.x.com, the user-mention-timeline reference, read 2026-09-15) —
+    /// **a reference, not a capture**: nothing here has been run against the
+    /// live API, because the account and bearer token do not exist yet
+    /// (AGENTS.md §1, "a reference proposes, a capture disposes").
+    ///
+    /// `None` when the field is absent from the response. That is not this
+    /// crate's rule 7 deny-by-default case: a missing thread id costs the bot
+    /// a read it might have skipped by treating the mention as an ordinary
+    /// first mention, it never makes the bot say something false, and the
+    /// existing mint dedupe in `admission.rs` already bounds the repeat. The
+    /// opposite reading — refuse to answer because a thread id is missing —
+    /// would silently stop the bot answering anyone whose platform response
+    /// happened to omit the field, which is a worse failure than the extra
+    /// read.
+    pub conversation: Option<String>,
 }
 
 /// What one entrant's account says about itself, as read at week close.
@@ -377,9 +401,18 @@ impl X {
     /// is more untrusted text to carry and none of it reaches a decision.
     #[must_use]
     pub fn mentions_url(&self, since_id: Option<&str>) -> String {
+        // `conversation_id` added for packet 0040's thread memory: one more
+        // field on a request this bot already makes, no extra call and no
+        // extra money. The parameter is spelled `tweet.fields` here, not the
+        // `post.fields` the current docs.x.com page uses — that is what
+        // already works in this repo, and packet 0040 does not change it on
+        // the strength of a docs page nobody has run against the live API
+        // yet. Whoever first runs this against a real account should check
+        // whether `tweet.fields` still returns `conversation_id`, or whether
+        // the endpoint has moved to `post.fields` by then.
         let mut url = format!(
             "{}/2/users/{}/mentions?max_results={PAGE}\
-             &tweet.fields=author_id,referenced_tweets",
+             &tweet.fields=author_id,referenced_tweets,conversation_id",
             self.base, self.user_id
         );
         if let Some(since) = since_id {
@@ -590,6 +623,7 @@ pub fn parse_mentions(body: &str) -> Result<Vec<Mention>, Unreachable> {
             author: author.to_owned(),
             text: text.to_owned(),
             parent: parent_of(item),
+            conversation: conversation_of(item),
         });
     }
     Ok(out)
@@ -607,6 +641,16 @@ fn parent_of(item: &serde_json::Value) -> Option<String> {
         .find(|r| r.get("type").and_then(serde_json::Value::as_str) == Some("replied_to"))?
         .get("id")?
         .as_str()
+        .map(str::to_owned)
+}
+
+/// The id of the thread a mention belongs to, parsed the way [`parent_of`]
+/// parses its own field — absent rather than defaulted when the response
+/// omits it, so a missing field reads as "no thread id" and not as some
+/// placeholder value a caller might mistake for a real one.
+fn conversation_of(item: &serde_json::Value) -> Option<String> {
+    item.get("conversation_id")
+        .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
 }
 
@@ -1028,7 +1072,8 @@ mod tests {
       "data": [
         {"id":"1","author_id":"a1","text":"@radar what is So11111111111111111111111111111111111111112"},
         {"id":"2","author_id":"a2","text":"@radar thoughts?",
-         "referenced_tweets":[{"type":"replied_to","id":"parent-9"}]}
+         "referenced_tweets":[{"type":"replied_to","id":"parent-9"}],
+         "conversation_id":"conv-2"}
       ],
       "meta": {"result_count": 2, "newest_id": "2"}
     }"#;
@@ -1097,6 +1142,21 @@ mod tests {
     }
 
     #[test]
+    fn a_mention_carrying_conversation_id_parses_it() {
+        let got = parse_mentions(PAGE_BODY).expect("a page");
+        assert_eq!(got[1].conversation.as_deref(), Some("conv-2"));
+    }
+
+    #[test]
+    fn a_mention_without_conversation_id_takes_todays_path() {
+        // No `conversation_id` at all: `None`, not a default and not a
+        // refusal. The mention parses exactly as it did before this field
+        // existed, which is what "today's path" means for a first mention.
+        let got = parse_mentions(PAGE_BODY).expect("a page");
+        assert_eq!(got[0].conversation, None);
+    }
+
+    #[test]
     fn an_empty_page_is_not_an_error_because_it_is_most_polls() {
         let got = parse_mentions(r#"{"meta":{"result_count":0}}"#).expect("empty page");
         assert!(got.is_empty());
@@ -1161,6 +1221,7 @@ mod tests {
         assert!(url.contains("max_results=100"), "{url}");
         assert!(url.contains("author_id"), "{url}");
         assert!(url.contains("referenced_tweets"), "{url}");
+        assert!(url.contains("conversation_id"), "{url}");
         assert!(!url.contains("since_id"), "{url}");
     }
 
@@ -1517,6 +1578,7 @@ mod tests {
             author: "a1".to_owned(),
             text: "hi".to_owned(),
             parent: None,
+            conversation: None,
         };
         let e = entry_for(&m, 1_788_000_000);
         assert_eq!(e.mention_id, "m1");

@@ -285,6 +285,9 @@ pub fn parse_updates(body: &str) -> Result<Page, Unreachable> {
             author: format!("tg:{from}"),
             text: text.to_owned(),
             parent,
+            // Telegram has no conversation-id concept the way X does; the
+            // thread memory this field feeds is X-only for now.
+            conversation: None,
         });
     }
     page.next_offset = newest.map(|n| (n + 1).to_string());

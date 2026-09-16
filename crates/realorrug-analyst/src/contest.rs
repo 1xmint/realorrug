@@ -1790,6 +1790,7 @@ mod tests {
             author: "alice".to_owned(),
             text: format!("pay me {address}"),
             parent: Some("prompt-1".to_owned()),
+            conversation: None,
         };
         let inside = WEEK.closes_at() + 3_600;
 
@@ -2112,6 +2113,7 @@ mod tests {
             author: author.to_owned(),
             text: text.to_owned(),
             parent: parent.map(str::to_owned),
+            conversation: None,
         };
         let inside = WEEK.closes_at() + 3_600;
         let late = record.claim_window_closes_at();
@@ -2311,6 +2313,7 @@ mod tests {
                 author: "alice".to_owned(),
                 text: format!("here {address}"),
                 parent: parent.map(str::to_owned),
+                conversation: None,
             };
             assert_eq!(
                 try_claim(&mention, &dir, inside, a_wallet),
