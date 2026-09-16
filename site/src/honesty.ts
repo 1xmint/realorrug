@@ -339,3 +339,14 @@ export function account(): string | null {
   const handle = configured.trim().replace(/^@/, "");
   return handleHref(handle) === null ? null : handle;
 }
+
+/**
+ * Whether text is shaped like a Robinhood Chain contract address.
+ *
+ * Shape only: forty hex digits after `0x`. Whether anything lives there is the
+ * server's question (design 0023 §2), and a shape check here only saves a
+ * stranger a round trip for something that was never an address.
+ */
+export function evmShaped(text: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(text.trim());
+}

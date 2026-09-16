@@ -45,6 +45,7 @@ import {
   Measured,
   Receipt,
   Section,
+  CheckBox,
   Summon,
 } from "./ui";
 
@@ -132,6 +133,7 @@ function Hero({ s }: { s: Stats }) {
           coin's life. Real or Rug has been reading every one of them. Most
           launches show nothing; the ones that do are the point.
         </p>
+        <CheckBox />
 
         {/* The claim above is only worth as much as the number under it, so the
             number is immediately under it, it is found in the data rather than

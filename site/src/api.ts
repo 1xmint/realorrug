@@ -346,3 +346,59 @@ export async function weeks(): Promise<Weeks> {
 export function sol(lamports: number): string {
   return (lamports / 1_000_000_000).toFixed(4);
 }
+
+/** What the checker route says about one pasted address (design 0023 §1). */
+export interface CheckResult {
+  readonly state:
+    | "verdict"
+    | "cant_read"
+    | "not_a_token"
+    | "bad_address"
+    | "busy"
+    | "budget";
+  readonly chain: "robinhood" | "solana" | null;
+  readonly address: string;
+  readonly level:
+    | "Rugged"
+    | "RugMechanicsLive"
+    | "Sketchy"
+    | "NothingUglyYet"
+    | "CantTell"
+    | null;
+  readonly reasons: readonly string[];
+  readonly twins: readonly string[];
+  readonly measured_at: string | null;
+  readonly message: string | null;
+}
+
+/**
+ * A cold check reads the chain while the visitor waits, and design 0023 §7
+ * prices that at several seconds. The four-second clock the published
+ * documents use would abort most first reads just before they finished.
+ */
+const CHECK_TIMEOUT_MS = 25_000;
+
+/**
+ * Asks the server about one address.
+ *
+ * Not `get()`: that helper treats any non-2xx as "no answer", and here a 400,
+ * 429 or 503 carries the sentence the visitor needs ("wait a minute", "not a
+ * Robinhood Chain address"). `null` means the server could not be reached at
+ * all, which the page says in its own words rather than guessing a verdict.
+ */
+export async function check(address: string): Promise<CheckResult | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `${BASE}/v1/check/${encodeURIComponent(address)}`,
+      { signal: controller.signal },
+    );
+    const body = (await response.json()) as CheckResult;
+    return typeof body?.state === "string" ? body : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

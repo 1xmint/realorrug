@@ -17,7 +17,7 @@ import { useTitle } from "./title";
 import { Block, Heading, Section } from "./ui";
 
 /** One rung of the ladder. */
-interface Level {
+export interface Level {
   readonly code: string;
   readonly stamp: string;
   /** A `--color-stamp-*` token: the ladder's colour on paper. */
@@ -26,7 +26,7 @@ interface Level {
   readonly note: string;
 }
 
-const LADDER: readonly Level[] = [
+export const LADDER: readonly Level[] = [
   {
     code: "Rugged",
     stamp: "Rugged",
