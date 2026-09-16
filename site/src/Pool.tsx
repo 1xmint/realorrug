@@ -67,7 +67,7 @@ function Economics() {
       </p>
       <p className="mt-4 text-sm">
         <Link
-          href="/token"
+          href="/tokenomics"
           className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
         >
           The full fee ladder, read off the chain, and the six rules →

@@ -102,7 +102,7 @@ export function Contact() {
             sign. If you have won, the account replies to you in your own thread,
             under the reply that won, and you claim by replying to that post with
             a Solana address — described step by step on{" "}
-            <Here href="/leaderboard">the leaderboard page</Here>.
+            <Here href="/contest">the contest page</Here>.
           </p>
         </Block>
 

@@ -376,7 +376,7 @@ function Contest({ handle }: { handle: string | null }) {
           </p>
           <p className="mt-4">
             <Link
-              href="/leaderboard"
+              href="/contest"
               className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
             >
               The rule, the leaderboard and how to claim →
@@ -390,7 +390,7 @@ function Contest({ handle }: { handle: string | null }) {
           </p>
           <p className="mt-4">
             <Link
-              href="/token"
+              href="/tokenomics"
               className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
             >
               What the token is, and the six rules →

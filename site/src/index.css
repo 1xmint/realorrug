@@ -1,79 +1,96 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 @import "tailwindcss";
 
-/* Cabal Hunter's palette.
+/* Real or Rug's palette: the case file.
 
-   Related to the operator console's and deliberately not the same. That surface
-   is read at night beside a terminal by one person who already knows what
-   everything means. This one is read once, on a phone, by a stranger who
-   arrived from a reply on X and will decide in four seconds whether this is
-   worth reading. It has to carry a voice; the console has to carry density.
+   The owner picked this direction on 2026-09-16 from three mockups (design 0025
+   §5). The site reads as a detective's evidence board -- a warm near-black
+   ground, cream paper cards pinned slightly askew, a rubber verdict stamp -- so
+   a stranger arriving from a reply on X sees an investigation, not a trading
+   terminal. That is the product's whole posture: it reports what it found and
+   never tells anybody to buy.
 
-   Same discipline, though: OKLCH, semantic names, and contrast ratios that were
-   measured rather than guessed. An earlier version of the console's palette
-   estimated a border at "roughly 2:1" and it was 1.53:1. Ratios below are
-   against `--color-ink` unless stated, computed from the OKLCH lightness. */
+   The token names below are the ones every page already uses, pointed at new
+   values. Renaming them would have touched every component to change nothing a
+   reader sees; keeping them lets this file reskin the site on its own.
+
+   Contrast ratios are WCAG 2 ratios computed from the hex values against
+   `--color-ink`, measured rather than guessed. An earlier palette on this
+   project estimated a border at "roughly 2:1" and it was 1.53:1. */
 @theme {
-  /* Grounds. Near-black with a trace of blue, so the amber reads as warm
-     against it rather than as a colour cast. */
-  --color-ink: oklch(0.15 0.012 265);
-  --color-surface: oklch(0.19 0.014 265);
-  --color-raised: oklch(0.23 0.016 265);
+  /* Grounds. Warm rather than blue-black: cream paper on a blue ground reads
+     as a spreadsheet with a skin on it. */
+  --color-ink: #0c0a09;
+  --color-surface: #171310;
+  --color-raised: #211c17;
 
-  /* Hairlines, and edges that a reader has to find. Two values for the reason
-     the console has two: WCAG 1.4.11's 3:1 is about content required to
-     identify a control, and a card's edge is not one. */
-  --color-line: oklch(0.30 0.016 265);
-  --color-edge: oklch(0.48 0.018 265);
+  /* Hairlines, and edges a reader has to find. Two values because WCAG
+     1.4.11's 3:1 is about what identifies a control, and a card's edge is not
+     one. `line` is 1.34:1 on purpose; `edge` is 3.36:1. */
+  --color-line: #2e2721;
+  --color-edge: #6e6354;
 
-  /* Text. */
-  --color-text: oklch(0.95 0.004 265);
-  --color-dim: oklch(0.70 0.012 265);
-  --color-faint: oklch(0.56 0.014 265);
+  /* Text. 15.95:1, 7.39:1 and 5.6:1 -- `faint` is still readable body text,
+     because on this site the small print is where the refusals live. */
+  --color-text: #efe6d6;
+  --color-dim: #a89d8b;
+  --color-faint: #928877;
 
-  /* The accent, and there is only one.
+  /* The accent, and there is only one: gold, from the badge's rim and the
+     banner's coin. 8.97:1, so it is safe at body size on this ground. `signal`
+     stays the name so every existing link and focus ring picks it up. */
+  --color-signal: #d4a93a;
+  --color-signal-dim: #a8842c;
+  --color-gold: #d4a93a;
 
-     Amber, because everything this site says is a warning. A product whose
-     entire measured signal is a REFUSE signal should not be painted in the
-     green that every other crypto page uses to mean "go". */
-  --color-signal: oklch(0.80 0.15 78);
-  --color-signal-dim: oklch(0.62 0.13 78);
+  /* The verdict ladder on the dark ground (design 0025 §5). Three different
+     colours for three different degrees of "not fine", because the product's
+     honesty argument is that `Sketchy`, `RugMechanicsLive` and `CantTell` are
+     not the same thing. Unknown is grey on purpose: it is not a fourth warning,
+     and it is not green. 9.74, 9.18, 4.76 and 6.10 to 1. */
+  --color-good: #3ecf6e;
+  --color-warn: #e2a63f;
+  --color-danger: #e0452f;
+  --color-unknown: #8b8f98;
 
-  /* Used only where a figure is genuinely good news, which on this site is
-     rare and should look it. */
-  --color-good: oklch(0.76 0.13 158);
+  /* Paper, for the cards that hold a verdict or evidence. Paper ink is
+     13.19:1 and paper-dim 5.90:1. The stamp colours are the ladder darkened
+     until they hold WCAG's 3:1 large-text floor on paper: 4.52, 3.89, 3.93 and
+     4.52 to 1. The mockup's own amber and green measured 2.84 and 3.20. */
+  --color-paper: #e8dbbf;
+  --color-paper-ink: #1b1510;
+  --color-paper-dim: #5a4e3e;
+  --color-stamp-rug: #b52f1c;
+  --color-stamp-warn: #94600c;
+  --color-stamp-real: #1a7a3c;
+  --color-stamp-unknown: #5e6168;
 
-  /* Type.
+  /* Type: four faces, each with one job, all SIL Open Font License and all
+     self-hosted (imported in `main.tsx`). Self-hosted matters: the privacy page
+     says this site collects nothing, and a font host that sees every visitor's
+     address would make that sentence false.
 
-     The earlier note here said a variable font would be one more dependency and
-     one more request, that the system stack renders instantly, and that on a
-     page that is mostly numbers the difference is small -- and it ended by
-     saying to revisit it when the identity needed it, because that is a design
-     judgement rather than a technical one. The identity needs it. This page is
-     the product's face and the system stack gives it the face of a settings
-     dialog.
+     - Anton: headings, the stamp, buttons. Condensed and loud, which is what a
+       case-file stamp is, and narrow enough that a headline fits a phone.
+     - Special Elite: the typewriter, for labels and card titles. Small doses
+       only; a paragraph of it is a costume.
+     - IBM Plex Sans: everything a reader actually reads. It has true tabular
+       numerals, so `.tnum` below keeps its guarantee on a page of figures.
+     - JetBrains Mono: contract addresses and receipts, where a reader compares
+       characters one by one.
 
-     **The display face is used for headings and the wordmark only.** Body text
-     and every figure stay on the system stack, and that is the important half
-     of this decision. `.tnum` below asks for tabular numerals, and whether a
-     given face actually has them is a property of the face; swapping the font
-     under every number on a page whose entire argument is a column of numbers
-     risks silently losing the alignment that `.tnum` exists to guarantee. The
-     headings carry the character, the figures keep the guarantee, and the cost
-     is one 29.4 kB woff2 for the latin subset -- measured, not estimated.
-
-     `swap` rather than `block`: the heading is legible in the fallback face
-     immediately and reflows once. A reader on a slow phone gets the argument
-     before they get the typography, which is the right way round. */
+     Every face falls back to a system stack and loads with `swap`: a reader on
+     a slow phone gets the words before the typography. */
   --font-display:
-    "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+    "Anton", Impact, "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-typewriter:
+    "Special Elite", "Courier New", Courier, ui-monospace, monospace;
   --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
+    "IBM Plex Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono:
-    ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas,
-    monospace;
+    "JetBrains Mono Variable", ui-monospace, "SF Mono", "Cascadia Mono",
+    "Roboto Mono", Menlo, Consolas, monospace;
 
   /* A fluid scale, so nothing has to be re-chosen at a breakpoint.
 
@@ -101,22 +118,20 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* The one piece of texture: a faint grid, fading out down the page. It reads as
-   a plot rather than as decoration, which is the right association for a page
-   whose argument is entirely measurement. Fixed so it does not scroll, and
-   `pointer-events: none` so it never eats a click. */
+/* The ground: a warm lamp glow at the top of the page, and a faint diagonal
+   grain like the fibres of card stock. The draft had a plotting grid, which
+   said "chart"; this says "desk". Both are CSS rather than an image, so the
+   page's first paint never waits on a texture. Fixed, so it does not scroll,
+   and `pointer-events: none`, so it never eats a click. */
 .grid-ground::before {
   content: "";
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  background-image:
-    linear-gradient(to right, var(--color-line) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--color-line) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: radial-gradient(ellipse 80% 55% at 50% 0%, black 10%, transparent 75%);
-  opacity: 0.5;
+  background:
+    radial-gradient(ellipse 70% 45% at 50% -5%, rgb(212 169 58 / 0.13), transparent 70%),
+    repeating-linear-gradient(135deg, rgb(239 230 214 / 0.018) 0 1px, transparent 1px 7px);
 }
 
 /* Numbers are tabular everywhere. A figure that shifts width as it animates
@@ -176,23 +191,104 @@ body {
   }
 }
 
-/* Headings and the wordmark, and nothing else. See the note in @theme. */
+/* Headings, the stamp and buttons. Anton is drawn for capitals and its
+   lowercase is the weakest part of it, so the class sets the case rather than
+   trusting every heading to be typed in capitals. */
 .display {
   font-family: var(--font-display);
-  font-optical-sizing: auto;
-  letter-spacing: -0.022em;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  line-height: 1.04;
+  /* The longhand, not `text-wrap: balance`: the shorthand also resets
+     wrapping on, and because this rule sits outside Tailwind's layers it beat
+     `whitespace-nowrap` and broke the header's wordmark onto two lines. */
+  text-wrap-style: balance;
+}
+
+/* The typewriter: kickers, card titles and small labels. */
+.typewriter {
+  font-family: var(--font-typewriter);
+  letter-spacing: 0.02em;
+}
+
+/* A sheet of paper pinned to the board. Tilted by under a degree: enough to
+   read as placed by hand, not enough to make a line of text harder to follow.
+   The tilt stays for reduced-motion readers because it is a shape, not a
+   movement. */
+.paper {
+  position: relative;
+  background: var(--color-paper);
+  color: var(--color-paper-ink);
+  border-radius: 2px;
+  box-shadow:
+    0 1px 0 rgb(0 0 0 / 0.25),
+    0 18px 40px -12px rgb(0 0 0 / 0.7);
+  rotate: -0.6deg;
+}
+.paper:nth-of-type(even) {
+  rotate: 0.5deg;
+}
+
+/* The red pin at the top of a paper card. */
+.paper.pinned::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #f27a63, #a3261a 70%);
+  box-shadow: 0 2px 3px rgb(0 0 0 / 0.5);
+}
+
+/* The verdict stamp. `multiply` lets the paper show through the ink the way a
+   real rubber stamp does. The colour comes from the element's own `color`, so
+   one class serves all five levels. */
+.stamp {
+  display: inline-block;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 0.3em 0.55em 0.25em;
+  border: 4px solid currentColor;
+  border-radius: 4px;
+  rotate: -9deg;
+  mix-blend-mode: multiply;
+}
+
+/* The stamp landing: a scale-and-settle, as if it just hit the page (design
+   0025 §5). Declared inside `no-preference`, so a reduced-motion reader gets
+   the stamp already down rather than a shorter version of the thump. */
+@media (prefers-reduced-motion: no-preference) {
+  .stamp.thump {
+    animation: thump 0.12s cubic-bezier(0.2, 0.8, 0.3, 1.2) both;
+  }
+}
+@keyframes thump {
+  from {
+    opacity: 0;
+    scale: 2.2;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
 }
 
 /* An act's number: the numbered argument down the page.
 
    The argument is the order, so the order is visible. A reader who scrolls past
    act 03 knows they skipped something, which a page of undifferentiated
-   sections cannot tell them. */
+   sections cannot tell them. Typewriter, because it is a case number. */
 .act-no {
-  font-family: var(--font-mono);
+  font-family: var(--font-typewriter);
   font-variant-numeric: tabular-nums;
-  font-size: 0.75rem;
-  letter-spacing: 0.18em;
+  font-size: 0.8125rem;
+  letter-spacing: 0.14em;
   color: var(--color-signal-dim);
 }
 

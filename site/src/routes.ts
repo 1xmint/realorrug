@@ -40,12 +40,25 @@ export interface Route {
   readonly inNav: boolean;
 }
 
+/**
+ * Paths this site used to serve, and where each one lives now (design 0025
+ * §4). Links to the old paths are already posted in replies on X, and a reply
+ * cannot be edited, so every old path keeps working as a redirect rather than
+ * landing a stranger on "No such page".
+ */
+export const MOVED = [
+  { from: "/leaderboard", to: "/contest" },
+  { from: "/pool", to: "/payouts" },
+  { from: "/history", to: "/payouts" },
+  { from: "/token", to: "/tokenomics" },
+] as const;
+
 export const ROUTES = [
   { path: "/", label: "Home", inNav: true },
-  { path: "/leaderboard", label: "Leaderboard", inNav: true },
-  { path: "/pool", label: "Prize pool", short: "Pool", inNav: true },
-  { path: "/history", label: "Past weeks", short: "History", inNav: true },
-  { path: "/token", label: "Tokenomics", short: "Token", inNav: true },
+  { path: "/contest", label: "Contest", inNav: true },
+  { path: "/payouts", label: "Payouts", inNav: true },
+  { path: "/how-it-works", label: "How it works", short: "How", inNav: true },
+  { path: "/tokenomics", label: "Tokenomics", short: "Token", inNav: true },
   { path: "/about", label: "About", inNav: true },
   // The three trust pages. Footer, not header: a stranger looks for these
   // before deciding whether to believe the rest of the site, and a young

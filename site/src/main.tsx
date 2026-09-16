@@ -3,11 +3,14 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
-// The display face, before the stylesheet that names it. Five `@font-face`
-// rules arrive, each gated by `unicode-range`; a reader of this English page
-// fetches exactly one of them, the 29.4 kB latin subset. The other four are
-// emitted and never requested.
-import "@fontsource-variable/geist/wght.css";
+// The four faces, before the stylesheet that names them (design 0025 §5).
+// Latin subsets only for the two static faces: this page is English, and the
+// others are bytes nobody requests. The two variable faces ship every subset
+// behind `unicode-range`, so a reader still fetches only the latin file.
+import "@fontsource/anton/latin-400.css";
+import "@fontsource/special-elite/latin-400.css";
+import "@fontsource-variable/ibm-plex-sans/wght.css";
+import "@fontsource-variable/jetbrains-mono/wght.css";
 import "./index.css";
 
 const root = document.getElementById("root");
