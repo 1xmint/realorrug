@@ -15,6 +15,22 @@
 //! being blunt about and that one is merely thin, and it writes the line. What
 //! it cannot do is **introduce a fact**.
 //!
+//! # One bot, one voice, every chain ([ADR 0028](../../../../docs/adr/0028-one-bot-every-chain.md) point 1)
+//!
+//! This pass used to ask the model to *select* among Radar's own pre-written
+//! sentences (`crate::clause`'s `F<number>.<voice>` grammar) rather than write
+//! its own prose -- the safest possible shape of "the model writes, code
+//! checks," because a clause the model did not write cannot contain a
+//! forbidden phrase or a fabricated number by construction. The owner's
+//! decision retires that mechanism as a live generation path for every chain,
+//! not only the one design 0020 first proposed it for: the model now writes
+//! its own one-to-three-sentence reply, and the checks below -- which already
+//! read arbitrary rendered text, not the selection mechanism -- are what make
+//! it safe. `crate::clause`'s types and authored sentences are not deleted:
+//! they are the deterministic fallback template's fixed sentence library, and
+//! `verdict::template` still draws on them. Only the call path that ran a
+//! model's answer through `clause::parse`/`clause::assemble` is gone.
+//!
 //! # A model never shown free text cannot be instructed by it
 //!
 //! This is the injection defence, and it is structural rather than a filter.
@@ -37,46 +53,54 @@
 use realorrug_model::{Provider, Request, Unreachable};
 
 use crate::sheet::FactSheet;
+#[cfg(test)]
+use crate::sheet::Signal;
 use crate::{fidelity, forbidden, render, verdict};
 
 /// What the model is told it is doing.
 ///
 /// Held as a constant so it is reviewable as a document. Everything in it is an
-/// instruction about *style and selection*; nothing in it is a fact, and nothing
+/// instruction about *style and honesty*; nothing in it is a fact, and nothing
 /// downstream trusts it to have been obeyed — the checks after generation are
 /// what make these true rather than requested.
+///
+/// No digit appears anywhere in this prompt, and a test pins that: a figure
+/// written here is in front of the model for every reply, on every coin, so an
+/// example like "280 characters" would be a number the model can echo back for
+/// a token whose sheet never authorised it -- and `fidelity::check` would then
+/// bin an otherwise honest reply for repeating the prompt's own arithmetic.
 pub const SYSTEM: &str = "\
-You are Radar, an automated account that answers questions about Solana tokens \
-with measurements. You are given a sheet of sentences Radar has already written \
-from what it measured. Your job is to choose which of them the reply says.
+You are Radar, an automated account that answers questions about a token with \
+measurements. You are given a sheet of facts Radar has already measured. \
+Write your own reply about THIS token, in your own words, from those facts \
+and nothing else.
 
-YOUR ENTIRE OUTPUT IS A LIST OF CHOICES. One per line, nothing else:
+Write one to three sentences and nothing else: no greeting, no heading, no \
+explanation, no line that is not part of the reply itself. Keep it short \
+enough for one post on a platform that cuts a longer one off mid-sentence --\
+a shorter reply chosen on purpose beats a longer one truncated by the \
+platform.
 
-    F3.blunt
-    F1.plain
+How to write it:
 
-F<number> names a sentence on the sheet. The word after the dot is which \
-version of it to use. Write no other text: no greeting, no explanation, no \
-sentence of your own, not one word outside this form. Any other line and the \
-whole answer is discarded and Radar prints its own template instead.
+one. Every number you write must be one this sheet gave you. Add none of \
+your own, and never state a price or a market capitalisation -- this account \
+never does, for any token.
+two. Lead with the sentence that is about THIS coin -- the creator's record, \
+or the launch block. A cost or population figure reads the same in every \
+reply, so it goes last or not at all.
+three. Put a count next to the count it should be weighed against. That \
+pairing is the joke, and choosing the pair is your work.
+four. Prefer saying something is not known over filling the space with a fact \
+that does not matter. An absence stated plainly is often the strongest line \
+on a thin sheet.
+five. Describe what happened, never what someone meant by it: an address, a \
+transfer, a block. Never call a dev, team, founder, creator, handle or \
+company a scammer, a thief, or say they rugged anyone -- describe the \
+transaction, not the intent behind it.
 
-How to choose, which is the whole of the judgement here:
-
-1. One to three lines. Fewer is usually better; the third sentence is the one \
-   nobody reaches.
-2. Lead with the sentence that is about THIS coin -- the creator's record, or \
-   the launch block. Cost and population figures are the same in every reply, \
-   so they go last or not at all.
-3. Put a count next to the count it should be weighed against. That pairing is \
-   the joke, and choosing the pair is your work.
-4. Prefer a sentence that says something is not known over one that fills the \
-   space. An absence stated plainly is the strongest line on most sheets.
-5. Choose 'blunt' when the number does the work on its own and 'plain' when the \
-   sentence needs its qualifier to be honest.
-
-The sheet also has facts marked CONTEXT and NOT KNOWN. Those are true, they are \
-there so you can choose well, and they have no number because they may not be \
-published. Do not try to name them.";
+The sheet also carries facts marked NOT KNOWN. Say so plainly if one of them \
+is the story; do not invent a number to fill the gap it leaves.";
 
 /// Why a model reply was not used.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,14 +115,8 @@ pub enum Fellback {
     Fabricated(Vec<fidelity::Fabricated>),
     /// The reply contained a claim that may not be published.
     Forbidden(Vec<forbidden::Violation>),
-    /// The answer was not a selection: prose, a fact that is not on offer, a
-    /// register nobody wrote, a repeat, too many, or nothing.
-    ///
-    /// This is the clause design working. A model that wrote a sentence did
-    /// something the design does not permit, and the template ships — which is
-    /// what the account posted anyway and is never wrong.
-    NotSelected(crate::clause::NotSelected),
-    /// The model returned nothing usable.
+    /// The model returned nothing usable: no text, or text that cleaned away
+    /// to nothing (an answer made only of invisible characters).
     Empty,
 }
 
@@ -201,33 +219,15 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
     // Everything below here has been paid for, whatever is done with the text.
     let billed = answer.cost.map_or(Billed::Unreported, Billed::Reported);
 
-    // **Assembled first**, because everything after it reads Radar's own
-    // sentences rather than the model's answer.
-    //
-    // A zero-width space inside `F1.plain` stops it being a selection, which is
-    // a rejection rather than a bypass -- the failure direction that ships the
-    // template. Cleaning before parsing would instead *repair* a broken pick
-    // into a working one, which is the model's text deciding what it chose. So
-    // the order is parse, assemble, clean, check.
-    let selected = match crate::clause::parse(&answer.text, sheet) {
-        Ok(selection) => selection,
-        Err(why) => {
-            return Reply {
-                text: fallback,
-                fellback: Some(Fellback::NotSelected(why)),
-                billed,
-            };
-        }
-    };
-    let substituted = crate::clause::assemble(&selected, sheet);
-
     // Cleaned **before** the checks, not after, and the ordering is the whole
     // reason `render` exists. Both checks below read the text as characters, and
     // a zero-width space renders as nothing: `s\u{200b}cam` is two tokens to a
     // checker and one word to a reader, and `1\u{200b}00%` is not a number until it
-    // reaches the timeline. Cleaning afterwards would assemble exactly the
-    // statement the checks refused.
-    let text = render::for_publication(&substituted);
+    // reaches the timeline. Cleaning afterwards would publish exactly the
+    // statement the checks refused. It is also where the length cap the reply
+    // is written for is actually enforced, since the model is asked for it, not
+    // guaranteed to obey it.
+    let text = render::for_publication(&answer.text);
     if text.is_empty() {
         return Reply {
             text: fallback,
@@ -239,7 +239,28 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
     // Order matters only for the report. Both checks run, and the first failure
     // named is the one an operator should look at first: a forbidden claim is a
     // legal exposure, a fabricated number is an accuracy one.
-    let violations = forbidden::check(&text);
+    //
+    // `forbidden::check` (the old blanket word ban) is retired as this pass's
+    // gate -- design 0020 §5's `check_target`, `check_level` and
+    // `check_unconditional` replace it between them, here only. `check_target`
+    // refuses an accusation aimed at a person, account or company regardless
+    // of level; `check_level` refuses a word the sheet's own computed level
+    // has not earned (`verdict::level`, the same rule `write` never lets the
+    // model move), so a reply cannot claim `Rugged`'s vocabulary for a
+    // `Sketchy` sheet. Neither of those two has any opinion on advice, a
+    // price prediction, `honeypot`, or a cabal-identity claim (research
+    // 0012) -- §5's "Kept, unchanged in purpose" keeps those as an
+    // unconditional ban, which is what `check_unconditional` is: `check`'s
+    // own RULES scan, minus the phrases the other two now judge instead. All
+    // three run, so what `check` refused before this pass still gets
+    // refused, split by which of target, level or neither decides it. The
+    // other eight callers of `forbidden::check` (`bio.rs`, `weekly.rs`,
+    // `verdict.rs`, and the adversarial-mention tests) check different text
+    // for different reasons and are unchanged by this pass.
+    let level = verdict::level(sheet);
+    let mut violations = forbidden::check_target(&text);
+    violations.extend(forbidden::check_level(&text, level));
+    violations.extend(forbidden::check_unconditional(&text));
     if !violations.is_empty() {
         return Reply {
             text: fallback,
@@ -247,11 +268,10 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
             billed,
         };
     }
-    // The second lock, and after substitution it passes by construction: every
-    // digit in the text is one this crate wrote, out of a `Fact::rendered` whose
-    // values are on the sheet. Kept for exactly that reason -- a check that can
-    // only fail when something upstream is broken is one whose silence is
-    // informative, and its noise would be a real finding.
+    // The second lock. Free text has no construction that guarantees this the
+    // way a clause substitution did, so this is the check that now carries the
+    // whole of rule 2 by itself: every digit the model wrote must be one the
+    // sheet authorised, or the template ships instead.
     let fabricated = fidelity::check(&text, &sheet.authorised());
     if !fabricated.is_empty() {
         return Reply {
@@ -275,19 +295,16 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
 /// sits in a position the model reads as true.
 #[must_use]
 pub fn request_for(sheet: &FactSheet) -> Request {
-    // No headline offer any more, and its absence is the point rather than an
-    // omission. It existed because three real launches on 2026-09-04 produced
-    // three identical replies: the cost line is a constant, most launches sit
-    // in the same recipient band, and the model had no anchor about the coin in
-    // front of it. The anchor is now structural — the sheet leads with this
-    // coin's own clauses and the prompt's third rule is to pair them — so
-    // offering a pre-built first sentence would only be a fourth way to say the
-    // same thing, competing with the selection it is trying to shape.
-    let question = format!(
-        "Token: {}\n\n{}",
-        sheet.mint,
-        crate::clause::render_for_selection(sheet)
-    );
+    // `FactSheet::render` -- facts and NOT KNOWN lines, nothing else -- rather
+    // than `crate::clause::render_for_selection`'s SELECTABLE/CONTEXT split.
+    // That split existed to keep an unpublishable fact visible but un-namable
+    // for a model that could only ever choose a pre-written sentence; a model
+    // writing its own prose has no such choice to restrict, and every number it
+    // could possibly write is checked afterwards regardless of which section a
+    // fact appeared in. Kept anyway: `FactSheet::authorised` reads its
+    // numerals out of this same rendering, so every figure shown here is one
+    // the fidelity check already permits.
+    let question = format!("Token: {}\n\n{}", sheet.mint, sheet.render());
     let mut request = Request::new(SYSTEM, question);
     for (label, value) in &sheet.untrusted {
         // `observing` fences and escapes -- it is the only way to add evidence
@@ -346,6 +363,17 @@ mod tests {
         }
     }
 
+    /// [`sheet`], with `unknown`/`signals` swapped in -- the two fields
+    /// `verdict::level` reads -- so a test can drive the sheet to a chosen
+    /// [`crate::verdict::Level`] without duplicating the whole fixture.
+    fn sheet_with(signals: Vec<Signal>, unknown: Vec<String>) -> FactSheet {
+        FactSheet {
+            unknown,
+            signals,
+            ..sheet()
+        }
+    }
+
     #[derive(Debug)]
     struct Says(&'static str);
 
@@ -380,102 +408,210 @@ mod tests {
     }
 
     #[test]
-    fn a_forbidden_word_in_a_clause_someone_authored_ships_the_template() {
-        // `forbidden::check` used to read the model's prose. It reads Radar's
-        // own clauses now, and that is the whole of what it is still for: the
-        // model cannot write a word, so the only way a forbidden claim reaches a
-        // reply is an author putting one in a vetted sentence. This is that
-        // case, and it is the reason the check was kept rather than deleted with
-        // the layer it used to guard.
-        //
-        // The zero-width space is still in the fixture on purpose: it is what
-        // makes the ordering in `write` load-bearing. `s\u{200b}cam` is two
-        // tokens to a checker and one word to a reader, so a sanitiser running
-        // after the check would assemble exactly the claim the check refused.
-        // Verified by re-applying the bug — moving `render::for_publication`
-        // below the two checks publishes this sentence.
-        let mut sheet = sheet();
-        sheet.facts[0] = Fact::exact(Kind::LaunchRecipients, "recipients", 11.0, "11")
-            .saying(Voice::Plain, "11 accounts, and this one is a s\u{200b}cam.");
-        let reply = write(&sheet, Some(&Says("F1.plain")));
-        assert!(
-            reply.is_template(),
-            "the forbidden word must be caught: {:?}",
-            reply.text
+    fn a_free_text_answer_naming_an_unauthorised_number_ships_the_template() {
+        // The claim design 0020 §4/§5 stake the whole design on: the checks
+        // read arbitrary rendered text, not a selection mechanism, so a model
+        // free to write its own sentence is caught the same way a model free
+        // to pick a broken clause used to be. 4200 is nowhere on the sheet
+        // (11 and 850 are).
+        let reply = write(
+            &sheet(),
+            Some(&Says(
+                "Eleven accounts at birth and the round trip runs 4200 bps.",
+            )),
         );
-        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Fabricated(_))));
+        assert!(!reply.text.contains("4200"));
     }
 
     #[test]
-    fn a_number_the_model_assembled_out_of_thin_air_never_becomes_text() {
-        // The case that took two attempts to build under the old scanner: the
-        // sheet authorises 11 and 850, so "11\u{200b}850" reads as two
-        // authorised numbers to a checker and as 11850 to a reader.
-        //
-        // Under clause selection it never gets near a checker. The line is not
-        // a selection, so there is no answer to sanitise and nothing to reason
-        // about — the difference between a check that has to be right about this
-        // specific string and a grammar that never admits it.
-        let reply = write(&sheet(), Some(&Says("the figure is 11\u{200b}850 exactly")));
+    fn a_free_text_answer_accusing_a_named_person_ships_the_template() {
+        // `check_target`, not the retired blanket `forbidden::check`: the
+        // accusation is aimed at "the dev," a person-reference, so it is
+        // refused regardless of the level the sheet earned.
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. The dev is a scammer.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("scammer"));
+    }
+
+    #[test]
+    fn a_clean_free_text_answer_ships_exactly_as_written() {
+        // The positive case: a sentence nobody pre-wrote, citing only sheet
+        // figures and no person, ships verbatim once cleaned.
+        let good = "Eleven accounts held it at birth, against an 850 bps round trip -- \
+                    thin either way.";
+        let reply = write(&sheet(), Some(&Says(good)));
+        assert!(!reply.is_template(), "{:?}", reply.fellback);
+        assert_eq!(reply.text, good);
+        assert!(fidelity::check(&reply.text, &sheet().authorised()).is_empty());
+    }
+
+    #[test]
+    fn the_template_fallback_is_unchanged_by_the_free_text_path() {
+        // ADR 0028 point 1: "the fallback path and its triggers are unchanged
+        // from today's voice::write." `verdict::template` reads the sheet
+        // alone and this pass never touches it, so the byte-for-byte floor a
+        // caller falls back to is exactly what it rendered before this change.
+        assert_eq!(write(&sheet(), None).text, verdict::template(&sheet()));
+    }
+
+    #[test]
+    fn a_word_the_sheets_level_never_earned_ships_the_template() {
+        // `check_level`, not `check_target`: no person is named, but this
+        // fixture's signal-free sheet computes `NothingUglyYet`
+        // (`verdict::level`), and "rugged" sits at `Rugged` only. Proves the
+        // claim decision 5 makes -- the reply cannot claim a level the
+        // evidence did not earn, even with no accusation aimed at anyone.
+        let reply = write(
+            &sheet(),
+            Some(&Says(
+                "11 accounts at birth, and this one already rugged everyone.",
+            )),
+        );
         assert!(
             reply.is_template(),
-            "11850 is not on the sheet and must not be published: {:?}",
+            "a level the sheet did not earn must be caught: {:?}",
             reply.text
         );
-        assert!(matches!(
-            reply.fellback,
-            Some(Fellback::NotSelected(crate::clause::NotSelected::Unparsed(
-                _
-            )))
-        ));
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("rugged"));
+    }
+
+    // -----------------------------------------------------------------
+    // Task 9-15-0025: `check_target` + `check_level` alone dropped every
+    // family `forbidden::check` used to refuse unconditionally. Each of
+    // these fails without `forbidden::check_unconditional` in `write`'s gate.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn a_price_prediction_ships_the_template() {
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. This is a 100x.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("100x"));
+    }
+
+    #[test]
+    fn advice_ships_the_template() {
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. You should buy this one.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("should buy"));
+    }
+
+    #[test]
+    fn a_honeypot_claim_ships_the_template() {
+        // 0042: "a word list, not a scan for sell-blocking bytecode" -- kept
+        // as a forbidden phrase until research 0044 ships an actual check.
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. Classic honeypot mechanics.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("honeypot"));
+    }
+
+    #[test]
+    fn a_cabal_identity_claim_ships_the_template() {
+        // Research 0012: recipients are token accounts, not people, so
+        // resolving a count to "people" claims an identity the measurement
+        // cannot see.
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 people bought it in the launch block.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("people bought"));
+    }
+
+    #[test]
+    fn reassurance_below_canttell_still_ships_the_template() {
+        // The default fixture's signal-free, fully-read sheet computes
+        // `NothingUglyYet`; "looks safe" is refused at every level below
+        // `CantTell`'s own row too (`check_level`'s `NOTHINGUGLYYET_WORDS`
+        // carries an unqualified "safe").
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. This one looks safe.")),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("safe"));
+    }
+
+    #[test]
+    fn a_legitimate_verdict_still_publishes_at_every_level() {
+        // The other half of the fix: a check strict enough to refuse every
+        // dropped family above must not also refuse an ordinary reply that
+        // uses none of their words. One sentence, free of every ceiling word
+        // at every level (no "safe"/"clean"/"fine"/"legit"/"rug"/"rugged"/
+        // "stole"/"stolen"/"guaranteed"), proven to publish unchanged
+        // whichever level the sheet computes.
+        let good = "Eleven accounts held it at birth, against an 850 bps round trip -- \
+                    thin either way.";
+        let cases: [(Vec<Signal>, Vec<String>); 5] = [
+            // CantTell: a required fact was not read.
+            (Vec::new(), vec!["reserve could not be read".to_owned()]),
+            // NothingUglyYet: nothing read, no signal.
+            (Vec::new(), Vec::new()),
+            // Sketchy: one signal, below the two `RugMechanicsLive` needs.
+            (vec![Signal::RepeatLauncher], Vec::new()),
+            // RugMechanicsLive: two live-risk signals, neither `Rugged` pair.
+            (
+                vec![
+                    Signal::CreatorBoughtOwnLaunch,
+                    Signal::LaunchBlockInStrongestBand,
+                ],
+                Vec::new(),
+            ),
+            // Rugged: a qualifying pair.
+            (
+                vec![Signal::LiquidityGone, Signal::HolderConcentration],
+                Vec::new(),
+            ),
+        ];
+        for (signals, unknown) in cases {
+            let sheet = sheet_with(signals, unknown);
+            let level = verdict::level(&sheet);
+            let reply = write(&sheet, Some(&Says(good)));
+            assert!(
+                !reply.is_template(),
+                "{level:?} must still publish a clean reply: {:?}",
+                reply.fellback
+            );
+            assert_eq!(reply.text, good);
+        }
     }
 
     #[test]
     fn a_bidirectional_override_never_reaches_a_published_reply() {
         // An override reverses the rendering of everything after it, which turns
         // a true sentence into a different one without changing a character any
-        // checker reads.
-        //
-        // **What defends this changed, and the test says which.** It used to be
-        // the sanitiser, because the override arrived in the model's prose. The
-        // model has no prose position now, so the override can only arrive in an
-        // authored clause — and the sanitiser is what still catches it there.
-        let mut sheet = sheet();
-        sheet.facts[0] = Fact::exact(Kind::LaunchRecipients, "recipients", 11.0, "11")
-            .saying(Voice::Plain, "11 accounts\u{202e} in the block.");
-        let reply = write(&sheet, Some(&Says("F1.plain")));
+        // checker reads. The model has a prose position now, so this is the
+        // free-text path's own version of the attack `render.rs` exists for.
+        let reply = write(&sheet(), Some(&Says("11 accounts\u{202e} in the block.")));
         assert!(!reply.text.contains('\u{202e}'), "{:?}", reply.text);
         assert!(!reply.is_template(), "and it is still published: {reply:?}");
     }
 
     #[test]
-    fn a_clause_that_is_only_invisible_characters_is_empty_rather_than_published() {
-        let mut sheet = sheet();
-        sheet.facts[0] = Fact::exact(Kind::LaunchRecipients, "recipients", 11.0, "11")
-            .saying(Voice::Plain, "\u{200b}\u{200b}");
-        let reply = write(&sheet, Some(&Says("F1.plain")));
+    fn an_answer_that_is_only_invisible_characters_is_empty_rather_than_published() {
+        let reply = write(&sheet(), Some(&Says("\u{200b}\u{200b}")));
         assert!(reply.is_template());
         assert_eq!(reply.fellback, Some(Fellback::Empty));
-    }
-
-    #[test]
-    fn an_answer_that_is_not_a_selection_ships_the_template() {
-        // The failure ADR 0016 exists to close, at the level of the pipeline: a
-        // fabricated claim carrying an authorised figure. Under the tag layer
-        // this substituted cleanly and published. Here it is not a selection, so
-        // there is nothing to publish.
-        let reply = write(
-            &sheet(),
-            Some(&Says("only [F1] of coins like this one ever recover")),
-        );
-        assert!(reply.is_template(), "{:?}", reply.text);
-        assert!(matches!(
-            reply.fellback,
-            Some(Fellback::NotSelected(crate::clause::NotSelected::Unparsed(
-                _
-            )))
-        ));
-        assert!(!reply.text.contains("recover"));
     }
 
     #[test]
@@ -531,9 +667,13 @@ mod tests {
 
     #[test]
     fn a_reported_cost_is_carried_to_the_meter_verbatim() {
-        let good = "F1.plain
-F2.blunt";
-        let reply = write(&sheet(), Some(&Priced(good, 4_500)));
+        let reply = write(
+            &sheet(),
+            Some(&Priced(
+                "Eleven accounts at birth, 850 bps to trade it.",
+                4_500,
+            )),
+        );
         assert!(!reply.is_template(), "{:?}", reply.fellback);
         assert_eq!(reply.billed, Billed::Reported(MicroUsd(4_500)));
     }
@@ -544,9 +684,10 @@ F2.blunt";
         // `Option`. `Says` reports no cost, which is what a subscription CLI
         // does. Read as zero, every call on that path is free and the day's
         // meter never moves -- while the bill does.
-        let good = "F1.plain
-F2.blunt";
-        let reply = write(&sheet(), Some(&Says(good)));
+        let reply = write(
+            &sheet(),
+            Some(&Says("Eleven accounts at birth, 850 bps to trade it.")),
+        );
         assert!(!reply.is_template(), "{:?}", reply.fellback);
         assert_eq!(reply.billed, Billed::Unreported);
     }
@@ -560,7 +701,7 @@ F2.blunt";
             ("digit-bearing", Priced("the round trip is 4200 bps", 4_500)),
             (
                 "forbidden",
-                Priced("[F1] recipients. This is a scam.", 4_500),
+                Priced("11 recipients. The dev is a scammer.", 4_500),
             ),
             ("empty", Priced("   ", 4_500)),
         ] {
@@ -609,203 +750,82 @@ F2.blunt";
     }
 
     #[test]
-    fn a_number_the_model_wrote_itself_ships_the_template_instead() {
-        // The verification standard, moved one more rung up AGENTS.md §5's
-        // ladder. The first version injected a figure nobody measured and
-        // checked that the scanner caught it. The second made the model unable
-        // to write a digit. This one makes it unable to write a *sentence*, so
-        // the figure and the claim it would have sat in are both gone.
+    fn a_forbidden_claim_the_model_wrote_never_reaches_the_text() {
         let reply = write(
             &sheet(),
-            Some(&Says("F1.plain and the round trip is 4200 bps.")),
+            Some(&Says("11 accounts at birth. The creator is a scammer.")),
         );
         assert!(reply.is_template());
-        assert!(matches!(
-            reply.fellback,
-            Some(Fellback::NotSelected(
-                crate::clause::NotSelected::NoSuchVoice(_)
-            ))
-        ));
-        assert!(!reply.text.contains("4200"));
-    }
-
-    #[test]
-    fn a_pick_that_names_no_fact_ships_the_template_instead() {
-        // A model that believes it was offered a ninth fact was not. Refused
-        // rather than dropped: dropping it publishes the other clauses in an
-        // order that was chosen with this one still in it.
-        let reply = write(&sheet(), Some(&Says("F9.plain")));
-        assert!(reply.is_template());
-        assert_eq!(
-            reply.fellback,
-            Some(Fellback::NotSelected(
-                crate::clause::NotSelected::NoSuchFact(9)
-            ))
-        );
-    }
-
-    #[test]
-    fn a_selected_reply_is_radars_own_sentences_in_the_models_order() {
-        // The positive case, and the reason the design is worth its cost: the
-        // model chose which facts land and in what order, and every word of the
-        // result was written by this crate.
-        let reply = write(&sheet(), Some(&Says("F1.plain\nF2.blunt")));
-        assert!(!reply.is_template(), "{:?}", reply.fellback);
-        assert_eq!(
-            reply.text,
-            "11 token accounts held it in its own launch block -- accounts, not people. \
-             850 bps to get in and out."
-        );
-        // And the second lock agrees, which it must by construction now: every
-        // figure in the text came off the sheet that authorised it.
-        assert!(fidelity::check(&reply.text, &sheet().authorised()).is_empty());
-    }
-
-    #[test]
-    fn the_order_is_the_models_and_the_words_are_not() {
-        // Same two facts, other way round. This is the whole of what the model
-        // still decides, so it is worth a test that it actually decides it.
-        let first = write(&sheet(), Some(&Says("F1.plain\nF2.blunt")));
-        let second = write(&sheet(), Some(&Says("F2.blunt\nF1.plain")));
-        assert!(!first.is_template() && !second.is_template());
-        assert_ne!(first.text, second.text, "the order is the model's");
-        // And neither reply contains a word that is not in a clause: reversing
-        // the order cannot introduce a connective, because there is none.
-        for reply in [&first, &second] {
-            assert!(
-                reply.text.split(' ').count() == first.text.split(' ').count(),
-                "a word appeared or vanished with the order: {:?}",
-                reply.text
-            );
-        }
-    }
-
-    #[test]
-    fn a_forbidden_claim_the_model_tried_to_add_never_reaches_the_text() {
-        let reply = write(&sheet(), Some(&Says("F1.plain. This is a scam.")));
-        assert!(reply.is_template());
-        assert!(matches!(reply.fellback, Some(Fellback::NotSelected(_))));
-        assert!(!reply.text.contains("scam"));
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("scammer"));
     }
 
     #[test]
     fn an_empty_answer_ships_the_template() {
-        // "The model said nothing" and "the model said something that selected
-        // nothing" are different problems, and an operator needs them apart. A
-        // blank answer is `NotSelected::Empty`; a reply whose clauses sanitise
-        // away is `Fellback::Empty`.
         let reply = write(&sheet(), Some(&Says("   ")));
         assert!(reply.is_template());
-        assert_eq!(
-            reply.fellback,
-            Some(Fellback::NotSelected(crate::clause::NotSelected::Empty))
-        );
+        assert_eq!(reply.fellback, Some(Fellback::Empty));
     }
 
     #[test]
     fn the_system_prompt_carries_no_figure_a_model_could_echo() {
         // Every number in a reply must be on that reply's fact sheet. A figure
         // written into the SYSTEM prompt is on no sheet and is in front of the
-        // model for every coin -- so an example like "456 bps" is a number the
-        // model can reproduce for a token it does not describe, and
+        // model for every coin -- so a literal like "280 characters" is a
+        // number the model can reproduce for a token it does not describe, and
         // `fidelity::check` would then bin an otherwise good reply.
         //
-        // Two kinds of digit are allowed and both are stripped first: the rule
-        // numbers, and the **example picks** the prompt has to show to explain
-        // its own grammar.
-        //
-        // A pick is not a figure, which is the point of it. A model that echoes
-        // `F1.plain` out of the prompt selects the first clause on that coin's
-        // sheet — the mechanism working rather than a leak. What must never
-        // appear is a bare number like "456 bps", which is on no sheet and is in
-        // front of the model for every coin.
-        //
-        // "one to three" is spelled out in words in the prompt for this reason.
-        let body: String = SYSTEM
-            .replace("F3.blunt", "F.blunt")
-            .replace("F1.plain", "F.plain")
-            .lines()
-            .map(|l| {
-                let trimmed = l.trim_start();
-                match trimmed.split_once(". ") {
-                    Some((n, rest)) if n.len() == 1 && n.chars().all(|c| c.is_ascii_digit()) => {
-                        rest.to_owned()
-                    }
-                    _ => l.to_owned(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(
-                "
-",
-            );
-        let digits: Vec<char> = body.chars().filter(char::is_ascii_digit).collect();
+        // The rule numbers ("one.", "two.", ...) are spelled out in words for
+        // exactly this reason, same as "one to three" already is.
+        let digits: Vec<char> = SYSTEM.chars().filter(char::is_ascii_digit).collect();
         assert!(
             digits.is_empty(),
-            "the system prompt names figures a model could echo: {digits:?} in {body}"
+            "the system prompt names figures a model could echo: {digits:?}"
         );
     }
 
     #[test]
     fn the_prompt_still_carries_every_rule_the_checks_enforce() {
-        // The wording changed; the rules did not. These are the phrases the
-        // downstream checks exist to back up, and losing one silently would
-        // leave a check with no instruction behind it.
-        // The list is much shorter than it was, and the reason is the point of
-        // this change rather than an omission. "WRITE NO DIGITS", "TOKEN
-        // ACCOUNTS are not people" and "a graduation history is NOT a good sign"
-        // were instructions the model had to obey for a reply to be honest. They
-        // are properties of the clauses now: the noun, the qualifier and the
-        // window are in the sentence, so a model that ignored every one of them
-        // still cannot publish the wrong claim. A rule kept after the behaviour
-        // it forbids became impossible is prose competing with a guarantee, and
-        // AGENTS.md §5 says which of those to keep.
-        //
-        // What is left is the part a check cannot back up: how to *choose*.
+        // The wording changed with the mechanism; the rules the checks still
+        // enforce afterwards did not, and losing one silently would leave a
+        // check with no instruction behind it.
         for phrase in [
-            "ENTIRE OUTPUT IS A LIST OF CHOICES",
+            "your own words",
             "about THIS coin",
             "not known",
+            "never state a price",
+            "Never call a dev, team, founder, creator, handle or company",
         ] {
             assert!(SYSTEM.contains(phrase), "the prompt dropped {phrase:?}");
         }
-        // And the contradiction is gone. `verdict::template` puts the round
-        // trip LAST, deliberately, because it is the same figure in every
-        // reply; the prompt told the model to lead with it. They disagreed
-        // from 2026-09-05 until this change, and the prompt was the wrong one.
-        assert!(
-            !SYSTEM.contains("Lead with the cost"),
-            "the prompt still contradicts the template"
-        );
     }
 
     #[test]
-    fn the_request_offers_every_clause_and_never_the_unpublishable_ones() {
-        // The headline offer is gone: the sheet now leads with this coin's own
-        // clauses and the prompt's second rule is to choose one, so a pre-built
-        // first sentence would be a fourth way of saying the same thing.
-        //
-        // What replaces it as a property worth pinning is the CONTEXT split. A
-        // fact with no clause is shown, so the model can choose well, and is
-        // given no number, so it cannot be chosen.
+    fn the_prompt_asks_for_free_text_rather_than_a_selection() {
+        // The mechanism ADR 0028 point 1 retires, pinned as absent: nothing in
+        // the prompt should still describe a `F<number>.<voice>` pick grammar.
+        for gone in ["LIST OF CHOICES", "F<number>", "F3.blunt", "F1.plain"] {
+            assert!(
+                !SYSTEM.contains(gone),
+                "the old selection prompt survived: {gone:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_request_carries_every_fact_and_the_untrusted_strings_only_fenced() {
+        // The SELECTABLE/CONTEXT split is gone with the selection mechanism it
+        // existed for: a model writing its own prose has nothing to be
+        // restricted from naming that the checks do not already gate
+        // afterwards. What still matters is that every fact reaches the model
+        // and the creator's own strings arrive fenced, not free.
         let mut sheet = sheet();
-        sheet.facts.push(Fact::exact(
-            Kind::SelfMintWithheld,
-            "this token",
-            0.0,
-            "the analyst's own; its price is never stated",
-        ));
+        sheet.unknown.push("the reserve read failed".to_owned());
         let rendered = request_for(&sheet).render();
-        assert!(rendered.contains("SELECTABLE"));
-        assert!(rendered.contains("F1  ("), "the offers are numbered");
-        assert!(
-            rendered.contains("CONTEXT"),
-            "the unpublishable fact is shown as context: {rendered}"
-        );
-        assert!(
-            !rendered.contains("F3"),
-            "and it is not numbered, so nothing can select it: {rendered}"
-        );
+        assert!(rendered.contains("11"), "{rendered}");
+        assert!(rendered.contains("850"), "{rendered}");
+        assert!(rendered.contains("NOT KNOWN"), "{rendered}");
+        assert!(rendered.contains("the reserve read failed"), "{rendered}");
     }
 
     #[test]
@@ -814,7 +834,6 @@ F2.blunt";
         // the sheet alone, so there is no field a mention could travel in.
         let request = request_for(&sheet());
         let rendered = request.render();
-        assert!(rendered.contains("SELECTABLE"));
         assert!(rendered.contains("11"));
         // And the creator's own string is present only inside a fence. Two
         // markers per fenced block, one open and one close.

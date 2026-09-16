@@ -681,6 +681,73 @@ const RUGMECHANICSLIVE_WORDS: &[LevelRule] = &[
     ),
 ];
 
+/// [`RULES`] phrases design 0020 §5 migrates to [`check_target`] (an
+/// accusation aimed at a person) or [`check_level`] (a word above the
+/// sheet's earned level) rather than an unconditional ban.
+///
+/// [`check_unconditional`] is *all of [`RULES`] except these*, rather than a
+/// second, hand-written list that has to be kept in sync with `RULES` by
+/// hand as entries are added or reworded there.
+const MIGRATED_TO_TARGET_OR_LEVEL: &[&str] = &[
+    // The person/project verdict words: §5's "Dropped" bullet names exactly
+    // these seven. A person-directed use is caught by `check_target`
+    // regardless of level; a token-directed use is caught by `check_level`
+    // once it names a level that has not earned the word.
+    "scam",
+    "rug",
+    "fraud",
+    "stole",
+    "stolen",
+    "criminal",
+    "thief",
+    // The reassurance words: §5's "Kept" bullet says these "fold directly
+    // into the level-check's `CantTell` row" -- conditional on level now,
+    // not an unconditional ban, so they must not also be refused here.
+    "is safe",
+    "looks safe",
+    "totally safe",
+    "legit",
+    "trustworthy",
+    "looks clean",
+    "is clean",
+];
+
+/// Refuses every [`RULES`] phrase design 0020 §5 keeps as an unconditional
+/// ban -- advice, a price prediction, the `honeypot`/`exit liquidity`/
+/// `dumped on`/`dumping on` phrases, and the cabal-identity words from
+/// research 0012 -- regardless of the reply's target or the sheet's earned
+/// level.
+///
+/// §5, "Kept, unchanged in purpose": *"The advice rules ... are kept
+/// unconditionally; ADR 0027 says nothing about advice, and AGENTS.md's
+/// advice rule is untouched by it,"* and the `honeypot` entry is *"kept as a
+/// forbidden phrase until research 0044 ships an actual sell-blocking
+/// check."* The cabal-identity words (research 0012: a destination is an
+/// `(owner, mint)` token account, so a recipient count never resolves to a
+/// person or a recurring group) are not named in §5's kept/dropped list at
+/// all, which places them with everything else `RULES` still bans outright
+/// rather than with the seven words §5 explicitly moves elsewhere.
+///
+/// This is [`check`]'s own scan (same masking, same lowercasing, same
+/// substring bluntness -- §5 does not ask for word-boundary precision on
+/// these, only `check_target`/`check_level` need that) restricted to the
+/// phrases [`MIGRATED_TO_TARGET_OR_LEVEL`] does not name, so a caller using
+/// `check_target` + `check_level` + this function refuses exactly what
+/// `check` refused, split three ways rather than narrowed.
+#[must_use]
+pub fn check_unconditional(reply: &str) -> Vec<Violation> {
+    let lower = masked(reply);
+    RULES
+        .iter()
+        .filter(|r| !MIGRATED_TO_TARGET_OR_LEVEL.contains(&r.phrase))
+        .filter(|r| lower.contains(r.phrase))
+        .map(|r| Violation {
+            phrase: r.phrase,
+            because: r.because,
+        })
+        .collect()
+}
+
 /// Refuses a word above the ceiling the sheet's computed level earned,
 /// regardless of who or what it is aimed at -- design 0020 §5's level check.
 ///
@@ -1070,6 +1137,96 @@ mod tests {
             disabled_check_level.is_empty() && !check_level(text, Level::Sketchy).is_empty(),
             "a stub check_level would wrongly let {text:?} through"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // check_unconditional
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn advice_and_price_prediction_are_refused_at_every_level() {
+        // Task 9-15-0025: `voice.rs`'s live gate used to be `check_target` +
+        // `check_level` alone, which has no opinion on advice or a price
+        // prediction at all -- neither function's vocabulary includes them.
+        // Re-apply the gap by deleting this function's call in `voice.rs`
+        // (or gutting `MIGRATED_TO_TARGET_OR_LEVEL` to exclude nothing): a
+        // reply saying "100x" or "should buy" would then publish.
+        for said in ["this is a 100x", "you should buy this one"] {
+            assert!(
+                !check_unconditional(said).is_empty(),
+                "{said:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn honeypot_is_still_refused_unconditionally() {
+        assert!(!check_unconditional("classic honeypot mechanics").is_empty());
+    }
+
+    #[test]
+    fn exit_liquidity_and_dumped_on_are_still_refused_unconditionally() {
+        assert!(!check_unconditional("you are the exit liquidity here").is_empty());
+        assert!(!check_unconditional("the creator dumped on buyers").is_empty());
+    }
+
+    #[test]
+    fn a_cabal_identity_the_measurement_cannot_see_is_still_refused() {
+        // Research 0012: a destination is an (owner, mint) token account, so
+        // "people bought" or "cabal" claims an identity the recipient count
+        // does not carry.
+        for said in [
+            "six people bought it in the launch block",
+            "classic cabal behaviour",
+            "six wallets bought it",
+        ] {
+            assert!(
+                !check_unconditional(said).is_empty(),
+                "{said:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn check_unconditional_does_not_refuse_the_words_target_and_level_now_own() {
+        // The whole point of splitting `check` into three functions: a word
+        // `check_target`/`check_level` now judges by target or level must
+        // not also be an unconditional ban here, or a legitimate `Rugged`
+        // verdict ("this one got rugged") would be refused regardless of the
+        // level it earned.
+        for said in ["this one got rugged", "looks safe so far", "totally clean"] {
+            assert!(
+                check_unconditional(said).is_empty(),
+                "{said:?} must survive check_unconditional: {:?}",
+                check_unconditional(said)
+            );
+        }
+    }
+
+    #[test]
+    fn check_unconditional_lets_an_ordinary_measured_reply_through() {
+        let reply = "Eleven recipients in the launch block. 0.5% of launches that never \
+                     graduated look like that. The round trip at $50 is about 4.6%.";
+        assert!(
+            check_unconditional(reply).is_empty(),
+            "{:?}",
+            check_unconditional(reply)
+        );
+    }
+
+    #[test]
+    fn every_migrated_phrase_is_actually_in_rules() {
+        // If a word in `MIGRATED_TO_TARGET_OR_LEVEL` were ever misspelled or
+        // renamed relative to `RULES`, the filter would silently do nothing
+        // for it and the phrase would stay banned unconditionally here --
+        // not wrong, but a sign the list has drifted from what it claims to
+        // name. This pins the two lists together.
+        for phrase in MIGRATED_TO_TARGET_OR_LEVEL {
+            assert!(
+                RULES.iter().any(|r| r.phrase == *phrase),
+                "{phrase:?} is not a RULES phrase"
+            );
+        }
     }
 
     #[test]

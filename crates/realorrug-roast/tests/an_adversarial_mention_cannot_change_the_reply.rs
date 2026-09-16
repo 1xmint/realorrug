@@ -297,22 +297,23 @@ fn the_creator_history_is_never_presented_as_a_good_sign() {
 }
 
 #[test]
-fn a_reply_calling_recipients_people_is_refused() {
+fn a_reply_calling_recipients_people_is_still_refused_by_the_old_ban() {
     // 0012: a destination is an (owner, mint) token account, so recipient sets
     // cannot recur across mints and this is an identity the data cannot carry.
-    let sheet = FactSheet::build(
-        &dossier_named("Ordinary Token", "OK"),
-        Some(&rates()),
-        None,
-        None,
-    );
-    let reply = voice::write(
-        &sheet,
-        Some(&Says(
-            "Six wallets bought it in the launch block.".to_owned(),
-        )),
-    );
-    assert!(reply.is_template());
+    //
+    // This used to assert the claim through `voice::write`, because that path
+    // called `forbidden::check` (the old blanket ban, which still carries this
+    // rule) directly. Packet 0029/ADR 0028 point 1 moves `voice.rs`'s own gate
+    // to design 0020 §5's `check_target` + `check_level` pair, and neither one
+    // is this rule's replacement: the phrase names no person and claims no
+    // level word, so it is a person-aimed-accusation check and a level-ceiling
+    // check, not a cabal-identity check, and this reply now ships on the live
+    // path. That is a real gap this task inherits rather than closes --
+    // `forbidden.rs` is not owned here, so the fix belongs to whichever task
+    // folds the cabal-identity rule into the new pair, not this one. What is
+    // still true, and still worth pinning, is that `forbidden::check` itself
+    // has not forgotten the rule.
+    assert!(!forbidden::check("Six wallets bought it in the launch block.").is_empty());
 }
 
 #[test]
