@@ -83,6 +83,40 @@ describe("the leaderboard before any week has run", () => {
   });
 });
 
+describe("the home page before a week has closed and before a token exists", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("says no week has closed, in the leaderboard page's own words", async () => {
+    render(<Home />);
+    await waitFor(() => {
+      expect(screen.getByText(/No week has run yet/i)).toBeTruthy();
+    });
+    // Matches `Leaderboard.tsx`'s empty state on purpose -- a reader following
+    // "See full contest" from here should not land on a page that disagrees
+    // with what this one just told them.
+    expect(screen.getByText(/live and answering/i)).toBeTruthy();
+  });
+
+  it("renders no contest table at all rather than an empty one", async () => {
+    const { container } = render(<Home />);
+    await waitFor(() => {
+      expect(screen.getByText(/No week has run yet/i)).toBeTruthy();
+    });
+    expect(container.querySelector("ol")).toBeNull();
+  });
+
+  it("says the token has not launched when no address is configured", async () => {
+    render(<Home />);
+    await waitFor(() => {
+      expect(screen.getByText(/has not launched/i)).toBeTruthy();
+    });
+    const { container } = render(<Home />);
+    expect(container.textContent ?? "").not.toMatch(/0x[0-9a-fA-F]{40}/);
+  });
+});
+
 describe("the prize pool before a token exists", () => {
   it("says there is no token, and shows no balance", async () => {
     render(<Pool />);

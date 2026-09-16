@@ -774,6 +774,20 @@ future slices existing.
    the image are polish on a working, honestly-branded site, not
    prerequisites for one.
 
+   **Home's non-live-feed part shipped 2026-09-16, ahead of this slice's
+   art pass.** The Solana/pump.fun base-rate sections this section's
+   original text assumed `Home.tsx` still carried (Watched, Cost, the
+   `fixtures/stats.json` figures) came off the page entirely — they measure
+   Solana, not the Robinhood Chain product this document describes — and
+   were replaced with §4a's own layout: the paste box, a deny-by-default
+   contract-address component (`site/src/TokenAddress.tsx`, new), and a
+   contest teaser built from `leaderboard()`. **The live feed itself is
+   still not built**, for exactly the reason named above: no
+   `realorrug-serve` route returns "recently checked tokens" yet. What
+   shipped is a code comment in `Home.tsx` pointing at this item, not a
+   fake or hard-coded list. The texture/motion art pass and the
+   `og:image` wiring also remain outstanding.
+
 ## 10. Not established
 
 - The exact root cause of the `Reading…` stuck state (§0) — read from the

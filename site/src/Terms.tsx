@@ -36,7 +36,7 @@ export function Terms() {
         <Card className="mb-10 border-[var(--color-edge)]">
           <p className="text-[var(--color-text)]">
             <strong>
-              Cabal Hunter is measurement and information, not financial advice.
+              Real or Rug is measurement and information, not financial advice.
             </strong>{" "}
             It is operated by Josh Fair. Nothing here is an offer to trade for
             you, to hold your money, or to buy or sell anything. Using this site
@@ -46,7 +46,7 @@ export function Terms() {
 
         <Block title="Who operates this">
           <p>
-            Cabal Hunter is operated by Josh Fair. The account on X is
+            Real or Rug is operated by Josh Fair. The account on X is
             automated, and it says so on the account and on{" "}
             <Here href="/about">the about page</Here>. The software behind it is{" "}
             <Out href={SOURCE}>published in full</Out> under the Apache License
