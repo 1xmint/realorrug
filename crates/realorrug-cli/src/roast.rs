@@ -17,11 +17,8 @@
 //! beside the reply so a disagreement can be traced to a measurement rather
 //! than argued about.
 
-use std::time::Duration;
-
-use realorrug_onchain::{Budget, RpcClient};
+use realorrug_onchain::{RpcClient, dispatch};
 use realorrug_roast::{BaseRates, Fellback};
-use realorrug_types::Address;
 
 use crate::dossier::safe;
 use crate::flag;
@@ -34,29 +31,38 @@ use crate::flag;
 /// history cannot be read at all.
 pub fn run(args: &[String]) -> Result<(), String> {
     let mint_arg = mint_arg_from(args).ok_or_else(|| {
-        "usage: realorrug roast <mint> [--rpc URL] [--rates PATH] [--sheet] [--seconds N]"
+        "usage: realorrug roast <mint> [--rpc URL] [--robinhood-rpc URL] [--rates PATH] [--sheet]"
             .to_owned()
     })?;
-
-    let mint: Address = mint_arg
-        .parse()
-        .map_err(|_| format!("not a valid address: {}", safe(&mint_arg, 64)))?;
 
     let client = flag(args, "--rpc").map_or_else(
         || RpcClient::from_vars(&|k| std::env::var(k).ok()),
         RpcClient::new,
     );
-    let seconds = flag(args, "--seconds")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
-    let mut budget = Budget::new(
-        realorrug_onchain::budget::DEFAULT_MAX_CALLS,
-        realorrug_onchain::budget::DEFAULT_MAX_PAGES,
-        Duration::from_secs(seconds),
-    );
+    // No default (rule 7), same as `launch-check --rpc`: the public Robinhood
+    // endpoint is rate-limited, so an operator who does not pass this flag has
+    // chosen "this chain cannot be read yet", not "read it anyway against a
+    // default this command invented". A `0x…` mint with this `None` is
+    // answered unreadable by the dispatcher below, never as not-an-address and
+    // never against Solana.
+    let robinhood = flag(args, "--robinhood-rpc").map(|url| realorrug_robinhood::Rpc::new(&url));
+    let clients = dispatch::Clients {
+        solana: &client,
+        robinhood: robinhood.as_ref(),
+    };
 
-    let dossier =
-        realorrug_onchain::build(&client, &mut budget, &mint).map_err(|e| e.to_string())?;
+    // The one dispatcher every entry point that answers about a mint goes
+    // through (`realorrug-onchain::dispatch`): it decides Solana or Robinhood
+    // purely from the address's own shape and owns the read's budget -- the
+    // crate's own default, not restated here for the same reason `answer.rs`
+    // does not restate it.
+    let dossier = match dispatch::read(&mint_arg, &clients) {
+        Ok(d) => d,
+        Err(dispatch::Error::NotAnAddress) => {
+            return Err(format!("not a valid address: {}", safe(&mint_arg, 64)));
+        }
+        Err(dispatch::Error::Unreadable(why)) => return Err(why),
+    };
 
     // Rule 8 twice over. A snapshot that will not load means the reply carries
     // no population context -- it never means falling back on remembered

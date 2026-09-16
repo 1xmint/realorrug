@@ -86,7 +86,7 @@ fn needs_newline(text: &str) -> bool {
 pub fn run(args: &[String]) -> Result<(), String> {
     let path = flag(args, "--mentions").ok_or_else(|| {
         "usage: realorrug analyst --mentions <file.jsonl> [--log <file>] [--rpc URL] \
-         [--per-summoner N] [--global N]\n\
+         [--robinhood-rpc URL] [--per-summoner N] [--global N]\n\
          \n\
          Each line: {\"id\":\"...\",\"author\":\"...\",\"text\":\"...\"}\n\
          Dry run only -- this command holds no credential and cannot post."
@@ -116,6 +116,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
         || RpcClient::from_vars(&|k| std::env::var(k).ok()),
         RpcClient::new,
     );
+    // No default (rule 7), same as `launch-check --rpc` and `roast
+    // --robinhood-rpc`: a Robinhood-shaped mention with this `None` is
+    // answered unreadable by the dispatcher, never dispatched to Solana and
+    // never `NotAnAddress`.
+    let robinhood = flag(args, "--robinhood-rpc").map(|url| realorrug_robinhood::Rpc::new(&url));
     let rates = BaseRates::load(realorrug_roast::baserates::DEFAULT_PATH).ok();
     if rates.is_none() {
         eprintln!("no base rates; replies will carry no population context");
@@ -138,6 +143,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let ctx = Answering {
         client: &client,
+        robinhood: robinhood.as_ref(),
         rates: rates.as_ref(),
         creators: creators.as_ref(),
         provider: provider.as_deref(),

@@ -582,6 +582,19 @@ pub fn run() -> ! {
     let mut spend = Spend::open(budget, prices, paths.ledger.clone(), day_of(now()));
 
     let client = realorrug_onchain::RpcClient::from_vars(&env);
+    // No default (rule 7): unlike Solana's `from_vars`, which falls back to a
+    // public endpoint, Robinhood's has none -- `realorrug-cli`'s
+    // `launch-check --rpc` is the pattern this follows. A Robinhood address
+    // arriving while this is `None` is answered "could not be read", never
+    // dispatched to Solana and never "not an address" (design 0020 §2's
+    // dispatch, `realorrug_onchain::dispatch`).
+    let robinhood_client = env("RADAR_ROBINHOOD_RPC").map(realorrug_robinhood::Rpc::new);
+    if robinhood_client.is_none() {
+        eprintln!(
+            "realorrug-analyst: no RADAR_ROBINHOOD_RPC configured; a Robinhood address will be \
+             answered as unreadable rather than read"
+        );
+    }
     let (rates, rates_notice) = rates_in_use(
         BaseRates::load(realorrug_roast::baserates::DEFAULT_PATH),
         &crate::daily::date_of(now()),
@@ -635,6 +648,7 @@ pub fn run() -> ! {
             &mut gate,
             &mut spend,
             &client,
+            robinhood_client.as_ref(),
             rates.as_ref(),
             creators.as_ref(),
             provider.as_deref(),
@@ -647,6 +661,7 @@ pub fn run() -> ! {
             &mut telegram_gate,
             &mut spend,
             &client,
+            robinhood_client.as_ref(),
             rates.as_ref(),
             creators.as_ref(),
             provider.as_deref(),
@@ -680,6 +695,7 @@ pub fn run() -> ! {
                 telegram_publisher.as_ref(),
                 &mut spend,
                 &client,
+                robinhood_client.as_ref(),
                 rates.as_ref(),
                 creators.as_ref(),
                 provider.as_deref(),
@@ -866,6 +882,7 @@ fn announce_week(
     telegram: &dyn Publisher,
     spend: &mut Spend,
     client: &realorrug_onchain::RpcClient,
+    robinhood: Option<&realorrug_robinhood::Rpc>,
     rates: Option<&BaseRates>,
     creators: Option<&realorrug_roast::CreatorIndex>,
     provider: Option<&dyn realorrug_model::Provider>,
@@ -879,23 +896,24 @@ fn announce_week(
     let mut posts = vec![crate::weekly::summary(record, vault.as_ref())];
 
     if let Some(winner) = record.ranking.winner() {
-        match winner.entry.mint.parse::<realorrug_types::Address>() {
-            Ok(mint) => {
-                let mut budget = realorrug_onchain::budget::Budget::default();
-                match realorrug_onchain::build(client, &mut budget, &mint) {
-                    Ok(dossier) => {
-                        let (sheet, reply) =
-                            realorrug_roast::roast(&dossier, rates, creators, provider, self_mint);
-                        posts.push(crate::weekly::teardown(&sheet, &reply));
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "realorrug-analyst: no teardown, the chain could not be read: {e}"
-                        );
-                    }
-                }
+        // The same dispatcher the summoned reply uses: the winning mint is
+        // stored text, on whichever chain it was launched on, and matching on
+        // its shape here a second time would be exactly the duplicated
+        // decision this task exists to remove.
+        let clients = realorrug_onchain::dispatch::Clients {
+            solana: client,
+            robinhood,
+        };
+        match realorrug_onchain::dispatch::read(&winner.entry.mint, &clients) {
+            Ok(dossier) => {
+                let (sheet, reply) =
+                    realorrug_roast::roast(&dossier, rates, creators, provider, self_mint);
+                posts.push(crate::weekly::teardown(&sheet, &reply));
             }
-            Err(_) => {
+            Err(realorrug_onchain::DispatchError::Unreadable(e)) => {
+                eprintln!("realorrug-analyst: no teardown, the chain could not be read: {e}");
+            }
+            Err(realorrug_onchain::DispatchError::NotAnAddress) => {
                 eprintln!("realorrug-analyst: no teardown, the winning mint is not an address");
             }
         }
@@ -1345,6 +1363,7 @@ pub fn tick(
     gate: &mut Gate,
     spend: &mut Spend,
     client: &realorrug_onchain::RpcClient,
+    robinhood: Option<&realorrug_robinhood::Rpc>,
     rates: Option<&BaseRates>,
     creators: Option<&realorrug_roast::CreatorIndex>,
     provider: Option<&dyn realorrug_model::Provider>,
@@ -1456,6 +1475,7 @@ pub fn tick(
         });
         let ctx = Answering {
             client,
+            robinhood,
             rates,
             creators,
             // Gated on the reservation, so a refused meter means no call was

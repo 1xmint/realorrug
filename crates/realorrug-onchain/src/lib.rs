@@ -53,6 +53,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budget;
+pub mod dispatch;
 pub mod dossier;
 pub mod launch;
 pub mod memory;
@@ -61,6 +62,7 @@ pub mod robinhood;
 pub mod rpc;
 
 pub use budget::{Budget, Count, Exhausted};
+pub use dispatch::{Clients as DispatchClients, Error as DispatchError, read as dispatch};
 pub use dossier::{ChainReader, CurveFacts, Dossier, QuoteAsset, SolanaReader, Unavailable, build};
 pub use launch::{LaunchBlock, Metadata, NotALaunch};
 pub use memory::{Error as MemoryError, Fact, Kind, Memory, Recorded};
