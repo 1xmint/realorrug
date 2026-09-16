@@ -271,22 +271,21 @@ pub(crate) fn twin_for(signal: Signal) -> &'static str {
         }
         Signal::CreatorBoughtOwnLaunch => {
             "a creator buying into their own launch block reads the same as a creator buying a \
-             token they believe in, priming the tape, or a launch factory that exempts the \
-             deployer's own first buy from the tax everyone else pays"
+             token they believe in"
         }
         Signal::LiquidityGone => {
             "reserves that emptied pre-graduation read the same whether the creator drained \
              them or every buyer simply sold back to the curve on their own"
         }
         Signal::CreatorSoldOut => {
-            "a creator who now holds nothing reads the same whether they cashed out or moved \
-             to a second wallet they still control; most creators never buy their own launch \
-             at all, so holding nothing is the common case, not the rare one"
+            "a creator wallet that now holds nothing reads the same whether the tokens were \
+             sold or only moved to another wallet the creator still holds them in"
         }
         Signal::BuyersCannotSell => {
-            "a simulated sell that reverts reads the same whether the curve's mechanics are \
-             broken or the simulated size was simply too large for a curve with real but thin \
-             depth"
+            "a simulated sell that fails reads the same whether the curve is broken, the \
+             simulated size was too large for a curve with real but thin depth, or the launch \
+             is still in its opening seconds, when the launchpad's own sell tax is near total \
+             on every token"
         }
         Signal::RepeatLauncher => {
             "a creator who recurs across many launch blocks reads the same whether a person is \
