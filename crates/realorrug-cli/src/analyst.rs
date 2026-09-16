@@ -117,6 +117,26 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
     let mut gate = Gate::new(limits, vec!["radar".to_owned()]);
 
+    // Same reasoning as `limits` above: stated, not defaulted. A dry run that
+    // left lane 2 unconfigured would never show Josh the reply design 0024
+    // adds, and one that invented a number here would make this command's
+    // budget diverge from the daemon's own (`RADAR_LANE2_*`, read by
+    // `lane2::limits_from` in the daemon).
+    let lane2_limits = realorrug_analyst::lane2::Limits {
+        per_author_daily: flag(args, "--lane2-per-author")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5),
+        global_daily: realorrug_types::MicroUsd::from_dollars(
+            flag(args, "--lane2-global-usd")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5.0),
+        ),
+        cooldown_seconds: flag(args, "--lane2-cooldown")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60),
+    };
+    let mut lane2 = realorrug_analyst::lane2::Gate::new(lane2_limits, vec!["radar".to_owned()]);
+
     let client = flag(args, "--rpc").map_or_else(
         || RpcClient::from_vars(&|k| std::env::var(k).ok()),
         RpcClient::new,
@@ -157,7 +177,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
     let mut threads = realorrug_analyst::followup::ThreadMemory::new();
     for mention in &mentions {
-        answer(mention, &mut gate, &mut threads, &ctx, &log_path)?;
+        answer(mention, &mut gate, &mut threads, &mut lane2, &ctx, &log_path)?;
     }
 
     println!(
@@ -186,6 +206,7 @@ fn answer(
     mention: &Mention,
     gate: &mut Gate,
     threads: &mut realorrug_analyst::followup::ThreadMemory,
+    lane2: &mut realorrug_analyst::lane2::Gate,
     ctx: &Answering<'_>,
     log_path: &str,
 ) -> Result<(), String> {
@@ -200,9 +221,11 @@ fn answer(
     // mint or a symbol.
     println!("    {}", safe(&mention.text, 120));
 
-    let entry = match realorrug_analyst::answer(mention, gate, threads, ctx) {
+    let entry = match realorrug_analyst::answer(mention, gate, threads, lane2, ctx) {
         Answered::Reply { entry, .. } => *entry,
-        Answered::Ticker { text: reply, .. } | Answered::Followup { text: reply, .. } => {
+        Answered::Ticker { text: reply, .. }
+        | Answered::Followup { text: reply, .. }
+        | Answered::Lane2 { text: reply, .. } => {
             println!("--> {reply}");
             return Ok(());
         }

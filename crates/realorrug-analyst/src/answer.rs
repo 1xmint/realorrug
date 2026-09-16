@@ -114,6 +114,26 @@ pub enum Answered {
         /// What to say.
         text: String,
     },
+    /// Design 0024's lane 2: a mention naming no address and no ticker,
+    /// outside any thread this bot already stands a verdict in.
+    ///
+    /// A short, in-character reply plus the fixed nudge
+    /// (`crate::lane2::NUDGE`), or `crate::lane2::FALLBACK` when a guardrail
+    /// refused the model's answer or refused the mention outright before a
+    /// call. No chain read, no `FactSheet` -- a sibling of [`Self::Ticker`]
+    /// and [`Self::Followup`], not a reuse of either: those two are plain
+    /// text built with zero model calls, and this one sometimes is and
+    /// sometimes is not, which is exactly why its own guardrails
+    /// (`crate::lane2`, `realorrug_roast::forbidden`) exist.
+    Lane2 {
+        /// The key lane 2's own gate admitted this on.
+        key: String,
+        /// What to say.
+        text: String,
+        /// What the model call (if any was made) owes the meter, same
+        /// reasoning as [`Self::Reply`]'s own field.
+        billed: Billed,
+    },
     /// Nothing usable was found in the mention.
     Nothing,
     /// The gate refused it.
@@ -135,7 +155,7 @@ impl Answered {
     #[must_use]
     pub const fn billed(&self) -> Billed {
         match self {
-            Self::Reply { billed, .. } => *billed,
+            Self::Reply { billed, .. } | Self::Lane2 { billed, .. } => *billed,
             Self::Ticker { .. }
             | Self::Followup { .. }
             | Self::Nothing
@@ -168,6 +188,7 @@ pub fn answer(
     mention: &Mention,
     gate: &mut Gate,
     threads: &mut crate::followup::ThreadMemory,
+    lane2: &mut crate::lane2::Gate,
     ctx: &Answering<'_>,
 ) -> Answered {
     // **A follow-up that names nothing design 0020 §2 lists** gets design
@@ -218,7 +239,12 @@ pub fn answer(
                 key,
             };
         }
-        Asked::Nothing => return Answered::Nothing,
+        // Design 0024: lane 2 owns every mention naming no address and no
+        // ticker, now that the thread check above has already ruled out
+        // "this is a follow-up in a thread we already stand a verdict in."
+        // `lane2::reply` reads no chain and admits itself on its own,
+        // smaller gate (design 0024 §3) -- `answer.rs` only routes to it.
+        Asked::Nothing => return crate::lane2::reply(mention, lane2, ctx.provider, ctx.now),
     };
 
     if let Admitted::No(why) = gate.admit(&mention.author, &mint_text, ctx.now) {
@@ -332,6 +358,10 @@ mod tests {
         crate::followup::ThreadMemory::new()
     }
 
+    fn lane2_gate() -> crate::lane2::Gate {
+        crate::lane2::Gate::unconfigured()
+    }
+
     fn gate() -> Gate {
         Gate::new(
             Limits {
@@ -373,6 +403,7 @@ mod tests {
             &mention("@radar what about $ABC"),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         match out {
@@ -391,6 +422,7 @@ mod tests {
             &mention("@radar hello"),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::Nothing), "{out:?}");
@@ -416,6 +448,7 @@ mod tests {
             &mention("@radar So11111111111111111111111111111111111111112"),
             &mut closed,
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::Refused(_)), "{out:?}");
@@ -427,7 +460,7 @@ mod tests {
         let mut g = gate();
         let mut m = mention("@radar So11111111111111111111111111111111111111112");
         m.author = "radar".to_owned();
-        let out = answer(&m, &mut g, &mut threads(), &ctx(&client));
+        let out = answer(&m, &mut g, &mut threads(), &mut lane2_gate(), &ctx(&client));
         assert!(
             matches!(out, Answered::Refused(Refused::SelfOrIgnored)),
             "{out:?}"
@@ -445,6 +478,7 @@ mod tests {
             &mention("@radar 0x1111111111111111111111111111111111111111"),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::Unreadable(_)), "{out:?}");
@@ -461,6 +495,7 @@ mod tests {
             &mention("@radar 0x1111111111111111111111111111111111111111"),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         let Answered::Unreadable(why) = out else {
@@ -481,6 +516,7 @@ mod tests {
             &mention(&format!("@radar {}", "a".repeat(32))),
             &mut gate(),
             &mut threads(),
+            &mut lane2_gate(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::NotAnAddress), "{out:?}");

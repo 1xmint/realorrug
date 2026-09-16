@@ -51,6 +51,7 @@ pub mod contest;
 pub mod daemon;
 pub mod daily;
 pub mod followup;
+pub mod lane2;
 pub mod log;
 pub mod mention;
 pub mod oauth;

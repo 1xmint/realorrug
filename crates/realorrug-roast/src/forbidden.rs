@@ -1020,6 +1020,154 @@ fn check_required_age(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violat
     }
 }
 
+// ---------------------------------------------------------------------------
+// Design 0024 §2.1: lane 2's own checks.
+//
+// Lane 2 (`crates/realorrug-analyst/src/lane2.rs`) has no `FactSheet` and no
+// computed `Level` -- there is nothing here a number or a claim could be
+// checked against, which is the guardrail design point itself: the only
+// safe number in a lane with no facts is no number (AGENTS.md rule 2, rule
+// 8). These three checks are new; `check_unconditional` above is reused as
+// it stands, and `check_any_person_reference` below reuses `check_target`'s
+// own person-reference detection with one widened trigger rather than
+// inventing a second one.
+// ---------------------------------------------------------------------------
+
+/// Refuses any ASCII digit anywhere in the reply -- design 0024 §2.1.
+///
+/// Blunter than [`check_required`]'s "does this number match the sheet":
+/// lane 2 has no sheet a digit could be checked against, so every digit is
+/// refused, not only a wrong one.
+#[must_use]
+pub fn check_numerals(text: &str) -> Vec<Violation> {
+    if text.chars().any(|c| c.is_ascii_digit()) {
+        vec![Violation {
+            phrase: "0-9",
+            because: "lane 2 has no fact sheet a digit could ever be checked against",
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The words a lane-2 reply may not pair with a claim that one has been
+/// identified, per design 0024 §2.1.
+///
+/// Deliberately does not ban the bare words: lane 2's own fixed nudge line
+/// (appended by its caller, never run through this check) says "drop a
+/// contract address" as a request, and the distinction is the same one
+/// [`check_target`] already draws between a fact and an accusation -- it is
+/// the *claim*, not the word, that is refused.
+const IDENTIFICATION_WORDS: &[&str] = &["token", "coin", "contract", "mint", "address"];
+
+/// Does this (already lowercase) sentence contain a `$`-cashtag -- `$` then
+/// an alphanumeric character?
+fn has_cashtag(sentence: &str) -> bool {
+    sentence.char_indices().any(|(i, c)| {
+        c == '$'
+            && sentence[i + c.len_utf8()..]
+                .chars()
+                .next()
+                .is_some_and(char::is_alphanumeric)
+    })
+}
+
+/// Refuses a cashtag, or one of [`IDENTIFICATION_WORDS`] used alongside a
+/// copula in the same sentence ("this **token is** great," "it**'s** a
+/// **legit coin**") -- design 0024 §2.1's `check_no_identification`.
+///
+/// A positive-claim shape, not a word ban: "drop a contract address" pairs
+/// no copula with the word, and is never refused by this. The false-refusal
+/// cost of a copula appearing near the word for an unrelated reason is
+/// accepted, the same conservative direction §5 (rule 7) already takes for
+/// `check_target`.
+#[must_use]
+pub fn check_no_identification(text: &str) -> Vec<Violation> {
+    let lower = text.to_lowercase();
+    let mut out = Vec::new();
+    for sentence in sentences(&lower) {
+        if has_cashtag(sentence) {
+            out.push(Violation {
+                phrase: "$",
+                because: "a cashtag treats a symbol as identified, and lane 2 has no sheet to \
+                          check one against",
+            });
+        }
+        let names_one = IDENTIFICATION_WORDS.iter().any(|w| word_occurs(sentence, w));
+        let has_copula = word_occurs(sentence, "is")
+            || word_occurs(sentence, "are")
+            || sentence.contains("'s ");
+        if names_one && has_copula {
+            out.push(Violation {
+                phrase: "token/coin/contract/mint/address claim",
+                because: "a positive identification claim lane 2 has no fact sheet to back",
+            });
+        }
+    }
+    out
+}
+
+/// Design 0024 §2.1's widened `check_target` trigger for lane 2: a
+/// violation needs **only** a person-reference, no [`ACCUSATION_WORDS`]
+/// co-occurrence -- lane 2 has no legitimate register in which naming a
+/// real person, complimentary or not, is the bot's job.
+///
+/// Shares every person-reference shape `check_target` uses
+/// ([`has_handle`], [`PERSON_WORDS`], [`has_capitalized_run`],
+/// [`has_address_subject`]) and the same own-name mask, so `realorrug` is
+/// never itself read as a person-reference. This is a superset of what
+/// `check_target` alone would catch for the same text; lane 2's caller uses
+/// this function alone rather than also calling `check_target`, per this
+/// module's own doc note that the trigger is widened, not duplicated.
+#[must_use]
+pub fn check_any_person_reference(text: &str) -> Vec<Violation> {
+    let masked_text = mask_case_preserving(text);
+    let mut violations = Vec::new();
+    for sentence in sentences(&masked_text) {
+        let lower = sentence.to_lowercase();
+        let has_person = has_handle(sentence)
+            || PERSON_WORDS.iter().any(|w| word_occurs(&lower, w))
+            || has_capitalized_run(sentence)
+            || has_address_subject(&lower);
+        if has_person {
+            violations.push(Violation {
+                phrase: "person-reference",
+                because: "lane 2 has no legitimate reason to name a real person at all",
+            });
+        }
+    }
+    violations
+}
+
+/// A fixed keyword scan of a **mention's** text (not a reply) for a
+/// tragedy, death, violence, war, or a political figure or party -- design
+/// 0024 §2.1's `check_sensitive_topic`. A hit routes straight to lane 2's
+/// fixed fallback line with no model call at all.
+///
+/// A keyword scan, not a classifier, for the reason design 0022 §2 gives
+/// its own fixed phrase list: the set of subjects that must never get a
+/// joke is closed enough to enumerate, and a false refusal costs one plain
+/// nudge instead of one joke -- the conservative direction rule 7 already
+/// prefers.
+const SENSITIVE_WORDS: &[&str] = &[
+    "died", "death", "dead", "killed", "kill", "suicide", "shooting", "shooter", "massacre",
+    "terrorist", "terrorism", "bombing", "bomb", "genocide", "war", "attack", "murder", "rape",
+    "assault", "tragedy", "disaster", "earthquake", "president", "election", "senator",
+    "congress", "republican", "democrat", "politician", "prime minister",
+];
+#[must_use]
+pub fn check_sensitive_topic(mention: &str) -> Vec<Violation> {
+    let lower = mention.to_lowercase();
+    SENSITIVE_WORDS
+        .iter()
+        .filter(|w| word_occurs(&lower, w))
+        .map(|w| Violation {
+            phrase: w,
+            because: "a tragedy or political subject gets the fixed nudge, never a joke",
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
