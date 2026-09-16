@@ -757,6 +757,11 @@ mod tests {
         // documented cooldown.
         let mut g = gate(); // cooldown_seconds: 60
         assert!(g.admit("asker", "q1", 1_000).is_ok());
+        // `record` is what starts the author's clock, exactly as `reply()`
+        // calls the pair. Without it this author has no state at all, the
+        // cooldown branch is never entered, and the test passes whatever the
+        // comparison says -- which is how a `<=` mutant survived it.
+        g.record("asker", 1_000, "a reply");
         assert!(
             g.admit("asker", "q2", 1_000 + 60).is_ok(),
             "exactly one cooldown period later must be admitted"
