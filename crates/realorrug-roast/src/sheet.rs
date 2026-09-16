@@ -1521,6 +1521,26 @@ mod tests {
         }
     }
 
+    /// The hours are arithmetic, and arithmetic is where a mutation hides.
+    ///
+    /// 63954 slots x 400ms = 25581.6s; over 3600 that is 7.106 hours, which
+    /// rounds to one decimal as 7.1. Every operator in that line has a
+    /// mutant, and each one lands on a different number -- 381.6, 1.7, 0.1 --
+    /// so pinning the rendered string and the two authorised values catches
+    /// all of them at once. It also pins the contract the reply depends on:
+    /// the digits a model may cite are the digits this fact declared.
+    #[test]
+    fn the_age_fact_pins_the_hours_it_declares() {
+        let mut facts = Vec::new();
+        push_age(&mut facts, SlotDelta(63_954));
+        assert_eq!(facts.len(), 1);
+        assert_eq!(
+            facts[0].rendered,
+            "63954 slots (about 7.1 hours) since its launch block"
+        );
+        assert_eq!(facts[0].values, vec![63_954.0, 7.1]);
+    }
+
     #[test]
     fn a_solana_sheet_renders_byte_for_byte() {
         // The whole string, not a `contains`. `voice::write` hands the model

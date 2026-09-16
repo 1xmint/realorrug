@@ -1622,6 +1622,41 @@ mod tests {
         );
     }
 
+    /// Both halves of "says the age is unknown", one at a time.
+    ///
+    /// The ageless branch asks for an age word AND a phrase admitting the age
+    /// was not read. Flip that `&&` to `||` and either half alone would do,
+    /// which is how "old or not" becomes an age statement. These two replies
+    /// each satisfy exactly one half, so each fails under the flip and passes
+    /// today.
+    #[test]
+    fn an_ageless_reply_that_never_says_the_age_is_unknown_is_refused() {
+        let sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
+        assert!(
+            !check_required(
+                "Eleven at birth, old or not, read at block 100. Nothing ugly yet.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_ageless_reply_that_admits_a_gap_without_naming_the_age_is_refused() {
+        // "unknown" with no age word: the reply admits *something* was not
+        // read without saying it was how long this token has existed.
+        let sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
+        assert!(
+            !check_required(
+                "How far back this one goes is unknown, read at block 100.",
+                Level::NothingUglyYet,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
     #[test]
     fn a_nothinguglyyet_reply_with_no_age_is_refused() {
         // Re-apply by deleting the `states_one_of` half of the `Some(age)`
