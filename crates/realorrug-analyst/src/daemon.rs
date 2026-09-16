@@ -19,6 +19,7 @@ use std::time::Duration;
 use realorrug_onchain::Budget as CallBudget;
 use realorrug_provider::Budget;
 use realorrug_roast::{BaseRates, Billed};
+use realorrug_types::env::env_or_legacy;
 use realorrug_types::{Address, MicroUsd};
 
 use crate::admission::{Gate, Limits, Refused};
@@ -69,7 +70,7 @@ impl Paths {
     /// Under one directory, so an operator moves one thing.
     ///
     /// The contest directory is a sibling rather than a child: `radar-serve`
-    /// reads it as `RADAR_CONTEST_DIR`, defaulting to `data/contest`, and the
+    /// reads it as `REALORRUG_CONTEST_DIR`, defaulting to `data/contest`, and the
     /// two defaults have to name the same place.
     #[must_use]
     pub fn under(dir: &str) -> Self {
@@ -129,6 +130,13 @@ fn env(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
 
+/// `env`, but falling back to a renamed variable's old name. See
+/// `realorrug_types::env::env_or_legacy` for why: this fallback is deleted once
+/// the box's env files are renamed.
+fn env_legacy(new: &str, old: &str) -> Option<String> {
+    env_or_legacy(new, old, env)
+}
+
 /// The budget, or a closed one.
 ///
 /// Takes a getter rather than reading the environment, so the rule can be tested
@@ -140,12 +148,20 @@ fn env(key: &str) -> Option<String> {
 /// **closed**, not ignored: a typo in a spending ceiling must not read as
 /// permission.
 pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
-    let daily = get("RADAR_ANALYST_DAILY_USD")
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .map(MicroUsd::from_dollars);
-    let per_call = get("RADAR_ANALYST_PER_CALL_USD")
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .map(MicroUsd::from_dollars);
+    let daily = env_or_legacy(
+        "REALORRUG_ANALYST_DAILY_USD",
+        "RADAR_ANALYST_DAILY_USD",
+        get,
+    )
+    .and_then(|v| v.trim().parse::<f64>().ok())
+    .map(MicroUsd::from_dollars);
+    let per_call = env_or_legacy(
+        "REALORRUG_ANALYST_PER_CALL_USD",
+        "RADAR_ANALYST_PER_CALL_USD",
+        get,
+    )
+    .and_then(|v| v.trim().parse::<f64>().ok())
+    .map(MicroUsd::from_dollars);
     match (daily, per_call) {
         (Some(daily_max), Some(per_call_max)) => Budget {
             per_call_max,
@@ -165,8 +181,8 @@ pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
 #[must_use]
 pub fn unfunded_notice(budget: Budget) -> Option<&'static str> {
     (budget == Budget::CLOSED).then_some(
-        "realorrug-analyst: unfunded -- RADAR_ANALYST_DAILY_USD and \
-         RADAR_ANALYST_PER_CALL_USD are not both set, so every call is refused.",
+        "realorrug-analyst: unfunded -- REALORRUG_ANALYST_DAILY_USD and \
+         REALORRUG_ANALYST_PER_CALL_USD are not both set, so every call is refused.",
     )
 }
 
@@ -234,17 +250,31 @@ fn rates_in_use(
 /// whoever typed it — so this function is where the absence is turned into a
 /// refusal rather than into a number.
 pub fn limits_from(get: &impl Fn(&str) -> Option<String>) -> Limits {
-    let n = |key: &str| get(key).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+    let n = |new: &str, old: &str| {
+        env_or_legacy(new, old, get)
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0)
+    };
     Limits {
-        per_summoner_daily: n("RADAR_ANALYST_PER_SUMMONER_DAILY"),
-        global_daily: n("RADAR_ANALYST_GLOBAL_DAILY"),
+        per_summoner_daily: n(
+            "REALORRUG_ANALYST_PER_SUMMONER_DAILY",
+            "RADAR_ANALYST_PER_SUMMONER_DAILY",
+        ),
+        global_daily: n(
+            "REALORRUG_ANALYST_GLOBAL_DAILY",
+            "RADAR_ANALYST_GLOBAL_DAILY",
+        ),
         // The one with a default, because a dedupe window is not a spending
         // decision -- it decides how long "already answered" lasts, and zero
         // would mean the same coin is answered again on the next poll. An hour
         // is the same figure the command uses.
-        dedupe_seconds: get("RADAR_ANALYST_DEDUPE_SECONDS")
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(3_600),
+        dedupe_seconds: env_or_legacy(
+            "REALORRUG_ANALYST_DEDUPE_SECONDS",
+            "RADAR_ANALYST_DEDUPE_SECONDS",
+            get,
+        )
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(3_600),
     }
 }
 
@@ -272,7 +302,7 @@ pub fn limits_from(get: &impl Fn(&str) -> Option<String>) -> Limits {
 ///
 /// When the variable is set to something that is not a base58 address.
 pub fn self_mint_from(get: &impl Fn(&str) -> Option<String>) -> Result<Option<Address>, String> {
-    let Some(raw) = get("RADAR_SELF_MINT") else {
+    let Some(raw) = env_or_legacy("REALORRUG_SELF_MINT", "RADAR_SELF_MINT", get) else {
         return Ok(None);
     };
     let raw = raw.trim();
@@ -280,7 +310,7 @@ pub fn self_mint_from(get: &impl Fn(&str) -> Option<String>) -> Result<Option<Ad
         return Ok(None);
     }
     raw.parse::<Address>().map(Some).map_err(|_| {
-        "RADAR_SELF_MINT is set and is not an address, so the analyst's own token cannot be \
+        "REALORRUG_SELF_MINT is set and is not an address, so the analyst's own token cannot be \
          told apart and nothing is answered. Set it to the mint, or unset it if no token \
          exists yet."
             .to_owned()
@@ -296,12 +326,12 @@ pub fn self_mint_from(get: &impl Fn(&str) -> Option<String>) -> Result<Option<Ad
 pub fn self_mint_notice(self_mint: Option<&Address>) -> String {
     match self_mint {
         None => {
-            "realorrug-analyst: no RADAR_SELF_MINT, so no token is the analyst's own and every \
+            "realorrug-analyst: no REALORRUG_SELF_MINT, so no token is the analyst's own and every \
                  coin is answered on the same rule."
                 .to_owned()
         }
         Some(mint) => format!(
-            "realorrug-analyst: RADAR_SELF_MINT={mint} -- its price and market capitalisation are \
+            "realorrug-analyst: REALORRUG_SELF_MINT={mint} -- its price and market capitalisation are \
              never stated; everything else about it is answered like any other coin."
         ),
     }
@@ -333,7 +363,8 @@ pub fn self_mint_notice(self_mint: Option<&Address>) -> String {
 /// the log says which state it is in.
 #[must_use]
 pub fn may_publish(get: &impl Fn(&str) -> Option<String>) -> bool {
-    get("RADAR_X_PUBLISH").is_some_and(|v| v.trim().eq_ignore_ascii_case("on"))
+    env_or_legacy("REALORRUG_X_PUBLISH", "RADAR_X_PUBLISH", get)
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("on"))
 }
 
 /// What the daemon says about which state it is in.
@@ -359,12 +390,12 @@ pub fn posture(has_credential: bool, can_post: bool, publishing: bool) -> &'stat
         }
         (true, _, false) => {
             "realorrug-analyst: reading mentions and answering them to the log ONLY -- \
-             set RADAR_X_PUBLISH=on to speak in public."
+             set REALORRUG_X_PUBLISH=on to speak in public."
         }
         (true, false, true) => {
-            "realorrug-analyst: RADAR_X_PUBLISH=on but there is no signing credential, so every \
+            "realorrug-analyst: REALORRUG_X_PUBLISH=on but there is no signing credential, so every \
              reply will be answered and none delivered. A bearer can read; posting needs \
-             RADAR_X_API_KEY, RADAR_X_API_SECRET, RADAR_X_ACCESS_TOKEN and RADAR_X_ACCESS_SECRET."
+             REALORRUG_X_API_KEY, REALORRUG_X_API_SECRET, REALORRUG_X_ACCESS_TOKEN and REALORRUG_X_ACCESS_SECRET."
         }
         (true, true, true) => "realorrug-analyst: LIVE -- replies are being posted publicly.",
     }
@@ -491,7 +522,8 @@ pub fn provider_notice(why: &realorrug_model::Selection) -> String {
     reason = "the daemon's start-up, read once top to bottom"
 )]
 pub fn run() -> ! {
-    let dir = env("RADAR_ANALYST_DIR").unwrap_or_else(|| "data/analyst".to_owned());
+    let dir = env_legacy("REALORRUG_ANALYST_DIR", "RADAR_ANALYST_DIR")
+        .unwrap_or_else(|| "data/analyst".to_owned());
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("realorrug-analyst: cannot use {dir}: {e}");
         std::process::exit(1);
@@ -513,7 +545,7 @@ pub fn run() -> ! {
     // states an operator otherwise has to infer. The build sha closes the trap
     // that caught us twice -- a change believed deployed, debugged against a
     // process that predated it -- and the operator count is what makes Phase
-    // 0.3 checkable: a duplicated or mistyped `RADAR_CONTEST_OPERATORS` line
+    // 0.3 checkable: a duplicated or mistyped `REALORRUG_CONTEST_OPERATORS` line
     // silently leaves the managing account eligible to win the prize, and the
     // only visible difference is this number.
     eprintln!("{}", build_notice(operator_ids(x.as_ref()).len()));
@@ -561,9 +593,9 @@ pub fn run() -> ! {
         // unmetered call is the open invoice this account cannot afford.
         eprintln!(
             "realorrug-analyst: no prices configured, so nothing can be metered and \
-             nothing will be answered. Set RADAR_X_PRICE_MENTION_READ, \
-             RADAR_X_PRICE_POST_READ, RADAR_X_PRICE_REPLY and \
-             RADAR_MODEL_PER_CALL_USD_MICRO -- see deploy/analyst.env.example."
+             nothing will be answered. Set REALORRUG_X_PRICE_MENTION_READ, \
+             REALORRUG_X_PRICE_POST_READ, REALORRUG_X_PRICE_REPLY and \
+             REALORRUG_MODEL_PER_CALL_USD_MICRO -- see deploy/analyst.env.example."
         );
         idle_forever();
     };
@@ -602,10 +634,11 @@ pub fn run() -> ! {
     // arriving while this is `None` is answered "could not be read", never
     // dispatched to Solana and never "not an address" (design 0020 §2's
     // dispatch, `realorrug_onchain::dispatch`).
-    let robinhood_client = env("RADAR_ROBINHOOD_RPC").map(realorrug_robinhood::Rpc::new);
+    let robinhood_client = env_legacy("REALORRUG_ROBINHOOD_RPC", "RADAR_ROBINHOOD_RPC")
+        .map(realorrug_robinhood::Rpc::new);
     if robinhood_client.is_none() {
         eprintln!(
-            "realorrug-analyst: no RADAR_ROBINHOOD_RPC configured; a Robinhood address will be \
+            "realorrug-analyst: no REALORRUG_ROBINHOOD_RPC configured; a Robinhood address will be \
              answered as unreadable rather than read"
         );
     }
@@ -695,7 +728,7 @@ pub fn run() -> ! {
         // account could have entered its own contest and won -- the operator
         // paying themselves out of a pool the public is told is theirs.
         //
-        // `RADAR_CONTEST_OPERATORS` is a comma-separated list of numeric ids;
+        // `REALORRUG_CONTEST_OPERATORS` is a comma-separated list of numeric ids;
         // the bot's own id is always in the set whether or not it is listed, so
         // forgetting the variable cannot make the bot eligible.
         let rules = realorrug_contest::Rules::published(operator_ids(x.as_ref()));
@@ -1017,7 +1050,7 @@ fn announce_week(
 #[must_use]
 pub fn bio_notice(bio: Option<&crate::bio::Bio>) -> String {
     match bio {
-        None => "realorrug-analyst: the bio is not written (RADAR_BIO_LEAD unset), so the \
+        None => "realorrug-analyst: the bio is not written (REALORRUG_BIO_LEAD unset), so the \
                  account's own copy stands."
             .to_owned(),
         Some(b) => format!(
@@ -1319,7 +1352,7 @@ pub fn build_notice(operators: usize) -> String {
 /// Every account the operator controls, for the contest's exclusion rule.
 ///
 /// The bot's own id is always included, so an unset or mistyped
-/// `RADAR_CONTEST_OPERATORS` can never make the bot itself eligible -- the
+/// `REALORRUG_CONTEST_OPERATORS` can never make the bot itself eligible -- the
 /// failure this ordering exists to prevent. Everything else is additive.
 ///
 /// Ids only: anything that is not a run of digits is dropped, because an X
@@ -1329,7 +1362,7 @@ fn operator_ids(x: Option<&X>) -> Vec<String> {
     let own = x.map_or_else(|| "radar".to_owned(), |x| x.user_id().to_owned());
     operator_ids_from(
         &own,
-        std::env::var("RADAR_CONTEST_OPERATORS").ok().as_deref(),
+        env_legacy("REALORRUG_CONTEST_OPERATORS", "RADAR_CONTEST_OPERATORS").as_deref(),
     )
 }
 
@@ -1938,7 +1971,7 @@ mod tests {
         // told about on a restart, so both are said.
         let off = bio_notice(None);
         assert!(off.contains("not written"), "{off}");
-        assert!(off.contains("RADAR_BIO_LEAD"), "{off}");
+        assert!(off.contains("REALORRUG_BIO_LEAD"), "{off}");
 
         let on = bio_notice(Some(&crate::bio::Bio {
             lead: "Automated.".to_owned(),
@@ -2217,7 +2250,7 @@ mod tests {
             build_notice(2)
         );
 
-        // An ordinary build has no `RADAR_BUILD_SHA` and says so rather than
+        // An ordinary build has no `REALORRUG_BUILD_SHA` and says so rather than
         // printing a blank, which reads as neither a commit nor an absence.
         // Release CI sets it, so this asserts the shape and not the value.
         assert!(one.contains("build "), "{one}");
@@ -2335,16 +2368,16 @@ mod tests {
         // Deny by default: a per-call ceiling with no daily cap is not a
         // budget, it is a ceiling on how fast an unbounded bill accumulates.
         let both = from(&[
-            ("RADAR_ANALYST_DAILY_USD", "5.00"),
-            ("RADAR_ANALYST_PER_CALL_USD", "0.25"),
+            ("REALORRUG_ANALYST_DAILY_USD", "5.00"),
+            ("REALORRUG_ANALYST_PER_CALL_USD", "0.25"),
         ]);
         let budget = budget_from(&both);
         assert_eq!(budget.daily_max, MicroUsd(5_000_000));
         assert_eq!(budget.per_call_max, MicroUsd(250_000));
 
         for partial in [
-            vec![("RADAR_ANALYST_DAILY_USD", "5.00")],
-            vec![("RADAR_ANALYST_PER_CALL_USD", "0.25")],
+            vec![("REALORRUG_ANALYST_DAILY_USD", "5.00")],
+            vec![("REALORRUG_ANALYST_PER_CALL_USD", "0.25")],
             vec![],
         ] {
             assert_eq!(
@@ -2359,8 +2392,8 @@ mod tests {
     fn a_ceiling_that_will_not_parse_is_closed_rather_than_ignored() {
         // A typo in a spending ceiling must not read as permission.
         let typo = from(&[
-            ("RADAR_ANALYST_DAILY_USD", "five dollars"),
-            ("RADAR_ANALYST_PER_CALL_USD", "0.25"),
+            ("REALORRUG_ANALYST_DAILY_USD", "five dollars"),
+            ("REALORRUG_ANALYST_PER_CALL_USD", "0.25"),
         ]);
         assert_eq!(budget_from(&typo), Budget::CLOSED);
     }
@@ -2371,7 +2404,7 @@ mod tests {
         // nothing, and this line is the difference between that and a mystery.
         let notice = unfunded_notice(Budget::CLOSED).expect("a closed budget says so");
         assert!(notice.contains("unfunded"), "{notice}");
-        assert!(notice.contains("RADAR_ANALYST_DAILY_USD"), "{notice}");
+        assert!(notice.contains("REALORRUG_ANALYST_DAILY_USD"), "{notice}");
 
         // A funded one says nothing: a warning that fires when everything is
         // fine is a warning nobody reads.
@@ -2400,9 +2433,9 @@ mod tests {
     #[test]
     fn limits_are_read_when_they_are_set() {
         let set = from(&[
-            ("RADAR_ANALYST_PER_SUMMONER_DAILY", "3"),
-            ("RADAR_ANALYST_GLOBAL_DAILY", "50"),
-            ("RADAR_ANALYST_DEDUPE_SECONDS", "900"),
+            ("REALORRUG_ANALYST_PER_SUMMONER_DAILY", "3"),
+            ("REALORRUG_ANALYST_GLOBAL_DAILY", "50"),
+            ("REALORRUG_ANALYST_DEDUPE_SECONDS", "900"),
         ]);
         let limits = limits_from(&set);
         assert_eq!(limits.per_summoner_daily, 3);
@@ -2417,14 +2450,14 @@ mod tests {
         // configuration is none, and it must not be reported as an error.
         assert!(matches!(self_mint_from(&from(&[])), Ok(None)));
         assert!(matches!(
-            self_mint_from(&from(&[("RADAR_SELF_MINT", "   ")])),
+            self_mint_from(&from(&[("REALORRUG_SELF_MINT", "   ")])),
             Ok(None)
         ));
 
         // A real address, with the whitespace an env file leaves around it.
         let mint = Address::new([3u8; 32]);
         let padded = format!("  {mint}  ");
-        let read = self_mint_from(&from(&[("RADAR_SELF_MINT", padded.as_str())]));
+        let read = self_mint_from(&from(&[("REALORRUG_SELF_MINT", padded.as_str())]));
         assert!(
             matches!(read, Ok(Some(m)) if m == mint),
             "the mint must round-trip"
@@ -2437,9 +2470,9 @@ mod tests {
         // that read as `None` would have the analyst state its own price while
         // every log line said the rule was configured. Re-apply the bug by
         // mapping the parse failure to `Ok(None)` and this fails.
-        match self_mint_from(&from(&[("RADAR_SELF_MINT", "not-a-mint")])) {
+        match self_mint_from(&from(&[("REALORRUG_SELF_MINT", "not-a-mint")])) {
             Err(e) => {
-                assert!(e.contains("RADAR_SELF_MINT"), "{e}");
+                assert!(e.contains("REALORRUG_SELF_MINT"), "{e}");
                 assert!(e.contains("nothing is answered"), "{e}");
                 // Not echoed: the likeliest wrong value is another variable's
                 // secret on the wrong line.
@@ -2454,14 +2487,14 @@ mod tests {
         // One line in the journal that says whether the rule is armed, and for
         // which token. Each state says something only it could say.
         let none = self_mint_notice(None);
-        assert!(none.contains("no RADAR_SELF_MINT"), "{none}");
+        assert!(none.contains("no REALORRUG_SELF_MINT"), "{none}");
         assert!(none.contains("same rule"), "{none}");
 
         let mint = Address::new([3u8; 32]);
         let some = self_mint_notice(Some(&mint));
         assert!(some.contains(&mint.to_string()), "{some}");
         assert!(some.contains("never stated"), "{some}");
-        assert!(!some.contains("no RADAR_SELF_MINT"), "{some}");
+        assert!(!some.contains("no REALORRUG_SELF_MINT"), "{some}");
     }
 
     #[test]
@@ -2498,9 +2531,9 @@ mod tests {
         // it must not make it *audible*, because the launch gate asks for a
         // hundred replies to be read beside their fact sheets first and there
         // was no way to do that without publishing them.
-        assert!(may_publish(&vars(&[("RADAR_X_PUBLISH", "on")])));
-        assert!(may_publish(&vars(&[("RADAR_X_PUBLISH", "ON")])));
-        assert!(may_publish(&vars(&[("RADAR_X_PUBLISH", "  on  ")])));
+        assert!(may_publish(&vars(&[("REALORRUG_X_PUBLISH", "on")])));
+        assert!(may_publish(&vars(&[("REALORRUG_X_PUBLISH", "ON")])));
+        assert!(may_publish(&vars(&[("REALORRUG_X_PUBLISH", "  on  ")])));
     }
 
     #[test]
@@ -2515,7 +2548,7 @@ mod tests {
         // mystery.
         for value in ["", " ", "off", "true", "1", "yes", "no", "onn", "n"] {
             assert!(
-                !may_publish(&vars(&[("RADAR_X_PUBLISH", value)])),
+                !may_publish(&vars(&[("REALORRUG_X_PUBLISH", value)])),
                 "{value:?} must not enable publishing"
             );
         }
@@ -2554,7 +2587,7 @@ mod tests {
         // reply log, so the daemon says which it is on every start.
         assert!(posture(false, false, false).contains("no credential"));
         assert!(posture(true, true, false).contains("log ONLY"));
-        assert!(posture(true, true, false).contains("RADAR_X_PUBLISH=on"));
+        assert!(posture(true, true, false).contains("REALORRUG_X_PUBLISH=on"));
         assert!(posture(true, true, true).contains("LIVE"));
 
         // A bearer is required to speak, so "publishing without one" is not a
@@ -2567,7 +2600,7 @@ mod tests {
         // It must not read as either of its neighbours.
         let unsigned = posture(true, false, true);
         assert!(unsigned.contains("no signing credential"), "{unsigned}");
-        assert!(unsigned.contains("RADAR_X_API_KEY"), "{unsigned}");
+        assert!(unsigned.contains("REALORRUG_X_API_KEY"), "{unsigned}");
         assert!(!unsigned.contains("LIVE"), "{unsigned}");
         assert!(!unsigned.contains("log ONLY"), "{unsigned}");
     }
@@ -2611,18 +2644,18 @@ mod tests {
         // carry the variable name through: "incomplete" on its own tells them
         // nothing they did not already know.
         let half = provider_notice(&realorrug_model::Selection::Incomplete(
-            "RADAR_MODEL_OPENAI_KEY is set but RADAR_MODEL_PRICE_IN is missing".to_owned(),
+            "REALORRUG_MODEL_OPENAI_KEY is set but REALORRUG_MODEL_PRICE_IN is missing".to_owned(),
         ));
         assert!(half.contains("UNUSABLE"), "{half}");
-        assert!(half.contains("RADAR_MODEL_PRICE_IN"), "{half}");
+        assert!(half.contains("REALORRUG_MODEL_PRICE_IN"), "{half}");
 
         // And the one that fires when a vendor is switched without unsetting
         // the old key -- the case paying two vendors at once looks like.
         let both = provider_notice(&realorrug_model::Selection::Ambiguous(
-            "RADAR_MODEL_API_KEY and RADAR_MODEL_OPENAI_KEY".to_owned(),
+            "REALORRUG_MODEL_API_KEY and REALORRUG_MODEL_OPENAI_KEY".to_owned(),
         ));
         assert!(both.contains("UNUSABLE"), "{both}");
-        assert!(both.contains("RADAR_MODEL_OPENAI_KEY"), "{both}");
+        assert!(both.contains("REALORRUG_MODEL_OPENAI_KEY"), "{both}");
     }
 
     /// The published snapshot, read from the file the daemon reads.

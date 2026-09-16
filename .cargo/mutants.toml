@@ -278,7 +278,7 @@ exclude_re = [
     'replace hunters -> Response with Default::default\(\)',
     # `realorrug_types::build_sha` replaced with `None`.
     #
-    # It is `option_env!("RADAR_BUILD_SHA")`, and **in every test build that is
+    # It is `option_env!("REALORRUG_BUILD_SHA")`, and **in every test build that is
     # already `None`** -- only the one release-CI step that produces the
     # artifact sets the variable, and `option_env!` is resolved when the crate
     # is compiled, which `cargo mutants` does without it. The mutation and the
