@@ -31,7 +31,7 @@ use realorrug_robinhood::{Address as RobinhoodAddress, Rpc};
 use realorrug_types::{ChainAddress, ReadAt};
 
 use crate::budget::{Budget, Exhausted};
-use crate::dossier::{ChainReader, CurveFacts, Dossier, Unavailable};
+use crate::dossier::{ChainReader, CurveFacts, Dossier, QuoteAsset, Unavailable};
 
 /// Why a Robinhood dossier could not be built at all.
 ///
@@ -127,10 +127,12 @@ fn curve_facts(
         &record.curve,
         &curve::call_data(curve::REAL_QUOTE_RESERVE),
     )?;
+    // `u128`, not `u64`: a curve holding more than about 18.4 ETH in wei does
+    // not fit a `u64`, and that is every token that raised real money, not an
+    // exotic case. Nothing downstream does arithmetic that can overflow a
+    // `u128`; the sheet only ever divides and formats it.
     let quote_reserves = curve::uint_return(&reserves_data)
         .ok_or_else(|| "realQuoteReserve(): malformed return".to_owned())?;
-    let quote_reserves = u64::try_from(quote_reserves)
-        .map_err(|_| format!("realQuoteReserve(): {quote_reserves} does not fit a u64"))?;
 
     Ok(CurveFacts {
         complete,
@@ -142,6 +144,16 @@ fn curve_facts(
         // `build` below also records this as an `Unavailable` entry rather
         // than letting a bare `None` speak for itself.
         quote_capacity: None,
+        // `record.pair` is `None` for native ETH (`pons.rs`: "The quote
+        // asset, or `None` for native ETH") -- the common case, and the only
+        // one this reader can name a unit for. When the record *does* name a
+        // pair token, this reader has no ERC-20 symbol/decimals lookup (no
+        // new provider, per the packet), so it must not guess ETH: guessing
+        // would print a wei figure with the wrong asset's name on it, which
+        // is precisely the fabricated fact AGENTS.md §3 rule 2 forbids.
+        // `None` here carries the absence forward so the sheet puts the unit
+        // on `unknown` instead of rendering anything.
+        quote_asset: record.pair.is_none().then(QuoteAsset::eth),
         // "Who launched it" -- the same fact Solana's `CurveFacts::creator`
         // doc comment names -- is the launch record's `deployer`, not
         // `creator_fee_recipient` (who the creator's *fees* are paid to,
@@ -349,7 +361,7 @@ mod tests {
         data.extend(word_addr(&record.curve));
         data.extend(word_addr(&record.deployer));
         data.extend(word_addr(&record.creator_fee_recipient));
-        data.extend(word_addr(&RobinhoodAddress::ZERO)); // pair: none
+        data.extend(word_addr(record.pair.as_ref().unwrap_or(&RobinhoodAddress::ZERO)));
         data.extend(word_u(record.graduation_threshold));
         data.extend(word_u(0)); // pool fee, unread
         data.extend(word_u(0)); // tick spacing, unread
@@ -394,8 +406,55 @@ mod tests {
         assert_eq!(curve_facts.creator, ChainAddress::Robinhood(deployer));
         assert_eq!(curve_facts.quote_capacity, None);
         assert_eq!(curve_facts.fees, None);
+        assert_eq!(curve_facts.quote_asset, Some(QuoteAsset::eth()));
         assert_eq!(dossier.launch, None);
         assert_eq!(dossier.creator_transactions, None);
+    }
+
+    /// The case that fails today (packet 0032): a curve holding more than
+    /// 18.4 ETH -- the point a `u64` overflows in wei -- must still read
+    /// cleanly rather than turn the whole dossier read into a hard error.
+    #[test]
+    fn a_curve_holding_more_than_18_point_4_eth_reads_without_error() {
+        let curve = RobinhoodAddress([0x24; 20]);
+        let deployer = RobinhoodAddress([0x35; 20]);
+        let rec = record(true, curve, deployer);
+        // 20 ETH in wei: 20 * 10^18, well past u64::MAX (~18.4 * 10^18).
+        let big: u128 = 20_000_000_000_000_000_000;
+        let url = serve(vec![
+            answer(&hex(&launched_token_return(&rec))),
+            answer(&serde_json::json!("0x1")),
+            answer(&hex(&word_bool(false))),
+            answer(&hex(&word_u(big))),
+        ]);
+        let client = Rpc::new(url);
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        let curve_facts = dossier.curve.expect("curve facts, not an overflow error");
+        assert_eq!(curve_facts.quote_reserves, big);
+        assert!(!dossier.unavailable.iter().any(|u| u.fact == "curve"));
+    }
+
+    /// The launch record names a quote token, but this reader has no symbol
+    /// for it: the unit must be carried as absent, never guessed as ETH.
+    #[test]
+    fn a_named_but_unidentified_pair_asset_carries_no_unit() {
+        let curve = RobinhoodAddress([0x26; 20]);
+        let deployer = RobinhoodAddress([0x37; 20]);
+        let mut rec = record(true, curve, deployer);
+        rec.pair = Some(RobinhoodAddress([0x42; 20]));
+        let url = serve(vec![
+            answer(&hex(&launched_token_return(&rec))),
+            answer(&serde_json::json!("0x1")),
+            answer(&hex(&word_bool(false))),
+            answer(&hex(&word_u(1))),
+        ]);
+        let client = Rpc::new(url);
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        assert_eq!(dossier.curve.expect("curve facts").quote_asset, None);
     }
 
     #[test]

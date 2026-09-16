@@ -30,9 +30,6 @@ use crate::baserates::BaseRates;
 use crate::clause::{Kind, Voice};
 use std::fmt::Write as _;
 
-/// Lamports in one SOL.
-const LAMPORTS_PER_SOL: u64 = 1_000_000_000;
-
 /// What a fact is a claim about, because one kind is withheld for one mint.
 ///
 /// ADR 0013 constraint 5: the analyst never states its own token's price or
@@ -251,6 +248,24 @@ pub struct FactSheet {
     /// The mint, as text. Not a number, and never checked as one.
     pub mint: String,
     /// The slot every figure was read at.
+    ///
+    /// **Left exactly as it was -- `Option<Slot>`, Solana-only -- and that is
+    /// a finding, not an oversight.** Packet 0032 asks for this to become
+    /// `Option<ReadAt>` so a Robinhood sheet's block reaches `verdict::template`
+    /// and `authorised`. Doing that here is impossible without also editing
+    /// `forbidden.rs`: its own test module constructs a `FactSheet` by full
+    /// struct literal (`required_sheet`, around line 1491) and destructures
+    /// this field as a bare [`Slot`] (`check_required_age`, around line 953),
+    /// and it also calls `verdict::template(sheet)` directly (around line
+    /// 1645) -- so retyping this field, or adding a second field beside it,
+    /// or changing `template`'s signature, all fail to compile without a
+    /// `forbidden.rs` edit. The packet and the top-level instructions both
+    /// forbid touching that file, so this field is untouched and a Robinhood
+    /// sheet's `read_at` stays `None`, same as before this task. See this
+    /// task's report for the full explanation -- this is the clearest
+    /// remaining place where a number (the read point) and the chain it was
+    /// read on could not be kept travelling together, because the file that
+    /// would need to change to fix it is owned by the next task.
     pub read_at: Option<Slot>,
     /// The facts, in the order they are shown to the model.
     pub facts: Vec<Fact>,
@@ -351,7 +366,7 @@ impl FactSheet {
         }
 
         if let Some(curve) = &dossier.curve {
-            push_curve(&mut facts, curve);
+            push_curve(&mut facts, &mut unknown, curve);
         } else {
             unknown.push("the bonding curve could not be read".to_owned());
         }
@@ -588,12 +603,16 @@ fn push_launch(facts: &mut Vec<Fact>, untrusted: &mut Vec<(String, String)>, lau
     );
     match launch.dev_buy_lamports {
         Some(l) => {
-            let sol = format!("{} SOL", render_sol(l));
+            // `LaunchBlock` is Solana-shaped only (`realorrug-onchain`'s doc
+            // comment on the type), so this figure is always lamports -- SOL,
+            // 9 decimals, is not an assumption here the way it was for the
+            // curve's quote amount, it is simply what this field is.
+            let sol = format!("{} SOL", render_quote(u128::from(l), 9));
             facts.push(
                 Fact::exact(
                     Kind::DevBuy,
                     "SOL the creator spent buying their own token in the launch block",
-                    lamports_as_sol(l),
+                    quote_as_f64(u128::from(l), 9),
                     sol.clone(),
                 )
                 .saying(
@@ -1060,7 +1079,7 @@ fn push_base_rates(facts: &mut Vec<Fact>, rates: &BaseRates) {
     );
 }
 
-fn push_curve(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
+fn push_curve(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, curve: &realorrug_onchain::CurveFacts) {
     facts.push(
         Fact {
             about: About::Measurement,
@@ -1115,16 +1134,16 @@ fn push_curve(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
         );
         return;
     }
-    match curve.quote_capacity {
-        Some(l) => {
-            let sol = format!("{} SOL", render_sol(l));
+    match (curve.quote_capacity, &curve.quote_asset) {
+        (Some(l), Some(asset)) => {
+            let amount = format!("{} {}", render_quote(l, asset.decimals), asset.symbol);
             facts.push(
                 Fact::exact(
                     Kind::Capacity,
-                    "SOL that can be bought before price moves 1% -- this is RADAR'S OWN \
-                     impact budget, NOT a ceiling the venue imposes (research 0022)",
-                    lamports_as_sol(l),
-                    sol.clone(),
+                    "quote asset that can be bought before price moves 1% -- this is RADAR'S \
+                     OWN impact budget, NOT a ceiling the venue imposes (research 0022)",
+                    quote_as_f64(l, asset.decimals),
+                    amount.clone(),
                 )
                 // Research 0022 reversed the capacity claim: this is Radar's own
                 // impact budget, not a ceiling the venue imposes. The clause
@@ -1133,15 +1152,24 @@ fn push_curve(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
                 // wrong for a year.
                 .saying(
                     Voice::Plain,
-                    format!("{sol} can be bought before the price moves one percent, on Radar's own impact budget."),
+                    format!("{amount} can be bought before the price moves one percent, on Radar's own impact budget."),
                 )
                 .saying(
                     Voice::Blunt,
-                    format!("{sol} before the price moves one percent, by Radar's budget."),
+                    format!("{amount} before the price moves one percent, by Radar's budget."),
                 ),
             );
         }
-        None => facts.push(
+        // A capacity figure exists but this reader could not name the asset
+        // it is denominated in -- rule 8, a number and its unit travel
+        // together or not at all, so no amount is rendered here. This is the
+        // "unidentified quote asset" case (never guess ETH, never guess SOL).
+        (Some(_), None) => unknown.push(
+            "the impact budget could not be priced: the quote asset for this curve is not one \
+             Radar can identify"
+                .to_owned(),
+        ),
+        (None, _) => facts.push(
             Fact {
                 about: About::Measurement,
                 kind: Kind::CapacityNone,
@@ -1255,23 +1283,27 @@ fn push_cost(facts: &mut Vec<Fact>, rates: &BaseRates) {
 
 #[expect(
     clippy::cast_precision_loss,
-    reason = "lamports are converted only for a comparison against a literal the model \
-              wrote; the rendered figure comes from integer arithmetic in `render_sol`"
+    reason = "quote units are converted only for a comparison against a literal the model \
+              wrote; the rendered figure comes from integer arithmetic in `render_quote`"
 )]
-fn lamports_as_sol(lamports: u64) -> f64 {
-    lamports as f64 / LAMPORTS_PER_SOL as f64
+fn quote_as_f64(units: u128, decimals: u8) -> f64 {
+    let scale = 10u128.pow(u32::from(decimals));
+    units as f64 / scale as f64
 }
 
-/// Renders lamports as SOL by integer arithmetic.
+/// Renders a quote-asset amount by integer arithmetic, to four decimal places.
 ///
 /// `realorrug-types` keeps money integral on purpose, and a printed figure that has
 /// silently rounded through a float is exactly what this account must not
-/// publish.
-fn render_sol(lamports: u64) -> String {
+/// publish. This is the one path both chains render through: Solana's SOL (9
+/// decimals) and Robinhood's ETH (18 decimals) differ only in `decimals`, not
+/// in the arithmetic.
+fn render_quote(units: u128, decimals: u8) -> String {
+    let scale = 10u128.pow(u32::from(decimals));
     format!(
         "{}.{:04}",
-        lamports / LAMPORTS_PER_SOL,
-        (lamports % LAMPORTS_PER_SOL) / 100_000
+        units / scale,
+        (units % scale) / (scale / 10_000)
     )
 }
 
@@ -1342,14 +1374,18 @@ mod tests {
     }
 
     #[test]
-    fn lamports_convert_to_sol_at_the_documented_rate() {
+    fn quote_units_convert_at_the_documented_rate() {
         // Used only to compare against a figure a model wrote, which is why it
         // is a float at all -- but a wrong conversion there authorises a wrong
-        // number in a public reply.
-        assert!((lamports_as_sol(LAMPORTS_PER_SOL) - 1.0).abs() < 1e-9);
-        assert!((lamports_as_sol(LAMPORTS_PER_SOL / 2) - 0.5).abs() < 1e-9);
-        assert!((lamports_as_sol(3 * LAMPORTS_PER_SOL) - 3.0).abs() < 1e-9);
-        assert!((lamports_as_sol(0) - 0.0).abs() < 1e-9);
+        // number in a public reply. Covers both chains' decimals so the
+        // exponent itself (`10u128.pow(decimals)`) is under test, not just the
+        // division.
+        assert!((quote_as_f64(1_000_000_000, 9) - 1.0).abs() < 1e-9);
+        assert!((quote_as_f64(500_000_000, 9) - 0.5).abs() < 1e-9);
+        assert!((quote_as_f64(3_000_000_000, 9) - 3.0).abs() < 1e-9);
+        assert!((quote_as_f64(0, 9) - 0.0).abs() < 1e-9);
+        assert!((quote_as_f64(1_000_000_000_000_000_000, 18) - 1.0).abs() < 1e-9);
+        assert!((quote_as_f64(2_500_000_000_000_000_000, 18) - 2.5).abs() < 1e-9);
     }
 
     #[test]
@@ -1364,10 +1400,16 @@ mod tests {
     }
 
     #[test]
-    fn sol_renders_by_integer_arithmetic() {
-        assert_eq!(render_sol(1_000_000_000), "1.0000");
-        assert_eq!(render_sol(303_000_000), "0.3030");
-        assert_eq!(render_sol(0), "0.0000");
+    fn quote_renders_by_integer_arithmetic() {
+        assert_eq!(render_quote(1_000_000_000, 9), "1.0000");
+        assert_eq!(render_quote(303_000_000, 9), "0.3030");
+        assert_eq!(render_quote(0, 9), "0.0000");
+        // A different exponent must produce a different answer, so a mutant
+        // that flips `decimals` or the `.pow` call is caught here rather than
+        // only by 9-decimals cases where a nearby wrong exponent could
+        // coincidentally still read plausible.
+        assert_eq!(render_quote(1_000_000_000_000_000_000, 18), "1.0000");
+        assert_eq!(render_quote(2_500_000_000_000_000_000, 18), "2.5000");
     }
 
     #[test]
@@ -1476,6 +1518,7 @@ mod tests {
             complete: true,
             quote_reserves: 0,
             quote_capacity: None,
+            quote_asset: None,
             fees: None,
         });
         d.unavailable.push(realorrug_onchain::dossier::Unavailable {
@@ -1732,6 +1775,7 @@ mod tests {
             complete: false,
             quote_reserves: 6_186_150_833,
             quote_capacity: Some(303_000_000),
+            quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
             fees: None,
         });
         let rendered = FactSheet::build(&dossier, None, None, None).render();
@@ -1750,6 +1794,7 @@ mod tests {
             complete: true,
             quote_reserves: 0,
             quote_capacity: None,
+            quote_asset: None,
             fees: None,
         });
         let rendered = FactSheet::build(&done, None, None, None).render();
@@ -1758,6 +1803,76 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("cannot size into this"), "{rendered}");
+    }
+
+    #[test]
+    fn a_robinhood_curve_renders_in_its_own_asset_and_a_solana_curve_is_unchanged() {
+        // No `match chain` in this file: the two reads through the same
+        // `push_curve` path, and the only difference in the output is the
+        // decimals and symbol carried on `quote_asset`.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.curve = Some(realorrug_onchain::CurveFacts {
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
+            complete: false,
+            quote_reserves: 20_000_000_000_000_000_000,
+            quote_capacity: Some(2_500_000_000_000_000_000),
+            quote_asset: Some(realorrug_onchain::QuoteAsset::eth()),
+            fees: None,
+        });
+        let rendered = FactSheet::build(&dossier, None, None, None).render();
+        assert!(rendered.contains("2.5000 ETH"), "{rendered}");
+        assert!(!rendered.contains("SOL"), "{rendered}");
+
+        // Pinned byte-for-byte: the Solana path renders exactly what it did
+        // before this file learned about a second chain.
+        let mut sol = dossier_for([3u8; 32]);
+        sol.curve = Some(realorrug_onchain::CurveFacts {
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
+            complete: false,
+            quote_reserves: 6_186_150_833,
+            quote_capacity: Some(303_000_000),
+            quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
+            fees: None,
+        });
+        let rendered = FactSheet::build(&sol, None, None, None).render();
+        assert!(rendered.contains("0.3030 SOL"), "{rendered}");
+    }
+
+    #[test]
+    fn a_curve_with_no_identified_quote_asset_renders_no_amount() {
+        // Rule 8: absent is not zero, and a number Radar cannot name the unit
+        // of is not a number Radar publishes. The capacity figure exists but
+        // is withheld entirely, and the reason goes to `unknown` instead.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.curve = Some(realorrug_onchain::CurveFacts {
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
+            complete: false,
+            quote_reserves: 5_000_000_000_000_000_000,
+            quote_capacity: Some(1_000_000_000_000_000_000),
+            quote_asset: None,
+            fees: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None);
+        let rendered = sheet.render();
+        assert!(!rendered.contains("exit capacity"), "{rendered}");
+        assert!(
+            !rendered.contains("1.0000"),
+            "an amount was rendered with no identified unit: {rendered}"
+        );
+        assert!(
+            sheet
+                .unknown
+                .iter()
+                .any(|u| u.contains("quote asset") || u.contains("could not be priced")),
+            "{:?}",
+            sheet.unknown
+        );
     }
 
     const SNAPSHOT: &str = include_str!("../../../docs/research/data/0024-base-rates.json");
