@@ -289,47 +289,19 @@ function Table({ data }: { data: Data }) {
   );
 }
 
-/**
- * `fetchLeaderboard()` always settles when `fetch` itself honours the
- * `AbortSignal` `api.ts` sets on it -- but if the underlying connection
- * never calls back (a hung proxy, a browser that does not abort a stalled
- * request the way `api.ts`'s own `TIMEOUT_MS` assumes), there is nothing
- * downstream of `fetch` to time it out, and the page is stuck on "Reading…"
- * forever. This is a second, independent clock: it does not trust the first
- * one to fire, so `Reading…` cannot outlive it.
- */
-const WATCHDOG_MS = 8000;
-
 export function Leaderboard() {
   useTitle("Leaderboard");
   const [data, setData] = useState<Data | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let live = true;
-    setData(null);
-    setFailed(false);
-    const watchdog = setTimeout(() => {
-      if (live) setFailed(true);
-    }, WATCHDOG_MS);
-    fetchLeaderboard()
-      .then((next) => {
-        if (!live) return;
-        clearTimeout(watchdog);
-        setFailed(false);
-        setData(next);
-      })
-      .catch(() => {
-        if (!live) return;
-        clearTimeout(watchdog);
-        setFailed(true);
-      });
+    void fetchLeaderboard().then((next) => {
+      if (live) setData(next);
+    });
     return () => {
       live = false;
-      clearTimeout(watchdog);
     };
-  }, [attempt]);
+  }, []);
 
   const empty = data !== null && data.entries.length === 0;
 
@@ -338,31 +310,13 @@ export function Leaderboard() {
       <Heading kicker="This week">The questions worth asking</Heading>
       <p className="mb-8 max-w-2xl text-[var(--color-dim)]">
         Every week, the summoner whose question produced the reply that travelled
-        furthest takes the whole prize pool. Entry is free: ask Real or Rug
+        furthest takes the whole prize pool. Entry is free: ask Cabal Hunter
         about a coin and you are in.
       </p>
 
       <div className="grid gap-8 lg:grid-cols-[1fr_20rem]">
         <div>
-          {failed ? (
-            <Card className="border-dashed">
-              <p className="text-[var(--color-text)]">
-                Could not reach the server.
-              </p>
-              <p className="mt-2 text-sm text-[var(--color-dim)]">
-                The request for this week's leaderboard did not finish -- a
-                connection problem, and a different fact than a week that
-                simply has not started yet.
-              </p>
-              <button
-                type="button"
-                onClick={() => setAttempt((n) => n + 1)}
-                className="mt-4 rounded border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-raised)]"
-              >
-                Try again
-              </button>
-            </Card>
-          ) : data === null ? (
+          {data === null ? (
             <p className="text-[var(--color-dim)]">Reading…</p>
           ) : empty ? (
             <Nothing

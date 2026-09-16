@@ -269,14 +269,17 @@ export interface Weeks {
 
 /** Fetches JSON, or gives up quietly. */
 async function get<T>(path: string): Promise<T | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     const response = await fetch(`${BASE}${path}`, {
       signal: controller.signal,
     });
-    clearTimeout(timer);
     if (!response.ok) return null;
+    // The clock covers the body too. Clearing it once the headers arrive
+    // left a server that sends headers and then stalls with nothing to stop
+    // it, and the page read "Reading…" forever. Aborting the controller
+    // rejects a pending `json()` as well as a pending `fetch`.
     return (await response.json()) as T;
   } catch {
     // Deliberately swallowed. Every caller has a truthful answer without this
@@ -284,6 +287,8 @@ async function get<T>(path: string): Promise<T | null> {
     // The distinction that matters -- live or committed -- is carried in
     // `Sourced.stale` and shown.
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

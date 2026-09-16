@@ -685,17 +685,14 @@ future slices existing.
    patterns — building the noir reskin on top of the stuck-spinner bug ships
    the same bug in nicer clothes.
 
-   The fetch fix: both pages now start a second, component-level clock
-   (`WATCHDOG_MS`, 8s) independent of `api.ts`'s own `TIMEOUT_MS` and
-   `AbortController`. `api.ts`'s `get()` already turns a rejection or its own
-   4s abort into an honest empty shape — the branch this document's §0 could
-   not fully explain is a `fetch` that never settles at all, so nothing
-   downstream of it (not the abort, not the `catch`) ever fires. The new
-   watchdog does not depend on `fetch` cooperating: it fires regardless, and
-   both pages render a "could not reach the server" state with a retry button
-   rather than sitting on `Reading…` past it. `site/src/stuck-reading.test.tsx`
-   reproduces the hang with a `fetch` mock that never resolves or rejects, and
-   fails if the watchdog is removed.
+   The fetch fix: `site/src/api.ts`'s `get()` cleared its 4s abort timer as
+   soon as the response headers arrived, before reading the body. A server
+   that sent headers and then stalled was never aborted, `pool()` and
+   `leaderboard()` never settled, and the page read `Reading…` forever. The
+   timer now runs until the body is read (cleared in a `finally`), so every
+   call settles within `TIMEOUT_MS` and falls back as it always meant to.
+   `site/src/api.test.ts` stalls the body behind a fake `fetch` that honours
+   the abort signal, and fails if the timer is cleared early again.
 
    Left unfixed, out of this slice's scope: `site/src/Leaderboard.tsx` and
    `site/src/Pool.tsx` still carry unrelated Solana/pump.fun-specific mechanic
