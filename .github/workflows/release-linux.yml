@@ -24,9 +24,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Build release binaries
         env:
-          # Read by `realorrug_types::build_sha_or_unknown`; the name is kept
-          # from Radar so the moved code needed no change.
-          RADAR_BUILD_SHA: ${{ github.sha }}
+          # Read by `realorrug_types::build_sha_or_unknown`.
+          REALORRUG_BUILD_SHA: ${{ github.sha }}
         run: cargo build --release --locked -p realorrug-analyst -p realorrug-payout -p realorrug-serve -p realorrug-cli
       - name: Record what was built
         run: |

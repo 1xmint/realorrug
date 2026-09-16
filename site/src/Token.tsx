@@ -6,7 +6,7 @@
 //! Not a stylistic choice. [ADR 0013](../../docs/adr/0013-a-community-token-exists-and-radar-holds-none-of-it.md)
 //! constraint 5 forbids the *bot* from stating the token's price or market
 //! capitalisation, and a marketing page that prints what the bot is forbidden to
-//! say would make that constraint decorative. `RADAR_SELF_MINT` enforces it on
+//! say would make that constraint decorative. `REALORRUG_SELF_MINT` enforces it on
 //! the Rust side by refusing to answer about the token with any price fact; this
 //! page holds the same line by having nothing of the kind to render.
 //!

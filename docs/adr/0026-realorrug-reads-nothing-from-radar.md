@@ -49,6 +49,10 @@ change with it.
 5. **Environment variables keep their `RADAR_` prefix.** A prefix is a name,
    not a dependency, and renaming every variable would break the installed
    `analyst.env` for no behaviour gained.
+   Superseded: every `RADAR_*` variable is being renamed to `REALORRUG_*`
+   (same suffix) to match the project's own name, with the old name read as a
+   fallback so an unrenamed env file keeps working
+   (`crates/realorrug-types/src/env.rs`).
 
 The committed base-rate snapshot (`docs/research/data/0024-base-rates.json`)
 stays, read only from this repository. It describes Solana launches, so whether

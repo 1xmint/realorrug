@@ -21,9 +21,9 @@
 //!
 //! # Rule 8, twice
 //!
-//! No `RADAR_TELEGRAM_BOT_TOKEN` means nothing is read and nothing is sent, and
-//! the daemon says so. A token alone reads messages and answers them **into the
-//! log only**; `RADAR_TELEGRAM_PUBLISH=on` is what makes it speak, for the
+//! No `REALORRUG_TELEGRAM_BOT_TOKEN` means nothing is read and nothing is
+//! sent, and the daemon says so. A token alone reads messages and answers
+//! them **into the log only**; `REALORRUG_TELEGRAM_PUBLISH=on` is what makes it speak, for the
 //! reason the X switch exists: the first replies are meant to be read beside
 //! their fact sheets before a stranger sees one. The caps are separate from X's
 //! and unset means zero, which means refuse.
@@ -49,6 +49,7 @@ use crate::publish::{DryRun, Publisher, Undeliverable};
 use crate::spend::{Cost, Spend};
 use crate::x::{Mention, Unreachable};
 use realorrug_roast::Billed;
+use realorrug_types::env::env_or_legacy;
 
 /// Where the Bot API lives.
 pub const API: &str = "https://api.telegram.org";
@@ -60,7 +61,7 @@ pub struct Telegram {
     base: String,
     /// The chat the weekly and daily posts go to, or `None`.
     ///
-    /// `RADAR_TELEGRAM_CHANNEL`. Replies need no channel -- they go where the
+    /// `REALORRUG_TELEGRAM_CHANNEL`. Replies need no channel -- they go where the
     /// question was -- so a bot with a token and no channel answers people and
     /// posts nothing on its own, and [`Publisher::post`] says so.
     channel: Option<String>,
@@ -96,7 +97,7 @@ pub struct Page {
 impl Telegram {
     /// From the environment, or `None` when there is no token.
     ///
-    /// Blank is unset. `RADAR_TELEGRAM_API_BASE` exists so the loop can be
+    /// Blank is unset. `REALORRUG_TELEGRAM_API_BASE` exists so the loop can be
     /// driven against a fake end to end; it defaults to the real thing because
     /// a dropped variable must point at Telegram rather than at nothing.
     #[must_use]
@@ -107,14 +108,23 @@ impl Telegram {
     /// [`Self::from_env`] with a getter, so the rule can be tested.
     #[must_use]
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Self> {
-        let token = get("RADAR_TELEGRAM_BOT_TOKEN")?;
+        let token = env_or_legacy(
+            "REALORRUG_TELEGRAM_BOT_TOKEN",
+            "RADAR_TELEGRAM_BOT_TOKEN",
+            get,
+        )?;
         if token.trim().is_empty() {
             return None;
         }
         Some(Self {
             token: token.trim().to_owned(),
-            base: get("RADAR_TELEGRAM_API_BASE").unwrap_or_else(|| API.to_owned()),
-            channel: get("RADAR_TELEGRAM_CHANNEL")
+            base: env_or_legacy(
+                "REALORRUG_TELEGRAM_API_BASE",
+                "RADAR_TELEGRAM_API_BASE",
+                get,
+            )
+            .unwrap_or_else(|| API.to_owned()),
+            channel: env_or_legacy("REALORRUG_TELEGRAM_CHANNEL", "RADAR_TELEGRAM_CHANNEL", get)
                 .map(|c| c.trim().to_owned())
                 .filter(|c| !c.is_empty()),
         })
@@ -381,7 +391,8 @@ impl Publisher for Telegram {
 /// Exactly `on`, for the reason [`crate::daemon::may_publish`] gives.
 #[must_use]
 pub fn may_publish(get: &impl Fn(&str) -> Option<String>) -> bool {
-    get("RADAR_TELEGRAM_PUBLISH").is_some_and(|v| v.trim().eq_ignore_ascii_case("on"))
+    env_or_legacy("REALORRUG_TELEGRAM_PUBLISH", "RADAR_TELEGRAM_PUBLISH", get)
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("on"))
 }
 
 /// Which publisher Telegram replies go through.
@@ -398,11 +409,11 @@ pub fn publisher_for(telegram: Option<Telegram>, publishing: bool) -> Box<dyn Pu
 pub fn posture(configured: bool, publishing: bool) -> &'static str {
     match (configured, publishing) {
         (false, _) => {
-            "realorrug-analyst: telegram off -- no RADAR_TELEGRAM_BOT_TOKEN, so nothing is read there and nothing is sent."
+            "realorrug-analyst: telegram off -- no REALORRUG_TELEGRAM_BOT_TOKEN, so nothing is read there and nothing is sent."
         }
         (true, false) => {
             "realorrug-analyst: telegram reading messages and answering them to telegram.jsonl ONLY -- \
-             set RADAR_TELEGRAM_PUBLISH=on to reply in the chat."
+             set REALORRUG_TELEGRAM_PUBLISH=on to reply in the chat."
         }
         (true, true) => "realorrug-analyst: telegram LIVE -- replies are being sent in the chat.",
     }
@@ -412,13 +423,27 @@ pub fn posture(configured: bool, publishing: bool) -> &'static str {
 /// room, and a global cap here is a cost ceiling on model calls, not on posts.
 #[must_use]
 pub fn limits_from(get: &impl Fn(&str) -> Option<String>) -> Limits {
-    let n = |key: &str| get(key).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
-    Limits {
-        per_summoner_daily: n("RADAR_TELEGRAM_PER_SUMMONER_DAILY"),
-        global_daily: n("RADAR_TELEGRAM_GLOBAL_DAILY"),
-        dedupe_seconds: get("RADAR_TELEGRAM_DEDUPE_SECONDS")
+    let n = |new: &str, old: &str| {
+        env_or_legacy(new, old, get)
             .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(3_600),
+            .unwrap_or(0)
+    };
+    Limits {
+        per_summoner_daily: n(
+            "REALORRUG_TELEGRAM_PER_SUMMONER_DAILY",
+            "RADAR_TELEGRAM_PER_SUMMONER_DAILY",
+        ),
+        global_daily: n(
+            "REALORRUG_TELEGRAM_GLOBAL_DAILY",
+            "RADAR_TELEGRAM_GLOBAL_DAILY",
+        ),
+        dedupe_seconds: env_or_legacy(
+            "REALORRUG_TELEGRAM_DEDUPE_SECONDS",
+            "RADAR_TELEGRAM_DEDUPE_SECONDS",
+            get,
+        )
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(3_600),
     }
 }
 
@@ -686,17 +711,17 @@ mod tests {
     #[test]
     fn no_token_is_no_bot_and_a_blank_token_is_no_token() {
         assert!(Telegram::from_vars(&vars(&[])).is_none());
-        assert!(Telegram::from_vars(&vars(&[("RADAR_TELEGRAM_BOT_TOKEN", "  ")])).is_none());
-        let bot =
-            Telegram::from_vars(&vars(&[("RADAR_TELEGRAM_BOT_TOKEN", " 1:a ")])).expect("a bot");
+        assert!(Telegram::from_vars(&vars(&[("REALORRUG_TELEGRAM_BOT_TOKEN", "  ")])).is_none());
+        let bot = Telegram::from_vars(&vars(&[("REALORRUG_TELEGRAM_BOT_TOKEN", " 1:a ")]))
+            .expect("a bot");
         assert_eq!(bot.base, API);
         assert!(
             bot.updates_url(None)
                 .starts_with("https://api.telegram.org/bot1:a/")
         );
         let elsewhere = Telegram::from_vars(&vars(&[
-            ("RADAR_TELEGRAM_BOT_TOKEN", "1:a"),
-            ("RADAR_TELEGRAM_API_BASE", "http://127.0.0.1:9"),
+            ("REALORRUG_TELEGRAM_BOT_TOKEN", "1:a"),
+            ("REALORRUG_TELEGRAM_API_BASE", "http://127.0.0.1:9"),
         ]))
         .expect("a bot");
         assert!(
@@ -712,10 +737,13 @@ mod tests {
         assert_eq!(publisher_for(Some(bot()), true).name(), "telegram");
         assert_eq!(publisher_for(Some(bot()), false).name(), "dry-run");
         assert_eq!(publisher_for(None, true).name(), "dry-run");
-        assert!(may_publish(&vars(&[("RADAR_TELEGRAM_PUBLISH", " ON ")])));
+        assert!(may_publish(&vars(&[(
+            "REALORRUG_TELEGRAM_PUBLISH",
+            " ON "
+        )])));
         for value in ["", "true", "1", "yes", "onn"] {
             assert!(
-                !may_publish(&vars(&[("RADAR_TELEGRAM_PUBLISH", value)])),
+                !may_publish(&vars(&[("REALORRUG_TELEGRAM_PUBLISH", value)])),
                 "{value:?}"
             );
         }
@@ -727,14 +755,14 @@ mod tests {
         // Re-applied by dropping the `!` in the channel filter: a blank
         // channel is kept and the bot would post into "" -- the first
         // assertion fails.
-        let token = ("RADAR_TELEGRAM_BOT_TOKEN", "1:a");
-        let blank =
-            Telegram::from_vars(&vars(&[token, ("RADAR_TELEGRAM_CHANNEL", "  ")])).expect("a bot");
+        let token = ("REALORRUG_TELEGRAM_BOT_TOKEN", "1:a");
+        let blank = Telegram::from_vars(&vars(&[token, ("REALORRUG_TELEGRAM_CHANNEL", "  ")]))
+            .expect("a bot");
         assert_eq!(blank.channel(), None);
         assert!(matches!(blank.post("x"), Err(Undeliverable::Unconfigured)));
         let none = Telegram::from_vars(&vars(&[token])).expect("a bot");
         assert_eq!(none.channel(), None);
-        let set = Telegram::from_vars(&vars(&[token, ("RADAR_TELEGRAM_CHANNEL", " -100777 ")]))
+        let set = Telegram::from_vars(&vars(&[token, ("REALORRUG_TELEGRAM_CHANNEL", " -100777 ")]))
             .expect("a bot");
         assert_eq!(set.channel(), Some("-100777"));
         assert_eq!(
@@ -748,16 +776,16 @@ mod tests {
         assert!(posture(false, false).contains("telegram off"));
         assert!(posture(false, true).contains("telegram off"));
         assert!(posture(true, false).contains("ONLY"));
-        assert!(posture(true, false).contains("RADAR_TELEGRAM_PUBLISH=on"));
+        assert!(posture(true, false).contains("REALORRUG_TELEGRAM_PUBLISH=on"));
         assert!(posture(true, true).contains("LIVE"));
 
         let closed = limits_from(&vars(&[]));
         assert_eq!((closed.per_summoner_daily, closed.global_daily), (0, 0));
         assert_eq!(closed.dedupe_seconds, 3_600);
         let open = limits_from(&vars(&[
-            ("RADAR_TELEGRAM_PER_SUMMONER_DAILY", "20"),
-            ("RADAR_TELEGRAM_GLOBAL_DAILY", "500"),
-            ("RADAR_TELEGRAM_DEDUPE_SECONDS", "60"),
+            ("REALORRUG_TELEGRAM_PER_SUMMONER_DAILY", "20"),
+            ("REALORRUG_TELEGRAM_GLOBAL_DAILY", "500"),
+            ("REALORRUG_TELEGRAM_DEDUPE_SECONDS", "60"),
         ]));
         assert_eq!(
             (

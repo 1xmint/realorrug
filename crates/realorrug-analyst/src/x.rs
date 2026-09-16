@@ -298,7 +298,7 @@ const API: &str = "https://api.x.com";
 /// the first request.
 ///
 /// Whitespace counts as absent. An operator who clears a variable by leaving
-/// `RADAR_X_BEARER=` in the file has removed the credential, and the difference
+/// `REALORRUG_X_BEARER=` in the file has removed the credential, and the difference
 /// between that and a missing line is not one this should have an opinion about.
 fn configured(bearer: Option<String>, user_id: Option<String>) -> Option<(String, String)> {
     let bearer = bearer?;
@@ -326,9 +326,10 @@ impl X {
     /// later — rule 8, and it means the binary falls back to the dry run.
     #[must_use]
     pub fn from_env() -> Option<Self> {
+        let get = |k: &str| std::env::var(k).ok();
         configured(
-            std::env::var("RADAR_X_BEARER").ok(),
-            std::env::var("RADAR_X_USER_ID").ok(),
+            realorrug_types::env::env_or_legacy("REALORRUG_X_BEARER", "RADAR_X_BEARER", get),
+            realorrug_types::env::env_or_legacy("REALORRUG_X_USER_ID", "RADAR_X_USER_ID", get),
         )
         .map(|(bearer, user_id)| Self {
             bearer,
@@ -343,7 +344,12 @@ impl X {
             // points at X rather than at nothing. Every other switch in this
             // crate defaults to refusing, and for the same underlying reason —
             // the default must be the outcome that cannot surprise anybody.
-            base: std::env::var("RADAR_X_API_BASE").unwrap_or_else(|_| API.to_owned()),
+            base: realorrug_types::env::env_or_legacy(
+                "REALORRUG_X_API_BASE",
+                "RADAR_X_API_BASE",
+                get,
+            )
+            .unwrap_or_else(|| API.to_owned()),
             // Read separately, and absent is not an error. The bearer is what
             // makes this instance able to read; these are what make it able to
             // speak, and an operator who has set up only the first has an
@@ -465,8 +471,8 @@ impl X {
         let Some(credentials) = &self.oauth else {
             return Err(Unreachable::Transport(
                 "no OAuth credential, so this instance can read but cannot post -- set \
-                 RADAR_X_API_KEY, RADAR_X_API_SECRET, RADAR_X_ACCESS_TOKEN and \
-                 RADAR_X_ACCESS_SECRET"
+                 REALORRUG_X_API_KEY, REALORRUG_X_API_SECRET, REALORRUG_X_ACCESS_TOKEN and \
+                 REALORRUG_X_ACCESS_SECRET"
                     .to_owned(),
             ));
         };
@@ -1467,7 +1473,7 @@ mod tests {
         let err = x.reply("m1", "text").expect_err("must refuse");
         let rendered = err.to_string();
         assert!(rendered.contains("cannot post"), "{rendered}");
-        assert!(rendered.contains("RADAR_X_API_KEY"), "{rendered}");
+        assert!(rendered.contains("REALORRUG_X_API_KEY"), "{rendered}");
     }
 
     #[test]

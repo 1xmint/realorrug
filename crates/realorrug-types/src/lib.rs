@@ -33,6 +33,7 @@
 /// this.
 pub mod b64;
 pub mod civil;
+pub mod env;
 
 mod address;
 mod asset;
@@ -57,7 +58,7 @@ mod slot;
 /// process as active.
 ///
 /// `option_env!` rather than `env!`: **an ordinary `cargo build` has no
-/// `RADAR_BUILD_SHA`**, and a workspace that refused to compile without one set
+/// `REALORRUG_BUILD_SHA`**, and a workspace that refused to compile without one set
 /// would be a check that fires on every developer, every time -- the exact
 /// shape §5 says to delete rather than tune. `None` here means "built outside
 /// CI", which is true and is what the callers print.
@@ -67,7 +68,7 @@ mod slot;
 /// provenance did not make.
 #[must_use]
 pub const fn build_sha() -> Option<&'static str> {
-    option_env!("RADAR_BUILD_SHA")
+    option_env!("REALORRUG_BUILD_SHA")
 }
 
 /// The same, rendered for a line of output.
@@ -101,7 +102,7 @@ mod build_tests {
     #[test]
     fn a_build_outside_release_ci_says_unknown_rather_than_a_blank_or_a_hash() {
         // Every test build is a build outside release CI: nothing sets
-        // `RADAR_BUILD_SHA` except the one workflow step that produces the
+        // `REALORRUG_BUILD_SHA` except the one workflow step that produces the
         // artifact. So this is the value an operator sees on a hand-built
         // binary, and it has to be a word rather than an empty string -- a
         // blank reads as neither "I cannot say" nor a commit.
@@ -109,7 +110,7 @@ mod build_tests {
         // CI turned `build_sha` into `Some("")` and `Some("xyzzy")` and
         // `build_sha_or_unknown` into `""` and `"xyzzy"`, and all four
         // survived. Re-apply any of them: this fails.
-        assert_eq!(build_sha(), None, "a test build has no RADAR_BUILD_SHA");
+        assert_eq!(build_sha(), None, "a test build has no REALORRUG_BUILD_SHA");
         assert_eq!(build_sha_or_unknown(), "unknown");
         assert!(!build_sha_or_unknown().is_empty());
     }

@@ -351,7 +351,7 @@ pub struct Config {
 /// refusals that bound the key are the others, and none of them defaults open.
 #[must_use]
 pub fn floor_from(get: &impl Fn(&str) -> Option<String>) -> u128 {
-    get("RADAR_PAYOUT_FLOOR_WEI")
+    realorrug_types::env::env_or_legacy("REALORRUG_PAYOUT_FLOOR_WEI", "RADAR_PAYOUT_FLOOR_WEI", get)
         .and_then(|v| Wei::parse(v.trim()))
         .map_or(0, |w| w.0)
 }
@@ -361,7 +361,7 @@ pub fn floor_from(get: &impl Fn(&str) -> Option<String>) -> u128 {
 #[must_use]
 pub fn floor_notice(floor: u128) -> String {
     if floor == 0 {
-        "realorrug-payout: no floor (RADAR_PAYOUT_FLOOR_WEI unset or unreadable); \
+        "realorrug-payout: no floor (REALORRUG_PAYOUT_FLOOR_WEI unset or unreadable); \
          a week pays out whatever it collected."
             .to_owned()
     } else {

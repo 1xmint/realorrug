@@ -62,7 +62,7 @@ pub struct Answering<'a> {
     ///
     /// ADR 0013 constraint 5: a price or market-cap fact about this mint is
     /// dropped from the sheet before the model sees it. Read once from
-    /// `RADAR_SELF_MINT` by the caller, which **stops** on a value that will not
+    /// `REALORRUG_SELF_MINT` by the caller, which **stops** on a value that will not
     /// parse rather than passing `None` -- because `None` here means the rule
     /// is off, and a misspelt mint must not switch it off for the real token.
     pub self_mint: Option<&'a Address>,

@@ -11,6 +11,9 @@ authors.workspace = true
 
 [dependencies]
 realorrug-contest.workspace = true
+# `env_or_legacy`: RADAR_* -> REALORRUG_* fallback, same helper every other
+# crate on this branch uses.
+realorrug-types.workspace = true
 # Reads the chain: receipts, the escrow, the factory's launch record. It holds no
 # key; the signing and sending live here.
 realorrug-robinhood.workspace = true

@@ -149,8 +149,9 @@ can ask Turnkey to sign two kinds of transaction and nothing else.
 Set up in Turnkey's dashboard, by the operator, on a passkey:
 
 1. An organisation, with the operator as root user.
-2. One wallet with one Ethereum account. Its address is `RADAR_PAYOUT_ADDRESS`,
-   and the token's creator fee recipient.
+2. One wallet with one Ethereum account. Its address is
+   `REALORRUG_PAYOUT_ADDRESS` (falling back to `RADAR_PAYOUT_ADDRESS`), and
+   the token's creator fee recipient.
 3. A user `realorrug-payout`, not in the root quorum, holding one API key on
    the **P-256** curve. Make the key on the box, where it will live, so the
    private half never crosses a network. From a checkout (sudo asks for a
@@ -197,7 +198,8 @@ Set up in Turnkey's dashboard, by the operator, on a passkey:
 5. Wallet and key export stay denied to everyone but root.
 
 Then the setup proof. It needs only the Turnkey variables and
-`RADAR_PAYOUT_ADDRESS`, sends nothing to any chain, and costs nothing:
+`REALORRUG_PAYOUT_ADDRESS` (or the legacy `RADAR_PAYOUT_ADDRESS`), sends
+nothing to any chain, and costs nothing:
 
 ```bash
 sudo systemd-run --pty --wait --uid=realorrug-payout -p EnvironmentFile=/etc/realorrug/payout.env -E TURNKEY_API_KEY=/etc/realorrug/turnkey.key /usr/local/bin/realorrug-payout --setup-proof
@@ -227,6 +229,9 @@ A claim or transfer made by hand is recorded with
 `realorrug contest record-payout --week N --wallet <address> --rpc <url> --claim-tx <hash> --transfer-tx <hash>`,
 which reads both back through the same checks.
 
-The environment variables keep their `RADAR_` prefix, so an existing
-`analyst.env` works unchanged once it is under `/etc/realorrug` with its
-directory paths moved.
+The environment variables are being renamed from their `RADAR_` prefix to
+`REALORRUG_` (same suffix); each name falls back to its old `RADAR_` form
+while the fallback lives, so an existing `analyst.env` keeps working
+unchanged once it is under `/etc/realorrug` with its directory paths moved.
+Rename the box's env files to the `REALORRUG_` names when convenient -- see
+`crates/realorrug-types/src/env.rs`.

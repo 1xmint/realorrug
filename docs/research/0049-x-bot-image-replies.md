@@ -13,9 +13,9 @@ carries an earlier date.
 
 `X::post` (`crates/realorrug-analyst/src/x.rs:431`) signs `POST /2/tweets`
 with OAuth 1.0a user-context credentials (`oauth: Option<crate::oauth::Credentials>`,
-`x.rs:237`) built from four env vars — `RADAR_X_API_KEY`, `RADAR_X_API_SECRET`,
-`RADAR_X_ACCESS_TOKEN`, `RADAR_X_ACCESS_SECRET` (`deploy/analyst.env.example`).
-Reads use a separate bearer (`RADAR_X_BEARER`) and cannot post
+`x.rs:237`) built from four env vars — `REALORRUG_X_API_KEY`, `REALORRUG_X_API_SECRET`,
+`REALORRUG_X_ACCESS_TOKEN`, `REALORRUG_X_ACCESS_SECRET` (`deploy/analyst.env.example`).
+Reads use a separate bearer (`REALORRUG_X_BEARER`) and cannot post
 (`oauth.rs:1-9`, "`POST /2/tweets` **does not accept an app-only bearer
 token.** It requires user context — OAuth 1.0a, or OAuth 2.0 user context with
 `tweet.write`"). Two facts from the code that bound everything below:
@@ -24,7 +24,7 @@ token.** It requires user context — OAuth 1.0a, or OAuth 2.0 user context with
   signed.** OAuth 1.0a folds request-body parameters into the signature only
   when the body is `application/x-www-form-urlencoded`." `X::post` sends
   JSON and relies on this.
-- `deploy/analyst.env.example` already carries a `RADAR_X_PRICE_REPLY` slot
+- `deploy/analyst.env.example` already carries a `REALORRUG_X_PRICE_REPLY` slot
   with **an unresolved uncertainty**: "whether a summoned reply carrying a
   URL is $0.010 or $0.200" — about a *link*, not media. No existing env var
   or price slot covers an image attachment; §1 below is new information the
@@ -47,7 +47,7 @@ security schemes.** The reference page lists two accepted schemes: an
 photos and videos, on your behalf."), and a `UserToken` scheme, which is the
 docs' generic label for OAuth 1.0a (https://docs.x.com/x-api/media/upload-media,
 read 2026-09-16) — the same credential shape the bot already holds in
-`RADAR_X_API_KEY`/`RADAR_X_API_SECRET`/`RADAR_X_ACCESS_TOKEN`/`RADAR_X_ACCESS_SECRET`.
+`REALORRUG_X_API_KEY`/`REALORRUG_X_API_SECRET`/`REALORRUG_X_ACCESS_TOKEN`/`REALORRUG_X_ACCESS_SECRET`.
 **This is contradicted in practice by developer reports, not confirmed
 end-to-end**: a 2026 thread titled "Request for OAuth 1.0a Compatibility with
 /2/media/upload Endpoint" and another, "Chunked upload media not working with
@@ -213,13 +213,13 @@ this test reuses exactly those, plus one PNG.
 
 ```sh
 # The owner exports these once, in a shell that is not logged/recorded.
-# Same four values RADAR_X_API_KEY / _API_SECRET / _ACCESS_TOKEN / _ACCESS_SECRET
+# Same four values REALORRUG_X_API_KEY / _API_SECRET / _ACCESS_TOKEN / _ACCESS_SECRET
 # already require in deploy/analyst.env.example -- "Read and write" app
 # permission, set BEFORE the access token was generated (per that file's note).
-export RADAR_X_API_KEY=...
-export RADAR_X_API_SECRET=...
-export RADAR_X_ACCESS_TOKEN=...
-export RADAR_X_ACCESS_SECRET=...
+export REALORRUG_X_API_KEY=...
+export REALORRUG_X_API_SECRET=...
+export REALORRUG_X_ACCESS_TOKEN=...
+export REALORRUG_X_ACCESS_SECRET=...
 
 # One small PNG under 5 MB, e.g. a placeholder card.
 TEST_IMAGE=./test-card.png
@@ -254,7 +254,7 @@ $0.015, $0.200, or something else. That single observed number is worth
 more than anything a docs page states, per `AGENTS.md` §1 ("Check a number
 before deciding on it... with a date and a source") and the exact gap
 `deploy/analyst.env.example` already leaves open for the URL case. Record it
-in that file's `RADAR_X_PRICE_REPLY` (or a new `RADAR_X_PRICE_REPLY_MEDIA`)
+in that file's `REALORRUG_X_PRICE_REPLY` (or a new `REALORRUG_X_PRICE_REPLY_MEDIA`)
 slot once read, not before.
 
 ## Recommendation

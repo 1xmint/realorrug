@@ -988,7 +988,9 @@ fn the_floor_is_read_in_wei_and_the_run_says_which_it_is_using() {
     assert_eq!(floor_from(&|_| None), 0);
     assert_eq!(floor_from(&|_| Some(" 0.1 ".to_owned())), 0);
     assert_eq!(
-        floor_from(&|k| (k == "RADAR_PAYOUT_FLOOR_WEI").then(|| " 20000000000000000 ".to_owned())),
+        floor_from(
+            &|k| (k == "REALORRUG_PAYOUT_FLOOR_WEI").then(|| " 20000000000000000 ".to_owned())
+        ),
         20_000_000_000_000_000
     );
     assert!(floor_notice(0).contains("no floor"));

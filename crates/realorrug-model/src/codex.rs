@@ -24,7 +24,7 @@
 //! credential file Radar's user can read.
 //!
 //! The command is configuration precisely so it need not be. Point
-//! `RADAR_MODEL_CODEX` at a wrapper that drops to a separate user and the
+//! `REALORRUG_MODEL_CODEX` at a wrapper that drops to a separate user and the
 //! boundary stops being a sentence in this file and starts being one the kernel
 //! enforces. `deploy/README.md` carries the unit that does that, and this
 //! distinction is written down because the tempting version of this comment
@@ -96,18 +96,18 @@ impl Codex {
     pub fn from_vars(command: &str, get: &impl Fn(&str) -> Option<String>) -> Result<Self, String> {
         let argv = split(command);
         if argv.is_empty() {
-            return Err("RADAR_MODEL_CODEX is set but names no command".to_owned());
+            return Err("REALORRUG_MODEL_CODEX is set but names no command".to_owned());
         }
         let env = INHERITED
             .iter()
-            .filter_map(|name| non_empty(get, name).map(|v| ((*name).to_owned(), v)))
+            .filter_map(|name| non_empty(get, name, name).map(|v| ((*name).to_owned(), v)))
             .collect();
         Ok(Self { argv, env })
     }
 
     /// The command as it will be spawned, with a subcommand appended.
     ///
-    /// `RADAR_MODEL_CODEX` names the **base** command and Radar supplies the
+    /// `REALORRUG_MODEL_CODEX` names the **base** command and Radar supplies the
     /// subcommand, because Radar runs two of them: `exec -` to ask a question
     /// and `login --device-auth` to link the credential. A wrapper that dropped
     /// to another user could otherwise only serve one of them, and the
@@ -468,8 +468,8 @@ mod tests {
             &vars(&[
                 ("PATH", "/usr/bin"),
                 ("CODEX_HOME", "/var/lib/realorrug-agent/.codex"),
-                ("RADAR_X402_PAY_TO", "a-payout-address"),
-                ("RADAR_MODEL_API_KEY", "sk-not-a-real-key"),
+                ("REALORRUG_X402_PAY_TO", "a-payout-address"),
+                ("REALORRUG_MODEL_API_KEY", "sk-not-a-real-key"),
                 ("AWS_SECRET_ACCESS_KEY", "also-not-real"),
             ]),
         )
@@ -530,7 +530,7 @@ mod tests {
         // Rule 8. The tempting failure is to spawn the empty string, which on
         // some platforms is a confusing error a long way from the cause.
         let why = Codex::from_vars("   \t ", &vars(&[])).expect_err("not a command");
-        assert!(why.contains("RADAR_MODEL_CODEX"), "names it: {why}");
+        assert!(why.contains("REALORRUG_MODEL_CODEX"), "names it: {why}");
     }
 
     #[test]
@@ -758,7 +758,7 @@ mod tests {
 
     #[test]
     fn the_two_subcommands_are_appended_to_the_configured_command() {
-        // `RADAR_MODEL_CODEX` names the base command because Radar runs two
+        // `REALORRUG_MODEL_CODEX` names the base command because Radar runs two
         // subcommands through it. A wrapper that dropped to another user could
         // otherwise only serve one of them.
         let codex = Codex::from_vars("sudo -u realorrug-agent codex", &vars(&[])).expect("built");

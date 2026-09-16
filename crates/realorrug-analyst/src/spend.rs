@@ -29,6 +29,7 @@
 
 use realorrug_provider::{Budget, Commitment, Ledger, Meter, Refusal};
 use realorrug_types::MicroUsd;
+use realorrug_types::env::env_or_legacy;
 
 /// What each billable thing costs.
 ///
@@ -88,18 +89,24 @@ impl Prices {
     /// exactly. A reply at one cent is `10000`.
     #[must_use]
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Self> {
-        let read = |name: &str| -> Option<MicroUsd> {
-            get(name)
+        let read = |new: &str, old: &str| -> Option<MicroUsd> {
+            env_or_legacy(new, old, get)
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .map(MicroUsd)
         };
         Some(Self {
-            mention_read: read("RADAR_X_PRICE_MENTION_READ")?,
-            post_read: read("RADAR_X_PRICE_POST_READ")?,
-            reply: read("RADAR_X_PRICE_REPLY")?,
-            post: read("RADAR_X_PRICE_POST")?,
-            model_call: read("RADAR_MODEL_PER_CALL_USD_MICRO")?,
-            user_read: read("RADAR_X_PRICE_USER_READ")?,
+            mention_read: read(
+                "REALORRUG_X_PRICE_MENTION_READ",
+                "RADAR_X_PRICE_MENTION_READ",
+            )?,
+            post_read: read("REALORRUG_X_PRICE_POST_READ", "RADAR_X_PRICE_POST_READ")?,
+            reply: read("REALORRUG_X_PRICE_REPLY", "RADAR_X_PRICE_REPLY")?,
+            post: read("REALORRUG_X_PRICE_POST", "RADAR_X_PRICE_POST")?,
+            model_call: read(
+                "REALORRUG_MODEL_PER_CALL_USD_MICRO",
+                "RADAR_MODEL_PER_CALL_USD_MICRO",
+            )?,
+            user_read: read("REALORRUG_X_PRICE_USER_READ", "RADAR_X_PRICE_USER_READ")?,
         })
     }
 
@@ -392,12 +399,12 @@ mod tests {
         let full = |k: &str| -> Option<String> {
             Some(
                 match k {
-                    "RADAR_X_PRICE_MENTION_READ" => "1000",
-                    "RADAR_X_PRICE_POST_READ" => "5000",
-                    "RADAR_X_PRICE_REPLY" => "10000",
-                    "RADAR_X_PRICE_POST" => "15000",
-                    "RADAR_MODEL_PER_CALL_USD_MICRO" => "2000",
-                    "RADAR_X_PRICE_USER_READ" => "20000",
+                    "REALORRUG_X_PRICE_MENTION_READ" => "1000",
+                    "REALORRUG_X_PRICE_POST_READ" => "5000",
+                    "REALORRUG_X_PRICE_REPLY" => "10000",
+                    "REALORRUG_X_PRICE_POST" => "15000",
+                    "REALORRUG_MODEL_PER_CALL_USD_MICRO" => "2000",
+                    "REALORRUG_X_PRICE_USER_READ" => "20000",
                     _ => return None,
                 }
                 .to_owned(),
@@ -406,12 +413,12 @@ mod tests {
         assert_eq!(Prices::from_vars(&full), Some(prices()));
 
         for missing in [
-            "RADAR_X_PRICE_MENTION_READ",
-            "RADAR_X_PRICE_POST_READ",
-            "RADAR_X_PRICE_REPLY",
-            "RADAR_X_PRICE_POST",
-            "RADAR_MODEL_PER_CALL_USD_MICRO",
-            "RADAR_X_PRICE_USER_READ",
+            "REALORRUG_X_PRICE_MENTION_READ",
+            "REALORRUG_X_PRICE_POST_READ",
+            "REALORRUG_X_PRICE_REPLY",
+            "REALORRUG_X_PRICE_POST",
+            "REALORRUG_MODEL_PER_CALL_USD_MICRO",
+            "REALORRUG_X_PRICE_USER_READ",
         ] {
             let partial = |k: &str| if k == missing { None } else { full(k) };
             assert_eq!(
@@ -429,7 +436,7 @@ mod tests {
         let get = |k: &str| -> Option<String> {
             Some(
                 match k {
-                    "RADAR_X_PRICE_REPLY" => "one cent",
+                    "REALORRUG_X_PRICE_REPLY" => "one cent",
                     _ => "1000",
                 }
                 .to_owned(),

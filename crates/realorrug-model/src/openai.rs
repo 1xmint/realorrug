@@ -88,30 +88,32 @@ impl OpenAi {
     /// it at the point where nothing works yet, and naming the first is the
     /// difference between one restart and four.
     pub fn from_vars(key: String, get: &impl Fn(&str) -> Option<String>) -> Result<Self, String> {
-        let endpoint = non_empty(get, "RADAR_MODEL_ENDPOINT");
-        let model = non_empty(get, "RADAR_MODEL_NAME");
-        let price_in = non_empty(get, "RADAR_MODEL_PRICE_IN").and_then(|v| v.parse::<u64>().ok());
-        let price_out = non_empty(get, "RADAR_MODEL_PRICE_OUT").and_then(|v| v.parse::<u64>().ok());
+        let endpoint = non_empty(get, "REALORRUG_MODEL_ENDPOINT", "RADAR_MODEL_ENDPOINT");
+        let model = non_empty(get, "REALORRUG_MODEL_NAME", "RADAR_MODEL_NAME");
+        let price_in = non_empty(get, "REALORRUG_MODEL_PRICE_IN", "RADAR_MODEL_PRICE_IN")
+            .and_then(|v| v.parse::<u64>().ok());
+        let price_out = non_empty(get, "REALORRUG_MODEL_PRICE_OUT", "RADAR_MODEL_PRICE_OUT")
+            .and_then(|v| v.parse::<u64>().ok());
 
         let mut missing = Vec::new();
         if endpoint.is_none() {
-            missing.push("RADAR_MODEL_ENDPOINT");
+            missing.push("REALORRUG_MODEL_ENDPOINT");
         }
         if model.is_none() {
-            missing.push("RADAR_MODEL_NAME");
+            missing.push("REALORRUG_MODEL_NAME");
         }
         // No default price, for the reason the sibling gives: a default is a
         // spending decision made by whoever wrote this file, and it goes wrong
         // silently in the direction of under-counting.
         if price_in.is_none() {
-            missing.push("RADAR_MODEL_PRICE_IN");
+            missing.push("REALORRUG_MODEL_PRICE_IN");
         }
         if price_out.is_none() {
-            missing.push("RADAR_MODEL_PRICE_OUT");
+            missing.push("REALORRUG_MODEL_PRICE_OUT");
         }
         if !missing.is_empty() {
             return Err(format!(
-                "RADAR_MODEL_OPENAI_KEY is set but {} {} missing (micro-dollars per million tokens)",
+                "REALORRUG_MODEL_OPENAI_KEY is set but {} {} missing (micro-dollars per million tokens)",
                 missing.join(", "),
                 if missing.len() == 1 { "is" } else { "are" }
             ));
@@ -125,7 +127,11 @@ impl OpenAi {
             price_out: price_out.unwrap_or_default(),
             // Optional, so it is not in the missing-variable list above: an
             // instance that never sets it is correctly configured.
-            reasoning_effort: non_empty(get, "RADAR_MODEL_REASONING_EFFORT"),
+            reasoning_effort: non_empty(
+                get,
+                "REALORRUG_MODEL_REASONING_EFFORT",
+                "RADAR_MODEL_REASONING_EFFORT",
+            ),
         })
     }
 
@@ -301,12 +307,12 @@ mod tests {
             "sk-proj-not-a-real-key".to_owned(),
             &vars(&[
                 (
-                    "RADAR_MODEL_ENDPOINT",
+                    "REALORRUG_MODEL_ENDPOINT",
                     "https://example.invalid/v1/chat/completions",
                 ),
-                ("RADAR_MODEL_NAME", "a-model"),
-                ("RADAR_MODEL_PRICE_IN", "3000000"),
-                ("RADAR_MODEL_PRICE_OUT", "15000000"),
+                ("REALORRUG_MODEL_NAME", "a-model"),
+                ("REALORRUG_MODEL_PRICE_IN", "3000000"),
+                ("REALORRUG_MODEL_PRICE_OUT", "15000000"),
             ]),
         )
         .expect("fully configured")
@@ -329,12 +335,12 @@ mod tests {
     fn a_partial_configuration_names_every_missing_variable_at_once() {
         let why = OpenAi::from_vars("sk-proj-not-a-real-key".to_owned(), &vars(&[]))
             .expect_err("nothing else is set");
-        assert!(why.contains("RADAR_MODEL_OPENAI_KEY"), "{why}");
+        assert!(why.contains("REALORRUG_MODEL_OPENAI_KEY"), "{why}");
         for name in [
-            "RADAR_MODEL_ENDPOINT",
-            "RADAR_MODEL_NAME",
-            "RADAR_MODEL_PRICE_IN",
-            "RADAR_MODEL_PRICE_OUT",
+            "REALORRUG_MODEL_ENDPOINT",
+            "REALORRUG_MODEL_NAME",
+            "REALORRUG_MODEL_PRICE_IN",
+            "REALORRUG_MODEL_PRICE_OUT",
         ] {
             assert!(why.contains(name), "{name} is not named in {why}");
         }
@@ -507,13 +513,13 @@ mod tests {
             "sk-proj-not-a-real-key".to_owned(),
             &vars(&[
                 (
-                    "RADAR_MODEL_ENDPOINT",
+                    "REALORRUG_MODEL_ENDPOINT",
                     "https://example.invalid/v1/chat/completions",
                 ),
-                ("RADAR_MODEL_NAME", "a-model"),
-                ("RADAR_MODEL_PRICE_IN", "200000"),
-                ("RADAR_MODEL_PRICE_OUT", "1200000"),
-                ("RADAR_MODEL_REASONING_EFFORT", "none"),
+                ("REALORRUG_MODEL_NAME", "a-model"),
+                ("REALORRUG_MODEL_PRICE_IN", "200000"),
+                ("REALORRUG_MODEL_PRICE_OUT", "1200000"),
+                ("REALORRUG_MODEL_REASONING_EFFORT", "none"),
             ]),
         )
         .expect("fully configured");
@@ -528,13 +534,13 @@ mod tests {
             "sk-proj-not-a-real-key".to_owned(),
             &vars(&[
                 (
-                    "RADAR_MODEL_ENDPOINT",
+                    "REALORRUG_MODEL_ENDPOINT",
                     "https://example.invalid/v1/chat/completions",
                 ),
-                ("RADAR_MODEL_NAME", "a-model"),
-                ("RADAR_MODEL_PRICE_IN", "200000"),
-                ("RADAR_MODEL_PRICE_OUT", "1200000"),
-                ("RADAR_MODEL_REASONING_EFFORT", "   "),
+                ("REALORRUG_MODEL_NAME", "a-model"),
+                ("REALORRUG_MODEL_PRICE_IN", "200000"),
+                ("REALORRUG_MODEL_PRICE_OUT", "1200000"),
+                ("REALORRUG_MODEL_REASONING_EFFORT", "   "),
             ]),
         )
         .expect("fully configured");

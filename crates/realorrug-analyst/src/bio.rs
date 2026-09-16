@@ -15,7 +15,7 @@
 //! ways it could destroy something are impossible rather than unlikely:
 //!
 //! - **It never invents the lead.** [`Bio::from_vars`] returns `None` unless
-//!   `RADAR_BIO_LEAD` is set, and with no configuration nothing is written at
+//!   `REALORRUG_BIO_LEAD` is set, and with no configuration nothing is written at
 //!   all. That is AGENTS.md rule 8 in the place it matters most: the failure
 //!   this prevents is an unconfigured instance overwriting the account's real
 //!   copy with a status line.
@@ -48,6 +48,7 @@
 use std::fmt::Write as _;
 
 use realorrug_contest::{Record, Week};
+use realorrug_types::env::env_or_legacy;
 
 /// The longest bio X accepts.
 ///
@@ -85,7 +86,9 @@ impl Bio {
     /// prevent.
     #[must_use]
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Self> {
-        let lead = get("RADAR_BIO_LEAD")?.trim().to_owned();
+        let lead = env_or_legacy("REALORRUG_BIO_LEAD", "RADAR_BIO_LEAD", get)?
+            .trim()
+            .to_owned();
         (!lead.is_empty() && lead.len() < MAX).then_some(Self { lead })
     }
 
@@ -350,7 +353,7 @@ mod tests {
         // configuration time rather than producing a bio that is only a lead.
         assert_eq!(Bio::from_vars(&|_| Some("x".repeat(MAX))), None);
 
-        let set = Bio::from_vars(&|k| (k == "RADAR_BIO_LEAD").then(|| "  hello  ".to_owned()));
+        let set = Bio::from_vars(&|k| (k == "REALORRUG_BIO_LEAD").then(|| "  hello  ".to_owned()));
         assert_eq!(set.expect("set").lead, "hello");
     }
 

@@ -255,7 +255,8 @@ does); Alchemy ≈29.78M CU (the free plan covers it, at 99% utilization).
 **What must change.** Nothing in the tree today reads either
 `REALORRUG_RPC_URL` or `REALORRUG_RPC_FALLBACK_URL` — confirmed by grep
 against the source tree during this write-up. Two different variables are
-actually read: `RADAR_RPC` in `crates/realorrug-onchain/src/rpc.rs`
+actually read: `REALORRUG_RPC` (falling back to the legacy `RADAR_RPC`) in
+`crates/realorrug-onchain/src/rpc.rs`
 (`RpcClient::from_vars`), and `REALORRUG_ROBINHOOD_RPC` in
 `crates/realorrug-payout/src/main.rs`, on the pattern already documented in
 `deploy/payout.env.example` ("Its own name, so the analyst's Solana
