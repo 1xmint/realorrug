@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Reading a token's launch block and curve from RPC, on demand.
+//! Reading a token's launch block and curve from RPC, on demand -- for
+//! whichever of Radar's two chains the token launched on. [`SolanaReader`]
+//! reads Solana; [`robinhood::RobinhoodReader`] reads Robinhood Chain,
+//! against the reads `realorrug-robinhood` decodes. Both produce the same
+//! [`Dossier`] shape, which is the seam [ADR 0028](../../../docs/adr/0028-one-bot-every-chain.md)
+//! point 2 names.
 //!
 //! # Why this crate exists
 //!
@@ -52,6 +57,7 @@ pub mod dossier;
 pub mod launch;
 pub mod memory;
 pub mod reserves;
+pub mod robinhood;
 pub mod rpc;
 
 pub use budget::{Budget, Count, Exhausted};
@@ -59,4 +65,5 @@ pub use dossier::{ChainReader, CurveFacts, Dossier, SolanaReader, Unavailable, b
 pub use launch::{LaunchBlock, Metadata, NotALaunch};
 pub use memory::{Error as MemoryError, Fact, Kind, Memory, Recorded};
 pub use reserves::{PoolReserves, Role, Unreadable};
+pub use robinhood::{Error as RobinhoodError, RobinhoodReader};
 pub use rpc::{AccountRead, MultiAccountRead, OwnedAccount, RpcClient, RpcError};

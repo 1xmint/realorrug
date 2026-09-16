@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [package]
 name = "realorrug-onchain"
-description = "Reads a token's launch block and curve from RPC on demand, for a question asked about a mint that may be forty seconds old."
+description = "Reads a token's launch block and curve from RPC on demand, on Solana or Robinhood Chain, for a question asked about a mint that may be forty seconds old."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,6 +17,12 @@ realorrug-decode.workspace = true
 # The curve, its fee schedule and the PDA derivations. Pure arithmetic: this
 # crate supplies the bytes and that one says what they mean.
 realorrug-pumpfun.workspace = true
+# Robinhood Chain's raw reads -- `robinhood.rs` assembles these into a
+# `Dossier`, the same way this crate's own `rpc`/`launch`/`reserves` modules
+# supply Solana's. Not a dev-only dependency: `RobinhoodReader` is a real
+# `ChainReader`, not only a test fake (see `dossier.rs`'s `FakeRobinhoodReader`
+# for the one that stays a fake, kept as the seam's compile-time proof).
+realorrug-robinhood.workspace = true
 realorrug-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -30,9 +36,6 @@ rusqlite = { version = "0.32", default-features = false, features = ["bundled"] 
 
 [dev-dependencies]
 tempfile = "3"
-# Only the fake, non-Solana `ChainReader` in dossier.rs's tests, which is the
-# proof that the seam seats a second chain's address type.
-realorrug-robinhood.workspace = true
 
 [lints]
 workspace = true

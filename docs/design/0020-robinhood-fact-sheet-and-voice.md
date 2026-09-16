@@ -591,7 +591,7 @@ not the old one, is what is catching it.
 |---|---|---|---|
 | `crates/realorrug-robinhood/src/pons.rs` | `LaunchedToken::from_return` extracts word 10 (`phase`) — currently unread | §1's phase fact is required and this is where it lives today, unread | changed function body, no signature change |
 | `crates/realorrug-robinhood/src/pons.rs` or a new module in the same crate | reserve reads (`getReserves`/`quoteReserve`/`tokenReserve`), holder-sum from `Transfer` logs, `balanceOf`, graduation-log decode, launch-block `Transfer`/`CurveBuy` scans | §1's table; none of these reads exist in this crate today, only the launch-record and trade/sweep decoding do | new functions, additive |
-| a new `realorrug-robinhood`-side `dossier`/`build` function, symmetrical to `realorrug_onchain::build` | assembles the reads above into a `Dossier`-shaped value for a Robinhood token | §2's dispatch needs a second `build` to call | new function |
+| `crates/realorrug-onchain/src/robinhood.rs`, new | a `build` function and a `RobinhoodReader` (`ChainReader` impl), symmetrical to `realorrug_onchain::build`/`SolanaReader`, assembling `realorrug-robinhood`'s reads into a `Dossier`-shaped value for a Robinhood token — **not** a `realorrug-robinhood`-side function; see "the crate boundary question" below, which this row no longer agrees with itself on | §2's dispatch needs a second `build` to call | new module, new function, new type |
 | `crates/realorrug-roast/src/sheet.rs` | `read_at: Option<Slot>` renamed to a block-number-shaped field (§1); new `push_*` functions for the Robinhood-only facts (reserves, holders, graduation); `self_mint` becomes Robinhood-shaped or `Venue`-shaped | §1, and ADR 0023 decision 2 (the token lives on Robinhood now) | changed field type, new functions, changed constructor parameter |
 | `crates/realorrug-roast/src/sheet.rs` | new `Signal` variants: `LiquidityGone`, `CreatorSoldOut`, `BuyersCannotSell`, `CreatorBoughtOwnLaunch`, `LaunchBlockBundle`, `RepeatLauncher`, `HolderConcentration` — one variant each, shared with Solana where the same name already exists, per [ADR 0028](../adr/0028-one-bot-every-chain.md) point 3 (a signal means the same thing on every chain; the read differing is the chain reader's problem, not a reason to fork the variant) | §3's signal set | new enum variants |
 | `crates/realorrug-roast/src/verdict.rs` | `Verdict` gains a `level: Level` field (`Rugged`/`RugMechanicsLive`/`Sketchy`/`NothingUglyYet`/`CantTell`), computed by a new pure function implementing §3's rule over `sheet.signals` and `sheet.unknown`; `Verdict::from` keeps producing `reasons` (the restated facts) alongside the new level | **this is the type ADR 0027 names as the one that changes** | new field, new type (`Level`), new pure function; `reasons` unchanged |
@@ -605,26 +605,43 @@ not the old one, is what is catching it.
 
 ### The crate boundary question
 
-**Recommendation: the Robinhood sheet *builder* (the reads in §1 —
-`getLaunchedToken`, reserves, holder-sum, graduation log) lives in
-`realorrug-robinhood`; the sheet *shape* (`FactSheet`, `Fact`, `Signal`,
-`Verdict`, `forbidden`, `fidelity`) stays in `realorrug-roast`, unchanged in
-crate ownership from today.** This is still the right split, and it is what
-makes [ADR 0028](../adr/0028-one-bot-every-chain.md) point 2's seam possible:
-one reader per chain, in its own chain-side crate, against one shared sheet,
-verdict and voice — a chain-forked builder with a shared shape is exactly
-the boundary a third chain's reader plugs into without touching
-`realorrug-roast`. This mirrors the existing Solana split exactly
-— `realorrug-onchain` reads the chain and returns a `Dossier`;
-`realorrug-roast` turns a `Dossier` into a `FactSheet` and a `Verdict`, and
-never reads the chain itself. No new crate is needed: `realorrug-robinhood`
-already exists (`pons.rs`, `lib.rs`'s `Address`), and putting the new reads
-there is the smallest change that keeps the existing model/chain boundary
-intact. The cost of *not* doing this — putting the reads inside
-`realorrug-roast` directly — would be a model-facing crate gaining a chain
-client dependency it does not need for anything else, which is the shape
-AGENTS.md §4's `no_crate_that_holds_a_model_can_reach_the_payout` rule
-exists to keep an eye on: `realorrug-roast` must stay a crate that only
+**Corrected by task packet 0030, which built this (9-15-0026): the
+`Dossier`-assembling `build`/`ChainReader` for Robinhood lives in
+`crates/realorrug-onchain/src/robinhood.rs`, beside the Solana one, not in
+`realorrug-robinhood`.** The raw reads (§1's `getLaunchedToken`, reserves,
+holder-sum, graduation-log decode) still live in `realorrug-robinhood`,
+exactly as first recommended — only the *assembler that turns those reads
+into a `Dossier`* moves. The reason is a dependency direction this section
+did not check: `realorrug-types` depends on `realorrug-robinhood` (for
+`ChainAddress::Robinhood`), which makes `realorrug-robinhood` the leaf of the
+workspace. `ChainReader` is defined in `realorrug-onchain`, above that leaf;
+a trait defined above a crate cannot be implemented inside it without that
+crate depending back on the trait's crate, which is a dependency cycle
+(`realorrug-onchain` already depends on `realorrug-robinhood` for the reads,
+so the reverse edge cannot also exist). Putting `build` in
+`realorrug-onchain` instead has no such problem: `realorrug-onchain` already
+sits above `realorrug-robinhood` in the graph, the same place it already sits
+above `realorrug-pumpfun` for Solana's own reads.
+
+**The rest of this section's argument is still right about what matters, and
+is not being restated to argue the other way.** The sheet *shape*
+(`FactSheet`, `Fact`, `Signal`, `Verdict`, `forbidden`, `fidelity`) still
+stays in `realorrug-roast`, unchanged in crate ownership from today, and this
+is still what makes [ADR 0028](../adr/0028-one-bot-every-chain.md) point 2's
+seam possible: one reader per chain, in its own chain-side module, against
+one shared sheet, verdict and voice — `realorrug-roast` gains no chain client
+and no path to the payout under this design either way, because the reads
+themselves (not the assembler that calls them) are what would have put a
+client dependency there, and they were never proposed to move.  What this
+correction protects is narrower than "keep the reads out of
+`realorrug-roast`" — it is "keep the reads out of `realorrug-roast`, **and**
+keep the trait that ties them to a `Dossier` out of the one crate that cannot
+depend on it." The cost of the original recommendation — putting `build`
+inside `realorrug-robinhood` — would not have been a model-facing crate
+gaining a chain client it does not need (it already has one); it would have
+been a manifest that cannot compile, which is the shape
+AGENTS.md §4's "enforce a property at the cheapest level that holds it" rule
+argues for catching before it is written down as a plan: `realorrug-roast` must stay a crate that only
 *reads* a `Dossier` and *writes* text, never one that holds an RPC client or
 a signing key. **`realorrug-roast` gains no path to the payout under this
 design**: nothing proposed above adds a payout-adjacent dependency to that

@@ -564,6 +564,16 @@ impl Rpc {
         u64::try_from(id).map_err(|_| format!("eth_chainId: {id} does not fit"))
     }
 
+    /// The latest block number.
+    ///
+    /// # Errors
+    ///
+    /// The endpoint's error, or a result that is not a 64-bit quantity.
+    pub fn block_number(&self) -> Result<u64, String> {
+        let n = self.quantity_of("eth_blockNumber", &serde_json::json!([]))?;
+        u64::try_from(n).map_err(|_| format!("eth_blockNumber: {n} does not fit"))
+    }
+
     /// An account's ETH at the latest block, in wei.
     ///
     /// # Errors
