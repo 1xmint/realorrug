@@ -113,7 +113,7 @@ function ContestTeaser() {
       {data === null ? null : top3.length === 0 ? (
         <Nothing
           what="No week has run yet."
-          why="The account is live and answering, and no week has closed yet. When one does, the best question of the week wins the whole prize pool."
+          why="The account is live and answering, and no week has closed yet. When one does, the summoner whose question produced the reply that travelled furthest takes the whole prize pool."
         />
       ) : (
         <Card className="max-w-2xl">

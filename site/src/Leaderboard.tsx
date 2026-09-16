@@ -32,7 +32,7 @@ function TheRule() {
         3 × reposters + 3 × quoters + 1 × likers
       </p>
       <p className="mt-3 text-sm text-[var(--color-dim)]">
-        Measured on <strong>Cabal Hunter's own reply</strong>, not on your post.
+        Measured on <strong>Real or Rug's own reply</strong>, not on your post.
         That is deliberate: it is the cheaper read, it is harder to buy
         engagement on somebody else's tweet, and it rewards bringing a coin worth
         answering rather than bringing an audience.
@@ -310,8 +310,8 @@ export function Leaderboard() {
       <Heading kicker="This week">The questions worth asking</Heading>
       <p className="mb-8 max-w-2xl text-[var(--color-dim)]">
         Every week, the summoner whose question produced the reply that travelled
-        furthest takes the whole prize pool. Entry is free: ask Cabal Hunter
-        about a coin and you are in.
+        furthest takes the whole prize pool. Entry is free: ask Real or Rug
+        about a token and you are in.
       </p>
 
       <div className="grid gap-8 lg:grid-cols-[1fr_20rem]">

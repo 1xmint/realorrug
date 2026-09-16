@@ -34,7 +34,7 @@ export function Contact() {
       <div className="max-w-2xl">
         <Card className="mb-10 border-[var(--color-edge)]">
           <p className="text-[var(--color-text)]">
-            <strong>Cabal Hunter is operated by Josh Fair.</strong> There are
+            <strong>Real or Rug is operated by Josh Fair.</strong> There are
             three ways to reach him, all of them public, and they are the only
             three. Everything below is a channel that exists today; nothing has
             been added here to make the page look fuller.
@@ -92,7 +92,7 @@ export function Contact() {
               This project publishes no email address, and it has no support
               inbox.
             </strong>{" "}
-            If you receive a message from one claiming to be Cabal Hunter, it did
+            If you receive a message from one claiming to be Real or Rug, it did
             not come from here.
           </p>
           <p>
