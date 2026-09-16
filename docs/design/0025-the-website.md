@@ -676,14 +676,37 @@ Each slice ships and is checkable on its own; later slices do not block on
 future slices existing.
 
 1. **Fix the stuck `Reading…` states and the brand text, no new pages.**
-   Files: `site/src/Leaderboard.tsx`, `site/src/Pool.tsx` (the timeout/error
-   fallback bug, §0), `site/src/App.tsx` (wordmark), `site/src/Home.tsx`,
-   `site/src/About.tsx`, `site/src/Token.tsx` (every "Cabal Hunter" /
-   "Solana" / "pump.fun" string replaced with the realorrug / Robinhood
-   Chain equivalent). No new routes, no new art. This ships first because
-   every later slice reuses these files' data-fetching and copy patterns —
-   building the noir reskin on top of the stuck-spinner bug ships the same
-   bug in nicer clothes.
+   **Shipped 2026-09-16.** Files: `site/src/Leaderboard.tsx`, `site/src/Pool.tsx`
+   (the timeout/error fallback bug, §0), `site/src/App.tsx` (wordmark),
+   `site/src/Home.tsx`, `site/src/About.tsx`, `site/src/Token.tsx` (every
+   "Cabal Hunter" / "Solana" / "pump.fun" string replaced with the realorrug /
+   Robinhood Chain equivalent). No new routes, no new art. This ships first
+   because every later slice reuses these files' data-fetching and copy
+   patterns — building the noir reskin on top of the stuck-spinner bug ships
+   the same bug in nicer clothes.
+
+   The fetch fix: both pages now start a second, component-level clock
+   (`WATCHDOG_MS`, 8s) independent of `api.ts`'s own `TIMEOUT_MS` and
+   `AbortController`. `api.ts`'s `get()` already turns a rejection or its own
+   4s abort into an honest empty shape — the branch this document's §0 could
+   not fully explain is a `fetch` that never settles at all, so nothing
+   downstream of it (not the abort, not the `catch`) ever fires. The new
+   watchdog does not depend on `fetch` cooperating: it fires regardless, and
+   both pages render a "could not reach the server" state with a retry button
+   rather than sitting on `Reading…` past it. `site/src/stuck-reading.test.tsx`
+   reproduces the hang with a `fetch` mock that never resolves or rejects, and
+   fails if the watchdog is removed.
+
+   Left unfixed, out of this slice's scope: `site/src/Leaderboard.tsx` and
+   `site/src/Pool.tsx` still carry unrelated Solana/pump.fun-specific mechanic
+   copy (`SOL` units, `solscan.io` links, the pump.fun fee schedule, "a Solana
+   wallet address"), as does `site/src/Contact.tsx`, `site/src/Privacy.tsx`,
+   `site/src/Terms.tsx`, `site/src/History.tsx` and `site/src/title.ts`'s
+   `SITE` constant — none of these were named in this document's §0, and
+   replacing them correctly needs the actual Robinhood Chain payout mechanic
+   (design 0025 §2 cites `realorrug-payout`'s two-transaction, Pons v2 escrow
+   shape), not a guessed Solana-shaped substitute. A later slice or a
+   dedicated pass should carry that fix.
 2. **Palette and type system.** File: `site/src/index.css` (§5's colour
    tokens added alongside, not replacing, the existing ones where kept;
    `--color-good` updated; Space Grotesk added as the display face,
