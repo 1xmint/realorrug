@@ -155,8 +155,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         self_mint: self_mint.as_ref(),
         now,
     };
+    let mut threads = realorrug_analyst::followup::ThreadMemory::new();
     for mention in &mentions {
-        answer(mention, &mut gate, &ctx, &log_path)?;
+        answer(mention, &mut gate, &mut threads, &ctx, &log_path)?;
     }
 
     println!(
@@ -184,6 +185,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 fn answer(
     mention: &Mention,
     gate: &mut Gate,
+    threads: &mut realorrug_analyst::followup::ThreadMemory,
     ctx: &Answering<'_>,
     log_path: &str,
 ) -> Result<(), String> {
@@ -198,9 +200,9 @@ fn answer(
     // mint or a symbol.
     println!("    {}", safe(&mention.text, 120));
 
-    let entry = match realorrug_analyst::answer(mention, gate, ctx) {
+    let entry = match realorrug_analyst::answer(mention, gate, threads, ctx) {
         Answered::Reply { entry, .. } => *entry,
-        Answered::Ticker { text: reply, .. } => {
+        Answered::Ticker { text: reply, .. } | Answered::Followup { text: reply, .. } => {
             println!("--> {reply}");
             return Ok(());
         }

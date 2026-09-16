@@ -231,6 +231,15 @@ fn no_chain() -> realorrug_onchain::RpcClient {
     realorrug_onchain::RpcClient::new("http://127.0.0.1:1".to_owned())
 }
 
+/// An empty thread memory, fresh for each `tick`/`telegram::tick` call this
+/// file makes. Every mention fixture here is a first mention in its own
+/// conversation, so a fresh, empty memory each time is the honest fixture,
+/// not a shared one that would let one test's recorded thread leak into
+/// another's.
+fn threads() -> realorrug_analyst::followup::ThreadMemory {
+    realorrug_analyst::followup::ThreadMemory::new()
+}
+
 #[test]
 fn one_poll_reads_answers_and_advances_the_cursor() {
     // Two mentions: one naming a symbol, which is answerable without a chain,
@@ -268,6 +277,7 @@ fn one_poll_reads_answers_and_advances_the_cursor() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -382,6 +392,7 @@ fn a_published_reply_is_counted_charged_and_remembered() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -446,6 +457,7 @@ fn a_platform_that_refuses_costs_nothing_and_does_not_move_the_cursor() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -486,6 +498,7 @@ fn an_exhausted_budget_stops_the_poll_before_it_costs_anything() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -526,6 +539,7 @@ fn with_no_credential_the_loop_does_nothing_at_all() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -575,6 +589,7 @@ fn tick_against_empty_chain(
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
     let logged = if std::path::Path::new(&paths.log).exists() {
@@ -768,6 +783,7 @@ fn a_telegram_message_is_answered_into_its_own_log_and_never_into_the_record() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
     assert_eq!(answered, 0, "a dry run sends nothing");
@@ -837,6 +853,7 @@ fn a_telegram_reply_that_is_sent_is_counted_and_remembered_by_the_gate() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
     assert_eq!(answered, 1, "one message answered and sent");
@@ -857,6 +874,7 @@ fn a_telegram_reply_that_is_sent_is_counted_and_remembered_by_the_gate() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
     assert_eq!(again, 0, "the gate remembered the mint");
@@ -877,7 +895,7 @@ fn with_no_telegram_token_the_lane_reads_nothing_and_writes_nothing() {
     let client = realorrug_onchain::RpcClient::new(rpc);
     let mut spend = funded(&paths);
     let answered = realorrug_analyst::telegram::tick(
-        None, &DryRun, &mut gate, &mut spend, &client, None, None, None, None, None, &paths,
+        None, &DryRun, &mut gate, &mut spend, &client, None, None, None, None, None, &mut threads(), &paths,
     );
     assert_eq!(answered, 0);
     assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 0);
@@ -953,6 +971,7 @@ fn the_model_call_is_charged_for_the_mention_that_made_one_and_no_other() {
         None,
         Some(&Priced),
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -1020,6 +1039,7 @@ fn a_symbol_gets_an_answer_rather_than_silence() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -1080,6 +1100,7 @@ fn a_second_asker_is_pointed_at_the_answer_rather_than_ignored() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -1145,6 +1166,7 @@ fn a_log_that_cannot_be_written_does_not_drop_the_questions_behind_it() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
 
@@ -1182,6 +1204,7 @@ fn a_restart_reads_the_days_replies_back_off_disk() {
         None,
         None,
         None,
+        &mut threads(),
         &paths,
     );
     assert_eq!(gate.sent_today(), 1);

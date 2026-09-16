@@ -328,6 +328,10 @@ mod tests {
         }
     }
 
+    fn threads() -> crate::followup::ThreadMemory {
+        crate::followup::ThreadMemory::new()
+    }
+
     fn gate() -> Gate {
         Gate::new(
             Limits {
@@ -368,6 +372,7 @@ mod tests {
         let out = answer(
             &mention("@radar what about $ABC"),
             &mut gate(),
+            &mut threads(),
             &ctx(&client),
         );
         match out {
@@ -382,7 +387,7 @@ mod tests {
     #[test]
     fn a_mention_naming_nothing_is_not_an_error() {
         let client = unreachable_client();
-        let out = answer(&mention("@radar hello"), &mut gate(), &ctx(&client));
+        let out = answer(&mention("@radar hello"), &mut gate(), &mut threads(), &ctx(&client));
         assert!(matches!(out, Answered::Nothing), "{out:?}");
     }
 
@@ -405,6 +410,7 @@ mod tests {
         let out = answer(
             &mention("@radar So11111111111111111111111111111111111111112"),
             &mut closed,
+            &mut threads(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::Refused(_)), "{out:?}");
@@ -416,7 +422,7 @@ mod tests {
         let mut g = gate();
         let mut m = mention("@radar So11111111111111111111111111111111111111112");
         m.author = "radar".to_owned();
-        let out = answer(&m, &mut g, &ctx(&client));
+        let out = answer(&m, &mut g, &mut threads(), &ctx(&client));
         assert!(
             matches!(out, Answered::Refused(Refused::SelfOrIgnored)),
             "{out:?}"
@@ -433,6 +439,7 @@ mod tests {
         let out = answer(
             &mention("@radar 0x1111111111111111111111111111111111111111"),
             &mut gate(),
+            &mut threads(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::Unreadable(_)), "{out:?}");
@@ -448,6 +455,7 @@ mod tests {
         let out = answer(
             &mention("@radar 0x1111111111111111111111111111111111111111"),
             &mut gate(),
+            &mut threads(),
             &ctx(&client),
         );
         let Answered::Unreadable(why) = out else {
@@ -467,6 +475,7 @@ mod tests {
         let out = answer(
             &mention(&format!("@radar {}", "a".repeat(32))),
             &mut gate(),
+            &mut threads(),
             &ctx(&client),
         );
         assert!(matches!(out, Answered::NotAnAddress), "{out:?}");
