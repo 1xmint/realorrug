@@ -23,5 +23,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 
+[dev-dependencies]
+# Only the fake, non-Solana `ChainReader` in dossier.rs's tests, which is the
+# proof that the seam seats a second chain's address type.
+realorrug-robinhood.workspace = true
+
 [lints]
 workspace = true

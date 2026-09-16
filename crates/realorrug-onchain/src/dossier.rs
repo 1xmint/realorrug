@@ -229,13 +229,23 @@ pub fn build(client: &RpcClient, budget: &mut Budget, mint: &Address) -> Result<
 /// `Verdict`, the voice) already reads the shape this trait returns, not any
 /// particular chain's client.
 ///
-/// The method signature matches `build`'s own parameters exactly rather than
-/// inventing a request type, because a request type here would be one more
-/// thing a second chain's reader would have to fit itself into for no
-/// difference in behaviour: `RpcClient` and `Address` are already Solana's own
-/// types, and [`SolanaReader`] below is nothing more than `build` under a
-/// trait name.
+/// `Client` and `Token` are associated types rather than the trait taking
+/// `&RpcClient` and `&Address` directly (Solana's own types) or `&ChainAddress`
+/// (the chain-tagged enum): a fixed `RpcClient`/`Address` signature cannot be
+/// implemented by a second chain at all, since it has neither Solana's client
+/// nor a 32-byte address to put a 20-byte address into. And `&ChainAddress`
+/// would compile for every reader but hand each one addresses that are not
+/// its own, pushing "is this my chain?" into a runtime branch every
+/// implementation has to write and get right. An associated `Token` makes that
+/// a compile error instead of a check -- AGENTS.md section 4's "enforce a
+/// property at the cheapest level that holds it" -- so [`SolanaReader`] below
+/// can only ever be handed a Solana [`Address`], and a Robinhood reader can
+/// only ever be handed a Robinhood one.
 pub trait ChainReader {
+    /// The client this chain's reads go through.
+    type Client;
+    /// This chain's own address type.
+    type Token;
     /// The error a failed read produces.
     type Error;
 
@@ -248,9 +258,9 @@ pub trait ChainReader {
     /// instead.
     fn read(
         &self,
-        client: &RpcClient,
+        client: &Self::Client,
         budget: &mut Budget,
-        mint: &Address,
+        token: &Self::Token,
     ) -> Result<Dossier, Self::Error>;
 }
 
@@ -264,6 +274,8 @@ pub trait ChainReader {
 pub struct SolanaReader;
 
 impl ChainReader for SolanaReader {
+    type Client = RpcClient;
+    type Token = Address;
     type Error = RpcError;
 
     fn read(
@@ -670,5 +682,58 @@ mod tests {
             (Err(d), Err(r)) => assert_eq!(d.to_string(), r.to_string()),
             (d, r) => panic!("build and SolanaReader disagreed on success: {d:?} vs {r:?}"),
         }
+    }
+
+    /// A second, non-Solana `ChainReader`. It never runs a real read -- it
+    /// exists only so this crate compiles it against the trait, which is the
+    /// one thing a Solana-shaped `ChainReader` (the defect this seam fixes)
+    /// could never do. `Client = ()` because this fake makes no calls at all,
+    /// and `Token = realorrug_robinhood::Address` because that 20-byte shape
+    /// is exactly what would not fit in a `&Address` (Solana's 32 bytes) if
+    /// the trait still hard-coded Solana's own types.
+    struct FakeRobinhoodReader;
+
+    impl ChainReader for FakeRobinhoodReader {
+        type Client = ();
+        type Token = realorrug_robinhood::Address;
+        type Error = core::convert::Infallible;
+
+        fn read(
+            &self,
+            _client: &(),
+            _budget: &mut Budget,
+            token: &realorrug_robinhood::Address,
+        ) -> Result<Dossier, core::convert::Infallible> {
+            Ok(Dossier {
+                mint: ChainAddress::Solana(Address::new([9u8; 32])),
+                read_at: None,
+                launch: None,
+                curve: None,
+                creator_transactions: None,
+                unavailable: vec![Unavailable {
+                    fact: "robinhood reads",
+                    why: format!("fake reader, token {:?}", token.0),
+                }],
+                calls: 0,
+                elapsed_ms: 0,
+            })
+        }
+    }
+
+    #[test]
+    fn a_second_chains_reader_compiles_against_the_seam() {
+        // The point of this test is that it compiles at all: a `ChainReader`
+        // whose client is not `RpcClient` and whose token is not Solana's
+        // `Address` implements the trait with no special case. That is the
+        // property ADR 0028 point 2 names, and a runtime assertion on Solana
+        // types alone would never notice it regressing.
+        let token = realorrug_robinhood::Address([7u8; 20]);
+        let mut budget = Budget::new(60, 3, std::time::Duration::from_secs(30));
+        let dossier = FakeRobinhoodReader
+            .read(&(), &mut budget, &token)
+            .expect("the fake reader never fails");
+        assert_eq!(dossier.mint, ChainAddress::Solana(Address::new([9u8; 32])));
+        assert_eq!(dossier.unavailable.len(), 1);
+        assert_eq!(dossier.unavailable[0].fact, "robinhood reads");
     }
 }

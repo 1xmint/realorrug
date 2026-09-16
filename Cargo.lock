@@ -1096,6 +1096,7 @@ version = "0.0.1"
 dependencies = [
  "realorrug-decode",
  "realorrug-pumpfun",
+ "realorrug-robinhood",
  "realorrug-types",
  "serde",
  "serde_json",
