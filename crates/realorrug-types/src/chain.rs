@@ -93,7 +93,7 @@ impl fmt::Display for ChainAddress {
 /// a `ReadAt::Solana` and a `ReadAt::Robinhood` carrying the same number are
 /// unequal, because they are different chains' clocks that happen to agree
 /// on a digit.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ReadAt {
     /// A Solana slot.
     Solana(Slot),
@@ -176,5 +176,27 @@ mod tests {
         assert_ne!(slot, block);
         assert_eq!(slot.as_slot(), Some(Slot(444_007_820)));
         assert_eq!(block.as_slot(), None);
+    }
+
+    #[test]
+    fn read_at_serialises_externally_tagged_by_chain() {
+        // The tag is the point (§1 of packet 0036): a bare number in a log is
+        // meaningless without the clock it was read against, so the chain
+        // name has to travel with it. Pins the default serde representation
+        // rather than a custom one, because a third chain should cost an
+        // enum arm and nothing else.
+        let slot = ReadAt::Solana(Slot(444_007_820));
+        assert_eq!(
+            serde_json::to_string(&slot).expect("json"),
+            r#"{"Solana":444007820}"#
+        );
+        let block = ReadAt::Robinhood(100);
+        assert_eq!(
+            serde_json::to_string(&block).expect("json"),
+            r#"{"Robinhood":100}"#
+        );
+
+        let back: ReadAt = serde_json::from_str(r#"{"Robinhood":100}"#).expect("round-trips");
+        assert_eq!(back, block);
     }
 }
