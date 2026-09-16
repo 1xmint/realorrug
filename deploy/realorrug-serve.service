@@ -18,8 +18,8 @@ Group=guardian
 WorkingDirectory=/home/guardian/realorrug
 ExecStart=/usr/local/bin/realorrug-serve
 Environment=REALORRUG_BIND=127.0.0.1:8090
-Environment=RADAR_CONTEST_DIR=/home/guardian/realorrug/data/contest
-Environment=RADAR_ANALYST_DIR=/home/guardian/realorrug/data/analyst
+Environment=REALORRUG_CONTEST_DIR=/home/guardian/realorrug/data/contest
+Environment=REALORRUG_ANALYST_DIR=/home/guardian/realorrug/data/analyst
 # Set to the site's origin to let a browser read these; unset sends no CORS header.
 EnvironmentFile=-/etc/realorrug/serve.env
 Restart=always

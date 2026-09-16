@@ -37,7 +37,7 @@ Group=realorrug-payout
 WorkingDirectory=/home/guardian/realorrug
 ExecStart=/usr/local/bin/realorrug-payout --due
 Environment=TURNKEY_API_KEY=/etc/realorrug/turnkey.key
-Environment=RADAR_CONTEST_DIR=/home/guardian/realorrug/data/contest
+Environment=REALORRUG_CONTEST_DIR=/home/guardian/realorrug/data/contest
 EnvironmentFile=/etc/realorrug/payout.env
 
 NoNewPrivileges=true
