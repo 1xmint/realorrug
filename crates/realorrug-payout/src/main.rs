@@ -16,15 +16,16 @@
 //! - `TURNKEY_API_PUBLIC_KEY` -- its compressed public key, as the Turnkey
 //!   dashboard shows it. The file must derive it.
 //! - `TURNKEY_ORGANIZATION_ID` -- the Turnkey organisation.
-//! - `RADAR_PAYOUT_ADDRESS` -- the wallet Turnkey signs for: the token's creator
-//!   fee recipient.
+//! - `REALORRUG_PAYOUT_ADDRESS` (falling back to `RADAR_PAYOUT_ADDRESS`) -- the
+//!   wallet Turnkey signs for: the token's creator fee recipient.
 //! - `REALORRUG_TOKEN` -- the token. Unset before launch, so nothing is paid
 //!   before there is anything to pay.
 //! - `REALORRUG_ROBINHOOD_RPC` -- the Robinhood Chain endpoint. Its own name, so
-//!   the analyst's Solana `RADAR_RPC_URL` can never be picked up by mistake.
+//!   the analyst's Solana `REALORRUG_RPC` can never be picked up by mistake.
 //!
-//! Optional: `RADAR_PAYOUT_FLOOR_WEI` (unset is no floor) and
-//! `RADAR_CONTEST_DIR` (`data/contest`).
+//! Optional: `REALORRUG_PAYOUT_FLOOR_WEI` (falling back to
+//! `RADAR_PAYOUT_FLOOR_WEI`; unset is no floor) and `REALORRUG_CONTEST_DIR`
+//! (falling back to `RADAR_CONTEST_DIR`; `data/contest`).
 //!
 //! `--week N` names the week; `--due` pays every claimed, unpaid week, which
 //! is what the timer runs; `--dry-run` plans and signs nothing;
@@ -111,7 +112,12 @@ fn signing_from(get: &impl Fn(&str) -> Option<String>, missing: &mut Vec<String>
     let key_path = need("TURNKEY_API_KEY");
     let public_key = need("TURNKEY_API_PUBLIC_KEY");
     let organization = need("TURNKEY_ORGANIZATION_ID");
-    let wallet = address_var(get, "RADAR_PAYOUT_ADDRESS", "", missing);
+    let wallet = address_var(
+        &|k: &str| realorrug_types::env::env_or_legacy(k, "RADAR_PAYOUT_ADDRESS", get),
+        "REALORRUG_PAYOUT_ADDRESS",
+        "",
+        missing,
+    );
     Signing {
         key_path,
         public_key,
@@ -221,7 +227,9 @@ fn turnkey(signing: &Signing) -> Result<Turnkey, String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let contest_dir = env("RADAR_CONTEST_DIR").unwrap_or_else(|| "data/contest".to_owned());
+    let contest_dir =
+        realorrug_types::env::env_or_legacy("REALORRUG_CONTEST_DIR", "RADAR_CONTEST_DIR", env)
+            .unwrap_or_else(|| "data/contest".to_owned());
     let get = |k: &str| std::env::var(k).ok();
 
     if has(&args, "--setup-proof") {
@@ -383,7 +391,7 @@ mod tests {
             "TURNKEY_API_KEY" => Some("/etc/realorrug/turnkey.key".to_owned()),
             "TURNKEY_API_PUBLIC_KEY" => Some("02ab".to_owned()),
             "TURNKEY_ORGANIZATION_ID" => Some("org".to_owned()),
-            "RADAR_PAYOUT_ADDRESS" => Some(wallet.clone()),
+            "REALORRUG_PAYOUT_ADDRESS" => Some(wallet.clone()),
             "REALORRUG_TOKEN" => Some(token.clone()),
             "REALORRUG_ROBINHOOD_RPC" => Some("https://rpc".to_owned()),
             _ => None,
@@ -398,7 +406,7 @@ mod tests {
             "TURNKEY_API_KEY",
             "TURNKEY_API_PUBLIC_KEY",
             "TURNKEY_ORGANIZATION_ID",
-            "RADAR_PAYOUT_ADDRESS",
+            "REALORRUG_PAYOUT_ADDRESS",
             "REALORRUG_TOKEN",
             "REALORRUG_ROBINHOOD_RPC",
         ];
@@ -420,19 +428,38 @@ mod tests {
         // The analyst's Solana variable is not a substitute.
         let solana = |k: &str| match k {
             "REALORRUG_ROBINHOOD_RPC" => None,
-            "RADAR_RPC_URL" => Some("https://solana".to_owned()),
+            "REALORRUG_RPC" => Some("https://solana".to_owned()),
             _ => all(k),
         };
         assert!(settings_from(&solana).is_err());
 
         let bad = |k: &str| {
-            if k == "RADAR_PAYOUT_ADDRESS" {
+            if k == "REALORRUG_PAYOUT_ADDRESS" {
                 Some("So111".to_owned())
             } else {
                 all(k)
             }
         };
         assert!(settings_from(&bad).expect_err("bad")[0].contains("does not parse"));
+    }
+
+    #[test]
+    fn the_old_payout_address_name_still_works() {
+        // The box's env file is renamed by hand, separately; until then the
+        // old name is read and a warning names the new one.
+        let wallet = format!("0x{}", "11".repeat(20));
+        let token = format!("0x{}", "22".repeat(20));
+        let legacy = |k: &str| match k {
+            "TURNKEY_API_KEY" => Some("/etc/realorrug/turnkey.key".to_owned()),
+            "TURNKEY_API_PUBLIC_KEY" => Some("02ab".to_owned()),
+            "TURNKEY_ORGANIZATION_ID" => Some("org".to_owned()),
+            "RADAR_PAYOUT_ADDRESS" => Some(wallet.clone()),
+            "REALORRUG_TOKEN" => Some(token.clone()),
+            "REALORRUG_ROBINHOOD_RPC" => Some("https://rpc".to_owned()),
+            _ => None,
+        };
+        let got = settings_from(&legacy).expect("the old name still resolves the wallet");
+        assert_eq!(got.signing.wallet.to_string(), wallet);
     }
 
     #[test]
@@ -445,7 +472,7 @@ mod tests {
             "TURNKEY_API_KEY" => Some("/etc/realorrug/turnkey.key".to_owned()),
             "TURNKEY_API_PUBLIC_KEY" => Some("02ab".to_owned()),
             "TURNKEY_ORGANIZATION_ID" => Some("org".to_owned()),
-            "RADAR_PAYOUT_ADDRESS" => Some(wallet.clone()),
+            "REALORRUG_PAYOUT_ADDRESS" => Some(wallet.clone()),
             _ => None,
         };
         let got = proof_settings_from(&turnkey_only).expect("enough for the proof");

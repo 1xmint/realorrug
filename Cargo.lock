@@ -1175,6 +1175,7 @@ dependencies = [
  "p256",
  "realorrug-contest",
  "realorrug-robinhood",
+ "realorrug-types",
  "serde",
  "serde_json",
  "sha3",
