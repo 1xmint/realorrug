@@ -31,7 +31,7 @@ use crate::budget::{Budget, Exhausted};
 /// A public Solana RPC endpoint. Overridable for a paid one.
 ///
 /// The public endpoint is rate-limited hard enough that it is a development
-/// convenience rather than something to serve from — `RADAR_RPC` is how a real
+/// convenience rather than something to serve from — `REALORRUG_RPC` is how a real
 /// deployment points this at Helius.
 pub const DEFAULT_RPC: &str = "https://api.mainnet-beta.solana.com";
 
@@ -309,7 +309,7 @@ impl RpcClient {
         }
     }
 
-    /// The endpoint from `RADAR_RPC`, or the public one.
+    /// The endpoint from `REALORRUG_RPC`, or the public one.
     ///
     /// Not deny-by-default, and the distinction from rule 8 is worth stating:
     /// rule 8 governs config whose absence would let Radar *spend* or *permit*
@@ -332,7 +332,8 @@ impl RpcClient {
     /// `&|k| std::env::var(k).ok()`.
     #[must_use]
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Self {
-        get("RADAR_RPC").map_or_else(Self::default, Self::new)
+        realorrug_types::env::env_or_legacy("REALORRUG_RPC", "RADAR_RPC", get)
+            .map_or_else(Self::default, Self::new)
     }
 
     /// Which endpoint this client talks to.
