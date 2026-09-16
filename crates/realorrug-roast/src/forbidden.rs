@@ -385,18 +385,26 @@ fn boundary(c: char) -> bool {
 /// making the per-level table above impossible to state precisely (the table
 /// lists "rug" and "rugged" as separate, differently-earned words).
 fn word_occurs(haystack: &str, word: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = haystack[start..].find(word) {
-        let at = start + pos;
-        let before_ok = haystack[..at].chars().next_back().is_none_or(boundary);
-        let after = at + word.len();
-        let after_ok = haystack[after..].chars().next().is_none_or(boundary);
-        if before_ok && after_ok {
-            return true;
-        }
-        start = at + 1;
-    }
-    false
+    // A range rather than a hand-rolled cursor. The cursor this replaced was
+    // one mutation away from never advancing -- `start = at + 1` with the `+`
+    // changed -- and `just mutants` reported exactly that, twice, as a timeout
+    // rather than as a survivor. The justfile's own rule for a timeout is to
+    // bound the loop, not to raise the budget. A range cannot be made not to
+    // terminate by changing one operator, so the whole class is gone.
+    //
+    // O(haystack * word) rather than O(haystack), on strings that are one
+    // social-media reply long. `starts_with` on a non-boundary index is false
+    // rather than a panic, but the guard is kept because slicing `haystack`
+    // by that index below is not.
+    (0..=haystack.len()).any(|at| {
+        haystack.is_char_boundary(at)
+            && haystack[at..].starts_with(word)
+            && haystack[..at].chars().next_back().is_none_or(boundary)
+            && haystack[at + word.len()..]
+                .chars()
+                .next()
+                .is_none_or(boundary)
+    })
 }
 
 /// [`masked`], but case-preserving: the account's own names become [`MASK`]
@@ -421,13 +429,20 @@ fn mask_case_preserving(text: &str) -> String {
         if needle.is_empty() {
             continue;
         }
-        let mut i = 0;
-        while i + needle.len() <= bytes.len() {
-            if bytes[i..i + needle.len()].eq_ignore_ascii_case(needle) {
+        // `windows` rather than a cursor, for the reason given in
+        // `word_occurs`: three mutations of this loop's `i +=` made it run
+        // forever, which CI reports as a timeout. `windows` yields nothing
+        // when the needle is longer than the text, which is the same answer
+        // the cursor gave.
+        //
+        // It differs from the cursor in one way: it marks *overlapping*
+        // occurrences, where the cursor skipped past each match. For these
+        // needles that is the same set of bytes, because neither `realorrug`
+        // nor `cabalhunter.org` has a prefix that is also one of its
+        // suffixes, so no occurrence of either can overlap another.
+        for (i, window) in bytes.windows(needle.len()).enumerate() {
+            if window.eq_ignore_ascii_case(needle) {
                 masked_byte[i..i + needle.len()].fill(true);
-                i += needle.len();
-            } else {
-                i += 1;
             }
         }
     }
@@ -489,23 +504,22 @@ fn has_capitalized_run(sentence: &str) -> bool {
 /// so an address followed by any other verb -- "sold," "bought," "moved" --
 /// is never treated as a person-reference by this shape alone.
 fn has_address_subject(sentence_lower: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = sentence_lower[start..].find("0x") {
-        let at = start + pos;
-        let mut end = at + 2;
-        while end < sentence_lower.len() && sentence_lower.as_bytes()[end].is_ascii_hexdigit() {
-            end += 1;
+    // Two std iterators rather than two cursors, for the reason given in
+    // `word_occurs`: three mutations between them made this function run
+    // forever. `match_indices` is non-overlapping, which is what the cursor's
+    // `start = at + 2` already did, and `0x` cannot overlap itself anyway.
+    sentence_lower.match_indices("0x").any(|(at, _)| {
+        let after = &sentence_lower[at + 2..];
+        let hex = after.bytes().take_while(u8::is_ascii_hexdigit).count();
+        // `0x` with nothing after it is two characters of prose, not an
+        // address. The hex run is what makes it one.
+        if hex == 0 {
+            return false;
         }
-        if end > at + 2 {
-            let rest = sentence_lower[end..].trim_start_matches(|c: char| !c.is_alphanumeric());
-            let next_word: String = rest.chars().take_while(|c| c.is_alphanumeric()).collect();
-            if next_word == "is" || next_word == "was" {
-                return true;
-            }
-        }
-        start = at + 2;
-    }
-    false
+        let rest = after[hex..].trim_start_matches(|c: char| !c.is_alphanumeric());
+        let next_word: String = rest.chars().take_while(|c| c.is_alphanumeric()).collect();
+        next_word == "is" || next_word == "was"
+    })
 }
 
 /// Refuses an accusation aimed at a person, account or company -- ADR 0027
