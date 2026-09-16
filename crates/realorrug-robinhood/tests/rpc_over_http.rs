@@ -241,6 +241,20 @@ fn the_chain_id_balance_and_code_are_read_as_mainnet_answered_them() {
 }
 
 #[test]
+fn the_block_number_is_read_as_a_quantity() {
+    let (url, seen) = serve(vec![
+        answer(&serde_json::json!("0x3b7827e")),
+        answer(&serde_json::json!(7)),
+    ]);
+    let rpc = Rpc::new(url);
+    assert_eq!(rpc.block_number(), Ok(62_358_142));
+    assert!(rpc.block_number().is_err(), "a number is not a quantity");
+    let log = seen.lock().expect("the log");
+    assert_eq!(log[0]["method"], "eth_blockNumber");
+    assert_eq!(log[0]["params"], serde_json::json!([]));
+}
+
+#[test]
 fn the_nonce_is_asked_at_the_named_tag() {
     // Pending for a new transaction, so one the node holds is not reused;
     // latest for "has this nonce landed". Re-apply by sending "latest" for
