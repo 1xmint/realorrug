@@ -157,6 +157,43 @@ pub struct CurveFacts {
     pub fees: Option<Fees>,
 }
 
+/// A launch read from the chain's own launch event, for a chain whose launch
+/// is not a Solana slot.
+///
+/// Its own type, not a variant of [`LaunchBlock`]: that type's creator is a
+/// Solana key, its buy is lamports and its metadata comes from the launch
+/// instruction, and none of the three exists in the same shape on an EVM
+/// chain. Stretching it would put a guessed unit next to a real figure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChainLaunch {
+    /// The block the launch event is in.
+    pub block: u64,
+    /// Seconds from the launch block to the read point, both timestamps the
+    /// chain's own. `None` when either block's time could not be read --
+    /// the sheet then says the age is unknown rather than inventing one.
+    pub age_seconds: Option<u64>,
+    /// Wei the launcher spent buying their own token in the launch
+    /// transaction. `Some(0)` means the transaction was read and held no such
+    /// buy; `None` means it could not be read, which is not zero (rule 8).
+    pub dev_buy_wei: Option<u128>,
+}
+
+/// Who holds the token, summed from every `Transfer` it ever emitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Holders {
+    /// Accounts with a balance above zero, not counting the launch curve,
+    /// the factory or the zero address -- the machinery, not holders.
+    pub count: u32,
+    /// The largest such account's share of what those accounts hold
+    /// together, in basis points; `None` when nobody holds any.
+    ///
+    /// **Of the circulating supply, not the total**: the curve's own stock is
+    /// excluded from both sides. The largest holder may still be a pool or a
+    /// contract; nothing here can tell a whale from a liquidity pool, so the
+    /// sheet never calls it a person.
+    pub largest_share_bps: Option<u16>,
+}
+
 /// Everything the analyst may assert about one token.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dossier {
@@ -187,6 +224,11 @@ pub struct Dossier {
     /// creator index -- 483,629 rows of `(creator, slot, mint)`, a hash lookup
     /// -- which is both cheaper and an actual launch count.
     pub creator_transactions: Option<Count>,
+    /// The launch, read from the chain's own launch event -- for a chain
+    /// whose launch is not a Solana slot ([`ChainLaunch`]).
+    pub chain_launch: Option<ChainLaunch>,
+    /// Who holds the token, where it was read.
+    pub holders: Option<Holders>,
     /// Facts that could not be read, and why.
     pub unavailable: Vec<Unavailable>,
     /// RPC calls this dossier cost.
@@ -245,6 +287,8 @@ pub fn build(
         launch: None,
         curve: None,
         creator_transactions: None,
+        chain_launch: None,
+        holders: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -670,6 +714,8 @@ mod tests {
             launch: None,
             curve: None,
             creator_transactions: None,
+            chain_launch: None,
+            holders: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -945,6 +991,8 @@ mod tests {
                 launch: None,
                 curve: None,
                 creator_transactions: None,
+                chain_launch: None,
+                holders: None,
                 unavailable: vec![Unavailable {
                     fact: "robinhood reads",
                     why: format!("fake reader, token {:?}", token.0),

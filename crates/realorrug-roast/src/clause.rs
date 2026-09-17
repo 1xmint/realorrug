@@ -83,7 +83,8 @@ pub enum Kind {
     LaunchRecipients,
     /// Transactions in the launch block.
     LaunchTransactions,
-    /// SOL the creator spent on their own token in the launch block.
+    /// What the creator spent on their own token at launch: SOL in the launch
+    /// block, or ETH in the launch transaction on Robinhood Chain.
     DevBuy,
     /// No creator buy was found. Absent, not zero.
     DevBuyUnseen,
@@ -153,6 +154,12 @@ pub enum Kind {
     /// clock (`sheet.rs::FactSheet::build`); a sheet with nothing to
     /// subtract carries no fact with this kind.
     Age,
+    /// Addresses holding the token, not counting its curve, the factory or
+    /// the zero address.
+    Holders,
+    /// The largest single address's share of the supply outside the curve.
+    /// An address, which may be a pool or contract, never called a person.
+    LargestHolderShare,
 }
 
 /// Which register a clause is written in.

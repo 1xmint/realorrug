@@ -464,14 +464,14 @@ in the set of numbers that satisfy this: a slot number is not an age, and
 counting it would let "read at slot 444007820" pass as "six hours old."
 Those are different claims and only one of them is true.
 
-**Tier two, the age could not be read.** Every Robinhood sheet is ageless
-today, and not because the chain hides the number — research 0039 measured
-Robinhood Chain's block time at 0.1019s over about 100k blocks. It is
-because `LaunchBlock` is Solana-slot-shaped, so `FactSheet::build` computes
-an age only for a Solana read and a Robinhood sheet has nothing to
-subtract (`sheet.rs`'s `push_age` says so at its own call site). So a whole
-chain's sheets carry no age while carrying everything else the verdict
-needs. The reply
+**Tier two, the age could not be read.** A Robinhood sheet carries an age
+when its reader found the token's `TokenLaunched` log: the Robinhood reader
+fills `Dossier::chain_launch` with the difference between the launch
+block's timestamp and the read block's, and `sheet.rs`'s
+`push_chain_launch` states it in hours (days past two). Before that reader
+existed every Robinhood sheet was ageless, which is why this tier was
+written with a whole chain in mind; it now covers the sheets whose launch
+log or block timestamp could not be read. The reply
 must then do three things, all of them: say in words that the age is not
 known ("how old this token is could not be read"), name the read point in
 words (*slot*, *block*, *read at*), and state the read point's own number.
@@ -497,7 +497,7 @@ cannot name (AGENTS.md rule 8 — absent is not zero, unknown is not safe).
 **The alternative that was considered and rejected: demote every ageless
 token to `CantTell`.** It is the tidier rule — the age is a required fact,
 the fact is missing, so the honest verdict is "can't tell." It was rejected
-because on Robinhood the age is missing *by default*, not by accident. Every
+because, when it was decided, on Robinhood the age was missing *by default*, not by accident. Every
 Robinhood token would land on `CantTell` no matter how much the reader did
 see: the reserves, the holder spread, the creator's history, the launch
 block itself, all read successfully and all thrown away over one timestamp

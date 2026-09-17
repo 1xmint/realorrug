@@ -568,6 +568,58 @@ impl Rpc {
             .map_err(|e| format!("receipt: {e}"))
     }
 
+    /// Every log `address` emitted whose leading topics match `topics`, over
+    /// the whole chain.
+    ///
+    /// One call, block 0 to the latest. The provider caps the size of the
+    /// answer rather than the range (Alchemy: 10,000 logs, measured
+    /// 2026-09-17 on this chain), so one token's own launch event, or its own
+    /// transfers until it is busy, fit in a single answer. A capped answer is
+    /// the endpoint's error and reaches the caller as one -- never as a short
+    /// list that reads as complete.
+    ///
+    /// # Errors
+    ///
+    /// The endpoint's error, or a log that did not parse.
+    pub fn logs(&self, address: &Address, topics: &[Hash32]) -> Result<Vec<Log>, String> {
+        let topics: Vec<String> = topics.iter().map(ToString::to_string).collect();
+        let result = self.call(
+            "eth_getLogs",
+            &serde_json::json!([{
+                "address": address.to_string(),
+                "fromBlock": "0x0",
+                "toBlock": "latest",
+                "topics": topics,
+            }]),
+        )?;
+        result
+            .as_array()
+            .ok_or("eth_getLogs returned no list")?
+            .iter()
+            .map(|log| Log::from_json(log).map_err(|e| format!("log: {e}")))
+            .collect()
+    }
+
+    /// A block's number and its timestamp in seconds: block `number`, or the
+    /// latest block when `number` is `None`.
+    ///
+    /// # Errors
+    ///
+    /// The endpoint's error, no such block, or a field that is not a quantity.
+    pub fn block_time(&self, number: Option<u64>) -> Result<(u64, u64), String> {
+        let tag = number.map_or_else(|| "latest".to_owned(), |n| format!("{n:#x}"));
+        let result = self.call("eth_getBlockByNumber", &serde_json::json!([tag, false]))?;
+        if result.is_null() {
+            return Err("eth_getBlockByNumber: no such block".to_owned());
+        }
+        let read = |name: &'static str| {
+            field(&result, name)
+                .and_then(quantity)
+                .map_err(|e| format!("eth_getBlockByNumber: {e}"))
+        };
+        Ok((read("number")?, read("timestamp")?))
+    }
+
     /// A read-only contract call at the latest block.
     ///
     /// # Errors

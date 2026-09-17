@@ -961,8 +961,8 @@ fn states_one_of(text: &str, values: &[f64]) -> bool {
 ///   Solana today): the reply must state *that* fact's value, not just the
 ///   read point -- a reply citing only `sheet.read_at`'s number is exactly
 ///   the defect this function exists to catch.
-/// - **No age, but a read point** (Robinhood today: `LaunchBlock` is
-///   Solana-slot-shaped, so a Robinhood sheet never gets an age fact): the
+/// - **No age, but a read point** (a sheet whose launch block or its
+///   timestamp could not be read): the
 ///   reply must say how old the token is could not be read, and must still
 ///   state the read point. Saying "nothing ugly yet" about a token whose age
 ///   is unknown, without saying so, is reassurance with its limit removed --
@@ -1702,10 +1702,10 @@ mod tests {
     /// A sheet naming one unread fact and read at a fixed Robinhood block, so
     /// `check_required_canttell` (against `unknown`) has something to check.
     ///
-    /// **Ageless, deliberately.** `LaunchBlock` is Solana-slot-shaped, so a
-    /// Robinhood sheet never carries a [`crate::clause::Kind::Age`] fact --
-    /// this fixture is that shape, and stands in for it in every test that is
-    /// not itself about the age rule.
+    /// **Ageless, deliberately.** A Robinhood sheet whose launch block could
+    /// not be read carries no [`crate::clause::Kind::Age`] fact -- this
+    /// fixture is that shape, and stands in for it in every test that is not
+    /// itself about the age rule.
     fn required_sheet(unknown: Vec<String>) -> FactSheet {
         FactSheet {
             mint: "MintOne".to_owned(),
