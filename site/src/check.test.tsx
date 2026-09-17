@@ -155,10 +155,13 @@ describe("the paste box", () => {
 
 describe("the share text", () => {
   it("names the level and links back to this page, and nothing else", () => {
-    const href = shareHref("Sketchy", "Real red flags.", ADDR);
+    const href = shareHref("Sketchy", "Real red flags.", ADDR, "realorrug");
     const text = decodeURIComponent(href.split("text=")[1] ?? "");
-    expect(text).toMatch(/^Checked a token on Real or Rug: Sketchy\. Real red flags\. /);
+    expect(text).toMatch(/^SKETCHY\. Real red flags\. Checked by @realorrug /);
     expect(text.endsWith(`/check/${ADDR}`)).toBe(true);
     expect(text).not.toMatch(/\$|price|market cap/i);
+    const untagged = decodeURIComponent(shareHref("Sketchy", "Real red flags.", ADDR, null).split("text=")[1] ?? "");
+    expect(untagged).not.toContain("@");
+    expect(untagged).toMatch(/Checked on Real or Rug /);
   });
 });

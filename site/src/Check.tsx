@@ -18,7 +18,7 @@ import { useEffect, useState } from "react";
 import { useRoute } from "wouter";
 
 import { type CheckResult, check } from "./api";
-import { evmShaped, mintShaped } from "./honesty";
+import { account, evmShaped, mintShaped } from "./honesty";
 import { LADDER } from "./HowItWorks";
 import { useTitle } from "./title";
 import { CheckBox, Heading, Nothing, Section } from "./ui";
@@ -146,7 +146,7 @@ function Verdict({ result, address }: { result: CheckResult; address: string }) 
   // No level, or a level this page does not know, is drawn as Can't tell:
   // the one rung that claims nothing.
   const rung = LADDER.find((l) => l.code === result.level) ?? LADDER[LADDER.length - 1]!;
-  const share = shareHref(rung.stamp, rung.means, address);
+  const share = shareHref(rung.stamp, rung.means, address, account());
   return (
     <article className="paper pinned p-6 pt-10 sm:p-10">
       <span className="stamp thump text-3xl sm:text-4xl" style={{ color: rung.ink }}>
@@ -198,11 +198,18 @@ function Verdict({ result, address }: { result: CheckResult; address: string }) 
 /**
  * The share link, composed from the level and this page's own address.
  *
+ * The stamp leads, because a feed is scrolled and the verdict is the only
+ * word that stops a thumb. The bot's handle follows when the build knows it,
+ * so each share is also a summons: the post carries the address, and the
+ * account answers it in the thread. Without a configured handle the tag is
+ * left out rather than guessed (see `account()`).
+ *
  * Exported for its test: the text is the rule-4 surface on this page.
  */
-export function shareHref(stamp: string, means: string, address: string): string {
+export function shareHref(stamp: string, means: string, address: string, handle: string | null): string {
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const url = `${origin}/check/${address}`;
-  const text = `Checked a token on Real or Rug: ${stamp}. ${means} ${url}`;
+  const by = handle ? ` Checked by @${handle}` : " Checked on Real or Rug";
+  const text = `${stamp.toUpperCase()}. ${means}${by} ${url}`;
   return `https://x.com/intent/post?text=${encodeURIComponent(text)}`;
 }
