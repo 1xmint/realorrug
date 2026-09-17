@@ -553,14 +553,13 @@ impl Rpc {
             .read_to_string()
             .map_err(|e| e.to_string())?;
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            // A non-JSON body is only worth reporting with its status, which
-            // is now the only thing distinguishing "the endpoint refused" from
-            // "the endpoint answered something we cannot read".
-            return Err(if status.is_success() {
-                format!("{method}: not json")
-            } else {
-                format!("{method}: http {status}")
-            });
+            // A non-JSON body carries its status, which since the read above
+            // stopped treating a bad status as a transport failure is the only
+            // thing left distinguishing "the endpoint refused" from "the
+            // endpoint answered something we cannot read". The wording leads
+            // with `not json`, as every other unreadable answer in this
+            // workspace does and as `tests/rpc_over_http.rs` asserts.
+            return Err(format!("not json: {method} answered http {status}"));
         };
         if let Some(err) = value.get("error") {
             return Err(format!("{method}: {err}"));

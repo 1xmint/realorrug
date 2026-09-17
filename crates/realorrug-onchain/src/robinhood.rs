@@ -1030,7 +1030,9 @@ mod tests {
                 1_000,
                 0
             )])),
-            answer(&serde_json::json!([transfer_at(&curve, &ALICE, 400, 5_000)])),
+            answer(&serde_json::json!([transfer_at(
+                &curve, &ALICE, 400, 5_000
+            )])),
             answer(&serde_json::json!([transfer_at(&curve, &BOB, 600, 20_000)])),
         ]));
         let mut b = budget();
