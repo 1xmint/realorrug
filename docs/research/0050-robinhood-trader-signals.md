@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# Robinhood Chain: what's readable, how, and at what cost, for trader-style signals
+# 0050 — Robinhood Chain: what is readable, how, and at what cost, for trader-style signals
 
 **Date:** 2026-09-17
 **Status:** read-only research, CHECKED tier on live-tested claims, CONDITIONAL
