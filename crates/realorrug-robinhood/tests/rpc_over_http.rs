@@ -360,3 +360,47 @@ fn a_transaction_is_read_by_hash_with_its_value_and_input() {
     assert_eq!(log[0]["method"], "eth_getTransactionByHash");
     assert_eq!(log[0]["params"], serde_json::json!([hash.to_string()]));
 }
+
+/// A port nothing listens on: the connection is refused at once.
+const DEAD: &str = "http://127.0.0.1:1";
+
+#[test]
+fn a_dead_first_endpoint_falls_through_to_the_second() {
+    let (url, seen) = serve(vec![answer(&serde_json::json!("0x10"))]);
+    let got = Rpc::new(format!("{DEAD}, {url}")).block_number();
+    assert_eq!(got, Ok(16));
+    assert_eq!(seen.lock().expect("the log").len(), 1);
+}
+
+#[test]
+fn an_endpoint_error_falls_through_to_the_second() {
+    // A rate limit can arrive as a JSON-RPC error rather than a transport one.
+    let limited =
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "error": { "code": 429, "message": "slow down" } })
+            .to_string();
+    let (first, _) = serve(vec![limited]);
+    let (second, _) = serve(vec![answer(&serde_json::json!("0x10"))]);
+    assert_eq!(Rpc::new(format!("{first},{second}")).block_number(), Ok(16));
+}
+
+#[test]
+fn a_working_first_endpoint_is_the_only_one_asked() {
+    let (first, _) = serve(vec![answer(&serde_json::json!("0x10"))]);
+    let (second, seen) = serve(vec![answer(&serde_json::json!("0x20"))]);
+    assert_eq!(Rpc::new(format!("{first},{second}")).block_number(), Ok(16));
+    assert!(seen.lock().expect("the log").is_empty());
+}
+
+#[test]
+fn every_endpoint_failing_is_an_error_not_a_guess() {
+    assert!(Rpc::new(format!("{DEAD},{DEAD}")).block_number().is_err());
+}
+
+#[test]
+fn no_endpoint_at_all_is_an_error() {
+    let got = Rpc::new(" , ").call("eth_blockNumber", &serde_json::json!([]));
+    assert_eq!(
+        got,
+        Err("eth_blockNumber: no endpoint configured".to_owned())
+    );
+}
