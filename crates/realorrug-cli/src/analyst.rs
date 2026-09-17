@@ -284,7 +284,10 @@ fn answer(
     // let a broken publisher silence the account by spending an allowance it
     // never used.
     if let Some(id) = &written.reply_id {
-        gate.record(&mention.author, &mint_text, id, ctx.now);
+        // No conversation and no sheet: this is the offline replay path, which
+        // has no thread to key a pointer on and never reuses a read, so both
+        // halves of the gate's memory are deliberately left empty here.
+        gate.record(&mention.author, &mint_text, id, None, None, ctx.now);
     }
     Ok(())
 }

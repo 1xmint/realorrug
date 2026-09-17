@@ -338,7 +338,7 @@ pub fn headline(sheet: &FactSheet) -> Option<String> {
 #[must_use]
 pub fn template(sheet: &FactSheet) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "Radar on {}:", sheet.mint);
+    let _ = writeln!(out, "Real or Rug on {}:", sheet.mint);
     // The headline, when there is one, so the floor leads on the fact that is
     // about this coin rather than on whichever fact happened to sort first.
     if let Some(headline) = headline(sheet) {
@@ -437,7 +437,6 @@ pub fn template(sheet: &FactSheet) -> String {
         }
         Level::Rugged | Level::NothingUglyYet | Level::CantTell => {}
     }
-    out.push_str("Measured, not predicted. Not financial advice.\n");
     out
 }
 
@@ -454,7 +453,7 @@ fn short(label: &str) -> &str {
             "share of never-graduated launches in that band"
         }
         l if l.contains("SOL that can be bought before price moves") => {
-            "SOL before 1% impact (Radar's budget, not the venue's ceiling)"
+            "SOL before 1% impact (Real or Rug's budget, not the venue's ceiling)"
         }
         l if l.contains("SOL the creator spent") => "the creator's own buy",
         l if l.contains("round trip for a position of") => "round trip on a $20-$200 position",
@@ -462,13 +461,13 @@ fn short(label: &str) -> &str {
         // statistic, because the reader is holding the creator's count two lines
         // above and the sentence has to connect the two for them.
         l if l.contains("how many graduated at all") => {
-            "across every launch Radar has measured, how many graduated at all"
+            "across every launch Real or Rug has measured, how many graduated at all"
         }
         l if l.contains("how many showed almost no activity at all") => {
             "and how many showed almost no activity at all"
         }
         l if l.contains("how many filled their curve over time") => {
-            "across every launch Radar has measured, how many filled over time"
+            "across every launch Real or Rug has measured, how many filled over time"
         }
         // The two lines that make one reply differ from the next, so they are
         // the two whose wording matters most. The sheet's labels are written to
@@ -667,7 +666,7 @@ mod tests {
         let out = template(&a_real_shaped_sheet());
         let launched = out.find("creator has launched").expect("the count");
         let population = out
-            .find("across every launch Radar has measured")
+            .find("across every launch Real or Rug has measured")
             .expect("the denominator must be published");
         assert!(
             population > launched,

@@ -265,16 +265,23 @@ pub fn limits_from(get: &impl Fn(&str) -> Option<String>) -> Limits {
             "RADAR_ANALYST_GLOBAL_DAILY",
         ),
         // The one with a default, because a dedupe window is not a spending
-        // decision -- it decides how long "already answered" lasts, and zero
-        // would mean the same coin is answered again on the next poll. An hour
-        // is the same figure the command uses.
+        // decision. It is seconds, not the hour it used to be: it now gates
+        // two different things, both short-lived. First, how long a same
+        // person's identical repeat *in the same thread* gets a pointer
+        // instead of a real answer. Second, how long a chain read stays
+        // fresh enough to reuse for a *different* post about the same mint,
+        // rather than reading again -- a young token's holders, curve state
+        // and dev balance can move inside a single block, so "fresh" here
+        // means "still true," not "recent." A minute absorbs a burst of
+        // asks landing in the same poll without serving stale facts to the
+        // next distinct one.
         dedupe_seconds: env_or_legacy(
             "REALORRUG_ANALYST_DEDUPE_SECONDS",
             "RADAR_ANALYST_DEDUPE_SECONDS",
             get,
         )
         .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(3_600),
+        .unwrap_or(60),
     }
 }
 
@@ -1588,7 +1595,7 @@ pub fn tick(
         }
 
         match outcome {
-            Answered::Reply { entry, .. } => {
+            Answered::Reply { entry, sheet, .. } => {
                 let mint = entry.mint.clone().unwrap_or_default();
                 let Ok(reply_cost) = spend.authorize(Cost::Reply, today) else {
                     // `break`, not `continue`. The day's reply budget is spent,
@@ -1634,7 +1641,14 @@ pub fn tick(
                         if let Some(id) = &written.reply_id {
                             let charged = reply_cost.reserved();
                             spend.settle(reply_cost, charged);
-                            gate.record(&mention.author, &mint, id, at);
+                            gate.record(
+                                &mention.author,
+                                &mint,
+                                id,
+                                mention.conversation.as_deref(),
+                                Some(*sheet),
+                                at,
+                            );
                             answered += 1;
                         } else {
                             // Nothing was published, so nothing is charged and
@@ -1703,7 +1717,14 @@ pub fn tick(
                             // than re-derived here: two derivations of one key
                             // is how a dedupe map fills with entries nothing
                             // ever looks up.
-                            gate.record(&mention.author, &key, id, at);
+                            gate.record(
+                                &mention.author,
+                                &key,
+                                id,
+                                mention.conversation.as_deref(),
+                                None,
+                                at,
+                            );
                             answered += 1;
                         } else {
                             spend.release(reply_cost);
@@ -1753,7 +1774,14 @@ pub fn tick(
                         if let Some(id) = &written.reply_id {
                             let charged = reply_cost.reserved();
                             spend.settle(reply_cost, charged);
-                            gate.record(&mention.author, &key, id, at);
+                            gate.record(
+                                &mention.author,
+                                &key,
+                                id,
+                                mention.conversation.as_deref(),
+                                None,
+                                at,
+                            );
                             answered += 1;
                         } else {
                             spend.release(reply_cost);
@@ -2520,7 +2548,7 @@ mod tests {
         assert_eq!(limits.global_daily, 0);
         // Except the dedupe window, which is not a spending decision: zero
         // would answer the same coin again on the very next poll.
-        assert_eq!(limits.dedupe_seconds, 3_600);
+        assert_eq!(limits.dedupe_seconds, 60);
     }
 
     #[test]

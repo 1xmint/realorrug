@@ -31,8 +31,12 @@ use std::collections::HashMap;
 /// What the gate decided.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Admitted {
-    /// Answer it.
+    /// Answer it, reading the chain fresh.
     Yes,
+    /// Answer it, and the last read of this mint is fresh enough
+    /// (`Limits::dedupe_seconds`) to reuse instead of reading the chain
+    /// again. [`Gate::cached_sheet`] returns it.
+    YesCached,
     /// Refused, with a reason worth telling the asker.
     No(Refused),
 }
@@ -61,7 +65,13 @@ pub enum Refused {
         /// Replies the account will send per hour once the burst is spent.
         per_hour: u32,
     },
-    /// This mint was answered recently; point at that answer instead.
+    /// The same person asked about this mint, in this same thread, inside
+    /// the dedupe window; point at that answer instead of saying it twice.
+    ///
+    /// The only case that gets a pointer rather than a real, freshly read
+    /// answer — see [`Gate::admit`]'s own doc for why every other repeat
+    /// (a different person, or the same person in a different thread) is
+    /// answered fresh instead of deduped.
     AlreadyAnswered {
         /// The reply that already exists.
         reply_id: String,
@@ -88,7 +98,23 @@ pub struct Limits {
     /// **It is a ceiling and not a schedule**, which is the hole
     /// [`Gate::burst`] closes. See there.
     pub global_daily: u32,
-    /// How long a mint's answer is reused rather than recomputed, in seconds.
+    /// Two things, on purpose the same number:
+    ///
+    /// 1. How long a **pointer** survives — the same person, in the same
+    ///    thread, asking again inside this many seconds gets the earlier
+    ///    reply's link instead of a second answer.
+    /// 2. How long a **chain read** survives for reuse when a different
+    ///    thread asks about the same mint inside this many seconds — a burst
+    ///    of asks in the same minute shares one read rather than paying for
+    ///    one each.
+    ///
+    /// Deliberately **seconds, not the hour this used to be**. A young
+    /// token's holder count, curve state and the dev's own balance can move
+    /// inside a block, so a read from ten minutes ago is not "the current
+    /// facts" the way a cached sentence used to assume — every distinct post
+    /// asking about a live token earns a fresh look, and this window exists
+    /// only to absorb the same instant, not to save a read that has gone
+    /// stale.
     pub dedupe_seconds: u64,
 }
 
@@ -106,7 +132,20 @@ pub struct Gate {
     /// Advanced by exactly the time the refill consumed rather than to `now`,
     /// so a partial hour is not thrown away on every call.
     refilled_at: u64,
-    answered: HashMap<String, (u64, String)>,
+    /// Mint to (when, the reply that answered it, who asked, which thread).
+    answered: HashMap<String, (u64, String, String, Option<String>)>,
+    /// Mint to (the fact sheet it read, when the chain was read, when it was
+    /// read into this cache). Separate from `answered`: a sheet is cached for
+    /// reuse across *any* asker inside the window, while `answered`'s thread
+    /// and summoner decide only whether a pointer is free.
+    sheets: HashMap<
+        String,
+        (
+            realorrug_roast::FactSheet,
+            Option<realorrug_types::ReadAt>,
+            u64,
+        ),
+    >,
     ignored: Vec<String>,
 }
 
@@ -122,6 +161,7 @@ impl Gate {
             tokens: Self::burst(limits),
             refilled_at: 0,
             answered: HashMap::new(),
+            sheets: HashMap::new(),
             ignored,
         }
     }
@@ -182,6 +222,7 @@ impl Gate {
             tokens: 0,
             refilled_at: 0,
             answered: HashMap::new(),
+            sheets: HashMap::new(),
             ignored: Vec::new(),
         }
     }
@@ -248,8 +289,16 @@ impl Gate {
     /// Decides one mention.
     ///
     /// `now` is seconds since the epoch, passed in rather than read, so a
-    /// refusal is reproducible.
-    pub fn admit(&mut self, summoner: &str, mint: &str, now: u64) -> Admitted {
+    /// refusal is reproducible. `conversation` is the thread id the mention
+    /// arrived in, when the platform has one — only used to decide whether a
+    /// repeat about an already-answered mint is the free pointer case, below.
+    pub fn admit(
+        &mut self,
+        summoner: &str,
+        mint: &str,
+        conversation: Option<&str>,
+        now: u64,
+    ) -> Admitted {
         let Some(limits) = self.limits else {
             return Admitted::No(Refused::Unconfigured);
         };
@@ -262,11 +311,27 @@ impl Gate {
             return Admitted::No(Refused::SelfOrIgnored);
         }
 
-        // Dedupe first, and deliberately: pointing at an existing answer costs
-        // no model call and no RPC, so it must not be refused by a cap it does
-        // not spend against.
-        if let Some((at, reply_id)) = self.answered.get(mint)
+        // The one case that gets a pointer instead of a real answer: this
+        // exact person, asking again in the exact thread the account already
+        // answered, inside the window. Checked first and deliberately, like
+        // the old blanket dedupe was: it costs no model call and no RPC, so it
+        // must not be refused by a cap it does not spend against.
+        //
+        // Everything else — a different person, or the same person in a
+        // different thread — falls through to a real, freshly read answer
+        // below, subject to every cap exactly as a first-time ask is. A young
+        // token moves fast enough that a second distinct post asking about it
+        // deserves another look, not the first look's sentence again.
+        // A platform that gives no thread id at all (Telegram) compares `None`
+        // with `None` here and keeps the old blanket dedupe. That is the safe
+        // direction rather than an omission: without a thread id there is no
+        // way to tell a second genuine question from the same message
+        // delivered twice, and answering one message twice is the worse of the
+        // two errors -- it is the loop the dedupe was written to stop.
+        if let Some((at, reply_id, prev_summoner, prev_conversation)) = self.answered.get(mint)
             && now.saturating_sub(*at) < limits.dedupe_seconds
+            && prev_summoner == summoner
+            && conversation == prev_conversation.as_deref()
         {
             return Admitted::No(Refused::AlreadyAnswered {
                 reply_id: reply_id.clone(),
@@ -303,7 +368,32 @@ impl Gate {
         // The per-summoner cap is what stops one account making the bot
         // expensive, so it has to count the expensive thing.
         *used += 1;
-        Admitted::Yes
+
+        // A read this fresh is not a stale cache, it is the same instant: a
+        // burst of distinct posts inside one minute shares the one read
+        // rather than paying sixty RPC calls each. Anything older is read
+        // again, which is the whole point of shortening this window.
+        let fresh = self
+            .sheets
+            .get(mint)
+            .is_some_and(|(_, _, at)| now.saturating_sub(*at) < limits.dedupe_seconds);
+        if fresh {
+            Admitted::YesCached
+        } else {
+            Admitted::Yes
+        }
+    }
+
+    /// The fact sheet cached from the last read of `mint`, when
+    /// [`Gate::admit`] returned [`Admitted::YesCached`] for it.
+    #[must_use]
+    pub fn cached_sheet(
+        &self,
+        mint: &str,
+    ) -> Option<(&realorrug_roast::FactSheet, Option<realorrug_types::ReadAt>)> {
+        self.sheets
+            .get(mint)
+            .map(|(sheet, read_at, _)| (sheet, *read_at))
     }
 
     /// Records that a reply was actually sent.
@@ -314,15 +404,38 @@ impl Gate {
     /// silence the account by spending a budget it never used. The summoner's
     /// own allowance was already charged on admission, and is not charged
     /// again here.
-    pub fn record(&mut self, summoner: &str, mint: &str, reply_id: &str, now: u64) {
+    ///
+    /// `conversation` is carried alongside the reply so a later `admit` for
+    /// the same mint can tell whether a repeat is the same thread (the free
+    /// pointer) or a different one (a fresh answer). `sheet` is the fact
+    /// sheet and read-at just used to answer, kept for reuse by
+    /// [`Gate::cached_sheet`] when the window is still open — `None` for a
+    /// caller with no sheet to offer (a ticker or a follow-up key), which
+    /// leaves any existing cache for that key untouched.
+    pub fn record(
+        &mut self,
+        summoner: &str,
+        mint: &str,
+        reply_id: &str,
+        conversation: Option<&str>,
+        sheet: Option<(realorrug_roast::FactSheet, Option<realorrug_types::ReadAt>)>,
+        now: u64,
+    ) {
         self.roll_to(now);
-        // Kept as a parameter so a caller cannot record a reply without saying
-        // who it was for; the count it used to move is spent in `admit`.
-        let _ = summoner;
         self.global += 1;
         self.tokens = self.tokens.saturating_sub(1);
-        self.answered
-            .insert(mint.to_owned(), (now, reply_id.to_owned()));
+        self.answered.insert(
+            mint.to_owned(),
+            (
+                now,
+                reply_id.to_owned(),
+                summoner.to_owned(),
+                conversation.map(str::to_owned),
+            ),
+        );
+        if let Some((sheet, read_at)) = sheet {
+            self.sheets.insert(mint.to_owned(), (sheet, read_at, now));
+        }
     }
 
     /// How many replies have gone out today.
@@ -422,10 +535,18 @@ impl Gate {
                 let newer = self
                     .answered
                     .get(mint)
-                    .is_none_or(|(at, _)| *at <= entry.at);
+                    .is_none_or(|(at, _, _, _)| *at <= entry.at);
                 if newer && now.saturating_sub(entry.at) < limits.dedupe_seconds {
-                    self.answered
-                        .insert(mint.clone(), (entry.at, reply_id.clone()));
+                    // The thread is not restored: the log does not carry a
+                    // conversation id (only the live mention does), so a
+                    // restart loses the free-pointer case for whatever was
+                    // in flight and re-reads instead — the same direction
+                    // `Gate::sheets` is not restored either, and for the same
+                    // reason: an under-answer is the safe way to be wrong.
+                    self.answered.insert(
+                        mint.clone(),
+                        (entry.at, reply_id.clone(), entry.summoner.clone(), None),
+                    );
                 }
             }
         }
@@ -439,6 +560,19 @@ impl Gate {
     #[must_use]
     pub fn answered_recently(&self) -> usize {
         self.answered.len()
+    }
+
+    /// The reply id the dedupe map holds for `mint`, if any.
+    ///
+    /// Test-only. `admit` can no longer be used to observe the map's
+    /// contents for a restored entry, because a restored entry always carries
+    /// no conversation and `admit`'s pointer case now requires one — so the
+    /// mutation-catching restore tests read the map directly instead.
+    #[cfg(test)]
+    fn answered_reply_id(&self, mint: &str) -> Option<&str> {
+        self.answered
+            .get(mint)
+            .map(|(_, reply_id, _, _)| reply_id.as_str())
     }
 
     /// Records a post that answered nothing of its own — a pointer.
@@ -476,22 +610,25 @@ mod tests {
         // ask without limit, which is the whole thing this gate exists to stop.
         let mut gate = Gate::new(limits(), Vec::new());
 
-        assert_eq!(gate.admit("alice", "MintOne", DAY), Admitted::Yes);
-        gate.record("alice", "MintOne", "r1", DAY);
-        assert_eq!(gate.admit("alice", "MintTwo", DAY + 1), Admitted::Yes);
-        gate.record("alice", "MintTwo", "r2", DAY + 1);
+        assert_eq!(gate.admit("alice", "MintOne", None, DAY), Admitted::Yes);
+        gate.record("alice", "MintOne", "r1", None, None, DAY);
+        assert_eq!(gate.admit("alice", "MintTwo", None, DAY + 1), Admitted::Yes);
+        gate.record("alice", "MintTwo", "r2", None, None, DAY + 1);
 
         // Two used, two allowed, still the same day: the third is refused.
         assert!(
             matches!(
-                gate.admit("alice", "MintThree", DAY + 2),
+                gate.admit("alice", "MintThree", None, DAY + 2),
                 Admitted::No(Refused::SummonerDaily { .. })
             ),
             "a second passing instant is not a new day"
         );
 
         // And a real new day does restore it.
-        assert_eq!(gate.admit("alice", "MintThree", 2 * DAY), Admitted::Yes);
+        assert_eq!(
+            gate.admit("alice", "MintThree", None, 2 * DAY),
+            Admitted::Yes
+        );
     }
 
     #[test]
@@ -499,22 +636,25 @@ mod tests {
         // `now - at < dedupe_seconds`. One character from `<=`, and the two
         // disagree only at the boundary -- so without this the window is a
         // second longer than it says, for ever, and nothing notices.
+        // The pointer case requires the same person in the same thread, so
+        // both calls here carry the same `conversation`.
         let mut gate = Gate::new(limits(), Vec::new());
         let l = limits();
+        let thread = Some("thread-1");
 
-        assert_eq!(gate.admit("alice", "MintOne", DAY), Admitted::Yes);
-        gate.record("alice", "MintOne", "r1", DAY);
+        assert_eq!(gate.admit("alice", "MintOne", thread, DAY), Admitted::Yes);
+        gate.record("alice", "MintOne", "r1", thread, None, DAY);
 
         // A second inside the window: pointed at the existing answer.
         assert!(matches!(
-            gate.admit("alice", "MintOne", DAY + l.dedupe_seconds - 1),
+            gate.admit("alice", "MintOne", thread, DAY + l.dedupe_seconds - 1),
             Admitted::No(Refused::AlreadyAnswered { .. })
         ));
 
         // Exactly the window: outside it, and answerable again.
         assert!(
             !matches!(
-                gate.admit("alice", "MintOne", DAY + l.dedupe_seconds),
+                gate.admit("alice", "MintOne", thread, DAY + l.dedupe_seconds),
                 Admitted::No(Refused::AlreadyAnswered { .. })
             ),
             "the window is exclusive at its edge"
@@ -530,10 +670,10 @@ mod tests {
         let mut gate = Gate::new(limits(), Vec::new());
         assert_eq!(gate.sent_today(), 0);
 
-        gate.record("alice", "MintOne", "r1", DAY);
+        gate.record("alice", "MintOne", "r1", None, None, DAY);
         assert_eq!(gate.sent_today(), 1, "one reply is one reply");
 
-        gate.record("bob", "MintTwo", "r2", DAY);
+        gate.record("bob", "MintTwo", "r2", None, None, DAY);
         assert_eq!(
             gate.sent_today(),
             2,
@@ -547,7 +687,7 @@ mod tests {
         // config and started answering the world for free.
         let mut gate = Gate::unconfigured();
         assert_eq!(
-            gate.admit("alice", "MintOne", DAY),
+            gate.admit("alice", "MintOne", None, DAY),
             Admitted::No(Refused::Unconfigured)
         );
     }
@@ -556,16 +696,19 @@ mod tests {
     fn one_summoner_cannot_spend_the_whole_budget() {
         let mut gate = Gate::new(limits(), Vec::new());
         for i in 0..2 {
-            assert_eq!(gate.admit("alice", &format!("Mint{i}"), DAY), Admitted::Yes);
-            gate.record("alice", &format!("Mint{i}"), "r", DAY);
+            assert_eq!(
+                gate.admit("alice", &format!("Mint{i}"), None, DAY),
+                Admitted::Yes
+            );
+            gate.record("alice", &format!("Mint{i}"), "r", None, None, DAY);
         }
         assert_eq!(
-            gate.admit("alice", "MintThree", DAY),
+            gate.admit("alice", "MintThree", None, DAY),
             Admitted::No(Refused::SummonerDaily { cap: 2 })
         );
         // And somebody else is unaffected, or one loud account could silence
         // the service for everyone.
-        assert_eq!(gate.admit("bob", "MintThree", DAY), Admitted::Yes);
+        assert_eq!(gate.admit("bob", "MintThree", None, DAY), Admitted::Yes);
     }
 
     #[test]
@@ -575,27 +718,34 @@ mod tests {
         let mut gate = Gate::new(limits(), Vec::new());
         for i in 0..5 {
             let who = format!("user{i}");
-            assert_eq!(gate.admit(&who, &format!("Mint{i}"), DAY), Admitted::Yes);
-            gate.record(&who, &format!("Mint{i}"), "r", DAY);
+            assert_eq!(
+                gate.admit(&who, &format!("Mint{i}"), None, DAY),
+                Admitted::Yes
+            );
+            gate.record(&who, &format!("Mint{i}"), "r", None, None, DAY);
         }
         assert_eq!(
-            gate.admit("fresh", "MintSix", DAY),
+            gate.admit("fresh", "MintSix", None, DAY),
             Admitted::No(Refused::GlobalDaily { cap: 5 })
         );
     }
 
     #[test]
-    fn a_mint_answered_recently_points_at_the_answer() {
+    fn a_mint_answered_recently_by_the_same_person_in_the_same_thread_points_at_the_answer() {
         let mut gate = Gate::new(limits(), Vec::new());
-        gate.record("alice", "MintOne", "reply-1", DAY);
+        let thread = Some("thread-1");
+        gate.record("alice", "MintOne", "reply-1", thread, None, DAY);
         assert_eq!(
-            gate.admit("bob", "MintOne", DAY + 60),
+            gate.admit("alice", "MintOne", thread, DAY + 60),
             Admitted::No(Refused::AlreadyAnswered {
                 reply_id: "reply-1".to_owned()
             })
         );
         // And it expires, so a token that moved is answerable again.
-        assert_eq!(gate.admit("bob", "MintOne", DAY + 3601), Admitted::Yes);
+        assert_eq!(
+            gate.admit("alice", "MintOne", thread, DAY + 3601),
+            Admitted::Yes
+        );
     }
 
     #[test]
@@ -604,14 +754,152 @@ mod tests {
         // spent global cap refused it, the account would go silent rather than
         // giving the cheapest useful reply it has.
         let mut gate = Gate::new(limits(), Vec::new());
-        gate.record("alice", "MintOne", "reply-1", DAY);
+        let thread = Some("thread-1");
+        gate.record("alice", "MintOne", "reply-1", thread, None, DAY);
         for i in 0..5 {
-            gate.record(&format!("u{i}"), &format!("Other{i}"), "r", DAY);
+            gate.record(&format!("u{i}"), &format!("Other{i}"), "r", None, None, DAY);
         }
         assert!(matches!(
-            gate.admit("bob", "MintOne", DAY + 60),
+            gate.admit("alice", "MintOne", thread, DAY + 60),
             Admitted::No(Refused::AlreadyAnswered { .. })
         ));
+    }
+
+    // --- the rekeyed dedupe: (mint, thread, summoner), not mint alone -------
+
+    fn sheet(mint: &str) -> realorrug_roast::FactSheet {
+        realorrug_roast::FactSheet {
+            mint: mint.to_owned(),
+            read_at: None,
+            facts: Vec::new(),
+            untrusted: Vec::new(),
+            unknown: Vec::new(),
+            signals: Vec::new(),
+            twins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_same_person_asking_in_two_different_threads_gets_a_real_answer_each_time() {
+        // A young token moves fast enough that a second distinct post about it
+        // deserves another look, not the first look's sentence again -- even
+        // when it is the same asker, as long as it is a different thread.
+        let mut gate = Gate::new(limits(), Vec::new());
+        gate.record("alice", "MintOne", "r1", Some("thread-a"), None, DAY);
+
+        assert_eq!(
+            gate.admit("alice", "MintOne", Some("thread-b"), DAY + 60),
+            Admitted::Yes,
+            "a different thread is not the dedupe case, even for the same asker"
+        );
+    }
+
+    #[test]
+    fn two_different_people_in_the_same_thread_both_get_a_real_answer() {
+        let mut gate = Gate::new(limits(), Vec::new());
+        let thread = Some("thread-1");
+        gate.record("alice", "MintOne", "r1", thread, None, DAY);
+
+        assert_eq!(
+            gate.admit("bob", "MintOne", thread, DAY + 60),
+            Admitted::Yes,
+            "a different person is not the dedupe case, even in the same thread"
+        );
+    }
+
+    #[test]
+    fn the_same_person_the_same_thread_identical_repeat_gets_the_pointer() {
+        let mut gate = Gate::new(limits(), Vec::new());
+        let thread = Some("thread-1");
+        gate.record("alice", "MintOne", "r1", thread, None, DAY);
+
+        assert_eq!(
+            gate.admit("alice", "MintOne", thread, DAY + 60),
+            Admitted::No(Refused::AlreadyAnswered {
+                reply_id: "r1".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_second_ask_within_sixty_seconds_reuses_the_sheet_and_still_writes_a_fresh_reply() {
+        // Inside the sheet-freshness window, a different asker shares the one
+        // chain read (`YesCached`) -- but still gets recorded as its own
+        // reply, not folded into the first asker's answer.
+        let l = Limits {
+            per_summoner_daily: 10,
+            global_daily: 10,
+            dedupe_seconds: 60,
+        };
+        let mut gate = Gate::new(l, Vec::new());
+        assert_eq!(
+            gate.admit("alice", "MintOne", Some("t1"), DAY),
+            Admitted::Yes
+        );
+        gate.record(
+            "alice",
+            "MintOne",
+            "r1",
+            Some("t1"),
+            Some((sheet("MintOne"), None)),
+            DAY,
+        );
+
+        assert_eq!(
+            gate.admit("bob", "MintOne", Some("t2"), DAY + 30),
+            Admitted::YesCached,
+            "under the window, the sheet just read is reused"
+        );
+        gate.record(
+            "bob",
+            "MintOne",
+            "r2",
+            Some("t2"),
+            Some((sheet("MintOne"), None)),
+            DAY + 30,
+        );
+        // Bob's own answer is on record, distinct from alice's.
+        assert_eq!(gate.answered_reply_id("MintOne"), Some("r2"));
+    }
+
+    #[test]
+    fn a_second_ask_after_sixty_seconds_re_reads_the_chain() {
+        let l = Limits {
+            per_summoner_daily: 10,
+            global_daily: 10,
+            dedupe_seconds: 60,
+        };
+        let mut gate = Gate::new(l, Vec::new());
+        assert_eq!(
+            gate.admit("alice", "MintOne", Some("t1"), DAY),
+            Admitted::Yes
+        );
+        gate.record(
+            "alice",
+            "MintOne",
+            "r1",
+            Some("t1"),
+            Some((sheet("MintOne"), None)),
+            DAY,
+        );
+
+        // Exactly the window: already outside it. The freshness test is
+        // `now - at < dedupe_seconds`, one character from `<=`, and the two
+        // disagree only here -- so without this assertion the sheet stays
+        // reusable a second longer than the window says, and every answer at
+        // the edge quotes a chain read it should have taken again.
+        assert_eq!(
+            gate.admit("bob", "MintOne", Some("t2"), DAY + 60),
+            Admitted::Yes,
+            "the freshness window is exclusive at its edge"
+        );
+
+        // Past the window: no cached sheet reuse, this asker's own fresh read.
+        assert_eq!(
+            gate.admit("carol", "MintOne", Some("t3"), DAY + 61),
+            Admitted::Yes,
+            "past the window, the sheet is stale and the chain is read again"
+        );
     }
 
     #[test]
@@ -619,7 +907,7 @@ mod tests {
         // A reply to its own post is a loop that costs money on every pass.
         let mut gate = Gate::new(limits(), vec!["radar".to_owned()]);
         assert_eq!(
-            gate.admit("radar", "MintOne", DAY),
+            gate.admit("radar", "MintOne", None, DAY),
             Admitted::No(Refused::SelfOrIgnored)
         );
     }
@@ -633,13 +921,13 @@ mod tests {
         let mut gate = Gate::new(limits(), Vec::new());
         for i in 0..5 {
             let who = format!("user{i}");
-            gate.record(&who, &format!("Mint{i}"), "r", DAY);
+            gate.record(&who, &format!("Mint{i}"), "r", None, None, DAY);
         }
         assert!(matches!(
-            gate.admit("fresh", "MintSix", DAY),
+            gate.admit("fresh", "MintSix", None, DAY),
             Admitted::No(Refused::GlobalDaily { .. })
         ));
-        assert_eq!(gate.admit("fresh", "MintSix", 2 * DAY), Admitted::Yes);
+        assert_eq!(gate.admit("fresh", "MintSix", None, 2 * DAY), Admitted::Yes);
         assert_eq!(gate.sent_today(), 0);
     }
 
@@ -655,18 +943,21 @@ mod tests {
         // `record`: the third admission below comes back `Yes` and this fails.
         let mut gate = Gate::new(limits(), Vec::new());
         for i in 0..2 {
-            assert_eq!(gate.admit("alice", &format!("Mint{i}"), DAY), Admitted::Yes);
+            assert_eq!(
+                gate.admit("alice", &format!("Mint{i}"), None, DAY),
+                Admitted::Yes
+            );
         }
         for i in 2..10 {
             assert_eq!(
-                gate.admit("alice", &format!("Mint{i}"), DAY),
+                gate.admit("alice", &format!("Mint{i}"), None, DAY),
                 Admitted::No(Refused::SummonerDaily { cap: 2 }),
                 "admission {i}"
             );
         }
         assert_eq!(gate.sent_today(), 0);
         // And nobody else pays for alice's burst.
-        assert_eq!(gate.admit("bob", "MintX", DAY), Admitted::Yes);
+        assert_eq!(gate.admit("bob", "MintX", None, DAY), Admitted::Yes);
     }
 
     #[test]
@@ -675,13 +966,13 @@ mod tests {
         // count, every published reply would cost two of the daily allowance
         // and the cap on the page would be half the cap in force.
         let mut gate = Gate::new(limits(), Vec::new());
-        assert_eq!(gate.admit("alice", "MintOne", DAY), Admitted::Yes);
-        gate.record("alice", "MintOne", "r1", DAY);
-        assert_eq!(gate.admit("alice", "MintTwo", DAY), Admitted::Yes);
-        gate.record("alice", "MintTwo", "r2", DAY);
+        assert_eq!(gate.admit("alice", "MintOne", None, DAY), Admitted::Yes);
+        gate.record("alice", "MintOne", "r1", None, None, DAY);
+        assert_eq!(gate.admit("alice", "MintTwo", None, DAY), Admitted::Yes);
+        gate.record("alice", "MintTwo", "r2", None, None, DAY);
         assert_eq!(gate.sent_today(), 2);
         assert_eq!(
-            gate.admit("alice", "MintThree", DAY),
+            gate.admit("alice", "MintThree", None, DAY),
             Admitted::No(Refused::SummonerDaily { cap: 2 })
         );
     }
@@ -704,9 +995,9 @@ mod tests {
 
     /// One admitted-and-sent reply, which is the pair the loop always makes.
     fn answer(gate: &mut Gate, who: &str, mint: &str, now: u64) -> Admitted {
-        let verdict = gate.admit(who, mint, now);
+        let verdict = gate.admit(who, mint, None, now);
         if verdict == Admitted::Yes {
-            gate.record(who, mint, "r", now);
+            gate.record(who, mint, "r", None, None, now);
         }
         verdict
     }
@@ -739,7 +1030,7 @@ mod tests {
         // spent — which is the difference the asker is told about.
         assert!(
             matches!(
-                gate.admit("a11", "Mint11", at),
+                gate.admit("a11", "Mint11", None, at),
                 Admitted::No(Refused::GlobalRate { per_hour: 2 })
             ),
             "the eleventh in one instant must be refused on the rate"
@@ -774,7 +1065,7 @@ mod tests {
         // One second into the next hour: `48 / 24` is two an hour, so one second
         // has earned nothing.
         assert!(matches!(
-            gate.admit("bob", "Later", hour + 1),
+            gate.admit("bob", "Later", None, hour + 1),
             Admitted::No(Refused::GlobalRate { .. })
         ));
         // A full hour has earned exactly two.
@@ -782,7 +1073,7 @@ mod tests {
         assert_eq!(answer(&mut gate, "bob", "L1", later), Admitted::Yes);
         assert_eq!(answer(&mut gate, "bob", "L2", later), Admitted::Yes);
         assert!(matches!(
-            gate.admit("bob", "L3", later),
+            gate.admit("bob", "L3", None, later),
             Admitted::No(Refused::GlobalRate { .. })
         ));
     }
@@ -806,7 +1097,7 @@ mod tests {
         }
         // Polled every five minutes for an hour, the way the daemon does.
         for tick in 1..=12 {
-            let _ = gate.admit("bob", "Nope", at + tick * 300);
+            let _ = gate.admit("bob", "Nope", None, at + tick * 300);
         }
         assert_eq!(
             answer(&mut gate, "bob", "Yes", at + 3_600),
@@ -834,7 +1125,7 @@ mod tests {
         }
         assert!(
             matches!(
-                gate.admit("alice", "M4", at + 86_000),
+                gate.admit("alice", "M4", None, at + 86_000),
                 Admitted::No(Refused::GlobalDaily { cap: 3 })
             ),
             "the day's cap outranks a refilled bucket"
@@ -889,32 +1180,31 @@ mod tests {
         assert_eq!(gate.sent_today(), 2, "two replies, not four lines");
         // `limits()` allows two per summoner, and alice has had both.
         assert!(matches!(
-            gate.admit("alice", "MintThree", at + 10),
+            gate.admit("alice", "MintThree", None, at + 10),
             Admitted::No(Refused::SummonerDaily { cap: 2 })
         ));
-        // And the mints answered are still answered.
-        assert!(matches!(
-            gate.admit("bob", "MintOne", at + 10),
-            Admitted::No(Refused::AlreadyAnswered { .. })
-        ));
+        // The mint is recorded as answered in the restored map...
+        assert_eq!(gate.answered_reply_id("MintOne"), Some("r1"));
+        // ...but the log carries no conversation id, so the free-pointer case
+        // is deliberately not restored: the next ask re-reads the chain
+        // rather than risking a pointer built on a thread nobody confirmed.
+        assert_eq!(gate.admit("bob", "MintOne", None, at + 10), Admitted::Yes);
     }
 
     #[test]
-    fn a_restored_dedupe_points_at_the_reply_that_exists() {
-        // Not merely "refused" — the refusal has to carry the id, because the
-        // loop answers a duplicate by pointing at it. A restore that forgot the
-        // id would produce a refusal nothing could act on.
+    fn a_restored_dedupe_remembers_the_reply_id_but_does_not_point_at_it() {
+        // Not merely "restored" — the id has to survive, because
+        // `answered_reply_id` is what a later live pointer path would key off
+        // of. But `restore` documents that it does not carry a conversation
+        // id, so `admit` (which now requires one for the pointer case) must
+        // not turn this into a refusal nothing asked for.
         let at = DAY + 100;
         let log = vec![entry("m1", "alice", "MintOne", at, Some("r99"))];
         let mut gate = Gate::new(limits(), Vec::new());
         gate.restore(&log, at + 10);
 
-        match gate.admit("bob", "MintOne", at + 10) {
-            Admitted::No(Refused::AlreadyAnswered { reply_id }) => {
-                assert_eq!(reply_id, "r99");
-            }
-            other => panic!("expected a pointer to r99, got {other:?}"),
-        }
+        assert_eq!(gate.answered_reply_id("MintOne"), Some("r99"));
+        assert_eq!(gate.admit("bob", "MintOne", None, at + 10), Admitted::Yes);
     }
 
     #[test]
@@ -927,7 +1217,10 @@ mod tests {
         let mut gate = Gate::new(limits(), Vec::new());
         // `limits()` dedupes for an hour; two hours have passed.
         gate.restore(&log, at + 7_200);
-        assert_eq!(gate.admit("bob", "MintOne", at + 7_200), Admitted::Yes);
+        assert_eq!(
+            gate.admit("bob", "MintOne", None, at + 7_200),
+            Admitted::Yes
+        );
     }
 
     #[test]
@@ -943,7 +1236,7 @@ mod tests {
         gate.restore(&log, 2 * DAY + 60);
         assert_eq!(gate.sent_today(), 0);
         assert_eq!(
-            gate.admit("alice", "MintThree", 2 * DAY + 60),
+            gate.admit("alice", "MintThree", None, 2 * DAY + 60),
             Admitted::Yes
         );
     }
@@ -970,16 +1263,12 @@ mod tests {
         assert_eq!(gate.sent_today(), 2, "the pointer was a post");
         // Bob was refused, so bob's allowance is untouched: `limits()` allows
         // two and both are available.
-        assert_eq!(gate.admit("bob", "MintTwo", at + 10), Admitted::Yes);
-        gate.record("bob", "MintTwo", "r2", at + 10);
-        assert_eq!(gate.admit("bob", "MintThree", at + 10), Admitted::Yes);
-        // And the third asker is pointed at the answer, not at the pointer.
-        match gate.admit("carol", "MintOne", at + 10) {
-            Admitted::No(Refused::AlreadyAnswered { reply_id }) => {
-                assert_eq!(reply_id, "r1", "never the pointer's own id");
-            }
-            other => panic!("expected the original answer, got {other:?}"),
-        }
+        assert_eq!(gate.admit("bob", "MintTwo", None, at + 10), Admitted::Yes);
+        gate.record("bob", "MintTwo", "r2", None, None, at + 10);
+        assert_eq!(gate.admit("bob", "MintThree", None, at + 10), Admitted::Yes);
+        // And the map remembers the real answer, never the pointer's own id
+        // (the pointer entry carries `mint: None` and is skipped by `restore`).
+        assert_eq!(gate.answered_reply_id("MintOne"), Some("r1"));
     }
 
     #[test]
@@ -994,17 +1283,17 @@ mod tests {
         gate.restore(&log, at + 10);
 
         assert_eq!(gate.sent_today(), 0, "nothing was said");
-        assert_eq!(gate.admit("alice", "MintTwo", at + 10), Admitted::Yes);
-        gate.record("alice", "MintTwo", "r2", at + 10);
+        assert_eq!(gate.admit("alice", "MintTwo", None, at + 10), Admitted::Yes);
+        gate.record("alice", "MintTwo", "r2", None, None, at + 10);
         assert!(
             matches!(
-                gate.admit("alice", "MintThree", at + 10),
+                gate.admit("alice", "MintThree", None, at + 10),
                 Admitted::No(Refused::SummonerDaily { .. })
             ),
             "the admission was still an admission"
         );
         // And nothing was answered, so nothing is deduped.
-        assert_eq!(gate.admit("bob", "MintOne", at + 10), Admitted::Yes);
+        assert_eq!(gate.admit("bob", "MintOne", None, at + 10), Admitted::Yes);
     }
 
     #[test]
@@ -1028,7 +1317,7 @@ mod tests {
         let mut gate = Gate::new(wide(), Vec::new());
         gate.restore(&log, at + 10);
         assert_eq!(gate.sent_today(), 20);
-        assert_eq!(gate.admit("fresh", "NewMint", at + 10), Admitted::Yes);
+        assert_eq!(gate.admit("fresh", "NewMint", None, at + 10), Admitted::Yes);
     }
 
     #[test]
@@ -1041,7 +1330,7 @@ mod tests {
         gate.restore(&log, at + 10);
         assert_eq!(gate.sent_today(), 0);
         assert_eq!(
-            gate.admit("alice", "MintTwo", at + 10),
+            gate.admit("alice", "MintTwo", None, at + 10),
             Admitted::No(Refused::Unconfigured)
         );
     }
@@ -1122,7 +1411,7 @@ mod tests {
         }
         // The clock jumps back an hour, then forward again.
         assert!(matches!(
-            gate.admit("late", "Nope", at - 3_600),
+            gate.admit("late", "Nope", None, at - 3_600),
             Admitted::No(Refused::GlobalRate { .. })
         ));
         assert_eq!(
@@ -1184,15 +1473,11 @@ mod tests {
 
         let mut gate = Gate::new(limits(), Vec::new());
         gate.restore(&log, at + 120);
-        match gate.admit("carol", "MintOne", at + 120) {
-            Admitted::No(Refused::AlreadyAnswered { reply_id }) => {
-                assert_eq!(
-                    reply_id, "second",
-                    "the later answer wins, whatever the file order"
-                );
-            }
-            other => panic!("expected the later answer, got {other:?}"),
-        }
+        assert_eq!(
+            gate.answered_reply_id("MintOne"),
+            Some("second"),
+            "the later answer wins, whatever the file order"
+        );
     }
 
     #[test]
@@ -1210,7 +1495,7 @@ mod tests {
         // `limits()` dedupes for an hour; two have passed.
         gate.restore(&log, at + 7_200);
         assert_eq!(
-            gate.admit("bob", "MintOne", at + 7_200),
+            gate.admit("bob", "MintOne", None, at + 7_200),
             Admitted::Yes,
             "an answer from two hours ago must not still be deduping"
         );
@@ -1226,19 +1511,20 @@ mod tests {
         let window = limits().dedupe_seconds;
         let log = vec![entry("m1", "alice", "MintOne", at, Some("r1"))];
 
-        // One second inside: deduped, both live and restored.
+        // One second inside: present in the map, both live and restored.
+        // (Checked on the map, not on `admit`'s pointer case: `admit` now
+        // also requires a matching conversation, which `restore` never
+        // carries — see `a_restored_dedupe_remembers_the_reply_id_but_does_not_point_at_it`.)
         let mut restored = Gate::new(limits(), Vec::new());
         restored.restore(&log, at + window - 1);
-        assert!(matches!(
-            restored.admit("bob", "MintOne", at + window - 1),
-            Admitted::No(Refused::AlreadyAnswered { .. })
-        ));
+        assert_eq!(restored.answered_reply_id("MintOne"), Some("r1"));
 
+        let thread = Some("thread-1");
         let mut live = Gate::new(limits(), Vec::new());
-        assert_eq!(live.admit("alice", "MintOne", at), Admitted::Yes);
-        live.record("alice", "MintOne", "r1", at);
+        assert_eq!(live.admit("alice", "MintOne", thread, at), Admitted::Yes);
+        live.record("alice", "MintOne", "r1", thread, None, at);
         assert!(matches!(
-            live.admit("bob", "MintOne", at + window - 1),
+            live.admit("alice", "MintOne", thread, at + window - 1),
             Admitted::No(Refused::AlreadyAnswered { .. })
         ));
 
@@ -1256,8 +1542,14 @@ mod tests {
             0,
             "an answer exactly one window old is outside it, and is not restored"
         );
-        assert_eq!(restored.admit("bob", "MintOne", at + window), Admitted::Yes);
-        assert_eq!(live.admit("bob", "MintOne", at + window), Admitted::Yes);
+        assert_eq!(
+            restored.admit("bob", "MintOne", None, at + window),
+            Admitted::Yes
+        );
+        assert_eq!(
+            live.admit("bob", "MintOne", None, at + window),
+            Admitted::Yes
+        );
 
         // And one second inside it is restored, so the edge is an edge rather
         // than the map being empty for some other reason.
@@ -1313,7 +1605,7 @@ mod tests {
         // And it touches neither the summoner's allowance nor the dedupe map --
         // the two things `Entry::pointed_at` exists to keep it out of.
         assert_eq!(gate.answered_recently(), 0);
-        assert_eq!(gate.admit("anyone", "MintOne", at), Admitted::Yes);
+        assert_eq!(gate.admit("anyone", "MintOne", None, at), Admitted::Yes);
     }
 
     #[test]
@@ -1346,13 +1638,13 @@ mod tests {
 
         // Thirty minutes: one token earned, and deliberately *not* recorded, so
         // nothing re-bases the marker behind the test's back.
-        assert_eq!(gate.admit("asker", "Half", at + 1_800), Admitted::Yes);
+        assert_eq!(gate.admit("asker", "Half", None, at + 1_800), Admitted::Yes);
         assert_eq!(gate.tokens_left(), 1);
 
         // Thirty more: a second token, which only a marker sitting at the first
         // one can have earned. Under `*=` the marker was re-based to this
         // instant instead and nothing accrues.
-        assert_eq!(gate.admit("asker", "Hour", at + 3_600), Admitted::Yes);
+        assert_eq!(gate.admit("asker", "Hour", None, at + 3_600), Admitted::Yes);
         assert_eq!(
             gate.tokens_left(),
             2,

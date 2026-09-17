@@ -278,14 +278,20 @@ from what the first person's follow-up already fetched, when it matches
 the same fact). A *different* thread on the *same* token (two separate
 original posts both naming the same mint) is a second, independent
 `(thread id, token)` key with its own five-follow-up budget — this design
-does not additionally cap total follow-up reads per token across threads,
-because design 0020's own dedupe (`admission.rs`'s `AlreadyAnswered`,
-keyed on the mint within `dedupe_seconds`) already prevents two *first*
-mentions about the same token in the same window from both triggering a
-full read; a follow-up in a second, later thread about a token whose
-dedupe window has passed is treated as a new thread with its own cap,
-same as the first-mention dedupe already allows a second full read once
-its window passes.
+does not additionally cap total follow-up reads per token across threads.
+Design 0020's own dedupe (`admission.rs`'s `AlreadyAnswered`) no longer
+caps this by token at all: as of 2026-09-17 it keys on `(mint, thread,
+summoner)`, so two *first* mentions about the same token from two
+different people, or from the same person in two different threads, are
+each answered fresh rather than pointed at each other — a young token
+moves fast enough that a second post is a reason to look again, not a
+reason to repeat what was said a minute ago. `dedupe_seconds` is now a
+short freshness window (default 60s, not the old one hour): a chain read
+inside it may be reused for a *different* post about the same mint, but
+the pointer reply itself only ever fires for an identical repeat by the
+same person in the same thread. A follow-up in a second, later thread
+about the same token is simply a new thread with its own cap, same as
+before.
 
 **Rule 7, applied here**: no configured follow-up limits means no
 follow-up is answered — the same `Gate`-shaped refusal

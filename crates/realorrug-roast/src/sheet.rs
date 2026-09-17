@@ -516,7 +516,7 @@ impl FactSheet {
                 )
                 .saying(
                     Voice::Plain,
-                    format!("Radar has seen {rendered} transactions from this creator's address -- transactions, not launches."),
+                    format!("Real or Rug has seen {rendered} transactions from this creator's address -- transactions, not launches."),
                 )
                 .saying(
                     Voice::Blunt,
@@ -862,7 +862,7 @@ fn push_launch(facts: &mut Vec<Fact>, untrusted: &mut Vec<(String, String)>, lau
             )
             .saying(
                 Voice::Blunt,
-                "Radar found no creator buy. Found, not happened.",
+                "Real or Rug found no creator buy. Found, not happened.",
             ),
         ),
     }
@@ -1107,7 +1107,7 @@ fn push_creator(
         // is the sort of thing that looks like a broken bot rather than a
         // careful one.
         unknown.push(
-            "this creator has no record here: Radar has been watching since August, so they launched before that, or have not launched again"
+            "this creator has no record here: Real or Rug has been watching since August, so they launched before that, or have not launched again"
                 .to_owned(),
         );
         return;
@@ -1117,7 +1117,7 @@ fn push_creator(
     facts.push(
         Fact::exact(
             Kind::CreatorLaunches,
-            "tokens this creator has launched, in Radar's record",
+            "tokens this creator has launched, in Real or Rug's record",
             f64::from(record.launches),
             launches.clone(),
         )
@@ -1126,11 +1126,11 @@ fn push_creator(
         // the part a free-writing model drops first.
         .saying(
             Voice::Plain,
-            format!("This creator has launched {launches} tokens in Radar's record."),
+            format!("This creator has launched {launches} tokens in Real or Rug's record."),
         )
         .saying(
             Voice::Blunt,
-            format!("{launches} launches on this creator, in Radar's record."),
+            format!("{launches} launches on this creator, in Real or Rug's record."),
         ),
     );
 
@@ -1261,7 +1261,7 @@ fn push_measured_population(facts: &mut Vec<Fact>, population: &crate::creator::
     let measured = population.measured.to_string();
     facts.push(Fact::exact(
         Kind::VenueMeasured,
-        "launches Radar has recorded and measured, which every share below is out of",
+        "launches Real or Rug has recorded and measured, which every share below is out of",
         // Lossless below 2^53; these are counts of launches.
         #[expect(
             clippy::cast_precision_loss,
@@ -1284,7 +1284,7 @@ fn push_measured_population(facts: &mut Vec<Fact>, population: &crate::creator::
         share
             .saying(
                 Voice::Plain,
-                format!("Across the {measured} launches Radar has measured, {rendered} graduated at all."),
+                format!("Across the {measured} launches Real or Rug has measured, {rendered} graduated at all."),
             )
             .saying(
                 Voice::Blunt,
@@ -1457,7 +1457,7 @@ fn push_band(facts: &mut Vec<Fact>, exact: u32, band: &crate::baserates::Band) {
         )
         .saying(
             Voice::Plain,
-            format!("That is {times} the rate across every launch Radar has measured."),
+            format!("That is {times} the rate across every launch Real or Rug has measured."),
         )
         .saying(Voice::Blunt, format!("{times} the rate of the field.")),
     );
@@ -1544,7 +1544,7 @@ fn push_curve(
                 kind: Kind::CapacityAfterGraduation,
                 label: "exit capacity".to_owned(),
                 rendered:
-                    "graduated off the curve; it trades on the AMM, which Radar does not price. \
+                    "graduated off the curve; it trades on the AMM, which Real or Rug does not price. \
                      NOT zero, and NOT 'cannot size into this'."
                         .to_owned(),
                 values: Vec::new(),
@@ -1552,9 +1552,9 @@ fn push_curve(
             }
             .saying(
                 Voice::Plain,
-                "Radar does not price the AMM it moved to, so it has no exit size for this one.",
+                "Real or Rug does not price the AMM it moved to, so it has no exit size for this one.",
             )
-            .saying(Voice::Blunt, "Radar cannot size the AMM it moved to."),
+            .saying(Voice::Blunt, "Real or Rug cannot size the AMM it moved to."),
         );
         return;
     }
@@ -1564,7 +1564,7 @@ fn push_curve(
             facts.push(
                 Fact::exact(
                     Kind::Capacity,
-                    "quote asset that can be bought before price moves 1% -- this is RADAR'S \
+                    "quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S \
                      OWN impact budget, NOT a ceiling the venue imposes (research 0022)",
                     quote_as_f64(l, asset.decimals),
                     amount.clone(),
@@ -1576,11 +1576,11 @@ fn push_curve(
                 // wrong for a year.
                 .saying(
                     Voice::Plain,
-                    format!("{amount} can be bought before the price moves one percent, on Radar's own impact budget."),
+                    format!("{amount} can be bought before the price moves one percent, on Real or Rug's own impact budget."),
                 )
                 .saying(
                     Voice::Blunt,
-                    format!("{amount} before the price moves one percent, by Radar's budget."),
+                    format!("{amount} before the price moves one percent, by Real or Rug's budget."),
                 ),
             );
         }
@@ -1590,7 +1590,7 @@ fn push_curve(
         // "unidentified quote asset" case (never guess ETH, never guess SOL).
         (Some(_), None) => unknown.push(
             "the impact budget could not be priced: the quote asset for this curve is not one \
-             Radar can identify"
+             Real or Rug can identify"
                 .to_owned(),
         ),
         (None, _) => facts.push(
@@ -1604,11 +1604,11 @@ fn push_curve(
             }
             .saying(
                 Voice::Plain,
-                "No size at all clears Radar's impact budget here.",
+                "No size at all clears Real or Rug's impact budget here.",
             )
             .saying(
                 Voice::Blunt,
-                "Nothing fits inside Radar's impact budget here.",
+                "Nothing fits inside Real or Rug's impact budget here.",
             ),
         ),
     }
@@ -1655,13 +1655,13 @@ fn push_cost(facts: &mut Vec<Fact>, rates: &BaseRates) {
     facts.push(
         Fact::exact(
             Kind::RoundTripKernel,
-            "measured all-in round trip Radar's kernel assumes, on fresh launches",
+            "measured all-in round trip Real or Rug's kernel assumes, on fresh launches",
             rates.round_trip_kernel,
             kernel.clone(),
         )
         .saying(
             Voice::Plain,
-            format!("A round trip on a fresh launch costs {kernel} all in, as Radar's kernel measures it."),
+            format!("A round trip on a fresh launch costs {kernel} all in, as Real or Rug's kernel measures it."),
         )
         .saying(Voice::Blunt, format!("{kernel} to get in and out, all in.")),
     );
@@ -2565,7 +2565,7 @@ mod tests {
         assert_eq!(
             rendered,
             "has the token graduated off the bonding curve: no\n\
-             quote asset that can be bought before price moves 1% -- this is RADAR'S OWN \
+             quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN \
              impact budget, NOT a ceiling the venue imposes (research 0022): 0.3030 SOL\n"
         );
         assert!(unknown.is_empty(), "{unknown:?}");
@@ -2621,7 +2621,8 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("round trip Radar's kernel assumes, on fresh launches: 850 bps"),
+            rendered
+                .contains("round trip Real or Rug's kernel assumes, on fresh launches: 850 bps"),
             "{rendered}"
         );
         assert!(
@@ -2656,7 +2657,7 @@ mod tests {
             FactSheet::build(&dossier_for([3u8; 32]), None, Some(&index), None, None).render();
         assert!(
             rendered.contains(
-                "launches Radar has recorded and measured, which every share below is out of: 506991"
+                "launches Real or Rug has recorded and measured, which every share below is out of: 506991"
             ),
             "{rendered}"
         );
@@ -2869,7 +2870,7 @@ mod tests {
         );
         let rendered = sheet.render();
         assert!(
-            !rendered.contains("round trip Radar's kernel assumes"),
+            !rendered.contains("round trip Real or Rug's kernel assumes"),
             "a Solana base-rate cost line leaked onto a Robinhood sheet: {rendered}"
         );
         assert!(
@@ -2883,7 +2884,7 @@ mod tests {
         let solana_rendered =
             FactSheet::build(&dossier_for([3u8; 32]), Some(&rates), None, None, None).render();
         assert!(
-            solana_rendered.contains("round trip Radar's kernel assumes"),
+            solana_rendered.contains("round trip Real or Rug's kernel assumes"),
             "{solana_rendered}"
         );
     }
@@ -2913,7 +2914,7 @@ mod tests {
         )
         .render();
         assert!(
-            !rendered.contains("launches Radar has recorded and measured"),
+            !rendered.contains("launches Real or Rug has recorded and measured"),
             "a Solana population line leaked onto a Robinhood sheet: {rendered}"
         );
     }

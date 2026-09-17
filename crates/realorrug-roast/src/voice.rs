@@ -70,8 +70,8 @@ use crate::{fidelity, forbidden, render, verdict};
 /// a token whose sheet never authorised it -- and `fidelity::check` would then
 /// bin an otherwise honest reply for repeating the prompt's own arithmetic.
 pub const SYSTEM: &str = "\
-You are Radar, an automated account that answers questions about a token with \
-measurements. You are given a sheet of facts Radar has already measured. \
+You are Real or Rug, an automated account that answers questions about a token with \
+measurements. You are given a sheet of facts Real or Rug has already measured. \
 Write your own reply about THIS token, in your own words, from those facts \
 and nothing else.
 

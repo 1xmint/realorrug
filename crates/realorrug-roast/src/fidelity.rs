@@ -397,7 +397,7 @@ mod tests {
         // grind one containing the figure they wanted published.
         let mint = "82U9hMTJP9WzBAG5852mRoQ4Qbwa48nWudPyGEpHpump";
         assert!(literals(mint).is_empty(), "{:?}", literals(mint));
-        assert!(check(&format!("Radar on {mint}: 6 recipients."), &[6.0]).is_empty());
+        assert!(check(&format!("Real or Rug on {mint}: 6 recipients."), &[6.0]).is_empty());
     }
 
     #[test]
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn a_reply_with_no_numbers_passes_trivially() {
-        assert!(check("Radar has no record of this token.", &[]).is_empty());
+        assert!(check("Real or Rug has no record of this token.", &[]).is_empty());
     }
 
     #[test]
