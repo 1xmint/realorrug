@@ -37,6 +37,7 @@ use realorrug_contest::ledger::{Balance, Paid, Payout, Vault};
 use realorrug_contest::{Record, Week};
 use realorrug_roast::baserates::BaseRates;
 use realorrug_roast::creator::Summary;
+use realorrug_types::ChainAddress;
 use realorrug_types::civil::{date_from_days, timestamp_from_seconds};
 use realorrug_types::env::env_or_legacy;
 use serde_json::{Value, json};
@@ -131,6 +132,52 @@ pub async fn pool() -> Response {
     let paths = Paths::from_env();
     let doc = pool_in(&paths);
     respond(&paths, StatusCode::OK, doc)
+}
+
+/// `GET /v1/public/recent`.
+pub async fn recent() -> Response {
+    let paths = Paths::from_env();
+    let doc = recent_in(&paths, realorrug_analyst::daemon::now());
+    respond(&paths, StatusCode::OK, doc)
+}
+
+/// How many verdicts the home page's live feed shows.
+pub const RECENT: usize = 10;
+
+/// The newest verdicts the account published, newest first.
+///
+/// Only a reply that was **posted** (`reply_id`), is **about a token**
+/// (`mint` that parses as an address) and **carries its level** is listed.
+/// A dry run said nothing in public, a pointer or a joke judged nothing, and
+/// a line from before the level was logged has no stamp to show -- guessing
+/// one from its signals could print "Nothing ugly yet" over a sheet that
+/// could not read a required fact (see `Entry::level`).
+///
+/// No reply text and no summoner: the row links to the reply on the
+/// platform, which is where the words and the asker already are, and the
+/// site's checker page, which re-reads the facts rather than repeating ours.
+#[must_use]
+pub fn recent_in(paths: &Paths, now: u64) -> Value {
+    let mut rows: Vec<(Entry, ChainAddress)> = replies(paths)
+        .into_iter()
+        .filter(|e| e.reply_id.is_some() && e.level.is_some())
+        .filter_map(|e| {
+            let address = e.mint.as_deref()?.parse::<ChainAddress>().ok()?;
+            Some((e, address))
+        })
+        .collect();
+    rows.sort_by_key(|(e, _)| std::cmp::Reverse(e.at));
+    rows.truncate(RECENT);
+    json!({
+        "measured_at": timestamp_from_seconds(now),
+        "verdicts": rows.iter().map(|(e, address)| json!({
+            "address": address.to_string(),
+            "chain": crate::check::chain_name(address),
+            "level": e.level,
+            "at": timestamp_from_seconds(e.at),
+            "reply_url": e.reply_id.as_deref().map(reply_url),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// The population figures, in the site's shape, or `None` when a figure it
@@ -729,6 +776,7 @@ mod tests {
     use super::*;
     use realorrug_contest::ledger::{Claim, Wei};
     use realorrug_contest::score::{Entry as ContestEntry, Metrics, Ranked, Ranking};
+    use realorrug_roast::Level;
 
     const SNAPSHOT: &str = include_str!("../../../docs/research/data/0024-base-rates.json");
 
@@ -773,6 +821,7 @@ mod tests {
             fellback: None,
             signals: None,
             pointed_at: None,
+            level: None,
             reply_id: reply_id.map(str::to_owned),
         }
     }
@@ -1194,6 +1243,90 @@ mod tests {
         // The cap is part of the published rule, so a hunter who hit it can
         // see that they did rather than wondering where their looks went.
         assert_eq!(doc["hunters"][0]["over_cap"], 2);
+    }
+
+    #[test]
+    fn the_live_feed_lists_only_posted_verdicts_newest_first() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let paths = paths_in(dir.path());
+        std::fs::create_dir_all(&paths.analyst_dir).expect("mkdir");
+        let log = format!("{}/replies.jsonl", paths.analyst_dir);
+        let judged = |at: u64, reply_id: Option<&str>, level: Option<Level>| Entry {
+            mint: Some("0x22fd486d80b7cce7362ffed59bbf2fd266a148fa".to_owned()),
+            level,
+            ..a_reply(at, reply_id)
+        };
+        for entry in [
+            judged(100, Some("r-old"), Some(Level::Sketchy)),
+            judged(300, Some("r-new"), Some(Level::Rugged)),
+            // A dry run said nothing in public.
+            judged(400, None, Some(Level::Rugged)),
+            // Logged before the level was: no stamp to show, and none guessed.
+            judged(500, Some("r-unstamped"), None),
+            // A reply that names no token is not a verdict.
+            Entry {
+                mint: None,
+                ..judged(600, Some("r-joke"), Some(Level::CantTell))
+            },
+            a_reply(200, Some("r-sol")),
+        ] {
+            realorrug_analyst::log::append(&log, &entry).expect("append");
+        }
+        realorrug_analyst::log::append(
+            &log,
+            &Entry {
+                level: Some(Level::NothingUglyYet),
+                ..a_reply(200, Some("r-sol"))
+            },
+        )
+        .expect("append");
+
+        let doc = recent_in(&paths, 1_000);
+        let rows = doc["verdicts"].as_array().expect("verdicts");
+        let ids: Vec<&str> = rows
+            .iter()
+            .map(|r| r["reply_url"].as_str().expect("url"))
+            .collect();
+        assert_eq!(
+            ids,
+            [reply_url("r-new"), reply_url("r-sol"), reply_url("r-old")],
+            "{doc}"
+        );
+        assert_eq!(rows[0]["level"], "Rugged");
+        assert_eq!(rows[0]["chain"], "robinhood");
+        assert_eq!(
+            rows[0]["address"],
+            "0x22fd486d80b7cce7362ffed59bbf2fd266a148fa"
+        );
+        assert_eq!(rows[1]["chain"], "solana");
+        assert_eq!(rows[1]["level"], "NothingUglyYet");
+    }
+
+    #[test]
+    fn the_live_feed_keeps_only_the_newest_few() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let paths = paths_in(dir.path());
+        std::fs::create_dir_all(&paths.analyst_dir).expect("mkdir");
+        let log = format!("{}/replies.jsonl", paths.analyst_dir);
+        for at in 1..=(RECENT as u64 + 3) {
+            let id = format!("r{at}");
+            let entry = Entry {
+                level: Some(Level::Sketchy),
+                ..a_reply(at, Some(&id))
+            };
+            realorrug_analyst::log::append(&log, &entry).expect("append");
+        }
+        let doc = recent_in(&paths, 1_000);
+        let rows = doc["verdicts"].as_array().expect("verdicts");
+        assert_eq!(rows.len(), RECENT);
+        assert_eq!(rows[0]["reply_url"], reply_url(&format!("r{}", RECENT + 3)));
+    }
+
+    #[test]
+    fn with_no_reply_log_the_feed_is_empty_rather_than_absent() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let doc = recent_in(&paths_in(dir.path()), 1_000);
+        assert_eq!(doc["verdicts"], json!([]));
     }
 
     #[test]

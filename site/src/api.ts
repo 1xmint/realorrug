@@ -323,6 +323,34 @@ export async function weeks(): Promise<Weeks> {
   return live ?? { measured_at: null, weeks: [] };
 }
 
+/** One verdict the account posted, as the home page's feed lists it. */
+export interface RecentVerdict {
+  readonly address: string;
+  readonly chain: "robinhood" | "solana";
+  readonly level: NonNullable<CheckResult["level"]>;
+  readonly at: string;
+  readonly reply_url: string | null;
+}
+
+/** The newest verdicts the account posted. */
+export interface Recent {
+  readonly measured_at: string | null;
+  readonly verdicts: readonly RecentVerdict[];
+}
+
+/**
+ * The newest posted verdicts, newest first.
+ *
+ * Empty when the server is unreachable as well as when nothing has been
+ * posted, for the reason `leaderboard` gives: the page cannot act on the
+ * difference, and it says "nothing posted yet" either way rather than
+ * showing a list that did not come from the server.
+ */
+export async function recent(): Promise<Recent> {
+  const live = await get<Recent>("/v1/public/recent");
+  return live ?? { measured_at: null, verdicts: [] };
+}
+
 /** Lamports as SOL, at the precision a prize is worth quoting to. */
 export function sol(lamports: number): string {
   return (lamports / 1_000_000_000).toFixed(4);

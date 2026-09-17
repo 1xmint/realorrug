@@ -45,7 +45,9 @@ use std::fmt::Write as _;
 /// spot must never read as `NothingUglyYet` -- so there is no safe default to
 /// pick, and the type does not offer one. Compare by matching on the variant,
 /// not by ordering it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Serialised under its variant names (`"Sketchy"`), the same strings the
+// checker route publishes, so the reply log and the site read one vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Level {
     /// It already happened, observed: liquidity removed, creator sold out,
     /// buyers cannot sell. Never on one signal alone.

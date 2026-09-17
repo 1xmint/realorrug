@@ -97,6 +97,7 @@ From `crates/realorrug-serve/src/lib.rs`'s router, verbatim:
 | `/v1/public/pool` | `public::pool` | the prize pool balance and past winners |
 | `/v1/public/weeks` | `public::weeks` | every closed week, with claim and payout state |
 | `/v1/public/hunters` | `public::hunters` | (routed; not read by any current page — see §10) |
+| `/v1/public/recent` | `public::recent` | `/` (live feed, §4a item 5) |
 
 Every handler "reads a published file, never the store"
 (`crates/realorrug-serve/src/public.rs`'s own doc, quoted in design 0023
@@ -402,14 +403,14 @@ entries only), no new endpoint.
    second most common reason a visitor is on this page at all.
 5. **Live feed of latest verdicts** — a short list (5–10) of the most
    recent checked tokens and their verdict level, each linking to its
-   `/check/:address`. **Data gap:** no current endpoint returns "recently
-   checked tokens" — `/v1/public/stats`, `/leaderboard`, `/pool`, `/weeks`,
-   `/hunters` (§1) hold none of this. This needs a new
-   `realorrug-serve` route reading the checker's own cache (design 0023
-   §3's per-key verdict cache, keyed `(chain, address)`) as a recency-sorted
-   list — the same store, a different read pattern, not a new source of
-   truth. Named here as a requirement on `realorrug-serve`; the route
-   itself is not designed in this document (§10).
+   `/check/:address`. **Built (2026-09-17)** as `/v1/public/recent`, and
+   from the analyst's reply log rather than the checker's cache this item
+   first named: the cache holds every address any visitor pasted, so a
+   feed built on it would let a stranger put any token on the home page by
+   checking it. The reply log holds only what the account posted in
+   public. Each reply now records its verdict level (`Entry::level`); a
+   reply from before that has none and is left out rather than given a
+   guessed stamp.
 6. **Contest teaser** — this week's top 3 from `leaderboard()`, a "See full
    contest →" link to `/contest`.
 7. Footer (existing).
