@@ -195,6 +195,20 @@ pub fn stats_in(paths: &Paths) -> Option<Value> {
     // with a remembered number.
     let aftermath = rates.aftermath.as_ref()?;
     let population = summary.population;
+    // Rule 8, absent is not zero. Before the outcome pass runs, these four are
+    // zero because nothing has been looked at, not because nothing graduated.
+    // Printed as digits they read as "0% of this venue's launches ever filled",
+    // which is a measurement of our own job published as a fact about the
+    // venue -- the mistake `Population::organic_share` returns `None` to avoid.
+    // A JSON null says to a renderer what that `None` says to Rust; a zero here
+    // would be believed.
+    let counted = |n: u64| {
+        if population.measured == 0 {
+            Value::Null
+        } else {
+            json!(n)
+        }
+    };
     Some(json!({
         "measured_at": timestamp_from_seconds(summary.built_at),
         // Which chain the five totals below were measured over. The page
@@ -207,10 +221,10 @@ pub fn stats_in(paths: &Paths) -> Option<Value> {
         "watched": {
             "launches": population.launches,
             "creators": summary.creators,
-            "measured": population.measured,
-            "organic": population.organic,
-            "instant": population.instant,
-            "stillborn": population.stillborn,
+            "measured": counted(population.measured),
+            "organic": counted(population.organic),
+            "instant": counted(population.instant),
+            "stillborn": counted(population.stillborn),
         },
         "bands": {
             "measured_on": rates.measured_on,
@@ -1399,6 +1413,55 @@ mod tests {
             stats_in(&paths).expect("both files present")["chain"],
             "robinhood"
         );
+    }
+
+    #[test]
+    fn an_index_with_no_outcome_pass_says_nothing_rather_than_saying_zero() {
+        // The Robinhood index built on 2026-09-17 has every outcome column at
+        // zero: it counted launches and launchers and has not yet asked what
+        // became of any of them. Published as digits, "organic: 0" beside
+        // "launches: 531581" is a claim that not one token on the venue ever
+        // filled its curve. Re-apply the bug by returning the raw counts and
+        // this test fails on all four.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let paths = paths_in(dir.path());
+        std::fs::write(&paths.base_rates, SNAPSHOT).expect("write");
+        let mut unmeasured = a_summary();
+        unmeasured.population = realorrug_roast::creator::Population {
+            launches: 531_581,
+            measured: 0,
+            organic: 0,
+            instant: 0,
+            stillborn: 0,
+        };
+        unmeasured.creators = 301_820;
+        unmeasured.write(&paths.summary).expect("write");
+
+        let doc = stats_in(&paths).expect("both files present");
+        // What was counted is still stated: these two are measurements.
+        assert_eq!(doc["watched"]["launches"], 531_581);
+        assert_eq!(doc["watched"]["creators"], 301_820);
+        // What was not looked at is absent, not zero.
+        assert_eq!(doc["watched"]["measured"], Value::Null);
+        assert_eq!(doc["watched"]["organic"], Value::Null);
+        assert_eq!(doc["watched"]["instant"], Value::Null);
+        assert_eq!(doc["watched"]["stillborn"], Value::Null);
+
+        // And a real zero among measured tokens is still a zero: an outcome
+        // pass that looked at 100 and found no organic graduations measured
+        // that, and must be allowed to say it.
+        let mut some = a_summary();
+        some.population = realorrug_roast::creator::Population {
+            launches: 531_581,
+            measured: 100,
+            organic: 0,
+            instant: 40,
+            stillborn: 60,
+        };
+        some.write(&paths.summary).expect("write");
+        let doc = stats_in(&paths).expect("both files present");
+        assert_eq!(doc["watched"]["measured"], 100);
+        assert_eq!(doc["watched"]["organic"], 0);
     }
 
     #[test]
