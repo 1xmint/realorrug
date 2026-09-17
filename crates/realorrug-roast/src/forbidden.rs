@@ -297,7 +297,10 @@ pub const RULES: &[Rule] = &[
 /// a longer word is allowed". Every other use of the word is still refused,
 /// including `cabalhunter.org.evil.example` and "realorrug is a rug" -- the
 /// mask consumes the literal and the surrounding text is scanned as it stands.
-const OWN_NAMES: &[&str] = &["cabalhunter.org", "realorrug"];
+// "real or rug" (spaced) is masked alongside "realorrug" because the reply
+// template opens with "Real or Rug on <mint>:" and "rug" is an accusation
+// word -- without this every published reply would refuse itself.
+const OWN_NAMES: &[&str] = &["cabalhunter.org", "realorrug", "real or rug"];
 
 /// What each own name becomes for the scan.
 ///
@@ -1288,7 +1291,7 @@ mod tests {
     fn an_ordinary_measured_reply_passes() {
         let reply = "Eleven recipients in the launch block. 0.5% of launches that never \
                      graduated look like that. The round trip at $50 is about 4.6%. \
-                     Radar has no record of this creator.";
+                     Real or Rug has no record of this creator.";
         assert!(check(reply).is_empty(), "{:?}", check(reply));
     }
 
