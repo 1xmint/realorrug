@@ -177,6 +177,26 @@ impl Wei {
         }
         text.parse().ok().map(Self)
     }
+
+    /// As ETH with `places` decimals, **cut, never rounded**.
+    ///
+    /// Cut rather than rounded because a prize quoted in public must never
+    /// read higher than what is held: 0.12999 ETH rounded to three places is a
+    /// 0.130 that nobody can be paid. Integer arithmetic throughout, since a
+    /// float loses wei above 2^53 (about 0.009 ETH) and this is the figure
+    /// the fidelity check compares against.
+    #[must_use]
+    pub fn to_eth(self, places: u32) -> String {
+        const WEI_PER_ETH: u128 = 1_000_000_000_000_000_000;
+        let places = places.min(18);
+        let whole = self.0 / WEI_PER_ETH;
+        if places == 0 {
+            return whole.to_string();
+        }
+        let step = 10u128.pow(18 - places);
+        let frac = (self.0 % WEI_PER_ETH) / step;
+        format!("{whole}.{frac:0width$}", width = places as usize)
+    }
 }
 
 /// Why a payout is refused.
@@ -798,6 +818,20 @@ mod tests {
                 collected: big - 1
             })
         );
+    }
+
+    #[test]
+    fn eth_is_cut_to_its_places_and_never_rounded_up() {
+        // 0.129999... ETH at three places is 0.129: rounding would publish a
+        // prize higher than the one held. Re-apply by rounding: this fails.
+        assert_eq!(Wei(129_999_999_999_999_999).to_eth(3), "0.129");
+        assert_eq!(Wei(1_500_000_000_000_000_000).to_eth(4), "1.5000");
+        assert_eq!(Wei(20_000_000_000_000_000_000).to_eth(2), "20.00");
+        assert_eq!(Wei(1_000_000_000_000_000).to_eth(3), "0.001");
+        assert_eq!(Wei(999_999_999_999_999).to_eth(3), "0.000");
+        assert_eq!(Wei(2_700_000_000_000_000_000).to_eth(0), "2");
+        assert_eq!(Wei(1).to_eth(18), "0.000000000000000001");
+        assert_eq!(Wei(1).to_eth(40), "0.000000000000000001");
     }
 
     #[test]

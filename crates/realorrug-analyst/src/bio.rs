@@ -47,7 +47,7 @@
 
 use std::fmt::Write as _;
 
-use realorrug_contest::{Record, Week};
+use realorrug_contest::{Balance, Record, Vault, Week};
 use realorrug_types::env::env_or_legacy;
 
 /// The longest bio X accepts.
@@ -137,8 +137,23 @@ pub enum State {
     },
     /// The prize was paid.
     Paid {
-        /// The amount, rendered in SOL.
-        sol: String,
+        /// The amount, already rendered in `unit`.
+        amount: String,
+        /// `ETH`, or `SOL` for a week paid before the move to Robinhood Chain.
+        unit: &'static str,
+    },
+    /// The week is open: what the pool holds and how many people are in.
+    ///
+    /// **Hunters, not replies.** One person summoning the bot ten times is one
+    /// person in the running, and a count of replies would let one busy
+    /// account make the week look crowded.
+    Open {
+        /// The Monday the week opened.
+        week: String,
+        /// The pool, rendered in ETH and cut, never rounded up.
+        pool: String,
+        /// Distinct accounts with a published reply on a token this week.
+        hunters: usize,
     },
 }
 
@@ -164,8 +179,19 @@ impl State {
                     "Won the week of {week}: @{handle}. Claim: reply to the prompt under your post by {until}"
                 );
             }
-            Self::Paid { sol } => {
-                let _ = write!(out, "Paid {sol} SOL to the week's winner");
+            Self::Paid { amount, unit } => {
+                let _ = write!(out, "Paid {amount} {unit} to the week's winner");
+            }
+            Self::Open {
+                week,
+                pool,
+                hunters,
+            } => {
+                let noun = if *hunters == 1 { "hunter" } else { "hunters" };
+                let _ = write!(
+                    out,
+                    "Week of {week}: {pool} ETH prize pool, {hunters} {noun} in"
+                );
             }
         }
         (!out.is_empty()).then_some(out)
@@ -200,11 +226,16 @@ impl State {
                 date(week);
                 date(until);
             }
-            Self::Paid { sol } => {
-                out.extend(sol.split('.').filter_map(|p| p.parse::<f64>().ok()));
-                if let Ok(v) = sol.parse::<f64>() {
-                    out.push(v);
-                }
+            Self::Paid { amount, unit: _ } => amount_parts(&mut out, amount),
+            Self::Open {
+                week,
+                pool,
+                hunters,
+            } => {
+                date(week);
+                amount_parts(&mut out, pool);
+                #[expect(clippy::cast_precision_loss, reason = "a head count, far below 2^53")]
+                out.push(*hunters as f64);
             }
         }
         out
@@ -222,12 +253,13 @@ pub fn state_of(record: &Record, now: u64) -> Option<State> {
     if let Some(payout) = &record.payout {
         return match payout.paid {
             realorrug_contest::Paid::Sol { lamports, .. } => Some(State::Paid {
-                sol: render_sol(lamports),
+                amount: render_sol(lamports),
+                unit: "SOL",
             }),
-            // Paid, so nothing else is true of the week, and the bio has no ETH
-            // sentence yet: plan 0001 step 6d writes one. Saying nothing is
-            // true; quoting wei as SOL would not be.
-            realorrug_contest::Paid::Eth { .. } => None,
+            realorrug_contest::Paid::Eth { wei, .. } => Some(State::Paid {
+                amount: wei.to_eth(4),
+                unit: "ETH",
+            }),
         };
     }
     // A voided week says nothing. The void is published on the site with the
@@ -250,6 +282,66 @@ pub fn state_of(record: &Record, now: u64) -> Option<State> {
         handle: handle.clone(),
         until: day_of(record.claim_window_closes_at()),
     })
+}
+
+/// How old a pool reading may be and still be quoted as the pool now.
+///
+/// The open-week line carries no time, so a reader takes the figure as
+/// current. A reading older than six hours means the job that takes it has
+/// stopped, and the bio then falls back to what the week's record says rather
+/// than quote a figure that may have moved a long way since.
+pub const POOL_FRESH_SECONDS: u64 = 6 * 3_600;
+
+/// The open-week state, or `None` when there is no fresh ETH pool reading.
+///
+/// A Solana vault says nothing here: nothing writes one any more, and a SOL
+/// figure in an ETH sentence would be a wrong one.
+#[must_use]
+pub fn open_state(vault: Option<&Vault>, hunters: usize, now: u64) -> Option<State> {
+    let vault = vault?;
+    let Balance::Eth { wei, .. } = &vault.balance else {
+        return None;
+    };
+    // A reading from the future is a clock fault, not a fresh reading.
+    if vault.measured_at > now || now - vault.measured_at > POOL_FRESH_SECONDS {
+        return None;
+    }
+    Some(State::Open {
+        week: monday_of(Week::of(now)),
+        pool: wei.to_eth(3),
+        hunters,
+    })
+}
+
+/// What the bio says now, from everything it may say.
+///
+/// **A winner who can still claim comes first.** That line is the only one
+/// somebody has to act on, and the claim window is the week after the close,
+/// so without this order the open-week line would hide it for all seven days.
+/// After that the live pool, because a pool that grows while you watch is the
+/// reason to join; and only with no fresh pool reading does a closed week's
+/// payout stand in.
+#[must_use]
+pub fn choose(
+    record: Option<&Record>,
+    vault: Option<&Vault>,
+    hunters: usize,
+    now: u64,
+) -> Option<State> {
+    let closed = record.and_then(|r| state_of(r, now));
+    if let Some(won @ State::Won { .. }) = closed {
+        return Some(won);
+    }
+    open_state(vault, hunters, now).or(closed)
+}
+
+/// The numerals a rendered amount puts in the text: each side of the point,
+/// and the whole value.
+fn amount_parts(out: &mut Vec<f64>, amount: &str) {
+    out.extend(amount.split('.').filter_map(|p| p.parse::<f64>().ok()));
+    if let Ok(v) = amount.parse::<f64>() {
+        out.push(v);
+    }
 }
 
 /// Lamports as SOL, at the precision a prize is worth quoting to.
@@ -310,6 +402,14 @@ mod tests {
         }
     }
 
+    fn open() -> State {
+        State::Open {
+            week: "2026-09-14".to_owned(),
+            pool: "0.129".to_owned(),
+            hunters: 17,
+        }
+    }
+
     #[test]
     fn the_lead_survives_every_branch_and_is_always_first() {
         // **The assertion this module exists for.** A bio write overwrites the
@@ -328,8 +428,10 @@ mod tests {
             },
             won(),
             State::Paid {
-                sol: "0.1234".to_owned(),
+                amount: "0.1234".to_owned(),
+                unit: "ETH",
             },
+            open(),
         ] {
             let text = b.render(&state).expect("a bio");
             assert!(text.starts_with(&b.lead), "lead not first: {text}");
@@ -400,8 +502,10 @@ mod tests {
             },
             won(),
             State::Paid {
-                sol: "0.1234".to_owned(),
+                amount: "0.1234".to_owned(),
+                unit: "ETH",
             },
+            open(),
         ] {
             let text = b.render(&state).expect("a bio");
             assert_eq!(
@@ -419,7 +523,8 @@ mod tests {
         // amount becomes a number nothing measured, and this catches it.
         let text = bio()
             .render(&State::Paid {
-                sol: "0.1234".to_owned(),
+                amount: "0.1234".to_owned(),
+                unit: "ETH",
             })
             .expect("a bio");
         assert!(check(&text, &[]).is_err(), "{text}");
@@ -428,7 +533,8 @@ mod tests {
             check(
                 &text,
                 &State::Paid {
-                    sol: "9.9999".to_owned()
+                    amount: "9.9999".to_owned(),
+                    unit: "ETH",
                 }
                 .authorised()
             )
@@ -489,7 +595,8 @@ mod tests {
         assert_eq!(
             state_of(&paid, closed + 200),
             Some(State::Paid {
-                sol: "0.1234".to_owned()
+                amount: "0.1234".to_owned(),
+                unit: "SOL",
             })
         );
 
@@ -513,5 +620,100 @@ mod tests {
         let mut nameless = record_with_winner();
         nameless.winner.as_mut().expect("winner").handle = None;
         assert_eq!(state_of(&nameless, closed + 60), None);
+    }
+
+    fn vault(wei: u128, measured_at: u64) -> Vault {
+        Vault {
+            address: "0xescrow".to_owned(),
+            balance: Balance::Eth {
+                holder: "0xbot".to_owned(),
+                wei: realorrug_contest::Wei(wei),
+            },
+            measured_at,
+        }
+    }
+
+    #[test]
+    fn the_open_week_line_quotes_a_fresh_eth_pool_and_the_hunters() {
+        // Week 2959 opens Monday 2026-09-14.
+        let now = Week(2959).opens_at() + 3_600;
+        let fresh = vault(129_999_999_999_999_999, now - 60);
+        let state = open_state(Some(&fresh), 17, now).expect("a fresh pool");
+        assert_eq!(state, open());
+        let text = bio().render(&state).expect("a bio");
+        assert!(
+            text.ends_with("Week of 2026-09-14: 0.129 ETH prize pool, 17 hunters in"),
+            "{text}"
+        );
+        assert_eq!(check(&text, &state.authorised()), Ok(()), "{text}");
+        let one = State::Open {
+            week: "2026-09-14".to_owned(),
+            pool: "0.129".to_owned(),
+            hunters: 1,
+        };
+        assert!(bio().render(&one).expect("a bio").ends_with("1 hunter in"));
+
+        // Exactly six hours old is still quoted; a second more is not, because
+        // the line carries no time and a reader takes it as now.
+        assert_eq!(POOL_FRESH_SECONDS, 21_600);
+        assert!(open_state(Some(&vault(1, now - POOL_FRESH_SECONDS)), 0, now).is_some());
+        assert_eq!(
+            open_state(Some(&vault(1, now - POOL_FRESH_SECONDS - 1)), 0, now),
+            None
+        );
+        // A reading from the future is a clock fault, not a fresh reading.
+        assert_eq!(open_state(Some(&vault(1, now + 1)), 0, now), None);
+        // No reading, or a Solana one, says nothing.
+        assert_eq!(open_state(None, 3, now), None);
+        let sol = Vault {
+            balance: Balance::Sol { lamports: 5 },
+            ..fresh
+        };
+        assert_eq!(open_state(Some(&sol), 3, now), None);
+    }
+
+    #[test]
+    fn a_claimable_win_outranks_the_pool_and_the_pool_outranks_an_old_payout() {
+        let record = record_with_winner();
+        let closed = WEEK.closes_at();
+        let now = closed + 60;
+        let fresh = vault(2_000_000_000_000_000_000, now);
+
+        // The winner still has to act, so their line stands all week.
+        assert!(matches!(
+            choose(Some(&record), Some(&fresh), 4, now),
+            Some(State::Won { .. })
+        ));
+
+        // Paid in ETH: the pool line replaces it while the pool is fresh...
+        let mut paid = record_with_winner();
+        paid.payout = Some(realorrug_contest::ledger::Payout {
+            recipient: "R".to_owned(),
+            paid: realorrug_contest::Paid::Eth {
+                wei: realorrug_contest::Wei(123_456_789_000_000_000),
+                claim_tx: "c".to_owned(),
+                transfer_tx: "t".to_owned(),
+            },
+            at: closed + 30,
+        });
+        assert!(matches!(
+            choose(Some(&paid), Some(&fresh), 4, now),
+            Some(State::Open { hunters: 4, .. })
+        ));
+        // ...and the payout, in ETH to four places, stands in without one.
+        assert_eq!(
+            choose(Some(&paid), None, 4, now),
+            Some(State::Paid {
+                amount: "0.1234".to_owned(),
+                unit: "ETH",
+            })
+        );
+
+        // No record at all (the first week) still shows the pool.
+        assert!(matches!(
+            choose(None, Some(&fresh), 0, now),
+            Some(State::Open { .. })
+        ));
+        assert_eq!(choose(None, None, 0, now), None);
     }
 }
