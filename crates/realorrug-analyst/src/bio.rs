@@ -493,14 +493,20 @@ mod tests {
         // configuration time, same as a lead alone too long for `MAX` was
         // refused before this task -- "always fits" is checked once, here,
         // rather than hoped for at every render.
-        let too_long = "x".repeat(MAX - JOIN.len() - DISCLAIMER.len());
+        // Counted in characters, not bytes: `MAX` and the length check in
+        // `from_vars` are both character counts, and `JOIN` holds a middle dot
+        // that is two bytes and one character. Byte arithmetic here would name
+        // a lead one character short of the boundary and assert the wrong side
+        // of it.
+        let room = MAX - JOIN.chars().count() - DISCLAIMER.chars().count();
+        let too_long = "x".repeat(room);
         assert_eq!(
             Bio::from_vars(&|_| Some(too_long.clone())),
             None,
             "{too_long}"
         );
         // One character shorter leaves exactly enough room.
-        let fits = "x".repeat(MAX - JOIN.len() - DISCLAIMER.len() - 1);
+        let fits = "x".repeat(room - 1);
         assert!(Bio::from_vars(&|_| Some(fits.clone())).is_some());
     }
 
