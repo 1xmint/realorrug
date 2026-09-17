@@ -613,6 +613,37 @@ mod tests {
         )
     }
 
+    #[test]
+    fn a_launcher_buy_counts_when_either_the_buyer_or_the_recipient_is_the_launcher() {
+        // A launch can buy through a router (the launcher receives, someone
+        // else is the trader) or buy for someone else (the launcher trades, a
+        // different address receives). Both are the launcher's money moving
+        // in the launch transaction; requiring both would miss either.
+        let curve = RobinhoodAddress([0x41; 20]);
+        let launcher = RobinhoodAddress([0x42; 20]);
+        let rec = record(true, curve, launcher);
+        let one_sided = |trader: &RobinhoodAddress, recipient: &RobinhoodAddress, quote| {
+            let mut data = word_u(quote);
+            data.extend(word_u(1_000));
+            data.extend(word_u(0));
+            data.extend(word_u(0));
+            Log::from_json(&log_json(
+                &curve,
+                &[topic::CURVE_BUY, topic_of(trader), topic_of(recipient)],
+                &data,
+                LAUNCH_BLOCK,
+            ))
+            .expect("a log")
+        };
+        let logs = [
+            one_sided(&launcher, &ALICE, 7),
+            one_sided(&BOB, &launcher, 11),
+        ];
+        assert_eq!(launcher_buy(&logs, &rec), 18);
+        let strangers = [one_sided(&ALICE, &BOB, 13)];
+        assert_eq!(launcher_buy(&strangers, &rec), 0);
+    }
+
     fn transfer(from: &RobinhoodAddress, to: &RobinhoodAddress, value: u128) -> serde_json::Value {
         log_json(
             &token(),
