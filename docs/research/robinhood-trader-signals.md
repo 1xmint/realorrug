@@ -293,3 +293,227 @@ bundling gap; a read of `PonsV2LaunchLocker.sol` would close the LP-lock
 gap. A second search of the same vendor pricing pages could not change §1;
 that boundary was reached. Blockscout with a key, and `PonsV2LaunchLocker.sol`'s
 source, are the two searches that could still change this document's answer.
+
+## §7 Follow-up: closing finding #6, the funding-source gap (2026-09-17)
+
+Requested by the coordinator as the deciding gap. Five items, answered in
+order below, all tested/read today against the packet's token
+`0x13e6cdb0470b10afcb96177ae8702ace2ac72cd6` ("HEY") where a live read applies.
+
+### 1. Paid-tier trace/debug/Transfers-API coverage for chain 4663
+
+**Alchemy — NO for the funding-source read, contradicting its own marketing
+copy.** Alchemy's chain-specific method table,
+[`alchemy.com/docs/robinhood-chain/robinhood-chain-api-overview`](https://www.alchemy.com/docs/robinhood-chain/robinhood-chain-api-overview)
+(fetched 2026-09-17), titled "Robinhood Chain API Endpoints", enumerates
+**52 methods this chain actually exposes** — the standard `eth_*`/`net_*`/
+`web3_*`/`txpool_content` set, plus exactly two `debug_*` methods:
+`debug_executionWitness` and `debug_executionWitnessByHash` (a Reth-style
+state-witness API for stateless-client proofs, not a transaction tracer).
+**`debug_traceTransaction`, `debug_traceBlockByNumber`, and every
+`trace_*` method are absent from this table.** The same page also carries a
+generic "Related APIs" bullet list, unscoped to any chain, claiming "The
+following Alchemy APIs are also supported on Robinhood Chain: ... Debug
+API ... Transfers API ..." — but each bullet links to Alchemy's *generic*
+product-quickstart page, not a Robinhood-Chain-specific endpoint page, and
+none of those methods appear in the chain's own enumerated table above it on
+the same page. **PROVED (self-contradiction in a primary source, dated
+today): Alchemy's own definitive per-chain method list for Robinhood Chain
+does not include a transaction tracer or `alchemy_getAssetTransfers`,
+regardless of what the marketing bullets on the same page claim.** This
+was checked without a key — the table is public documentation, not a
+metered response, so no sign-up was needed to read it.
+
+**QuickNode — inferred yes for tracing, not independently key-tested.**
+[`quicknode.com/chains/robinhood`](https://www.quicknode.com/chains/robinhood)
+(fetched 2026-09-17, re-verified today to rule out generic-template copy —
+the raw HTML names "Robinhood" 14 times and chain ID "4663" 5 times in
+chain-specific FAQ/JSON-LD blocks, not boilerplate) states verbatim:
+"Yes. Quicknode runs full archive nodes for Robinhood Chain mainnet and
+testnet with no pruning, plus the Debug API for `debug_traceTransaction`
+and `debug_traceBlockByNumber`. You can query historical state and trace
+transactions for indexing, simulation, and analytics," and separately:
+"Run `debug_traceTransaction` and `trace_block` against Robinhood Chain
+archive nodes to replay internal calls, decode state changes, and power
+indexing, simulation, and trading forensics." No `trace_filter` and no
+address-indexed transfer-history method (no `alchemy_getAssetTransfers`
+equivalent) appears anywhere on the page — QuickNode's Robinhood offering,
+as documented, is trace-by-transaction/trace-by-block, not
+trace-by-address. The page does not say which paid tier (Build $49/mo vs.
+higher) gates trace/debug access, only that "paid plans... scale with...
+features like archive access" — **this tier-gating detail is UNVERIFIED,
+not found on this page**. **Marked INFERRED, not verified**: this is a
+directly-quoted, dated, chain-specific vendor claim, but was not exercised
+with a real key, per the packet's no-sign-up boundary.
+
+**Net for item 1: QuickNode's own documentation is the more useful lead —
+it claims per-transaction and per-block tracing is real on this chain;
+Alchemy's own table shows it is not.** Neither vendor documents an
+address-indexed "all transfers/fundings for wallet X" call for Robinhood
+Chain (Alchemy's Transfers API bullet is unsupported by its own method
+table; QuickNode names no Transfers/Blockbook address-history feature for
+this chain specifically). So even the paid, trace-capable path
+(QuickNode) answers "who funded this specific wallet's specific
+transaction" only if you already know which transaction to trace — it
+does **not** give a reverse index ("show me every inbound transfer to
+address X"). That distinction matters for item 2 below.
+
+### 2. Best bundling proxy from data that is actually readable
+
+Given item 1, a funding-source read (native-ETH transfer graph by address)
+is not available keylessly, and even QuickNode's paid trace API is
+transaction-scoped, not address-scoped — so building a funding graph would
+mean tracing every transaction in a launch window, an O(blocks) sized
+job, not an O(wallets) one. Six candidates, all built from data this bot
+can already read (`eth_getLogs` on `Transfer`/`Swap` events, standard
+`eth_get*` reads) or could read cheaply:
+
+| Proxy | Cost | Evidence strength | Innocent twin |
+|---|---|---|---|
+| Buys in launch block or first N blocks | 1 `eth_getLogs` call already made for holders/snipers | Weak alone — a launch tweet reaching real buyers in the same minute looks identical | Any well-marketed launch draws organic buyers in block 1 |
+| Near-identical buy sizes | Free (derived from the same `Transfer` logs, no extra call) | Moderate — same-amount buys across unrelated wallets are unusual but not rare (round-number presets: 0.1/0.5/1 ETH UI buttons) | A UI with quick-buy buttons produces identical amounts from strangers |
+| Sequential nonces across the buyer set | 1 `eth_getTransactionCount` per wallet **at the launch block** (needs the address list already in hand) — an archive read, see item 5 | Strong — sequential nonces across *different* addresses only happens if one funder deployed/funded them in a batch immediately beforehand | None found — this is the hardest pattern to produce by accident; the one candidate worth spending calls on |
+| Wallet's first-ever tx is this buy (`eth_getTransactionCount == 1` at launch block) | 1 `eth_getTransactionCount` per wallet at the launch block (same archive read as above, can reuse) | Moderate-strong — fresh wallets buying immediately at launch is a known bundle signature, but also the normal shape of a brand-new user's very first trade | A new crypto user's first-ever transaction is legitimately often a token buy |
+| Gas-price/timing clustering | Free (from tx receipts/blocks already fetched for other reads) | Weak — Arbitrum-family chains (Robinhood is Nitro-based) have chain-set gas prices most of the time, so "same gas price" is close to universal, not diagnostic | Nearly everyone pays the same gas price on this chain by default |
+| Later coordinated selling (same wallets selling in a tight window) | 1 more `eth_getLogs` on `Transfer` post-launch, already budgeted for the "sellers" signal | Moderate — coordinated exit is real bundle behavior, but a shared trending/alert bot pinging many independent holders at once produces the same shape | A trending-token alert firing to thousands of independent watchers causes synchronized, uncoordinated selling |
+
+**Recommended primary proxy: sequential nonces at the launch block among
+the launch-block buyer set**, cross-checked against near-identical buy
+sizes (free) and later coordinated selling (already-budgeted call) as
+corroborating, not primary, evidence. **Cost: 1 `eth_getLogs` (already
+paid for holders) + 1 `eth_getTransactionCount` per distinct buyer address
+at the launch block** — for a launch with ~20 buyers in the first block,
+that is 20 extra calls, all against a block that is only readable if it
+falls inside the archive window (see item 5). **The bot must never accuse**
+per AGENTS.md rule 4: even sequential nonces are consistent with one person
+running a personal batch of wallets for reasons that are not bundling
+(testing, a market maker's own inventory wallets, a CEX's hot-wallet
+rotation) — this proxy can only ever raise a *pattern* into the fact
+sheet ("N of the top M holders bought in the launch block with sequential
+nonces"), never a verdict word.
+
+### 3. Uniswap v4 pool/hook address for the graduated HEY token
+
+**Found and confirmed live — closing the "address still unfound" gap in
+0044/0048.** Derived independently from Pons v2's own `PoolKey` fields
+(currency0 = native ETH `0x0`, currency1 = the token, fee = `0`,
+tickSpacing = `200`, hooks = the deployed `PonsV2MemeHook`
+`0xe5e702641ea86f4ae6cc3cdaed2b886f976be044`, address confirmed by exact
+Sourcify bytecode match in the 2026-09-16 verification run) via
+`keccak256(abi.encode(PoolKey))` computed with a from-scratch,
+validated-against-known-selectors Keccak-256 implementation (no network
+dependency, no third-party library). Result:
+`0xfa309242187ec19ffa6a467bdfea620f3fe626e0f7ff43e1e356b1004c1defaf`.
+**This exactly matches DexScreener's/GeckoTerminal's own reported pool
+identifier for this token's graduated pool**, byte for byte. Live-verified
+today by filtering the Uniswap v4 singleton `PoolManager`
+(`0x8366a39cc670b4001a1121b8f6a443a643e40951`) for `Swap` events with this
+PoolId as the indexed topic over a recent ~3,000-block window on the
+public RPC — real swap logs returned. Caveat for future per-wallet-seller
+work: the `Swap` event's `sender` field is the router/hook contract that
+called `PoolManager`, not necessarily the end-trader's EOA — attributing a
+swap to a human wallet needs the calling transaction's `from`, not the
+event's `sender`. **PROVED.**
+
+### 4. LP-lock question, from `PonsV2LaunchLocker.sol` and a live read
+
+**Yes, permanently locked; no one can withdraw it, including the
+contract's own owner.** Read in full at
+`.orchestrator/runs/20260915-robinhood-7b/sources/PonsV2LaunchLocker.sol`
+(deployed at `0x267444d099b10fb5ed7c3cc7b7c767adca574952`, confirmed exact
+bytecode match in the 2026-09-16 verification run). The contract's own doc
+comment states its intent directly: "Permanently holds the graduated
+Uniswap V4 position NFT for every pons v2 launch... This contract exposes
+no withdrawal or arbitrary-call function, so locked liquidity can never be
+removed by an administrator." Two structural facts back that claim up:
+(1) there is no `withdraw`/`transferPosition`/`collectFees`-shaped
+function anywhere in the contract — `lockPosition` and `lockTokenSupply`
+are one-way, `onlyFactory`-gated, and nothing moves an NFT back out; (2)
+`renounceOwnership()` is overridden to unconditionally `revert
+OwnershipCannotBeRenounced()`, which sounds like the opposite of a
+safety guarantee but isn't one either way here, because ownership itself
+carries no power over a locked position — it only gates the one-time
+`setFactory` wiring call. **Live-proved against the packet's own token**:
+called `ownerOf(2843787)` (tokenId read from the locker's own
+`lockedPositions(HEY)` mapping) on the Uniswap v4 `PositionManager`
+(`0x58daec3116aae6d93017baaea7749052e8a04fa7`) and got back
+`0x267444d099b10fb5ed7c3cc7b7c767adca574952` — the locker's own address,
+exactly. Cross-checked `isLocked(HEY)` on the locker itself, which
+returned `true`. **PROVED**, both from source and from a live on-chain
+read, cost 3 `eth_call`s total (`lockedPositions`, `isLocked`, `ownerOf`).
+
+### 5. Archive depth, live-tested
+
+**Public RPC keeps a much shorter window than research 0038/0039's prior
+estimate of "~100k blocks" — re-tested today and found narrower.** Tested
+`eth_getBalance` at decreasing offsets from the chain head
+(`0x3e87257` at test time) on the public keyless RPC:
+
+| Blocks back | Result |
+|---|---|
+| 1,000 | OK |
+| 2,000–6,000 | OK |
+| 8,000 | `{"code":-32000,"message":"historical state ... is not available"}` |
+| 10,000 and beyond (tested to 500,000) | same error |
+
+**The pruning boundary sits between 6,000 and 8,000 blocks back on the
+public RPC** — not the ~100k previously recorded. At this chain's ~100ms
+block time (QuickNode's own FAQ figure, quoted in §1 above), 6,000–8,000
+blocks is roughly **10–13 minutes of retained history**, not the hours the
+prior estimate implied. This is a **REFUTATION of the earlier ~100k-block
+estimate** with a fresh, dated, live measurement; either the chain's
+pruning policy changed between 2026-09-15 and 2026-09-17, or the prior
+figure was measured against a different node/method and was wrong — this
+document cannot tell which, only that today's number is 6,000–8,000, not
+100,000. **Consequence for item 2's nonce-based proxy: it is only usable
+in the same short window a bot is already watching a launch in real
+time** — checking nonces at the launch block *minutes* after graduation is
+fine; checking them for a token discovered hours or days later, against
+the free public RPC, will hit this wall and fail exactly the way the
+packet's original holder-read failure did. QuickNode's dated marketing
+claim ("Full historical Robinhood Chain state with no pruning... from
+genesis") is the only lead that would lift this limit, and it is
+untested here per the no-sign-up boundary — **item 5 is CHECKED for the
+free tier (live, reproducible, quoted above) and INFERRED (vendor claim
+only) for the paid tier.**
+
+### Coordinator's requested format
+
+1. Alchemy trace/Transfers coverage for chain 4663: **No** — its own
+   per-chain method table excludes every trace/debug-tracer method and
+   `alchemy_getAssetTransfers`, contradicting its generic marketing
+   bullets on the same page. QuickNode debug/trace coverage: **inferred
+   yes** (dated, chain-specific vendor quote; not key-tested).
+2. Best bundle proxy: **sequential nonces among launch-block buyers**,
+   corroborated by near-identical buy sizes and later coordinated
+   selling. Cost: **1 `eth_getLogs` + 1 `eth_getTransactionCount` per
+   distinct buyer address at the launch block** (≈20 extra calls for a
+   ~20-buyer launch block) — never used to accuse, only to surface a
+   pattern in the fact sheet.
+3. Uniswap v4 pool/hook address: **Found and confirmed live** —
+   PoolId `0xfa309242187ec19ffa6a467bdfea620f3fe626e0f7ff43e1e356b1004c1defaf`,
+   matches DexScreener/GeckoTerminal exactly, real `Swap` logs pulled
+   from the `PoolManager` today.
+4. LP lock: **Yes, permanent, no withdrawal function exists for anyone**
+   — proved from source and from a live `ownerOf()` read matching the
+   locker's own address for the packet's token.
+5. Archive depth: **Free public RPC: ~6,000–8,000 blocks (~10–13
+   minutes), live-tested today, narrower than the prior ~100k-block
+   estimate.** Paid (QuickNode): claimed unlimited/no-pruning, not
+   independently tested.
+
+**Do paid tiers close the funding-source gap? Partially, and only for
+QuickNode, and only in a weaker form than "read who funded this wallet."**
+QuickNode's documented Debug API (`debug_traceTransaction`,
+`debug_traceBlockByNumber`, `trace_block`) would let a paid bot replay a
+specific transaction or block to see internal ETH transfers within it —
+but neither vendor documents an address-indexed reverse lookup ("all
+transfers into wallet X, ever") for this chain, so finding *which*
+transaction funded a wallet still means scanning blocks, not querying an
+address. The practical, affordable path to a bundling signal remains the
+proxy in item 2 (nonces/amounts/timing on data already read for other
+signals), not a genuine funding-source trace — that is unchanged from
+finding #6 in the original document, now narrowed to: paid tracing exists
+on this chain (QuickNode, inferred) but nothing turns it into a
+funding-source *index*, so the proxy is still the cheapest and only
+currently-affordable answer.
