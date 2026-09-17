@@ -218,9 +218,7 @@ describe("the tokenomics page before any token exists", () => {
     expect(screen.getAllByText(/1000 bps/).length).toBeGreaterThan(0);
     // No post-graduation number was decoded (research 0040), so the page
     // says so rather than publishing one.
-    expect(
-      screen.getByText(/not established here/i),
-    ).toBeTruthy();
+    expect(screen.getByText(/not established here/i)).toBeTruthy();
   });
 });
 
@@ -273,7 +271,7 @@ describe("the summon box", () => {
     // somebody else's profile.
     render(<Summon handle={null} />);
     expect(screen.getByText(/not announced here yet/i)).toBeTruthy();
-    expect(screen.queryByPlaceholderText(/mint address/i)).toBe(null);
+    expect(screen.queryByPlaceholderText(/token address/i)).toBe(null);
   });
 
   it("builds a prefilled post once a real address is typed", () => {
@@ -282,7 +280,7 @@ describe("the summon box", () => {
     // way. The comment in ui/index.tsx about not installing a library before a
     // component needs one applies to test libraries too.
     render(<Summon handle="realorrug" />);
-    const box = screen.getByPlaceholderText(/mint address/i);
+    const box = screen.getByPlaceholderText(/token address/i);
 
     // Nothing typed: no link, so the button is absent rather than dead.
     expect(screen.queryByRole("link")).toBe(null);
@@ -290,7 +288,9 @@ describe("the summon box", () => {
     // Something that is not an address: the reader is told here, before it
     // costs them a public post that gets no answer.
     fireEvent.change(box, { target: { value: "not an address" } });
-    expect(screen.getByText(/not shaped like a Solana address/i)).toBeTruthy();
+    expect(
+      screen.getByText(/not shaped like a token address on either chain/i),
+    ).toBeTruthy();
     expect(screen.queryByRole("link")).toBe(null);
 
     // A real one: the intent link, with the mint encoded into it.
@@ -299,6 +299,22 @@ describe("the summon box", () => {
     const link = screen.getByRole("link");
     expect(link.getAttribute("href")).toBe(
       `https://x.com/intent/post?text=%40realorrug%20${mint}`,
+    );
+  });
+
+  it("summons about a Robinhood Chain token too, not only a Solana one", () => {
+    // The box gated on base58 alone until 2026-09-17, so the chain the bot
+    // mainly answers about got the refusal line and no button, from the front
+    // page's own call to action. Re-apply the bug by dropping `evmShaped` from
+    // `Summon` and this fails on the missing link.
+    render(<Summon handle="realorrug" />);
+    const box = screen.getByPlaceholderText(/token address/i);
+
+    const token = "0x13e6cdB0470B10AfCB96177Ae8702ace2ac72cD6";
+    fireEvent.change(box, { target: { value: token } });
+    expect(screen.queryByText(/not shaped like a token address/i)).toBe(null);
+    expect(screen.getByRole("link").getAttribute("href")).toBe(
+      `https://x.com/intent/post?text=%40realorrug%20${token}`,
     );
   });
 });
@@ -600,7 +616,9 @@ describe("the history page", () => {
     expect(links).toContain("https://x.com/i/web/status/1");
     expect(links).toContain("https://x.com/i/web/status/2");
     expect(
-      links.some((h) => h?.startsWith("https://robinhoodchain.blockscout.com/tx/")),
+      links.some((h) =>
+        h?.startsWith("https://robinhoodchain.blockscout.com/tx/"),
+      ),
     ).toBe(true);
     // The prize, in the unit it was paid in.
     expect(screen.getByText(/3\.0000 ETH/)).toBeTruthy();

@@ -100,9 +100,7 @@ export function Heading({
           {kicker}
         </div>
       )}
-      <h2 className="display text-3xl sm:text-4xl">
-        {children}
-      </h2>
+      <h2 className="display text-3xl sm:text-4xl">{children}</h2>
     </div>
   );
 }
@@ -259,8 +257,7 @@ export function LaunchBlock({
   const gap = 4;
   const perRow = 8;
   const rows = Math.ceil(squares / perRow) || 1;
-  const fill =
-    tone === "signal" ? "var(--color-signal)" : "var(--color-edge)";
+  const fill = tone === "signal" ? "var(--color-signal)" : "var(--color-edge)";
   return (
     <svg
       className="block"
@@ -397,7 +394,10 @@ export function Cta({
 export function Summon({ handle }: { handle: string | null }) {
   const [mint, setMint] = useState("");
   const typed = mint.trim().length > 0;
-  const shaped = mintShaped(mint);
+  // Either chain: the bot dispatches on the address shape it is handed, so
+  // the box accepts both shapes it reads. Base58 alone here rejected every
+  // Robinhood Chain token until 2026-09-17 -- see `summonIntent`.
+  const shaped = mintShaped(mint) || evmShaped(mint);
   const href = handle === null ? null : summonIntent(handle, mint);
 
   if (handle === null) {
@@ -421,7 +421,7 @@ export function Summon({ handle }: { handle: string | null }) {
         id="mint"
         value={mint}
         onChange={(e) => setMint(e.target.value)}
-        placeholder="Paste a mint address"
+        placeholder="Paste a token address"
         spellCheck={false}
         autoComplete="off"
         // The address is the only thing this field accepts, and a phone
@@ -436,7 +436,7 @@ export function Summon({ handle }: { handle: string | null }) {
             ? "Opens X with the post written. You send it."
             : shaped
               ? "Opens X with the post written. You send it."
-              : "That is not shaped like a Solana address, so the bot would not read it."}
+              : "That is not shaped like a token address on either chain, so the bot would not read it."}
         </span>
       </div>
     </Card>
@@ -508,7 +508,10 @@ export function CheckBox() {
   };
   return (
     <form onSubmit={submit} className="mt-8 max-w-2xl" role="search">
-      <label htmlFor="check-address" className="typewriter mb-2 block text-sm text-[var(--color-dim)]">
+      <label
+        htmlFor="check-address"
+        className="typewriter mb-2 block text-sm text-[var(--color-dim)]"
+      >
         Paste a token&apos;s contract address
       </label>
       <div className="flex flex-col gap-2 border-2 border-[var(--color-gold)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[#f0c95a] sm:flex-row">
@@ -534,7 +537,10 @@ export function CheckBox() {
         </button>
       </div>
       {wrong && (
-        <p id="check-address-error" className="mt-2 text-sm text-[var(--color-danger)]">
+        <p
+          id="check-address-error"
+          className="mt-2 text-sm text-[var(--color-danger)]"
+        >
           That is not a contract address. It should start with 0x and be 42
           characters long.
         </p>

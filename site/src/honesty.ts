@@ -27,7 +27,10 @@ export function count(value: number): string {
  * A clock skew rendering "in 3 hours" would look like a bug in the data, which
  * is worse than saying nothing.
  */
-export function measuredAgo(iso: string, now: Date = new Date()): string | null {
+export function measuredAgo(
+  iso: string,
+  now: Date = new Date(),
+): string | null {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return null;
   const seconds = Math.floor((now.getTime() - then) / 1000);
@@ -196,16 +199,23 @@ export function mintShaped(text: string): boolean {
 }
 
 /**
- * A prefilled X post that summons the account about a mint, or `null`.
+ * A prefilled X post that summons the account about a token, or `null`.
  *
  * `null` when the handle is not configured or the text is not address-shaped —
  * a summon button that posts `@undefined` would be worse than no button. The
  * handle is a parameter rather than a constant here because this site does not
  * know it: see [`account`].
+ *
+ * **Either chain.** This gated on `mintShaped` alone until 2026-09-17, so a
+ * Robinhood Chain `0x` address — the chain the bot mainly answers about — got
+ * no button at all from the front page's own box, while `Check.tsx` next door
+ * accepted it. The bot dispatches on the shape of the address it is handed
+ * (one list, one path, both chains), and this button only writes the post the
+ * reader sends, so the shapes it accepts are the shapes the bot reads.
  */
 export function summonIntent(handle: string, mint: string): string | null {
   if (handleHref(handle) === null) return null;
-  if (!mintShaped(mint)) return null;
+  if (!mintShaped(mint) && !evmShaped(mint)) return null;
   const text = encodeURIComponent(`@${handle} ${mint.trim()}`);
   return `https://x.com/intent/post?text=${text}`;
 }
