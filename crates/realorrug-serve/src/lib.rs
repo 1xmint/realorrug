@@ -8,7 +8,6 @@
 
 pub mod card;
 pub mod check;
-pub mod crawler;
 pub mod public;
 
 use axum::routing::get;
@@ -37,8 +36,7 @@ pub fn app() -> Router {
         .route("/v1/public/weeks", get(public::weeks))
         .route("/v1/public/hunters", get(public::hunters))
         .merge(check::router(check_state.clone()))
-        .merge(card::router(check_state.clone()))
-        .merge(crawler::router(check_state))
+        .merge(card::router(check_state))
 }
 
 /// `GET /health`: the version and the commit, so "is the running process the

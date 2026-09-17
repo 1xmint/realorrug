@@ -926,6 +926,30 @@ mod tests {
     }
 
     #[test]
+    fn an_untrusted_field_is_found_by_its_own_label() {
+        let pairs = vec![
+            ("token name".to_owned(), "Pepe".to_owned()),
+            ("token symbol".to_owned(), "PEPE".to_owned()),
+        ];
+        assert_eq!(untrusted_field(&pairs, "token symbol"), Some("PEPE"));
+        assert_eq!(untrusted_field(&pairs, "token name"), Some("Pepe"));
+        assert_eq!(untrusted_field(&pairs, "website"), None);
+    }
+
+    #[test]
+    fn the_client_document_drops_the_card_stash_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("entry.json");
+        let doc = json!({"state": "verdict", "_name": "Pepe", "_symbol": "PEPE"});
+        write_cache(&path, &doc, 1_000).expect("write");
+        let served = fresh_cached(&path, 1_001).expect("fresh");
+        assert_eq!(served["state"], "verdict");
+        assert!(served.get("_name").is_none() && served.get("_symbol").is_none());
+        let raw = fresh_cached_raw(&path, 1_001).expect("fresh");
+        assert_eq!(raw["_name"], "Pepe");
+    }
+
+    #[test]
     fn a_stale_cache_entry_is_a_miss() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let path = dir.path().join("entry.json");

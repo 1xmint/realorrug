@@ -105,10 +105,7 @@ async fn handle(
     // verdict — pass the same status through with no body, rather than
     // drawing a grey card that would then get cached under a key nothing
     // else will ever ask for again the same way.
-    if status == StatusCode::TOO_MANY_REQUESTS
-        || status == StatusCode::BAD_REQUEST
-        || status == StatusCode::SERVICE_UNAVAILABLE
-    {
+    if refused(status) {
         return status.into_response();
     }
 
@@ -203,6 +200,25 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+/// Whether the checker refused rather than answered: rate limit, malformed
+/// address, or budget spent. Those pass through as a bare status.
+fn refused(status: StatusCode) -> bool {
+    status == StatusCode::TOO_MANY_REQUESTS
+        || status == StatusCode::BAD_REQUEST
+        || status == StatusCode::SERVICE_UNAVAILABLE
+}
+
+/// The chain's name as a reader knows it; an empty field is said as unknown
+/// rather than drawn as a blank line.
+fn chain_label(chain: &str) -> &str {
+    match chain {
+        "solana" => "Solana",
+        "robinhood" => "Robinhood Chain",
+        other if !other.is_empty() => other,
+        _ => "unknown chain",
+    }
+}
+
 /// Builds the card's SVG. Pure and synchronous: no chain read, no I/O, so it
 /// is directly unit-testable for escaping, truncation and the "never a
 /// digit-run from a price field" rule.
@@ -214,12 +230,7 @@ fn build_svg(word: &str, chain: &str, name: Option<&str>, symbol: Option<&str>) 
     let color = stamp_color(word);
     let name_text = name.map(|n| escape_xml(&truncate(n, MAX_NAME_CHARS)));
     let symbol_text = symbol.map(|s| escape_xml(&truncate(s, MAX_SYMBOL_CHARS)));
-    let chain_label = escape_xml(match chain {
-        "solana" => "Solana",
-        "robinhood" => "Robinhood Chain",
-        other if !other.is_empty() => other,
-        _ => "unknown chain",
-    });
+    let chain_label = escape_xml(chain_label(chain));
 
     let mut body = String::new();
     let _ = write!(
@@ -380,6 +391,39 @@ mod tests {
             !visible.chars().any(|c| c.is_ascii_digit()),
             "visible card text carries a digit the inputs did not: {visible}"
         );
+    }
+
+    #[test]
+    fn only_the_three_refusals_skip_the_card() {
+        assert!(refused(StatusCode::TOO_MANY_REQUESTS));
+        assert!(refused(StatusCode::BAD_REQUEST));
+        assert!(refused(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(!refused(StatusCode::OK));
+        assert!(!refused(StatusCode::NOT_FOUND));
+    }
+
+    #[test]
+    fn each_chain_is_named_as_a_reader_knows_it() {
+        assert_eq!(chain_label("solana"), "Solana");
+        assert_eq!(chain_label("robinhood"), "Robinhood Chain");
+        assert_eq!(chain_label("base"), "base");
+        assert_eq!(chain_label(""), "unknown chain");
+    }
+
+    /// The card's words are drawn from the host's fonts. Without them the
+    /// PNG is the same whatever the verdict says, so two different words
+    /// must give two different images. Skipped on a host with no fonts,
+    /// where there is nothing to draw with.
+    #[test]
+    fn the_verdict_word_is_actually_drawn() {
+        let mut db = resvg::usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        if db.is_empty() {
+            return;
+        }
+        let a = render_png(&build_svg("Sketchy", "robinhood", None, None)).expect("render");
+        let b = render_png(&build_svg("Rugged", "robinhood", None, None)).expect("render");
+        assert_ne!(a, b, "the stamp word left no mark on the image");
     }
 
     #[test]
