@@ -17,7 +17,11 @@ supervised. Binary at `~/realorrug/bin/realorrug-serve`, with the release's
 
 Installed from `release-linux` run 34793325535, commit `ae448f0`; `/health`
 reported that build, and the five `/v1/public/*` documents were byte-identical
-to `radar-serve`'s on install.
+to `radar-serve`'s on install. **Both binaries were replaced on 2026-09-17 with
+commit `414105c`**, checksums verified against the release's `BUILD-INFO.txt`
+and the previous pair kept beside them as `*.prev-d15cf18`; `/health` reports
+`414105c` and the analyst's journal reports `LIVE -- replies are being posted
+publicly` on it.
 
 **The live site reaches it** since 2026-09-14. The site calls
 `https://radar.heyvera.org`; the root-owned tunnel config
@@ -73,17 +77,28 @@ Three files are read at paths relative to that working directory:
 - `docs/research/data/0024-base-rates.json`, a dated snapshot. A copy is
   committed here too.
 - `docs/research/data/population.json`, the population summary behind
-  `/v1/public/stats`. The box holds the last one Radar built, copied once, and
-  the page states its date. Without it the page answers "not measured yet" and
-  the site shows its own dated figures.
-- `docs/research/data/creator-index.json`, who launched what. **Absent** until
-  realorrug builds its own from Robinhood Chain launches (plan 0001 step 7b).
-  Without it, replies say nothing about who launched a token, and the analyst
-  says so once at startup. A stale copy of Radar's would be worse: a creator
-  it has not seen would read as a first launch.
+  `/v1/public/stats`. Written by the `creator-index` job, beside the index and
+  from the same walk, so the two can never disagree. It held the last one Radar
+  built until 2026-09-17, when building the Robinhood index overwrote it; it now
+  states Pons v2's totals, with its `chain` field saying so. Its outcome columns
+  are absent rather than zero until the pass below runs, and `/v1/public/stats`
+  publishes them as JSON `null` for the same reason. Without the file the page
+  answers "not measured yet" and the site shows its own dated figures.
+- `docs/research/data/creator-index.json`, who launched what. **Built on the box
+  on 2026-09-17** from Robinhood Chain launches (plan 0001 step 7b): 531,581
+  launches by 301,820 launchers, blocks 0 to 65,763,847, 134 requests, 33.5 MB
+  on disk and about 50 MB of the analyst's memory. The outcome pass that fills
+  `measured`/`organic`/`instant`/`stillborn` and the deployer-to-fee-recipient
+  alias has **not** run, so a reply can say this launcher has launched before
+  and how often, and cannot yet say how those went. Without the file entirely,
+  replies say nothing about who launched a token and the analyst says so once at
+  startup; a successful load is silent, so the absence of that line is the
+  confirmation. A copy of Radar's would be worse than nothing: it is a different
+  chain, and a creator it had not seen would read as a first launch.
 
 The daily "seven days later" post reads a day's file in `data/analyst/daily/`.
-Radar's join wrote those; nothing does now, so the post is silent until step 7b.
+Radar's join wrote those; nothing does now, so the post is silent until
+realorrug's own join writes a day's file from Robinhood Chain.
 
 ## Moving off Radar's folders
 
