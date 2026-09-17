@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 
 use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, topic};
-use realorrug_robinhood::{Address as RobinhoodAddress, Hash32, Log, Rpc};
+use realorrug_robinhood::{Address as RobinhoodAddress, Hash32, Log, LogsError, Rpc};
 use realorrug_types::{ChainAddress, ReadAt};
 
 use crate::budget::{Budget, Exhausted};
@@ -219,6 +219,102 @@ fn holders_from(logs: &[Log], record: &LaunchedToken) -> Result<Holders, String>
     })
 }
 
+/// Why [`holders_paged`] gives up rather than keep walking.
+///
+/// Named as one constant so the reason a caller sees for "too busy" is the
+/// same string this module documents and tests, rather than one composed
+/// ad hoc at each of the two places the walk can stop early (the page cap,
+/// and a single block that alone exceeds the provider's cap).
+const TOO_BUSY: &str = "too many transfers to read within this answer's budget";
+
+/// The largest share of a token's remaining `calls_left` that one dossier's
+/// holder-log paging may spend, on top of the flat ceiling below.
+///
+/// Not the only ceiling: see [`MAX_HOLDER_PAGES`]'s own comment for why a
+/// second, budget-independent cap is also needed.
+const HOLDER_PAGE_BUDGET_DIVISOR: u32 = 4;
+
+/// The largest number of pages [`holders_paged`] may fetch for one token,
+/// regardless of how much budget is left.
+///
+/// Sized so a busy token cannot spend the whole call budget it happens to
+/// have been handed, even when that budget is generous: research
+/// (`docs/research/robinhood-trader-signals.md` §0, reproduced live
+/// 2026-09-17 against a real graduated token a few hours old) estimates
+/// 3-5 pages to sum a heavily-traded young token's transfers in full, so 12
+/// leaves headroom for a halving retry or two beyond that estimate without
+/// approaching [`crate::budget::DEFAULT_MAX_CALLS`] (60) on its own. The actual cap
+/// used is the smaller of this and a quarter of the calls the budget passed
+/// in today has left when the walk starts (see [`HOLDER_PAGE_BUDGET_DIVISOR`]),
+/// so a budget constructed smaller than the default cannot be emptied by
+/// holder paging alone either.
+const MAX_HOLDER_PAGES: u32 = 12;
+
+/// How many pages [`holders_paged`] may spend on `budget`, chosen from what
+/// it has left right now rather than from a constant alone.
+fn holder_page_cap(budget: &Budget) -> u32 {
+    (budget.calls_left() / HOLDER_PAGE_BUDGET_DIVISOR).clamp(1, MAX_HOLDER_PAGES)
+}
+
+/// Every holder-relevant `Transfer` `token` emitted between `from_block` and
+/// `to_block`, read a window at a time so a token busy enough to clear the
+/// provider's per-call result cap (10,000 logs, `Rpc::logs_range`'s own doc
+/// comment) is still readable rather than refused outright.
+///
+/// Starts with the whole range as one window -- the common case, a token
+/// quiet enough that one call already answers in full, costs exactly the
+/// single request [`Rpc::logs`] always did. Only when the provider reports
+/// the result-count cap does the window halve and retry from the same
+/// starting block; once a window size succeeds, later pages reuse it rather
+/// than re-probing the full remaining range each time, since a window sized
+/// for the busiest part of a token's history is sized for the rest of it
+/// too.
+///
+/// # Errors
+///
+/// The endpoint's error, a log that did not parse, or -- when the page cap
+/// or a single block alone would need more requests than are allowed --
+/// [`TOO_BUSY`]. Never a partial count: every error here is returned before
+/// [`holders_from`] runs, so a caller that stops early gets nothing rather
+/// than a truncated ledger that would misreport a real balance as zero
+/// (AGENTS.md §3 rule 8).
+fn holders_paged(
+    budget: &mut Budget,
+    client: &Rpc,
+    token: &RobinhoodAddress,
+    from_block: u64,
+    to_block: u64,
+    record: &LaunchedToken,
+) -> Result<Holders, String> {
+    let cap = holder_page_cap(budget);
+    let mut logs: Vec<Log> = Vec::new();
+    let mut start = from_block;
+    let mut window = to_block.saturating_sub(from_block).saturating_add(1);
+    let mut pages = 0u32;
+    while start <= to_block {
+        if pages >= cap {
+            return Err(TOO_BUSY.to_owned());
+        }
+        take(budget)?;
+        pages += 1;
+        let end = start.saturating_add(window.saturating_sub(1)).min(to_block);
+        match client.logs_range(token, &[topic::TRANSFER], start, end) {
+            Ok(page) => {
+                logs.extend(page);
+                start = end.saturating_add(1);
+            }
+            Err(LogsError::TooManyResults) => {
+                if window <= 1 {
+                    return Err(TOO_BUSY.to_owned());
+                }
+                window = window.div_ceil(2);
+            }
+            Err(LogsError::Other(e)) => return Err(e),
+        }
+    }
+    holders_from(&logs, record)
+}
+
 /// The factory's record of `token`, the one read a Robinhood dossier cannot
 /// be built without.
 fn launched_token(
@@ -372,11 +468,27 @@ pub fn build(
         }),
     }
 
-    // 5. The holders. Required too. A token too busy for one answer (the
-    // provider's log cap) lands here as unread, never as a partial count.
-    let holders = take(budget)
-        .and_then(|()| client.logs(token, &[topic::TRANSFER]))
-        .and_then(|logs| holders_from(&logs, &record));
+    // 5. The holders. Required too. A busy token pages the read by block
+    // range instead of one unbounded call, so the provider's per-call result
+    // cap (research/robinhood-trader-signals.md §0) no longer collapses
+    // every actively-traded token's holder count to unread. Paging needs a
+    // concrete upper block, so it only runs when the read point (step 2)
+    // was actually read; the launch block (step 4) bounds the low end when
+    // known and falls back to genesis otherwise -- the same fallback
+    // `Rpc::logs` always used. A read point that could not be read here
+    // means the budget or deadline was already tight enough that this read
+    // falls back to the prior one-shot call, which fails the same way it
+    // always did rather than paging against a block number that was never
+    // learned.
+    let from_block = dossier.chain_launch.as_ref().map_or(0, |l| l.block);
+    let holders = match dossier.read_at {
+        Some(ReadAt::Robinhood(to_block)) => {
+            holders_paged(budget, client, token, from_block, to_block, &record)
+        }
+        _ => take(budget)
+            .and_then(|()| client.logs(token, &[topic::TRANSFER]))
+            .and_then(|logs| holders_from(&logs, &record)),
+    };
     match holders {
         Ok(h) => dossier.holders = Some(h),
         Err(why) => dossier.unavailable.push(Unavailable {
@@ -645,12 +757,30 @@ mod tests {
     }
 
     fn transfer(from: &RobinhoodAddress, to: &RobinhoodAddress, value: u128) -> serde_json::Value {
+        transfer_at(from, to, value, LAUNCH_BLOCK)
+    }
+
+    fn transfer_at(
+        from: &RobinhoodAddress,
+        to: &RobinhoodAddress,
+        value: u128,
+        block: u64,
+    ) -> serde_json::Value {
         log_json(
             &token(),
             &[topic::TRANSFER, topic_of(from), topic_of(to)],
             &word_u(value),
-            LAUNCH_BLOCK,
+            block,
         )
+    }
+
+    /// A raw JSON-RPC error body carrying the provider's own result-count
+    /// cap wording, byte-identical to the one reproduced live 2026-09-17
+    /// against a real graduated token (docs/research/robinhood-trader-signals.md
+    /// §0).
+    fn too_many_results_error() -> String {
+        r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"logs matched by query exceeds limit of 10000"}}"#
+            .to_owned()
     }
 
     const ALICE: RobinhoodAddress = RobinhoodAddress([0xa1; 20]);
@@ -836,6 +966,94 @@ mod tests {
         let holders = holders_from(&logs, &rec).expect("holders");
         assert_eq!(holders.count, 2);
         assert_eq!(holders.largest_share_bps, Some(6_666));
+    }
+
+    #[test]
+    fn a_token_whose_transfers_come_back_in_three_pages_sums_to_the_right_holders() {
+        // The provider's cap fires on the whole range (width 6) and on the
+        // first halved window too (width 3), so covering blocks 0..=5 takes
+        // a window of 2: two failed attempts, then three successful pages
+        // (0-1, 2-3, 4-5). Each page contributes a transfer, and the three
+        // joined in order give the same balances a single unbounded call
+        // would have, which is the property this walk exists to keep.
+        let curve = RobinhoodAddress([0x51; 20]);
+        let deployer = RobinhoodAddress([0x52; 20]);
+        let rec = record(true, curve, deployer);
+        let client = Rpc::new(serve(vec![
+            too_many_results_error(),
+            too_many_results_error(),
+            answer(&serde_json::json!([transfer_at(
+                &RobinhoodAddress::ZERO,
+                &curve,
+                1_000,
+                0
+            )])),
+            answer(&serde_json::json!([transfer_at(&curve, &ALICE, 400, 2)])),
+            answer(&serde_json::json!([transfer_at(&curve, &BOB, 600, 5)])),
+        ]));
+        let mut b = budget();
+
+        let holders = holders_paged(&mut b, &client, &token(), 0, 5, &rec).expect("holders");
+        assert_eq!(holders.count, 2);
+        assert_eq!(holders.largest_share_bps, Some(6_000));
+        assert_eq!(b.calls_made(), 5);
+    }
+
+    #[test]
+    fn a_wide_window_over_the_limit_halves_and_a_narrower_one_succeeds() {
+        let curve = RobinhoodAddress([0x53; 20]);
+        let deployer = RobinhoodAddress([0x54; 20]);
+        let rec = record(true, curve, deployer);
+        let client = Rpc::new(serve(vec![
+            too_many_results_error(),
+            answer(&serde_json::json!([transfer_at(
+                &RobinhoodAddress::ZERO,
+                &ALICE,
+                10,
+                0
+            )])),
+            answer(&serde_json::json!([transfer_at(&ALICE, &BOB, 4, 3)])),
+        ]));
+        let mut b = budget();
+
+        let holders = holders_paged(&mut b, &client, &token(), 0, 3, &rec).expect("holders");
+        assert_eq!(holders.count, 2);
+        assert_eq!(b.calls_made(), 3);
+    }
+
+    #[test]
+    fn a_page_budget_that_runs_out_mid_walk_is_unread_not_a_partial_count() {
+        // A small budget derives a small page cap (`holder_page_cap`): with
+        // 4 calls left the cap is 1, so a token that needs a second page to
+        // finish its range is refused outright rather than answering with
+        // only the first page's balances -- a partial ledger presented as
+        // complete is exactly what AGENTS.md rule 8 forbids.
+        let curve = RobinhoodAddress([0x55; 20]);
+        let deployer = RobinhoodAddress([0x56; 20]);
+        let rec = record(true, curve, deployer);
+        let client = Rpc::new(serve(vec![too_many_results_error()]));
+        let mut b = Budget::new(4, 3, Duration::from_secs(30));
+
+        let err = holders_paged(&mut b, &client, &token(), 0, 3, &rec).expect_err("refused");
+        assert_eq!(err, TOO_BUSY);
+    }
+
+    #[test]
+    fn a_single_page_token_still_costs_one_request() {
+        let curve = RobinhoodAddress([0x57; 20]);
+        let deployer = RobinhoodAddress([0x58; 20]);
+        let rec = record(true, curve, deployer);
+        let client = Rpc::new(serve(vec![answer(&serde_json::json!([transfer_at(
+            &RobinhoodAddress::ZERO,
+            &ALICE,
+            10,
+            1
+        )]))]));
+        let mut b = budget();
+
+        let holders = holders_paged(&mut b, &client, &token(), 0, 100, &rec).expect("holders");
+        assert_eq!(holders.count, 1);
+        assert_eq!(b.calls_made(), 1);
     }
 
     #[test]
