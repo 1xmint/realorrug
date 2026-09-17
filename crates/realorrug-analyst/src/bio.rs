@@ -60,6 +60,16 @@ pub const MAX: usize = 160;
 /// What separates the lead from the status.
 const JOIN: &str = " · ";
 
+/// The disclaimer every reply used to end with, until 2026-09-17: the owner
+/// decided it belongs on the profile once, not on every post. Fixed rather
+/// than operator-configured, appended to whatever lead is set, so an
+/// operator cannot configure a bio that omits it, and so it is never at the
+/// mercy of `REALORRUG_BIO_LEAD`'s own length -- `from_vars` below folds it
+/// into the stored lead and refuses configuration that would not leave room
+/// for it, which is what "always fits" means here: checked once, at
+/// configuration time, rather than hoped for at every render.
+pub const DISCLAIMER: &str = "Not financial advice.";
+
 /// The bio writer's configuration.
 ///
 /// Both fields are required and there is no default for either, which is what
@@ -86,10 +96,21 @@ impl Bio {
     /// prevent.
     #[must_use]
     pub fn from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<Self> {
-        let lead = env_or_legacy("REALORRUG_BIO_LEAD", "RADAR_BIO_LEAD", get)?
+        let operator_lead = env_or_legacy("REALORRUG_BIO_LEAD", "RADAR_BIO_LEAD", get)?
             .trim()
             .to_owned();
-        (!lead.is_empty() && lead.len() < MAX).then_some(Self { lead })
+        if operator_lead.is_empty() {
+            return None;
+        }
+        // The disclaimer is folded in here, not appended at render time: a
+        // lead so long it left the disclaimer no room would otherwise be
+        // accepted at configuration time and silently render without it
+        // whenever a status line is also present. Refusing it here instead
+        // means every configured instance either carries the disclaimer or
+        // is not configured at all -- the same "deny by default" shape rule
+        // 8 asks for everywhere else.
+        let lead = format!("{operator_lead}{JOIN}{DISCLAIMER}");
+        (lead.chars().count() < MAX).then_some(Self { lead })
     }
 
     /// The bio for a week, or `None` when there is nothing to say.
@@ -455,8 +476,32 @@ mod tests {
         // configuration time rather than producing a bio that is only a lead.
         assert_eq!(Bio::from_vars(&|_| Some("x".repeat(MAX))), None);
 
+        // The disclaimer is folded into the stored lead, fixed and always
+        // present -- an operator cannot configure a bio that omits it.
         let set = Bio::from_vars(&|k| (k == "REALORRUG_BIO_LEAD").then(|| "  hello  ".to_owned()));
-        assert_eq!(set.expect("set").lead, "hello");
+        assert_eq!(set.expect("set").lead, format!("hello{JOIN}{DISCLAIMER}"));
+    }
+
+    #[test]
+    fn the_disclaimer_is_fixed_and_a_lead_leaving_it_no_room_is_refused() {
+        // An operator cannot configure the disclaimer away: it is not part of
+        // `REALORRUG_BIO_LEAD`, it is appended to whatever that holds.
+        let set = Bio::from_vars(&|k| (k == "REALORRUG_BIO_LEAD").then(|| "Automated.".to_owned()));
+        assert!(set.expect("set").lead.ends_with(DISCLAIMER));
+
+        // A lead that leaves the disclaimer no room is refused at
+        // configuration time, same as a lead alone too long for `MAX` was
+        // refused before this task -- "always fits" is checked once, here,
+        // rather than hoped for at every render.
+        let too_long = "x".repeat(MAX - JOIN.len() - DISCLAIMER.len());
+        assert_eq!(
+            Bio::from_vars(&|_| Some(too_long.clone())),
+            None,
+            "{too_long}"
+        );
+        // One character shorter leaves exactly enough room.
+        let fits = "x".repeat(MAX - JOIN.len() - DISCLAIMER.len() - 1);
+        assert!(Bio::from_vars(&|_| Some(fits.clone())).is_some());
     }
 
     #[test]

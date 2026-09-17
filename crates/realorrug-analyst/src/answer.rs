@@ -82,6 +82,13 @@ pub enum Answered {
         entry: Box<Entry>,
         /// What the voice pass owes the meter that reserved it.
         billed: Billed,
+        /// The sheet this reply was written from and when the chain was read
+        /// for it, so the caller can cache it in `admission::Gate` for reuse
+        /// by a distinct post about the same mint inside the burst window
+        /// (`Limits::dedupe_seconds`). `Box`ed for the same reason `entry`
+        /// is: this variant should not make every `Answered` as big as its
+        /// heaviest case.
+        sheet: Box<(realorrug_roast::FactSheet, Option<realorrug_types::ReadAt>)>,
     },
     /// The mention named a symbol, which identifies nothing.
     ///
@@ -220,7 +227,9 @@ pub fn answer(
         // and global caps -- the same reasoning `Asked::Ticker` below already
         // states for gating a reply that costs no chain read.
         let key = format!("followup:{conversation}");
-        if let Admitted::No(why) = gate.admit(&mention.author, &key, ctx.now) {
+        if let Admitted::No(why) =
+            gate.admit(&mention.author, &key, Some(conversation.as_str()), ctx.now)
+        {
             return Answered::Refused(why);
         }
         return Answered::Followup {
@@ -242,7 +251,12 @@ pub fn answer(
             // the answer to `$DOGE` is the same sentence for everyone who asks
             // inside the window.
             let key = format!("${t}");
-            if let Admitted::No(why) = gate.admit(&mention.author, &key, ctx.now) {
+            if let Admitted::No(why) = gate.admit(
+                &mention.author,
+                &key,
+                mention.conversation.as_deref(),
+                ctx.now,
+            ) {
                 return Answered::Refused(why);
             }
             return Answered::Ticker {
@@ -258,42 +272,61 @@ pub fn answer(
         Asked::Nothing => return crate::lane2::reply(mention, lane2, ctx.provider, ctx.now),
     };
 
-    if let Admitted::No(why) = gate.admit(&mention.author, &mint_text, ctx.now) {
-        return Answered::Refused(why);
+    let admitted = gate.admit(
+        &mention.author,
+        &mint_text,
+        mention.conversation.as_deref(),
+        ctx.now,
+    );
+    let cached = matches!(admitted, Admitted::YesCached)
+        .then(|| gate.cached_sheet(&mint_text))
+        .flatten()
+        .map(|(sheet, read_at)| (sheet.clone(), read_at));
+    match admitted {
+        Admitted::No(why) => return Answered::Refused(why),
+        Admitted::Yes | Admitted::YesCached => {}
     }
 
-    // Dispatched on the address's own shape -- `0x` is always Robinhood's,
-    // anything else is tried as Solana's base58 -- never on configuration and
-    // never guessed. The one function this whole task exists to introduce:
-    // both analyst entry points and the CLI call it rather than each writing
-    // its own "which chain is this" match. It also owns the call budget
-    // (`realorrug-onchain`'s own default, sixty calls, three pages, twenty
-    // seconds) for the same reason `answer.rs` used to build it by hand and
-    // no longer does: a stranger chooses when this runs and how many run at
-    // once, and a second copy of the ceiling is a second thing to forget to
-    // change.
-    let clients = dispatch::Clients {
-        solana: ctx.client,
-        robinhood: ctx.robinhood,
+    // `cached` is only `Some` when `Gate::admit` just said this mint's last
+    // read is fresh enough to reuse (`Admitted::YesCached`) -- a burst of
+    // distinct posts about the same token inside the same short window. Any
+    // older read misses the cache and falls through to reading the chain
+    // again, which is the default: the facts a young token's reply rests on
+    // move fast enough that a second post deserves another look.
+    let (sheet, read_at) = if let Some((sheet, read_at)) = cached {
+        (sheet, read_at)
+    } else {
+        // Dispatched on the address's own shape -- `0x` is always Robinhood's,
+        // anything else is tried as Solana's base58 -- never on configuration
+        // and never guessed. The one function this whole task exists to
+        // introduce: both analyst entry points and the CLI call it rather
+        // than each writing its own "which chain is this" match. It also owns
+        // the call budget (`realorrug-onchain`'s own default, sixty calls,
+        // three pages, twenty seconds) for the same reason `answer.rs` used
+        // to build it by hand and no longer does: a stranger chooses when
+        // this runs and how many run at once, and a second copy of the
+        // ceiling is a second thing to forget to change.
+        let clients = dispatch::Clients {
+            solana: ctx.client,
+            robinhood: ctx.robinhood,
+        };
+        let dossier = match dispatch::read(&mint_text, &clients) {
+            Ok(d) => d,
+            Err(dispatch::Error::NotAnAddress) => return Answered::NotAnAddress,
+            Err(dispatch::Error::Unreadable(why)) => return Answered::Unreadable(why),
+        };
+        let sheet = realorrug_roast::FactSheet::build(
+            &dossier,
+            ctx.rates,
+            ctx.creators,
+            ctx.self_mint,
+            None,
+        );
+        (sheet, dossier.read_at)
     };
-    let dossier = match dispatch::read(&mint_text, &clients) {
-        Ok(d) => d,
-        Err(dispatch::Error::NotAnAddress) => return Answered::NotAnAddress,
-        Err(dispatch::Error::Unreadable(why)) => return Answered::Unreadable(why),
-    };
-
-    let (sheet, reply) = realorrug_roast::roast(
-        &dossier,
-        ctx.rates,
-        ctx.creators,
-        ctx.provider,
-        ctx.self_mint,
-    );
-
-    // Computed once. `read_at_slot` below is derived from this same value
-    // rather than re-read from `dossier`, so the two fields can never
-    // disagree with each other.
-    let read_at = dossier.read_at;
+    // Written fresh every time, even from a cached sheet: two people asking
+    // in the same minute get two posts, not one post copied twice.
+    let reply = realorrug_roast::write(&sheet, ctx.provider);
 
     // Recorded here, where the verdict is computed for the published reply
     // -- not by reading it back out of the log afterwards, which would make
@@ -305,11 +338,16 @@ pub fn answer(
     if let Some(conversation) = &mention.conversation {
         threads.record(conversation, &mint_text, level);
     }
+    // Cloned before `sheet.signals` is moved out of it below for the log
+    // entry: the caller needs the whole sheet, unmodified, to cache it for
+    // reuse by the next distinct post about this mint.
+    let cached_sheet = Box::new((sheet.clone(), read_at));
 
     Answered::Reply {
         // Read before `reply.text` is moved below. `Billed` is `Copy`, so this
         // is not a borrow that has to outlive anything.
         billed: reply.billed,
+        sheet: cached_sheet,
         entry: Box::new(Entry {
             at: ctx.now,
             mention_id: mention.id.clone(),

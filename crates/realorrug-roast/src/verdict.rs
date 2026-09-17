@@ -437,7 +437,6 @@ pub fn template(sheet: &FactSheet) -> String {
         }
         Level::Rugged | Level::NothingUglyYet | Level::CantTell => {}
     }
-    out.push_str("Measured, not predicted. Not financial advice.\n");
     out
 }
 

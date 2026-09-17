@@ -146,12 +146,14 @@ pub const RULES: &[Rule] = &[
         because: "advice, not commentary",
     },
     // NOT a rule: "financial advice". It was one, and the test asserting the
-    // deterministic template passes this check caught it -- the template ends
-    // "Not financial advice", so the analyst's own safest possible reply was
-    // being refused by its own rule. The disclaimer is the thing ADR 0005's
-    // unresolved precondition 3 asks for, and blocking it would have removed
-    // the one sentence most worth keeping. The advice itself is caught by the
-    // phrases above.
+    // deterministic template passes this check caught it -- the template used
+    // to end "Not financial advice", so the analyst's own safest possible
+    // reply was being refused by its own rule. ADR 0005's unresolved
+    // precondition 3 asked for that disclaimer; as of 2026-09-17 it lives in
+    // the bio instead of every reply (see `bio.rs`'s `REALORRUG_BIO_LEAD`),
+    // but the phrase stays off this list regardless -- a model-written reply
+    // that happens to say "financial advice" is not asking to be refused for
+    // it. The advice itself is caught by the phrases above.
     Rule {
         phrase: "to the moon",
         because: "a price prediction",

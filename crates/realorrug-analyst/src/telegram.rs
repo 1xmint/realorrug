@@ -553,13 +553,20 @@ pub fn tick(
         }
 
         match outcome {
-            Answered::Reply { entry, .. } => {
+            Answered::Reply { entry, sheet, .. } => {
                 let mint = entry.mint.clone().unwrap_or_default();
                 match crate::publish::publish(publisher, &paths.telegram_log, &mut journal, *entry)
                 {
                     Ok(written) => {
                         if let Some(id) = &written.reply_id {
-                            gate.record(&mention.author, &mint, id, at);
+                            // `conversation` is always `None` here (Telegram
+                            // has no matching concept, see `Mention` above),
+                            // so this can never earn a pointer reply -- every
+                            // repeat ask gets answered fresh. The sheet is
+                            // still cached: a burst of asks about the same
+                            // mint within `dedupe_seconds` still reuses the
+                            // read even though no pointer is ever possible.
+                            gate.record(&mention.author, &mint, id, None, Some(*sheet), at);
                             answered += 1;
                         }
                     }
