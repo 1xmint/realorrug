@@ -336,9 +336,18 @@ rule 2 is actually true.
 Length: aim for 220–240 weighted characters, validate against X's weighted
 rules, hard-refuse over 280. Do **not** truncate at 280 the way
 `render::for_publication` (`crates/realorrug-roast/src/render.rs:68`) does
-today — cutting the tail can sever the evidence from the verdict it earned.
+— cutting the tail can sever the evidence from the verdict it earned.
 On overflow, re-render deterministically with one finding instead of two. No
 second model call.
+
+**Half of that arrived on 2026-09-17, because the §1 fix made it urgent.**
+Asking the model what the facts *mean* made replies longer, and the first
+live one ran past the limit and published as "…but the concentration is" —
+the sentence the reply existed for, cut one word in. `for_publication` now
+backs up to the last sentence that finished inside the budget, so a reader
+never sees half a thought. That is a floor, not this section: a reply is
+still shortened by dropping its last sentence, which can still be the
+sentence carrying the evidence, and the paragraph above stays the plan.
 
 ### Three replies this would produce
 

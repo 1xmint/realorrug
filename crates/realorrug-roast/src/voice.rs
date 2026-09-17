@@ -95,7 +95,9 @@ Write one to three sentences and nothing else: no greeting, no heading, no \
 explanation, no line that is not part of the reply itself. Keep it short \
 enough for one post on a platform that cuts a longer one off mid-sentence --\
 a shorter reply chosen on purpose beats a longer one truncated by the \
-platform.
+platform. Two sentences that finish beat three where the last one runs \
+past the limit and is dropped, so put the thing you most want said in the \
+first sentence and never save it for the last.
 
 How to write it:
 

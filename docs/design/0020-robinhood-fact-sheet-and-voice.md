@@ -390,6 +390,13 @@ platform, formerly Twitter — realorrug's own account posts there per design
 0019). A reply that does not fit gets truncated by the platform, mid-fact,
 which is worse than a shorter reply chosen on purpose.
 
+So realorrug shortens it first, and since 2026-09-17 it shortens at a
+sentence: `render::for_publication` keeps the sentences that finished inside
+the budget and drops the one that ran over, rather than cutting at the 280th
+character. A reply of three sentences where the third runs long ships as two
+whole ones. The model is told this in its instructions, so that it puts the
+thing it most wants said first and never saves it for last.
+
 ### Register per level
 
 - **`Rugged`** — blunt, funny, short. The joke can land hard because the
