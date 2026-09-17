@@ -571,7 +571,7 @@ describe("the history page", () => {
       lamports: 3_000_000_000_000_000_000,
       recipient: "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
       signature:
-        "0x5f3a1c2d4e6b7890abcdef1234567890abcdef1234567890abcdef1234567890ab",
+        "0x5f3a1c2d4e6b7890abcdef1234567890abcdef1234567890abcdef1234567890",
       at: "2026-09-07T01:00:00Z",
     },
   };
