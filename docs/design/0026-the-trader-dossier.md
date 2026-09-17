@@ -123,6 +123,35 @@ both chains and a Solana reply is unchanged; a test pins that. This is
 independent of ADR 0030 and of §9's slice 1: it is the floor every path falls
 back to, and it was empty.
 
+**And the model was never told the verdict it would be judged against —
+fixed 2026-09-17.** `voice::write` computed `verdict::level` *after*
+generation and used it for one thing only: refusing words the level had not
+earned (`forbidden::check_level`) and content it required
+(`check_required`). The request itself carried the fact sheet and nothing
+else. So the model wrote every reply blind to the conclusion the whole
+system exists to reach, and was then marked against it.
+
+Two costs, and the second is the one that matters. A reply refused for a
+word its level had not earned spent a paid call and shipped the template.
+And a reply that passed every check still read as a recital, because every
+one of the prompt's five rules was a prohibition — no invented numbers,
+never a price, never an accusation, one to three sentences — and not one
+word of it asked the model what the facts *meant*. Measured on the box that
+day, against a real graduated token: *"It has 527 holders, but one address
+holds 50.1% outside the curve; it has graduated to the AMM."* Every number
+correct, and no read in it. That is the gap between this bot and the one §1
+describes, and it was never a data gap.
+
+The request now carries the level, what it means, what the reply must
+contain at that level, and which words it does not license — the word list
+read from `forbidden`'s own table (`words_refused_at`), so the instruction
+and the check can never disagree. The prompt gained rules that ask for the
+read: lead with whatever most changes the decision, say what the pair of
+numbers *means*, work inside the verdict without arguing it. The level is
+still decided by code before the call and checked again after it; what
+changed is that the model writes inside a verdict instead of guessing at
+one. Independent of ADR 0030 and of §9's slice 1.
+
 Everything after this section is worth less than this one.
 
 ## 2. What the data can actually do

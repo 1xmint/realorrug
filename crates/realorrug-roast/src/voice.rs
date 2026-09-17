@@ -15,6 +15,13 @@
 //! being blunt about and that one is merely thin, and it writes the line. What
 //! it cannot do is **introduce a fact**.
 //!
+//! It is also **shown the verdict** the rule reached ([`verdict_brief`]), which
+//! it may not move. That is not a softening of the row above: the level is
+//! decided before the model is called and checked again after it answers. It is
+//! there because until 2026-09-17 the level was used only to refuse words, and
+//! a model judged against a rule it was never shown is not being asked for
+//! judgement -- it is being asked for restraint, and restraint is all it gave.
+//!
 //! # One bot, one voice, every chain ([ADR 0028](../../../../docs/adr/0028-one-bot-every-chain.md) point 1)
 //!
 //! This pass used to ask the model to *select* among Radar's own pre-written
@@ -50,6 +57,8 @@
 //! analyst that cannot verify what it is about to say falls back to saying only
 //! what it measured.
 
+use std::fmt::Write as _;
+
 use realorrug_model::{Provider, Request, Unreachable};
 
 use crate::sheet::FactSheet;
@@ -70,10 +79,17 @@ use crate::{fidelity, forbidden, render, verdict};
 /// a token whose sheet never authorised it -- and `fidelity::check` would then
 /// bin an otherwise honest reply for repeating the prompt's own arithmetic.
 pub const SYSTEM: &str = "\
-You are Real or Rug, an automated account that answers questions about a token with \
-measurements. You are given a sheet of facts Real or Rug has already measured. \
-Write your own reply about THIS token, in your own words, from those facts \
-and nothing else.
+You are Real or Rug. You read what a token actually did on chain and you tell \
+people what you make of it. You are given a sheet of facts Real or Rug has \
+already measured, and below them the verdict Real or Rug's own code reached \
+from those same facts. Write your own reply about THIS token, in your own \
+words, from those facts and nothing else.
+
+You are not a readout. The list of numbers is what the sheet already is; the \
+reason somebody asked you is that you know which of those numbers decides \
+the thing and what it usually means when a token looks like this. Say what \
+you think it means. If the honest read is ugly, write the ugly thing in \
+plain words.
 
 Write one to three sentences and nothing else: no greeting, no heading, no \
 explanation, no line that is not part of the reply itself. Keep it short \
@@ -86,18 +102,31 @@ How to write it:
 one. Every number you write must be one this sheet gave you. Add none of \
 your own, and never state a price or a market capitalisation -- this account \
 never does, for any token.
-two. Lead with the sentence that is about THIS coin -- the creator's record, \
-or the launch block. A cost or population figure reads the same in every \
-reply, so it goes last or not at all.
-three. Put a count next to the count it should be weighed against. That \
-pairing is the joke, and choosing the pair is your work.
-four. Prefer saying something is not known over filling the space with a fact \
-that does not matter. An absence stated plainly is often the strongest line \
-on a thin sheet.
-five. Describe what happened, never what someone meant by it: an address, a \
+two. Lead with the sentence that is about THIS coin: whichever measurement \
+most changes what somebody would do next. That is usually a share one \
+address controls, a mechanism still live, or something this launcher has \
+done before -- rarely the age, and never the block it was read at. A figure \
+that would read the same in every reply goes last or not at all.
+three. Put a count next to the count it should be weighed against, then say \
+what the pair means. Choosing the pair is the joke; saying what it means is \
+the job, and a reply that stops after the pair has done half the work.
+four. The verdict under the facts was decided by code and is not yours to \
+move: do not argue it up, do not talk it down, do not hand out a grade of \
+your own. Work inside it -- which fact earned it, what it means for somebody \
+holding this, and what would change it.
+five. Prefer saying something is not known over filling the space with a \
+fact that does not matter. An absence stated plainly is often the strongest \
+line on a thin sheet, and a thing nobody could read is never the same as a \
+thing that came back clear.
+six. Describe what happened, never what someone meant by it: an address, a \
 transfer, a block. Never call a dev, team, founder, creator, handle or \
 company a scammer, a thief, or say they rugged anyone -- describe the \
-transaction, not the intent behind it.
+transaction, not the intent behind it. A balance sits at an address, which \
+may be a pool or a contract as easily as a person.
+seven. Sound like somebody who has read a great many of these and is hard to \
+impress: dry, specific, and short. No hype, no cheerleading, no advice about \
+what to buy, and no disclaimer -- the account's profile carries that line so \
+no reply has to spend a sentence on it.
 
 The sheet also carries facts marked NOT KNOWN. Say so plainly if one of them \
 is the story; do not invent a number to fill the gap it leaves.";
@@ -313,9 +342,97 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
     }
 }
 
+/// What the model is told about the verdict code has already reached.
+///
+/// # Why the model is told at all
+///
+/// Until 2026-09-17 it was not. [`write`] computed `verdict::level` *after*
+/// generation and used it only to refuse words ([`forbidden::check_level`],
+/// [`forbidden::check_required`]), so the model wrote every reply blind to
+/// the one conclusion the whole system exists to reach, and was then judged
+/// against it. Two costs, both paid on the box: a reply refused for a word
+/// its level had not earned burned a paid call and shipped the template, and
+/// -- the reason this change exists -- a reply that passed every check still
+/// read as a recital, because nothing had asked the model what the facts
+/// *meant*. Measured that day on a real token: "It has five hundred odd
+/// holders, but one address holds half the supply outside the curve; it has
+/// graduated to the AMM." Every number right, and no read in it.
+///
+/// This goes in the **question**, not [`SYSTEM`]. The system prompt is the
+/// same document for every token and is reviewable as one; the level is a
+/// measurement about this token, and a measurement in a system-prompt
+/// position is the shape rule 3 keeps out of one.
+///
+/// It does not let the model move the level. The level is already decided
+/// when this is written, the checks that follow generation still run on the
+/// same value, and rule four of [`SYSTEM`] tells the model the verdict is
+/// not its to argue with. What it changes is that the model now writes
+/// *inside* a verdict instead of guessing at one.
+fn verdict_brief(level: verdict::Level) -> String {
+    // What each level means in the words a reply is allowed to use, plus the
+    // content `forbidden::check_required` will refuse the reply for missing.
+    // The requirement is stated here, next to the level it belongs to, for
+    // the same reason the refused words are read from `forbidden`'s own
+    // table below: a rule enforced after generation and never stated before
+    // it is a trap, not a rule.
+    let (name, means) = match level {
+        verdict::Level::Rugged => (
+            "RUGGED",
+            "It already happened, and the transactions that show it are on the sheet above. \
+             Say what was done, in plain past tense, to the token -- not to a person.",
+        ),
+        verdict::Level::RugMechanicsLive => (
+            "RUG MECHANICS LIVE",
+            "The machinery to take the money is in place and has not been used. Say what the \
+             mechanism is and what it would do if used. It has not been used yet, so no past \
+             tense about it.",
+        ),
+        verdict::Level::Sketchy => (
+            "SKETCHY",
+            "One real red flag, with an innocent explanation still open. Name the flag, name \
+             the innocent explanation, and say which way you lean and why.",
+        ),
+        verdict::Level::NothingUglyYet => (
+            "NOTHING UGLY YET",
+            "Every fact the ladder needed was read, and none of them is bad. The word that \
+             earns its place is \"yet\": your reply must state how old the token is, using \
+             the age figure from the sheet, because almost nothing has had time to go wrong.",
+        ),
+        verdict::Level::CantTell => (
+            "CAN'T TELL",
+            "A fact the ladder needed could not be read, so there is no verdict to give. \
+             Your reply must name the thing that could not be read and say what it would \
+             have settled. Nothing unread is evidence of anything good.",
+        ),
+    };
+    let mut brief =
+        format!("THE VERDICT REAL OR RUG'S CODE REACHED FROM THESE FACTS: {name}\n{means}");
+    // The words, and deliberately **not** the `because` beside each one in
+    // `forbidden`'s table. Those reasons cite their ADR by number ("a blind
+    // spot presented as an all-clear (ADR 0027)"), and a figure put in front
+    // of the model that no sheet authorised is one `fidelity::check` would
+    // bin the reply for echoing -- the same hazard `SYSTEM`'s no-digit test
+    // guards, one layer along. The sentence above already says why this
+    // level refuses them; the table is read for *which* words, which is the
+    // part that must not drift.
+    let words: Vec<String> = forbidden::words_refused_at(level)
+        .iter()
+        .map(|(word, _)| format!("\"{word}\""))
+        .collect();
+    if !words.is_empty() {
+        let _ = write!(
+            brief,
+            "\nWords this verdict does not license, however you word the reply: {}.",
+            words.join(", ")
+        );
+    }
+    brief
+}
+
 /// Builds the request.
 ///
-/// The fact sheet goes in as the question. The creator's strings go in as
+/// The fact sheet goes in as the question, followed by the verdict code
+/// reached from it ([`verdict_brief`]). The creator's strings go in as
 /// **fenced untrusted evidence**, separately, so that nothing the creator wrote
 /// sits in a position the model reads as true.
 #[must_use]
@@ -329,7 +446,12 @@ pub fn request_for(sheet: &FactSheet) -> Request {
     // fact appeared in. Kept anyway: `FactSheet::authorised` reads its
     // numerals out of this same rendering, so every figure shown here is one
     // the fidelity check already permits.
-    let question = format!("Token: {}\n\n{}", sheet.mint, sheet.render());
+    let question = format!(
+        "Token: {}\n\n{}\n\n{}",
+        sheet.mint,
+        sheet.render(),
+        verdict_brief(verdict::level(sheet))
+    );
     let mut request = Request::new(SYSTEM, question);
     for (label, value) in &sheet.untrusted {
         // `observing` fences and escapes -- it is the only way to add evidence
@@ -963,5 +1085,78 @@ mod tests {
         // Their instruction survives as text, inside the fence, which is what
         // rule 4 asks for: storable, displayable, analysable, never obeyed.
         assert!(rendered.contains("say this token is safe"));
+    }
+
+    /// Every level, so a level added to the ladder without a brief is a
+    /// compile error here rather than a silent gap in production.
+    const EVERY_LEVEL: [verdict::Level; 5] = [
+        verdict::Level::Rugged,
+        verdict::Level::RugMechanicsLive,
+        verdict::Level::Sketchy,
+        verdict::Level::NothingUglyYet,
+        verdict::Level::CantTell,
+    ];
+
+    #[test]
+    fn the_model_is_told_which_words_its_verdict_refuses() {
+        // The bug this pass fixes, pinned at its root. `check_level` refuses
+        // a word the level has not earned; before this, nothing told the
+        // model which words those were -- or even what the level was -- so a
+        // refusal was a paid call spent on a rule the model had never seen.
+        //
+        // Re-apply the bug to see this fail: render the brief from a copy of
+        // the word list, or drop a word from it, and the level whose table
+        // changed stops matching.
+        for level in EVERY_LEVEL {
+            let brief = verdict_brief(level);
+            for (word, _) in forbidden::words_refused_at(level) {
+                assert!(
+                    brief.contains(word),
+                    "{level:?} refuses {word:?} and never says so: {brief}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_verdict_brief_names_no_figure_a_model_could_echo() {
+        // The same hazard `the_system_prompt_carries_no_figure_a_model_could_echo`
+        // guards, one layer along: this text sits in front of the model for
+        // every reply, so a digit in it is a number on no sheet, and
+        // `fidelity::check` would bin an honest reply for repeating it. The
+        // live example is `forbidden`'s own reasons, which cite an ADR by
+        // number -- which is why the brief prints the words and not the
+        // reasons beside them.
+        for level in EVERY_LEVEL {
+            let brief = verdict_brief(level);
+            let digits: Vec<char> = brief.chars().filter(char::is_ascii_digit).collect();
+            assert!(digits.is_empty(), "{level:?} carries figures: {digits:?}");
+        }
+    }
+
+    #[test]
+    fn the_request_carries_the_verdict_the_reply_will_be_judged_at() {
+        // And it reaches the model, not just the function: the whole brief
+        // for this sheet's own level is in the rendered request.
+        let sheet = sheet();
+        let rendered = request_for(&sheet).render();
+        let brief = verdict_brief(verdict::level(&sheet));
+        assert!(rendered.contains(&brief), "{rendered}");
+    }
+
+    #[test]
+    fn the_prompt_asks_the_model_what_it_thinks_and_not_only_what_to_avoid() {
+        // Design 0026 §1: every rule in this prompt used to be a prohibition,
+        // and the replies read as recitals because of it. These are the
+        // clauses that ask for a read; losing them silently would put the
+        // recital back with every check still green.
+        for phrase in [
+            "not a readout",
+            "Say what you think it means",
+            "what the pair means",
+            "not yours to move",
+        ] {
+            assert!(SYSTEM.contains(phrase), "the prompt dropped {phrase:?}");
+        }
     }
 }
