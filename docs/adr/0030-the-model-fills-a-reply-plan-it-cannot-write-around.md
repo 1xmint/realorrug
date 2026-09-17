@@ -74,10 +74,12 @@ So the choice is not "free prose or dull prose". It is "free prose with rule
 
 5. **The fallback composes through the same renderer.** The deterministic
    reply is the same code path with the model's choices replaced by defaults
-   — lead with the strongest finding, no angle. A provider outage then
-   produces a shorter answer, not a different kind of answer. Design 0026 §1
-   shows the reply Josh complained about was this fallback, so this is the
-   part that fixes what he actually saw.
+   — lead with the strongest finding, no angle. Falling back then produces
+   a shorter answer, not a different kind of answer. Design 0026 §1 measured
+   that every reply the bot has sent so far fell back, and that the one Josh
+   complained about fell back because a check refused the model's draft, not
+   because the provider was down. So this is the path the reader has actually
+   been reading, and it is the part that fixes what he saw.
 
 ## What this costs
 

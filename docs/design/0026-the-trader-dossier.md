@@ -51,18 +51,51 @@ model may not introduce a fact, code picks the verdict level, never the price
 or market cap, never an accusation against a named person, absent is not
 zero, unknown is not safe.
 
-## 1. The two things actually broken, before any new detector
+## 1. The three things actually broken, before any new detector
 
 **The bad reply Josh saw was not written by a model at all.** It is the
 deterministic fallback in `realorrug_roast::verdict::template`
 (`crates/realorrug-roast/src/verdict.rs:339`), which
 `realorrug_roast::voice::write` (`crates/realorrug-roast/src/voice.rs:186`)
-ships whenever the provider is absent, unreachable or rejected. That path
-already records itself — `answer.rs:365` logs `fellback` with the reason —
-so the first operational question is what percentage of live replies fall
-back. If it is most of them, every hour spent on the system prompt changes
-nothing that anyone reads. **Read the fallback rate before building
-anything.**
+ships whenever the provider is absent, unreachable or rejected.
+
+**Measured on the production box, 2026-09-17.** Every substantive reply the
+bot has ever sent is a fallback: two of two in
+`~/realorrug/data/analyst/replies.jsonl`, the third record being a pointer
+at an earlier answer and not a reply of its own. Their reasons differ, and
+the second is the one that matters.
+
+| reply | `fellback` |
+| --- | --- |
+| the Solana-era one | `NoProvider` |
+| the Robinhood one Josh complained about | `Forbidden([Violation { phrase: "canttell reply names nothing that could not be read" }])` |
+
+**So the model was reachable, it did write a reply, and a check threw the
+reply away.** That inverts the obvious reading. The prompt is not the
+problem and the provider is not the problem: the problem is the gate between
+them and the reader.
+
+The gate is `check_required_canttell`
+(`crates/realorrug-roast/src/forbidden.rs:904`). It requires the reply's
+lowercased text to *contain* one of `sheet.unknown`'s phrases with the
+suffix `" could not be read"` stripped off. For this token that sheet entry
+was `the holders could not be read`, so the reply had to contain the literal
+two-word string `the holders`. A model that wrote "holders can't be read",
+"holder data is unavailable", or "we couldn't see who holds it" fails. Each
+of those satisfies the rule the check exists to enforce, and none of them
+contains that string. The rule is right; the check is a substring match that
+happens to include an article.
+
+**And nobody can read the draft that was refused.** The rejected text is not
+written to `replies.jsonl`, not logged, and not kept anywhere: the journal
+for that minute holds no trace of it. What the model actually wrote is
+unknown and unknowable, here and for every future rejection. That is the
+cheapest of the three to fix and it has to be fixed first, because without
+it every later claim about how the voice reads is a guess.
+
+**Order of work, from this measurement:** log the refused draft; loosen the
+match to the topic's content words while keeping the requirement; only then
+touch prompts, data or detectors.
 
 **The "no invented facts" guarantee is narrower than rule 2 claims.**
 `realorrug_roast::fidelity::check`
@@ -73,7 +106,7 @@ check we have. Rule 2 says the model may not introduce a fact. Today the
 code enforces "may not introduce a number". §7 closes that, and it is the
 reason this design constrains the voice rather than freeing it.
 
-Everything after this section is worth less than these two paragraphs.
+Everything after this section is worth less than this one.
 
 ## 2. What the data can actually do
 
@@ -247,8 +280,9 @@ opinion angles — nonfactual reactions like "the exit door was painted on",
 owned by code and enabled only at levels that earn them. Code renders the
 factual clauses and appends the verdict. The model cannot write prose
 outside those choices. The deterministic fallback composes through the same
-path, so a provider outage sounds like the product instead of a database
-dump — which fixes §1's first problem as a side effect.
+path, so a fallback sounds like the product instead of a database dump. §1
+measured that every reply so far has been one, so this is not a contingency
+branch: it is the branch the reader has actually been getting.
 
 That is less free than design 0020's current prompt. It is the version where
 rule 2 is actually true.
