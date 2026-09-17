@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use realorrug_robinhood::escrow::{ESCROW, claimable};
 use realorrug_robinhood::pons::{FACTORY, LaunchedToken};
-use realorrug_robinhood::{Address, Hash32, Receipt, Rpc, Tag, Transaction};
+use realorrug_robinhood::{Address, Hash32, LogsError, Receipt, Rpc, Tag, Transaction};
 
 const CLEAN: &str = include_str!("../../../docs/research/data/0036-pons-v2-clean-launch.json");
 
@@ -394,6 +394,55 @@ fn a_working_first_endpoint_is_the_only_one_asked() {
 #[test]
 fn every_endpoint_failing_is_an_error_not_a_guess() {
     assert!(Rpc::new(format!("{DEAD},{DEAD}")).block_number().is_err());
+}
+
+#[test]
+fn logs_range_sends_the_explicit_block_range_and_parses_the_answer() {
+    let addr: Address = "0x13e6cdb0470b10afcb96177ae8702ace2ac72cd6"
+        .parse()
+        .expect("an address");
+    let topic: Hash32 = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        .parse()
+        .expect("a topic");
+    let (url, seen) = serve(vec![answer(&serde_json::json!([]))]);
+    let got = Rpc::new(url).logs_range(&addr, &[topic], 0x10, 0x20);
+    assert_eq!(got, Ok(Vec::new()));
+    let request = seen.lock().expect("the log")[0].clone();
+    assert_eq!(request["method"], "eth_getLogs");
+    assert_eq!(
+        request["params"],
+        serde_json::json!([{
+            "address": addr.to_string(),
+            "fromBlock": "0x10",
+            "toBlock": "0x20",
+            "topics": [topic.to_string()],
+        }])
+    );
+}
+
+#[test]
+fn logs_range_names_the_result_count_cap_distinctly_from_any_other_error() {
+    // This is Alchemy's own error text against Robinhood Chain, captured
+    // live 2026-09-17 (docs/research/robinhood-trader-signals.md §0) -- the
+    // one error a caller needs to tell apart from the rest, because it is
+    // the one with a defined recovery (halve the window and retry).
+    let (url, _) = serve(vec![
+        r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"logs matched by query exceeds limit of 10000"}}"#
+            .to_owned(),
+        r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"metadata is not found"}}"#
+            .to_owned(),
+    ]);
+    let rpc = Rpc::new(url);
+    let addr = Address([0u8; 20]);
+    assert_eq!(
+        rpc.logs_range(&addr, &[], 0, 100),
+        Err(LogsError::TooManyResults)
+    );
+    let other = rpc.logs_range(&addr, &[], 0, 100).expect_err("refused");
+    assert!(
+        matches!(other, LogsError::Other(ref e) if e.contains("metadata is not found")),
+        "{other:?}"
+    );
 }
 
 #[test]
