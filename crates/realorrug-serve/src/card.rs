@@ -219,6 +219,17 @@ fn chain_label(chain: &str) -> &str {
     }
 }
 
+/// Font families named in the card, first match wins.
+///
+/// Named rather than the bare generic `sans-serif`: `usvg` maps that generic
+/// to Arial by default, and neither the server nor CI has Arial, so a card
+/// asking only for `sans-serif` rendered with no words on it at all. DejaVu is
+/// what the server has; Liberation and Noto cover other Linux hosts.
+const FONT_SANS: &str = "'DejaVu Sans', 'Liberation Sans', 'Noto Sans', Arial, sans-serif";
+/// The same rule for the monospace chain label.
+const FONT_MONO: &str =
+    "'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', 'Courier New', monospace";
+
 /// Builds the card's SVG. Pure and synchronous: no chain read, no I/O, so it
 /// is directly unit-testable for escaping, truncation and the "never a
 /// digit-run from a price field" rule.
@@ -245,28 +256,28 @@ fn build_svg(word: &str, chain: &str, name: Option<&str>, symbol: Option<&str>) 
     );
     let _ = write!(
         body,
-        r#"<text x="100" y="220" font-family="sans-serif" font-size="96" font-weight="700" fill="{color}">{word}</text>"#,
+        r#"<text x="100" y="220" font-family="{FONT_SANS}" font-size="96" font-weight="700" fill="{color}">{word}</text>"#,
         word = escape_xml(word),
     );
     if let (Some(name_text), Some(symbol_text)) = (&name_text, &symbol_text) {
         let _ = write!(
             body,
-            r#"<text x="100" y="320" font-family="sans-serif" font-size="48" fill="{COLOR_PAPER_INK}">{name_text} ({symbol_text})</text>"#,
+            r#"<text x="100" y="320" font-family="{FONT_SANS}" font-size="48" fill="{COLOR_PAPER_INK}">{name_text} ({symbol_text})</text>"#,
         );
     } else if let Some(name_text) = &name_text {
         let _ = write!(
             body,
-            r#"<text x="100" y="320" font-family="sans-serif" font-size="48" fill="{COLOR_PAPER_INK}">{name_text}</text>"#,
+            r#"<text x="100" y="320" font-family="{FONT_SANS}" font-size="48" fill="{COLOR_PAPER_INK}">{name_text}</text>"#,
         );
     }
     let _ = write!(
         body,
-        r#"<text x="100" y="{y}" font-family="monospace" font-size="30" fill="{COLOR_PAPER_INK}">{chain_label}</text>"#,
+        r#"<text x="100" y="{y}" font-family="{FONT_MONO}" font-size="30" fill="{COLOR_PAPER_INK}">{chain_label}</text>"#,
         y = HEIGHT - 140,
     );
     let _ = write!(
         body,
-        r#"<text x="{x}" y="{y}" font-family="sans-serif" font-size="26" font-weight="700" fill="{COLOR_GOLD}" text-anchor="end">REALORRUG</text>"#,
+        r#"<text x="{x}" y="{y}" font-family="{FONT_SANS}" font-size="26" font-weight="700" fill="{COLOR_GOLD}" text-anchor="end">REALORRUG</text>"#,
         x = WIDTH - 100,
         y = HEIGHT - 100,
     );
