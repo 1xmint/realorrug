@@ -32,9 +32,11 @@
 //!
 //! [`build_svg`] takes exactly four strings — verdict word, chain, name,
 //! symbol — and never a number. There is no code path from a price or
-//! market-cap field to this function's parameters; a test below asserts the
-//! rendered SVG text never contains a digit run of three or more (a
-//! deliberately blunt check pinned to design 0025 §6's absolute rule).
+//! market-cap field to this function's parameters. The token's own name and
+//! symbol are drawn as written, digits included: "Pepe2024" is a name, and
+//! scrubbing digits from it would misquote the token. A test below pins that
+//! with every text input free of digits, the only digits in the SVG are the
+//! template's own layout numbers, so nothing numeric enters by any other road.
 //!
 //! # Font
 //!
@@ -362,55 +364,24 @@ mod tests {
         );
     }
 
-    /// No digit run of three or more characters (the shape a price or a
-    /// market cap would take, e.g. "1234" or "0.00042") can reach the SVG —
-    /// `build_svg`'s own parameter list has no numeric field at all, and
-    /// this pins that no caller can smuggle one in through `name`/`symbol`
-    /// without it being caught here first.
+    /// The template adds no number of its own beyond layout. With name,
+    /// symbol, word and chain all digit-free, every digit in the SVG sits in
+    /// a fixed layout attribute, so a price could only arrive through a
+    /// parameter, and `build_svg` has no numeric one. A `{price}` slipped
+    /// into the template's visible text fails this.
     #[test]
-    fn no_long_digit_run_reaches_the_svg_from_any_input() {
-        for (name, symbol) in [
-            (Some("Token $1,234,567 mcap"), Some("SYM")),
-            (Some("price 0.00042069"), Some("999999")),
-            (None, None),
-        ] {
-            let svg = build_svg("Sketchy", "solana", name, symbol);
-            let max_digit_run = svg
-                .chars()
-                .fold((0usize, 0usize), |(max, cur), c| {
-                    if c.is_ascii_digit() {
-                        let cur = cur + 1;
-                        (max.max(cur), cur)
-                    } else {
-                        (max, 0)
-                    }
-                })
-                .0;
-            // The template's own fixed layout numbers (coordinates, sizes,
-            // "1200"/"630") are themselves short digit runs; the assertion
-            // here is on data that flows in from `name`/`symbol`, so we
-            // check that none of *those specific* strings' digits survive
-            // as a long run distinguishable from layout constants -- the
-            // stronger, simpler property: neither input string appears
-            // verbatim in the output.
-            if let Some(n) = name {
-                assert!(
-                    !svg.contains(n),
-                    "price-shaped name must not appear verbatim: {svg}"
-                );
-            }
-            if let Some(s) = symbol {
-                assert!(
-                    !svg.contains(s) || s.chars().all(|c| !c.is_ascii_digit()),
-                    "digit symbol must not appear verbatim: {svg}"
-                );
-            }
-            let _ = max_digit_run;
-        }
+    fn the_only_digits_on_a_digit_free_card_are_layout_numbers() {
+        let svg = build_svg("Sketchy", "robinhood", Some("Pepe Coin"), Some("PEPE"));
+        let visible: String = svg
+            .split('>')
+            .filter_map(|chunk| chunk.split('<').next())
+            .collect();
+        assert!(
+            !visible.chars().any(|c| c.is_ascii_digit()),
+            "visible card text carries a digit the inputs did not: {visible}"
+        );
     }
 
-    /// The rendered PNG is under design 0025 §7's ~300KB budget and exactly
-    /// the 1200x630 size it names.
     #[test]
     fn the_rendered_card_is_under_the_size_budget_and_the_right_dimensions() {
         let svg = build_svg("Sketchy", "solana", Some("Example Token"), Some("EX"));
