@@ -113,7 +113,10 @@ pub fn for_publication(text: &str) -> String {
 ///
 /// A closing quote or bracket after the stop belongs to the sentence, so a
 /// run of them is stepped over before the whitespace test and kept in the
-/// result.
+/// result. That run is counted with `take_while` rather than walked with a
+/// `while` loop and an index: a loop whose index fails to advance hangs the
+/// analyst instead of returning a wrong answer, and a hang is the one failure
+/// no reply-level check can recover from.
 fn last_sentence_end(text: &str) -> Option<usize> {
     const CLOSERS: [char; 6] = ['"', '\'', ')', ']', '\u{201d}', '\u{2019}'];
     let chars: Vec<(usize, char)> = text.char_indices().collect();
@@ -122,10 +125,11 @@ fn last_sentence_end(text: &str) -> Option<usize> {
         if !matches!(c, '.' | '!' | '?') {
             continue;
         }
-        let mut after = n + 1;
-        while chars.get(after).is_some_and(|(_, c)| CLOSERS.contains(c)) {
-            after += 1;
-        }
+        let closers = chars[n + 1..]
+            .iter()
+            .take_while(|(_, c)| CLOSERS.contains(c))
+            .count();
+        let after = n + 1 + closers;
         if chars.get(after).is_none_or(|(_, c)| c.is_whitespace()) {
             end = Some(chars.get(after).map_or(text.len(), |(i, _)| *i));
         }
