@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `realorrug launch-check`: whether a Pons v2 launch meets ADR 0013 constraint 1.
+//! `realorrug launch-check`: whether a Pons v2 launch meets ADR 0029's launch rule.
 //!
 //! `launch-check --tx <hash> --rpc <url>` reads the launch transaction's receipt
 //! and the factory's record of the token, and prints either the launch it
 //! verified or every reason it is not clean. Read-only: no key, nothing signed.
 //!
+//! A dev buy by the launcher passes and is printed, because ADR 0029 allows one
+//! and requires it stated; the tokenomics page copies these lines.
+//!
 //! This is the instrument for launch day. The token is launched, this is run on
 //! its transaction, and what it prints is what the analyst may say about the
 //! launch block -- or the reason the launch has to be disowned.
 
-use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Unclean, check_launch};
+use realorrug_robinhood::pons::{
+    FACTORY, Launched, LaunchedToken, Trade, Unclean, check_launch, dev_buys,
+};
 use realorrug_robinhood::{Hash32, Rpc};
 
 /// Runs the command.
@@ -35,14 +40,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .find_map(Launched::from_log)
         .map(|l| l.token);
     let Some(token) = token else {
-        return Err(report(&tx, &Err(vec![Unclean::NoLaunch]), None));
+        return Err(report(&tx, &Err(vec![Unclean::NoLaunch]), None, &[]));
     };
     let record = LaunchedToken::from_return(
         &rpc.call_contract(&FACTORY, &LaunchedToken::call_data(&token))?,
     )
     .ok_or("the factory's record of the token did not decode")?;
     let verdict = check_launch(&receipt, &record);
-    let text = report(&tx, &verdict, Some(&record));
+    let buys = match &verdict {
+        Ok(launch) => dev_buys(&receipt, launch, &record),
+        Err(_) => Vec::new(),
+    };
+    let text = report(&tx, &verdict, Some(&record), &buys);
     if verdict.is_ok() {
         print!("{text}");
         Ok(())
@@ -56,20 +65,39 @@ pub(crate) fn report(
     tx: &Hash32,
     verdict: &Result<Launched, Vec<Unclean>>,
     record: Option<&LaunchedToken>,
+    buys: &[Trade],
 ) -> String {
     let mut lines = match verdict {
-        Ok(launch) => vec![
-            format!("CLEAN launch {tx}"),
-            format!("  token     {}", launch.token),
-            format!("  curve     {}", launch.curve),
-            format!("  deployer  {}", launch.deployer),
-            format!(
-                "  pair      {}",
-                launch.pair.map_or_else(|| "ETH".to_owned(), |p| p.to_string())
-            ),
-            "  the mint went only to the curve; no trade, no other transfer, no extra snipe-tax exemption"
-                .to_owned(),
-        ],
+        Ok(launch) => {
+            let mut lines = vec![
+                format!("CLEAN launch {tx}"),
+                format!("  token     {}", launch.token),
+                format!("  curve     {}", launch.curve),
+                format!("  deployer  {}", launch.deployer),
+                format!(
+                    "  pair      {}",
+                    launch
+                        .pair
+                        .map_or_else(|| "ETH".to_owned(), |p| p.to_string())
+                ),
+            ];
+            lines.extend(buys.iter().map(|b| {
+                format!(
+                    "  dev buy   {} ETH for {} tokens, to {}",
+                    eth(b.quote),
+                    b.tokens,
+                    b.recipient
+                )
+            }));
+            lines.push(if buys.is_empty() {
+                "  the mint went only to the curve; no trade, no other transfer, no extra snipe-tax exemption"
+                    .to_owned()
+            } else {
+                "  the mint went to the curve; no trade but the launcher's own buy above, no other transfer, no extra snipe-tax exemption"
+                    .to_owned()
+            });
+            lines
+        }
         Err(reasons) => std::iter::once(format!("NOT CLEAN: launch {tx}"))
             .chain(reasons.iter().map(|r| format!("  - {}", describe(r))))
             .collect(),
@@ -85,6 +113,19 @@ pub(crate) fn report(
     let mut text = lines.join("\n");
     text.push('\n');
     text
+}
+
+/// Wei as ETH, every digit kept and trailing zeros dropped: this is copied to
+/// the tokenomics page, so it is exact rather than rounded.
+fn eth(wei: u128) -> String {
+    const WEI: u128 = 1_000_000_000_000_000_000;
+    let fraction = format!("{:018}", wei % WEI);
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.is_empty() {
+        (wei / WEI).to_string()
+    } else {
+        format!("{}.{fraction}", wei / WEI)
+    }
 }
 
 fn describe(reason: &Unclean) -> String {
@@ -138,7 +179,9 @@ mod tests {
             exists: true,
         };
         let tx = Hash32([9; 32]);
-        let text = report(&tx, &Ok(launch.clone()), Some(&record));
+        let text = report(&tx, &Ok(launch.clone()), Some(&record), &[]);
+        assert!(text.contains("no trade, no other transfer"), "{text}");
+        assert!(!text.contains("dev buy"), "{text}");
         assert!(text.starts_with(&format!("CLEAN launch {tx}\n")), "{text}");
         assert!(text.contains(&format!("token     {}", Address([1; 20]))));
         assert!(text.contains(&format!("curve     {}", Address([2; 20]))));
@@ -156,10 +199,53 @@ mod tests {
             buyback: true,
             ..record
         };
-        let text = report(&tx, &Ok(paired), Some(&on));
+        let text = report(&tx, &Ok(paired), Some(&on), &[]);
         assert!(text.contains(&format!("pair      {}", Address([5; 20]))));
         assert!(text.contains("buyback on"));
-        assert!(!report(&tx, &Err(vec![]), None).contains("creator tax"));
+        assert!(!report(&tx, &Err(vec![]), None, &[]).contains("creator tax"));
+    }
+
+    #[test]
+    fn a_clean_launch_with_a_dev_buy_states_the_buy() {
+        let launch = Launched {
+            token: Address([1; 20]),
+            curve: Address([2; 20]),
+            deployer: Address([3; 20]),
+            pair: None,
+            config: 0,
+            graduation_threshold: 0,
+        };
+        let buy = Trade {
+            side: realorrug_robinhood::pons::Side::Buy,
+            curve: launch.curve,
+            trader: Address([6; 20]),
+            recipient: launch.deployer,
+            quote: 50_000_000_000_000_000,
+            tokens: 1234,
+            fee: 0,
+            tax: 0,
+        };
+        let text = report(&Hash32([9; 32]), &Ok(launch), None, &[buy]);
+        assert!(
+            text.contains(&format!(
+                "  dev buy   0.05 ETH for 1234 tokens, to {}",
+                Address([3; 20])
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("no trade but the launcher's own buy above"),
+            "{text}"
+        );
+        assert!(!text.contains("no trade, no other transfer"), "{text}");
+    }
+
+    #[test]
+    fn wei_reads_as_exact_eth() {
+        assert_eq!(eth(0), "0");
+        assert_eq!(eth(2_000_000_000_000_000_000), "2");
+        assert_eq!(eth(1_500_000_000_000_000_000), "1.5");
+        assert_eq!(eth(1), "0.000000000000000001");
     }
 
     #[test]
@@ -188,7 +274,7 @@ mod tests {
             Unclean::Exempted(a),
             Unclean::Unreadable(Hash32([8; 32])),
         ];
-        let text = report(&Hash32([9; 32]), &Err(reasons.clone()), None);
+        let text = report(&Hash32([9; 32]), &Err(reasons.clone()), None, &[]);
         assert!(text.starts_with("NOT CLEAN: launch "), "{text}");
         let lines: Vec<&str> = text.lines().skip(1).collect();
         assert_eq!(lines.len(), reasons.len());
@@ -311,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_with_a_dev_buy_is_refused_with_its_reasons() {
+    fn the_launch_with_extra_exemptions_is_refused_with_its_reasons() {
         let (url, _) = serve(vec![
             answer(&result(DIRTY, "the launch receipt")),
             answer(&result(
@@ -324,10 +410,9 @@ mod tests {
             err.starts_with(&format!("NOT CLEAN: launch {DIRTY_TX}\n")),
             "{err}"
         );
-        assert!(
-            err.contains("a trade on the curve in the launch transaction"),
-            "{err}"
-        );
+        assert!(err.contains("exempted from the snipe tax"), "{err}");
+        // Its dev buy is allowed (ADR 0029), so it is not a reason.
+        assert!(!err.contains("a trade on the curve"), "{err}");
         assert!(err.contains("creator tax 100 bps"), "{err}");
     }
 

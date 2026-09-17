@@ -44,9 +44,9 @@ commands:
                                  check the automated payout uses
   launch-check --tx <hash> --rpc URL
                                  whether a Pons v2 launch on Robinhood Chain
-                                 is clean (ADR 0013 constraint 1): the mint
-                                 only to the curve, no trade, no extra
-                                 snipe-tax exemption. Read-only, holds no key
+                                 is clean (ADR 0029): the mint to the curve,
+                                 no trade but the launcher's own stated buy,
+                                 no extra snipe-tax exemption. Read-only
   model-prices <model> [--check] | --list
                                  what to paste into analyst.env for a model,
                                  read from models.dev rather than typed

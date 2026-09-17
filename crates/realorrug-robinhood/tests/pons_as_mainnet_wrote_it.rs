@@ -8,14 +8,14 @@
 //!   trades it paid out.
 //! - `0036-pons-v2-clean-launch.json`: a launch with neither.
 //!
-//! The launch check must refuse the first for exactly its buy and its three
-//! exemptions, and pass the second. Each way a launch can be unclean is then
+//! The launch check must refuse the first for exactly its three exemptions --
+//! its dev buy is allowed and named (ADR 0029) -- and pass the second. Each way a launch can be unclean is then
 //! re-applied to the clean one, so a check that stopped looking would fail
 //! here rather than on launch day.
 
 use realorrug_robinhood::pons::{
     FACTORY, GET_LAUNCHED_TOKEN, Launched, LaunchedToken, Side, Sweep, Trade, Unclean,
-    check_launch, topic,
+    check_launch, dev_buys, topic,
 };
 use realorrug_robinhood::{Address, Log, Receipt, hex_bytes};
 
@@ -157,7 +157,7 @@ fn the_captured_launch_decodes_to_what_research_0036_states() {
 }
 
 #[test]
-fn the_launch_with_a_dev_buy_is_refused_for_exactly_that() {
+fn the_launch_with_a_dev_buy_is_refused_for_its_exemptions_and_names_the_buy() {
     let (launch, record) = dirty();
     let deployer = addr("0x3f927788d627d3561ff59bbfef67ebcbf0fb10a9");
     let curve = addr("0xddf3afb29e265b00c48015c3aacdedcb10088fcf");
@@ -167,17 +167,21 @@ fn the_launch_with_a_dev_buy_is_refused_for_exactly_that() {
             Unclean::Exempted(addr("0x7f5cf80c6075c06253cc8573881d9b76eda657d5")),
             Unclean::Exempted(addr("0x92f4e778076d006c3f30392284315fd3beeb3247")),
             Unclean::Exempted(addr("0x0e7502964aa30b2f7c4689eae8c7c3f5c109567d")),
-            Unclean::TokenMoved {
-                from: curve,
-                to: deployer,
-                amount: Some(28_340_080_971_659_919_028_340_080),
-            },
-            Unclean::Traded {
-                recipient: deployer,
-                tokens: 28_340_080_971_659_919_028_340_080,
-            },
         ])
     );
+    let parsed = Launched::from_log(
+        launch
+            .logs
+            .iter()
+            .find(|l| l.is(&FACTORY, &topic::TOKEN_LAUNCHED))
+            .expect("the launch"),
+    )
+    .expect("it decodes");
+    let buys = dev_buys(&launch, &parsed, &record);
+    assert_eq!(buys.len(), 1, "{buys:?}");
+    assert_eq!(buys[0].curve, curve);
+    assert_eq!(buys[0].recipient, deployer);
+    assert_eq!(buys[0].tokens, 28_340_080_971_659_919_028_340_080);
 }
 
 #[test]
@@ -219,7 +223,7 @@ fn index_of(r: &Receipt, t: realorrug_robinhood::Hash32) -> usize {
 }
 
 #[test]
-fn a_dev_buy_added_to_the_clean_launch_is_refused() {
+fn a_buy_for_someone_else_added_to_the_clean_launch_is_refused() {
     let (dirty_launch, _) = dirty();
     let bundled: Log = dirty_launch.logs[index_of(&dirty_launch, topic::CURVE_BUY)].clone();
     let result = clean_with(|launch, _| {
@@ -251,6 +255,63 @@ fn a_dev_buy_added_to_the_clean_launch_is_refused() {
             Err([Unclean::Traded { .. }])
         ),
         "{result:?}"
+    );
+}
+
+/// The dirty launch's buy, re-aimed at the clean launch's curve and paying
+/// `recipient`, with the transfer that pays it when `paid` is `Some(amount)`.
+fn launcher_buy(launch: &mut Receipt, recipient: Address, paid: Option<u128>) {
+    let (dirty_launch, _) = dirty();
+    let mut buy = dirty_launch.logs[index_of(&dirty_launch, topic::CURVE_BUY)].clone();
+    let curve = launch.logs[index_of(launch, topic::SNIPE_TAX_EXEMPTED)].address;
+    buy.address = curve;
+    buy.topics[2] = word_of(recipient);
+    if let Some(amount) = paid {
+        let mut transfer = launch.logs[index_of(launch, topic::TRANSFER)].clone();
+        transfer.topics[1] = word_of(curve);
+        transfer.topics[2] = word_of(recipient);
+        transfer.data = [[0u8; 16].as_slice(), &amount.to_be_bytes()].concat();
+        launch.logs.push(transfer);
+    }
+    launch.logs.push(buy);
+}
+
+fn word_of(a: Address) -> realorrug_robinhood::Hash32 {
+    let mut word = [0u8; 32];
+    word[12..].copy_from_slice(&a.0);
+    realorrug_robinhood::Hash32(word)
+}
+
+#[test]
+fn the_launchers_own_buy_passes_only_when_its_tokens_arrive() {
+    const TOKENS: u128 = 28_340_080_971_659_919_028_340_080;
+    let (_, record) = clean();
+    let deployer = addr("0x139f144b5187df68a1580ac614da02f0a04233a7");
+    let curve = addr("0x1b45231650ca724fd3e98d7f3eb2569d4ddf0751");
+    assert!(clean_with(|l, _| launcher_buy(l, deployer, Some(TOKENS))).is_ok());
+    assert!(clean_with(|l, _| launcher_buy(l, record.creator_fee_recipient, Some(TOKENS))).is_ok());
+    // Bought, never paid: refused as a trade, once.
+    assert_eq!(
+        clean_with(|l, _| launcher_buy(l, deployer, None)),
+        Err(vec![Unclean::Traded {
+            recipient: deployer,
+            tokens: TOKENS,
+        }])
+    );
+    // Paid the wrong amount: the transfer and the unpaid buy are both named.
+    assert_eq!(
+        clean_with(|l, _| launcher_buy(l, deployer, Some(TOKENS + 1))),
+        Err(vec![
+            Unclean::TokenMoved {
+                from: curve,
+                to: deployer,
+                amount: Some(TOKENS + 1),
+            },
+            Unclean::Traded {
+                recipient: deployer,
+                tokens: TOKENS,
+            },
+        ])
     );
 }
 

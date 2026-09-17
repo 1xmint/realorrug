@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Pons v2, the launcher: launches, curve trades and fee sweeps, decoded, and
-//! the launch check ADR 0013 constraint 1 needs.
+//! the launch check ADR 0029 needs.
 //!
 //! [Research 0036](../../../docs/research/0036-pons-v2-read-from-a-real-launch.md)
 //! is the evidence for every layout here. Pons's published source does not
@@ -14,10 +14,15 @@
 //! curve is the only recipient of the mint" is true of a launch with a dev buy
 //! too. The captured launch `0x1013a302…` minted to its curve and then, in the
 //! same transaction, sold 2.83% of supply to its launcher, free of the snipe
-//! tax, after exempting three more wallets. [`check_launch`] refuses exactly
-//! that: any trade on the curve in the launch transaction, any token transfer
-//! but the mint, and any snipe-tax exemption beyond the two the factory grants
-//! by itself.
+//! tax, after exempting three more wallets.
+//!
+//! ADR 0029 allows the first part: a dev buy by the launcher, stated in public.
+//! [`check_launch`] passes a buy whose tokens go to the deployer or the creator
+//! fee recipient, and the one transfer that pays it, and [`dev_buys`] names
+//! them so the report can say so. It still refuses any other trade on the curve
+//! in the launch transaction (a sell, or a buy for anyone else), any other token
+//! transfer, and any snipe-tax exemption beyond the two the factory grants by
+//! itself: the three extra exemptions are what made that launch unclean.
 
 use std::collections::BTreeMap;
 
@@ -332,7 +337,9 @@ pub enum Unclean {
         /// Amount, when it reads.
         amount: Option<u128>,
     },
-    /// A trade on the curve inside the launch transaction: a dev buy, or a sell.
+    /// A trade on the curve inside the launch transaction other than the
+    /// launcher's own buy: a sell, a buy for anyone else, or a launcher's buy
+    /// whose tokens never arrived.
     Traded {
         /// Who received the output.
         recipient: Address,
@@ -346,7 +353,29 @@ pub enum Unclean {
     Unreadable(Hash32),
 }
 
-/// Whether a launch transaction is clean, per ADR 0013 constraint 1.
+/// The launcher's own buys in a launch transaction: buys on the launched curve
+/// whose tokens went to the deployer or the creator fee recipient. ADR 0029
+/// allows these and requires them stated, so [`check_launch`] passes them and
+/// the launch report lists them.
+///
+/// Only the recipient is compared. The trader is whoever called the curve,
+/// often a router, and the tokens landing with the launcher is what makes it
+/// the launcher's buy.
+#[must_use]
+pub fn dev_buys(receipt: &Receipt, launch: &Launched, record: &LaunchedToken) -> Vec<Trade> {
+    receipt
+        .logs
+        .iter()
+        .filter(|l| l.address == launch.curve)
+        .filter_map(Trade::from_log)
+        .filter(|t| {
+            t.side == Side::Buy
+                && (t.recipient == launch.deployer || t.recipient == record.creator_fee_recipient)
+        })
+        .collect()
+}
+
+/// Whether a launch transaction is clean, per ADR 0029.
 ///
 /// `record` is the factory's `getLaunchedToken` for the launched token, which
 /// names the creator fee recipient the factory exempts by itself. Every reason
@@ -375,6 +404,9 @@ pub fn check_launch(receipt: &Receipt, record: &LaunchedToken) -> Result<Launche
         unclean.push(Unclean::RecordMismatch);
     }
 
+    let allowed = dev_buys(receipt, &launch, record);
+    // Each allowed buy pays out once, curve to recipient, for its exact tokens.
+    let mut owed: Vec<(Address, u128)> = allowed.iter().map(|t| (t.recipient, t.tokens)).collect();
     let mut minted = false;
     for log in &receipt.logs {
         if log.is(&launch.token, &topic::TRANSFER) {
@@ -383,6 +415,8 @@ pub fn check_launch(receipt: &Receipt, record: &LaunchedToken) -> Result<Launche
                     let amount = log.data_u128(0);
                     if from == Address::ZERO && to == launch.curve && amount.is_some() && !minted {
                         minted = true;
+                    } else if from == launch.curve && settle(&mut owed, to, amount) {
+                        // The token side of an allowed dev buy.
                     } else {
                         unclean.push(Unclean::TokenMoved { from, to, amount });
                     }
@@ -393,6 +427,7 @@ pub fn check_launch(receipt: &Receipt, record: &LaunchedToken) -> Result<Launche
             let event = log.topics.first().copied();
             if event == Some(topic::CURVE_BUY) || event == Some(topic::CURVE_SELL) {
                 match Trade::from_log(log) {
+                    Some(t) if allowed.contains(&t) => {}
                     Some(t) => unclean.push(Unclean::Traded {
                         recipient: t.recipient,
                         tokens: t.tokens,
@@ -411,10 +446,29 @@ pub fn check_launch(receipt: &Receipt, record: &LaunchedToken) -> Result<Launche
     if !minted {
         unclean.insert(0, Unclean::NoMint);
     }
+    // A buy whose tokens never arrived is not a buy this check can vouch for.
+    unclean.extend(
+        owed.into_iter()
+            .map(|(recipient, tokens)| Unclean::Traded { recipient, tokens }),
+    );
     if unclean.is_empty() {
         Ok(launch)
     } else {
         Err(unclean)
+    }
+}
+
+/// Strikes one owed payout matching `to` and `amount`, if there is one.
+fn settle(owed: &mut Vec<(Address, u128)>, to: Address, amount: Option<u128>) -> bool {
+    match owed
+        .iter()
+        .position(|&(who, tokens)| who == to && Some(tokens) == amount)
+    {
+        Some(i) => {
+            owed.swap_remove(i);
+            true
+        }
+        None => false,
     }
 }
 
