@@ -829,4 +829,13 @@ mod tests {
                 .is_some_and(|f| f.starts_with("refused:"))
         );
     }
+    #[test]
+    fn the_eth_pool_figure_is_the_wei_in_whole_eth() {
+        let (exact, rendered, unit) = pool_figure(&Balance::Eth {
+            holder: "0xbot".to_owned(),
+            wei: realorrug_contest::Wei(1_500_000_000_000_000_000),
+        });
+        assert!((exact - 1.5).abs() < 1e-12, "{exact}");
+        assert_eq!((rendered.as_str(), unit), ("1.500", "ETH"));
+    }
 }

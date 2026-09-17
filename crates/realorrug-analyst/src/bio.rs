@@ -655,6 +655,7 @@ mod tests {
 
         // Exactly six hours old is still quoted; a second more is not, because
         // the line carries no time and a reader takes it as now.
+        assert_eq!(POOL_FRESH_SECONDS, 21_600);
         assert!(open_state(Some(&vault(1, now - POOL_FRESH_SECONDS)), 0, now).is_some());
         assert_eq!(
             open_state(Some(&vault(1, now - POOL_FRESH_SECONDS - 1)), 0, now),
