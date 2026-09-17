@@ -823,6 +823,24 @@ mod tests {
     }
 
     #[test]
+    fn only_a_digit_on_both_sides_makes_a_full_stop_a_decimal_point() {
+        // One side is not enough, in either direction. "1. the creator" is a
+        // numbered list and ends a sentence; "v.2" is a name and ends one too.
+        // Only a digit on both sides is a number that must be kept whole.
+        assert_eq!(sentences("v.2"), vec!["v.", "2"]);
+        assert_eq!(sentences("41. the creator"), vec!["41.", " the creator"]);
+    }
+
+    #[test]
+    fn a_sentence_keeps_its_own_ending_and_gives_the_next_one_none() {
+        // The terminator belongs to the sentence it ends. If it led the next
+        // one instead, every sentence after the first would start with a stray
+        // mark, and a trailing terminator would add an empty sentence after it.
+        assert_eq!(sentences("gone! next"), vec!["gone!", " next"]);
+        assert_eq!(sentences("gone!"), vec!["gone!"]);
+    }
+
+    #[test]
     fn a_number_nothing_measured_is_still_caught_and_says_so() {
         let caught = super::check("The creator already dumped 77%.", &holders_at_41());
         assert_eq!(caught.len(), 1, "{caught:?}");
