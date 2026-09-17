@@ -517,3 +517,95 @@ finding #6 in the original document, now narrowed to: paid tracing exists
 on this chain (QuickNode, inferred) but nothing turns it into a
 funding-source *index*, so the proxy is still the cheapest and only
 currently-affordable answer.
+
+## §8 Correction: what the owner's own Alchemy free key actually does (2026-09-17, live)
+
+**Sections 1, 4, §7.1 and §7.5 above are wrong about capability, and the
+"funding-source gap" is closed.** Those sections were written from vendor
+documentation and from the *keyless public* endpoint. Everything below was
+measured against the key the bot already runs on, from the production box, on
+2026-09-17. `AGENTS.md` §1 puts a live capture above a vendor's own page, so
+where the two disagree, this section is the record.
+
+Probe scripts: `scratchpad/probe_rpc.sh` through `probe5.sh` (session-local,
+not committed; each reads the endpoint out of the serve env file and never
+prints it).
+
+### What works, measured
+
+| Read | Result on the key |
+|---|---|
+| `alchemy_getAssetTransfers`, category `external` (native ETH) | **works**, `fromAddress` and `toAddress`, `order: "asc"`, `withMetadata: true`, `pageKey` paging |
+| `alchemy_getAssetTransfers`, category `erc20` | **works**, both directions, `contractAddresses` filter honoured |
+| `alchemy_getAssetTransfers`, category `internal` | not supported on this chain |
+| `debug_traceBlockByNumber`, `callTracer` | **works** — one recent block: ~215 ms, ~668 KB of JSON |
+| `trace_block`, `trace_filter`, any `qn_*` | not available |
+| `eth_getBalance` / `eth_getTransactionCount` at old blocks | **works** far past the public RPC's window (see below) |
+| `eth_getLogs` | works; capped at **10,000 results per call**, not by block range |
+
+### The funding-source gap is not a gap
+
+§7's conclusion — "neither vendor documents an address-indexed reverse lookup
+('all transfers into wallet X, ever') for this chain" — is refuted.
+`alchemy_getAssetTransfers` **is** that index, and it answers on this chain on
+the free key. One call returns, oldest-first, every native-ETH transfer into a
+given address with block number, sender, amount and timestamp.
+
+Live example, from the packet's own token
+(`0x13e6cdb0470b10afcb96177ae8702ace2ac72cd6`): pulled its `Transfer` logs over
+the last 3,000 blocks, kept only addresses whose `eth_getCode` is `"0x"` (real
+wallets — the earlier probes sampled contracts, which is why their transfer
+lists looked empty), then asked for each one's first five incoming native
+transfers. One buyer, `0x2a4acb164a2bcfd963f92f798b59db137cabae53`, nonce
+`0xb3`, was funded like this:
+
+```
+0xe0050f2a8aa898da5829c5f1a270315062c56d30   0.01594850357357177
+0x623198efeb5da687f71653f889798f22a0bae02b   0.005
+0x623198efeb5da687f71653f889798f22a0bae02b   0.01201634222542658
+0x623198efeb5da687f71653f889798f22a0bae02b   0.01
+0x623198efeb5da687f71653f889798f22a0bae02b   0.004
+```
+
+Four of its first five top-ups came from one address. That is the shared-funder
+signal itself, read directly, at **2 calls per candidate wallet**
+(`eth_getCode`, then `alchemy_getAssetTransfers`) on top of the one
+`eth_getLogs` that produced the candidates. The nonce proxy in §7.2 is still
+useful as a cheap corroborator, but it is no longer the only affordable answer.
+
+### Archive depth: deep on the key, shallow only without one
+
+§7.5's "6,000–8,000 blocks (~10–13 minutes)" is a fact about the **keyless
+public** endpoint and must not be read as a limit on the bot. On the key,
+`eth_getBalance` for a busy address answered at every depth tested, from head
+`65566989`:
+
+| Blocks back | Balance returned |
+|---|---|
+| 1,000 | `0x12d8e19dbb3ba171` |
+| 10,000 | `0x12e816a8aeb125c1` |
+| 100,000 | `0x14d56fb718c2f070` |
+| 1,000,000 | `0xc33f7574b5e26fe` |
+| 10,000,000 | `0x0` |
+| 50,000,000 | `0x0` |
+
+The two `0x0` answers are **not** pruning errors — no error was returned, and
+`eth_getBlockByNumber` at 10,000,000 blocks back still served a full header.
+That address simply held nothing then. Historical state is available at least
+1,000,000 blocks back and the node answers, rather than refuses, far beyond it.
+
+### Block time, measured
+
+1,000 blocks spanned **101 seconds** — 0.101 s per block. So one hour is ~35,600
+blocks and a three-hour-old token sits ~107,000 blocks deep. Every "how many
+blocks back" figure elsewhere in this document should be converted with this
+number, not with an assumed 1-second or 2-second block.
+
+### What this changes
+
+- The bundle, fresh-wallet-cluster and shared-funder checks are affordable on
+  the free tier today. No paid plan is required to ship them.
+- `debug_traceBlockByNumber` is available but expensive per block (~668 KB);
+  treat it as a last-resort read for a single block of interest, never a sweep.
+- §7's recommendation to buy a QuickNode plan for tracing is withdrawn. Revisit
+  cost only if measured daily request counts approach the free allowance.
