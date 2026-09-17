@@ -409,11 +409,18 @@ level is worded the way it is.
 
 ## 9. The order to build it
 
-1. **A safe floor that already sounds like a trader.** Typed composer over
+1. ~~**A safe floor that already sounds like a trader.** Typed composer over
    the facts we already read, disclaimer out of replies, blind truncation
-   gone. No new chain reads at all. *Proof:* one test per level showing the
-   fallback passes every check, carries no disclaimer, fits X's weighted
-   length, and changes its opening line when the strongest fact changes.
+   gone.~~ **Done, and not as written.** The typed composer was rejected by
+   [ADR 0031](../adr/0031-the-model-picks-the-story-and-the-evidence-licenses-the-joke.md)
+   in favour of the model keeping the writing; §7 above is the rejected
+   alternative. The other two shipped on 2026-09-17: the disclaimer moved
+   into the account bio (`realorrug-analyst/src/bio.rs`), and truncation now
+   backs up to the last finished sentence instead of cutting mid-thought
+   (`realorrug-roast/src/render.rs`). What replaced the composer is the
+   system prompt in `realorrug-roast/src/voice.rs`, where rule eight licenses
+   a joke from the specific evidence and rule one states the subject rule
+   `fidelity::check` enforces.
 2. **Per-fact freshness and the weighted budget.** *Proof:* a stale required
    fact forces a re-read; a failed re-read lands on `CantTell`; a missing
    optional fact does not; a check cannot start without its full

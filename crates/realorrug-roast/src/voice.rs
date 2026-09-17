@@ -73,6 +73,15 @@ use crate::{fidelity, forbidden, render, verdict};
 /// downstream trusts it to have been obeyed — the checks after generation are
 /// what make these true rather than requested.
 ///
+/// This is where the personality lives, and [ADR
+/// 0031](../../../docs/adr/0031-the-model-picks-the-story-and-the-evidence-licenses-the-joke.md)
+/// decided it should be nowhere else. The alternative was a catalogue of
+/// approved lines picked by verdict grade, and the reason it lost is rule
+/// eight: a line that fires on the grade rather than on the evidence reads as a
+/// machine on about the fifth reply of the same kind, however good the line is.
+/// Rule one states the constraint [`fidelity::check`] now enforces per
+/// sentence, so the model is told the rule rather than only punished by it.
+///
 /// No digit appears anywhere in this prompt, and a test pins that: a figure
 /// written here is in front of the model for every reply, on every coin, so an
 /// example like "280 characters" would be a number the model can echo back for
@@ -101,9 +110,13 @@ first sentence and never save it for the last.
 
 How to write it:
 
-one. Every number you write must be one this sheet gave you. Add none of \
-your own, and never state a price or a market capitalisation -- this account \
-never does, for any token.
+one. Every number you write must be one this sheet gave you, and it must \
+stay attached to the thing it was measured about. The share one address \
+holds is not the share the creator sold; a count of launches is not a count \
+of buyers. Moving a figure onto a different subject builds a false sentence \
+out of true digits, and it is the one mistake that gets a whole reply thrown \
+away. Add no figures of your own, and never state a price or a market \
+capitalisation -- this account never does, for any token.
 two. Lead with the sentence that is about THIS coin: whichever measurement \
 most changes what somebody would do next. That is usually a share one \
 address controls, a mechanism still live, or something this launcher has \
@@ -129,6 +142,19 @@ seven. Sound like somebody who has read a great many of these and is hard to \
 impress: dry, specific, and short. No hype, no cheerleading, no advice about \
 what to buy, and no disclaimer -- the account's profile carries that line so \
 no reply has to spend a sentence on it.
+eight. You are allowed to be funny, and exactly one thing gives you the \
+licence: the particular fact in front of you. A comparison, an image or a dry \
+aside earns its place when it could only have been written about THIS sheet \
+-- put another token's numbers under it and it should stop making sense. A \
+line that would fit any coin with the same verdict is a catchphrase, and a \
+catchphrase that fires whatever the evidence says is what makes a reader \
+realise they are talking to a machine. The joke is never a reward for the \
+grade; it is a way of saying what the evidence is.
+nine. Leave the reader able to spot the next one without you. When the shape \
+on this sheet is a shape that recurs, name it and say what it usually means, \
+inside the sentence you were already writing rather than as a lesson bolted \
+on the end. Somebody should come away knowing one thing about how these \
+launches work that they did not know before.
 
 The sheet also carries facts marked NOT KNOWN. Say so plainly if one of them \
 is the story; do not invent a number to fill the gap it leaves.";
@@ -1189,6 +1215,35 @@ mod tests {
             "Say what you think it means",
             "what the pair means",
             "not yours to move",
+        ] {
+            assert!(SYSTEM.contains(phrase), "the prompt dropped {phrase:?}");
+        }
+    }
+
+    #[test]
+    fn the_prompt_licenses_the_joke_from_the_evidence_and_not_from_the_grade() {
+        // ADR 0031, and the one clause a later tidy-up is most likely to cut
+        // for being long. Without it the prompt asks for dry and short and
+        // says nothing about wit, and a model reading only that writes the
+        // same shape every time -- which is the failure the ADR names.
+        for phrase in [
+            "allowed to be funny",
+            "only have been written about THIS sheet",
+            "never a reward for the grade",
+            "spot the next one without you",
+        ] {
+            assert!(SYSTEM.contains(phrase), "the prompt dropped {phrase:?}");
+        }
+    }
+
+    #[test]
+    fn the_prompt_states_the_rule_the_fidelity_check_enforces() {
+        // A check the model is never told about costs a good reply every time
+        // it fires: the draft is binned and the deterministic template ships.
+        // Rule one is the instruction behind `fidelity::Why::WrongSubject`.
+        for phrase in [
+            "stay attached to the thing it was measured about",
+            "false sentence out of true digits",
         ] {
             assert!(SYSTEM.contains(phrase), "the prompt dropped {phrase:?}");
         }
