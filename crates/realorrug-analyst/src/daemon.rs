@@ -1106,8 +1106,8 @@ impl BioMarker {
 ///
 /// `None` for each of five reasons, and they are genuinely five:
 ///
-/// - the week's record says nothing worth a bio ([`crate::bio::state_of`] --
-///   a voided week, a week past its claim window, a winner with no handle);
+/// - nothing is worth a bio ([`crate::bio::choose`] -- no claimable winner, no
+///   pool reading from the last six hours, and no payout on the latest week);
 /// - the render would not fit in [`crate::bio::MAX`] characters, and a bio the
 ///   platform cuts mid-figure is a wrong figure with no record it was right;
 /// - it was written less than an hour ago;
@@ -1120,11 +1120,13 @@ impl BioMarker {
 /// is not for a reply.
 fn bio_to_write(
     bio: &crate::bio::Bio,
-    record: &realorrug_contest::Record,
+    record: Option<&realorrug_contest::Record>,
+    vault: Option<&realorrug_contest::Vault>,
+    hunters: usize,
     marker: Option<&BioMarker>,
     now: u64,
 ) -> Option<String> {
-    let state = crate::bio::state_of(record, now)?;
+    let state = crate::bio::choose(record, vault, hunters, now)?;
     let text = bio.render(&state)?;
     if !bio_write_due(now, marker, &text) {
         return None;
@@ -1138,6 +1140,24 @@ fn bio_to_write(
             None
         }
     }
+}
+
+/// How many distinct accounts are in this week's running at `now`.
+///
+/// An account is in once the bot has **published** a reply to their summons
+/// on a token this week -- the same entries the week close scores. A reply
+/// that was only logged (a dry run, a refused post) entered nobody, and a
+/// mention with no token was never an entry. Counted by summoner, so ten
+/// summonses from one account are one hunter.
+#[must_use]
+pub fn hunters_in_week(entries: &[crate::log::Entry], now: u64) -> usize {
+    let week = realorrug_contest::Week::of(now);
+    entries
+        .iter()
+        .filter(|e| week.contains(e.at) && e.mint.is_some() && e.reply_id.is_some())
+        .map(|e| e.summoner.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 /// Whether to write the bio now.
@@ -1192,13 +1212,25 @@ fn write_bio_if_changed(x: Option<&X>, bio: &crate::bio::Bio, spend: &mut Spend,
     let previous = std::fs::read_to_string(&path).ok();
     let marker = previous.as_deref().and_then(BioMarker::parse);
 
-    let Some(record) = realorrug_contest::records_in(std::path::Path::new(&paths.contest_dir))
+    let record = realorrug_contest::records_in(std::path::Path::new(&paths.contest_dir))
         .into_iter()
-        .max_by_key(|r| r.week)
-    else {
-        return;
-    };
-    let Some(text) = bio_to_write(bio, &record, marker.as_ref(), at) else {
+        .max_by_key(|r| r.week);
+    // The same pool reading the daily and weekly posts quote, and the same
+    // reply log the site's leaderboard counts: two local files, no platform
+    // read, so the live line costs nothing until it is actually written.
+    let vault = std::fs::read_to_string(format!("{}/pool.json", paths.contest_dir))
+        .ok()
+        .and_then(|text| realorrug_contest::Vault::from_json(&text).ok());
+    let replies = crate::log::latest(&paths.log).unwrap_or_default();
+    let hunters = hunters_in_week(&replies, at);
+    let Some(text) = bio_to_write(
+        bio,
+        record.as_ref(),
+        vault.as_ref(),
+        hunters,
+        marker.as_ref(),
+        at,
+    ) else {
         return;
     };
 
@@ -1917,7 +1949,7 @@ mod tests {
         let closed = realorrug_contest::Week(2958).closes_at();
 
         // Nothing written yet: write it, and it says what the record says.
-        let first = bio_to_write(&bio, &record, None, closed + 60).expect("a bio");
+        let first = bio_to_write(&bio, Some(&record), None, 0, None, closed + 60).expect("a bio");
         assert!(first.starts_with("Automated."), "{first}");
         assert!(first.contains("@somebody"), "{first}");
         assert!(first.contains("2026-09-21"), "{first}");
@@ -1928,7 +1960,14 @@ mod tests {
             text: first.clone(),
         };
         assert_eq!(
-            bio_to_write(&bio, &record, Some(&marker), closed + 60 + 7_200),
+            bio_to_write(
+                &bio,
+                Some(&record),
+                None,
+                0,
+                Some(&marker),
+                closed + 60 + 7_200
+            ),
             None,
             "unchanged"
         );
@@ -1939,12 +1978,20 @@ mod tests {
             text: "something else".to_owned(),
         };
         assert_eq!(
-            bio_to_write(&bio, &record, Some(&stale), closed + 60 + 60),
+            bio_to_write(&bio, Some(&record), None, 0, Some(&stale), closed + 60 + 60),
             None,
             "59 minutes"
         );
         assert!(
-            bio_to_write(&bio, &record, Some(&stale), closed + 60 + 3_600).is_some(),
+            bio_to_write(
+                &bio,
+                Some(&record),
+                None,
+                0,
+                Some(&stale),
+                closed + 60 + 3_600
+            )
+            .is_some(),
             "an hour later, with new text"
         );
 
@@ -1954,14 +2001,55 @@ mod tests {
             at: closed,
             reason: "bought".to_owned(),
         });
-        assert_eq!(bio_to_write(&bio, &voided, None, closed + 60), None);
+        assert_eq!(
+            bio_to_write(&bio, Some(&voided), None, 0, None, closed + 60),
+            None
+        );
 
         // A lead that leaves no room writes nothing rather than a bio the
         // platform would cut mid-figure.
         let long = crate::bio::Bio {
             lead: "x".repeat(crate::bio::MAX - 10),
         };
-        assert_eq!(bio_to_write(&long, &record, None, closed + 60), None);
+        assert_eq!(
+            bio_to_write(&long, Some(&record), None, 0, None, closed + 60),
+            None
+        );
+    }
+
+    #[test]
+    fn hunters_are_accounts_with_a_published_token_reply_this_week() {
+        let week = realorrug_contest::Week(2959);
+        let now = week.opens_at() + 86_400;
+        let entry = |at: u64, who: &str, mint: bool, published: bool| crate::log::Entry {
+            at,
+            mention_id: format!("m-{who}-{at}"),
+            summoner: who.to_owned(),
+            mint: mint.then(|| "0xtoken".to_owned()),
+            read_at: None,
+            read_at_slot: None,
+            fact_sheet: String::new(),
+            reply: String::new(),
+            fellback: None,
+            reply_id: published.then(|| format!("r-{who}-{at}")),
+            signals: None,
+            pointed_at: None,
+        };
+        let open = week.opens_at();
+        let entries = vec![
+            // Two summonses from one account are one hunter.
+            entry(open + 10, "a", true, true),
+            entry(open + 20, "a", true, true),
+            entry(open + 30, "b", true, true),
+            // No token: not an entry.
+            entry(open + 40, "c", false, true),
+            // Logged but never published: entered nobody.
+            entry(open + 50, "d", true, false),
+            // Last week: not this week's running.
+            entry(open - 1, "e", true, true),
+        ];
+        assert_eq!(hunters_in_week(&entries, now), 2);
+        assert_eq!(hunters_in_week(&[], now), 0);
     }
 
     #[test]

@@ -152,17 +152,16 @@ pub fn summary(record: &Record, vault: Option<&Vault>) -> Post {
     }
 
     match vault.map(|v| (&v.balance, v.measured_at)) {
-        Some((Balance::Sol { lamports }, measured_at)) => {
-            let sol = *lamports as f64 / LAMPORTS_PER_SOL;
-            let rendered = format!("{sol:.3}");
-            authorised.push(sol);
+        Some((balance, measured_at)) => {
+            let (exact, rendered, unit) = pool_figure(balance);
+            authorised.push(exact);
             if let Ok(r) = rendered.parse::<f64>() {
                 authorised.push(r);
             }
             let at = timestamp_from_seconds(measured_at);
             authorise_date(&mut authorised, &at[..10]);
             authorised.extend(at[11..19].split(':').filter_map(|p| p.parse::<f64>().ok()));
-            let _ = write!(text, "\nPrize pool: {rendered} SOL at {at}");
+            let _ = write!(text, "\nPrize pool: {rendered} {unit} at {at}");
             match (&record.payout, &record.winner) {
                 (Some(_), _) => text.push_str("; paid to the claim, transaction on the site."),
                 (None, Some(_)) => {
@@ -179,10 +178,6 @@ pub fn summary(record: &Record, vault: Option<&Vault>) -> Post {
                 (None, None) => text.push('.'),
             }
         }
-        // An ETH pool says nothing yet, and on purpose: "no token yet" would be
-        // false once there is one, and quoting wei as SOL is a wrong figure.
-        // Rendering ETH is plan 0001 step 6d, before launch.
-        Some((Balance::Eth { .. }, _)) => {}
         None => text.push_str("\nPrize pool: no token yet."),
     }
     // The address itself, since 2026-09-06. `forbidden::check` masks this exact
@@ -197,6 +192,28 @@ pub fn summary(record: &Record, vault: Option<&Vault>) -> Post {
         text,
         authorised,
         source: record.to_json().unwrap_or_default(),
+    }
+}
+
+/// A pool balance as the posts quote it: the exact value for the fidelity
+/// check, the text to three places, and its unit.
+///
+/// ETH is cut, never rounded ([`realorrug_contest::Wei::to_eth`]), so a post
+/// never quotes more than the pool holds. The exact value is a float and may
+/// be off in its last wei; the check compares it with the rendered figure's
+/// own precision, and the rendered figure is pushed beside it.
+#[must_use]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "authorising a figure, not paying it"
+)]
+pub fn pool_figure(balance: &Balance) -> (f64, String, &'static str) {
+    match balance {
+        Balance::Sol { lamports } => {
+            let sol = *lamports as f64 / LAMPORTS_PER_SOL;
+            (sol, format!("{sol:.3}"), "SOL")
+        }
+        Balance::Eth { wei, .. } => (wei.0 as f64 / 1e18, wei.to_eth(3), "ETH"),
     }
 }
 
