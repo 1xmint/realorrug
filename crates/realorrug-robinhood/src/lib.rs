@@ -467,34 +467,71 @@ impl Tag {
 /// public endpoint is "rate-limited and not recommended for production use"
 /// (research 0035 §1), and choosing it silently would be choosing for the
 /// operator.
+///
+/// Several endpoints may be configured, comma-separated, and each call tries
+/// them in order until one answers. The operator runs two free plans (Alchemy
+/// and QuickNode, 2026-09-17), and one alone hitting its rate limit on a busy
+/// day would turn every reply into "could not be read". Parsing the list here,
+/// rather than adding a second variable, means every caller that already reads
+/// `REALORRUG_ROBINHOOD_RPC` -- the analyst, the checker, the payout -- gets
+/// the fallback without its own configuration code.
 #[derive(Clone, Debug)]
 pub struct Rpc {
-    endpoint: String,
+    endpoints: Vec<String>,
 }
 
 impl Rpc {
-    /// A client for one endpoint.
+    /// A client for one endpoint, or several separated by commas, tried in
+    /// the order written.
     #[must_use]
     pub fn new(endpoint: impl Into<String>) -> Self {
-        Self {
-            endpoint: endpoint.into(),
-        }
+        let text = endpoint.into();
+        let endpoints = text
+            .split(',')
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .map(str::to_owned)
+            .collect();
+        Self { endpoints }
     }
 
     /// One JSON-RPC call, returning its `result`.
     ///
+    /// Any failure moves on to the next endpoint, including an `error` the
+    /// endpoint answered with: a rate limit arrives as either a transport
+    /// error or a JSON-RPC error depending on the provider, and telling them
+    /// apart per provider is more code than the one repeated call a genuine
+    /// error costs. Only when every endpoint fails is the call an error, so a
+    /// read is never guessed (rule 8).
+    ///
     /// # Errors
     ///
-    /// The transport's error, a body that is not JSON, the endpoint's `error`
-    /// with the method named, or an answer with no `result`.
+    /// The last endpoint's failure: the transport's error, a body that is not
+    /// JSON, the endpoint's `error` with the method named, or an answer with
+    /// no `result`. No endpoint configured at all is an error too.
     pub fn call(
         &self,
         method: &str,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        let mut last = Err(format!("{method}: no endpoint configured"));
+        for endpoint in &self.endpoints {
+            last = Self::call_one(endpoint, method, params);
+            if last.is_ok() {
+                break;
+            }
+        }
+        last
+    }
+
+    fn call_one(
+        endpoint: &str,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let body =
             serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-        let mut response = ureq::post(&self.endpoint)
+        let mut response = ureq::post(endpoint)
             .content_type("application/json")
             .send(body.to_string())
             .map_err(|e| e.to_string())?;
