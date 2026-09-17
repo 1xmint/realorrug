@@ -1146,10 +1146,34 @@ fn push_creator(
     };
 
     let launches = record.launches.to_string();
+    // The caveat rides on the sentence rather than in a separate list, when
+    // there is one to make. An index that has counted launches but measured no
+    // outcomes is the normal state of a new index -- the launch walk is tens of
+    // calls, the outcome pass is one per token -- and the count it does hold is
+    // the whole of what `Signal::RepeatLauncher` needs.
+    //
+    // **Why not `unknown`.** That list is read twice: the reply says every line
+    // in it, and `verdict::level` returns `CantTell` the moment it is non-empty.
+    // Putting "no outcome measured" there would mean a sheet that can see this
+    // launcher has forty-one launches to their name reports that it cannot tell
+    // you anything -- the evidence read as its own absence. Attached here it is
+    // still said, in the same breath as the number it qualifies, where a model
+    // writing freely cannot quote the count and drop the limit.
+    let (label, unmeasured) = if record.measured == 0 {
+        (
+            "tokens this creator has launched, in Real or Rug's record -- none with an outcome measured yet",
+            " None of them has had an outcome measured yet.",
+        )
+    } else {
+        (
+            "tokens this creator has launched, in Real or Rug's record",
+            "",
+        )
+    };
     facts.push(
         Fact::exact(
             Kind::CreatorLaunches,
-            "tokens this creator has launched, in Real or Rug's record",
+            label,
             f64::from(record.launches),
             launches.clone(),
         )
@@ -1158,11 +1182,13 @@ fn push_creator(
         // the part a free-writing model drops first.
         .saying(
             Voice::Plain,
-            format!("This creator has launched {launches} tokens in Real or Rug's record."),
+            format!(
+                "This creator has launched {launches} tokens in Real or Rug's record.{unmeasured}"
+            ),
         )
         .saying(
             Voice::Blunt,
-            format!("{launches} launches on this creator, in Real or Rug's record."),
+            format!("{launches} launches on this creator, in Real or Rug's record.{unmeasured}"),
         ),
     );
 
@@ -1171,7 +1197,6 @@ fn push_creator(
     // tokens did nothing -- and a share quoted without it would be a share of
     // an unstated population.
     if record.measured == 0 {
-        unknown.push("how those launches turned out: none has been measured yet".to_owned());
         return;
     }
     // Every clause below carries its denominator, because that is the number
@@ -2189,6 +2214,54 @@ mod tests {
             instant: measured.saturating_sub(organic),
             stillborn: 0,
         }
+    }
+
+    #[test]
+    fn a_launch_count_with_no_outcomes_yet_is_stated_and_does_not_blank_the_verdict() {
+        // The normal state of a new index. Walking the factory's launch logs
+        // costs tens of calls; measuring each launch's outcome costs one call
+        // per token, about 171,000 of them (research 0038 4). So an index that
+        // knows launch counts and no outcomes is what exists first, and for a
+        // while.
+        //
+        // The count is the whole of what `Signal::RepeatLauncher` needs. Before
+        // this, the missing outcomes went into `unknown`, which `verdict::level`
+        // reads as "a required fact is unread" and answers `CantTell` -- so
+        // seeing that a launcher had forty-one launches to their name made the
+        // bot less able to speak, not more.
+        let mut dossier = dossier_for([9u8; 32]);
+        dossier.launch = Some(launch(
+            realorrug_onchain::budget::Count::Exactly(12),
+            Some(30_000_000),
+        ));
+        let index = index_with(crate::creator::Record {
+            launches: 41,
+            measured: 0,
+            organic: 0,
+            instant: 0,
+            stillborn: 0,
+        });
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, None);
+
+        assert!(
+            !sheet
+                .unknown
+                .iter()
+                .any(|u| u.contains("outcome") || u.contains("measured")),
+            "an unmeasured outcome must not reach the list that answers CantTell: {:?}",
+            sheet.unknown
+        );
+        // Still said, though -- in the same breath as the number it qualifies,
+        // which is the one place a model quoting the count cannot drop it.
+        let rendered = sheet.render();
+        assert!(
+            rendered.contains("41"),
+            "the launch count itself must survive: {rendered}"
+        );
+        assert!(
+            rendered.contains("none with an outcome measured yet"),
+            "the limit must be stated beside the count, in the text the model is shown: {rendered}"
+        );
     }
 
     #[test]
