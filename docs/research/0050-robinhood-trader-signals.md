@@ -73,6 +73,48 @@ A token that clears 10,000 Transfer logs needs roughly (total transfers /
 6h rate) would need roughly 3-5 pages once its full history is summed, not
 one.
 
+### 0a. Correction, 2026-09-17 (later the same day): §0 measured the wrong endpoint
+
+**Two things above are wrong, and the paging built from them did not work.**
+After §0 was written, the paging walker it recommended shipped — and the
+live bot still answered "the holders could not be read" for the same token.
+Measured directly against the endpoint the deployed bot actually reads
+through, which is **Alchemy, not the public RPC §0 curled**:
+
+1. **"The actual cause is a volume cap that any busy token hits regardless
+   of RPC tier" is not right for the deployed reader.** Alchemy's rule,
+   quoted verbatim from its own refusal today, is *either* limit: "you can
+   make eth_getLogs requests with up to a 5,000 block range and no limit on
+   the response size, **or** you can request any block range with a cap of
+   10K logs in the response". Both a range and a volume path exist; §0 saw
+   only the public endpoint's volume-only cap and generalised it.
+
+2. **Alchemy reports the cap over HTTP 400, not HTTP 200.** The body is an
+   ordinary JSON-RPC error (`code: -32602`), but `ureq` 3.4 turns a non-2xx
+   status into a transport error and never reads the body. So the message
+   explaining how to narrow the range was discarded before
+   `is_log_limit_error` could see it, the walker received
+   `LogsError::Other("http status: 400")`, and it abandoned the read on its
+   very first probe without ever bisecting. §1's line that Alchemy's result
+   cap was "confirmed live today against Robinhood Chain specifically (§0)"
+   should be read as confirmed about the public endpoint only; §0 never
+   called Alchemy.
+
+3. **The "3-5 pages" estimate was low by roughly three times.** Walked in
+   full today, `HEY` held **28,652** Transfer logs across the ~175,000
+   blocks between its launch and the read. A walk that starts at a
+   20,000-block window, halves on a refusal and doubles after each success
+   read all of them in **12 requests / 7.1 seconds**. Starting from the full
+   span instead cost 16 requests and 10.3s; holding the narrowed window
+   rather than growing it back cost 38. The code now does the middle thing,
+   and `MAX_HOLDER_PAGES` was raised from 12 — which this estimate had sized
+   as generous headroom and which was in fact one page short of an answer —
+   to 24.
+
+The recommendation in §0 was directionally right and the paging it asked for
+is what fixed this. What it got wrong was measuring the endpoint that was
+convenient to curl rather than the one in the bot's environment file.
+
 ## 1. Plain RPC on Alchemy free and QuickNode free (re-verified 2026-09-17)
 
 Both re-fetched live today; both **unchanged from the 2026-09-15 reads in
