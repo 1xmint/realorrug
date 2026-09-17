@@ -242,6 +242,29 @@ const LEAD: &[&str] = &[
     "share of launches that NEVER graduated",
     "SOL that can be bought before price moves",
     "SOL the creator spent",
+    // Everything above is a Solana label and everything below is a Robinhood
+    // one, and **no label is on both lists**, so one array serves both chains:
+    // a Solana sheet matches only the entries above, a Robinhood sheet only
+    // the entries below, and neither chain's reply is changed by the other's
+    // entries existing. (The one shared label is the graduation line, which
+    // `push_curve` writes for both; it sits below the Solana entries so a
+    // Solana sheet with a creator record still fills its five slots from them
+    // first and only a sheet too sparse to fill them reaches it.)
+    //
+    // This block is why the fix exists. Until 2026-09-17 the list was Solana's
+    // alone, so for a Robinhood token nothing matched, the loop printed zero
+    // facts, and the reply was the launch age and the block it was read at --
+    // with the 529 holders and the 50.2% top address measured, on the sheet,
+    // and silently dropped.
+    //
+    // Ordered the way somebody deciding whether to buy would ask. The top
+    // address's share is first because it is the one number that can make the
+    // rest irrelevant: whatever else is true, one address that can sell half
+    // the float decides what happens next.
+    "held by the single largest address",
+    "addresses holding the token now",
+    "has the token graduated off the bonding curve",
+    "ETH the launcher spent",
     // **The round trip is deliberately NOT here.** It led every reply until
     // 2026-09-05, and it is the same 456 bps every time, so every reply opened
     // with the same sentence -- an account that reads as a bot repeating itself
@@ -321,6 +344,29 @@ pub fn headline(sheet: &FactSheet) -> Option<String> {
     // and the fallback test caught it.
     if let Some(recipients) = rendered("receiving the token in its own launch block") {
         let line = format!("{recipients} token accounts were paid in the launch block.");
+        if line.chars().count() <= 100 {
+            return Some(line);
+        }
+    }
+
+    // Robinhood's version of the same shape: a count beside the number it has
+    // to be weighed against. "529 holders" alone sounds healthy; "529 holders,
+    // one of them holding half" is the same read and a different decision, and
+    // the two only mean anything together.
+    //
+    // Last of the branches, not because it matters least but because the ones
+    // above cannot fire on a sheet this one can -- the creator index answers
+    // for either chain, and when it has this launcher's record that record is
+    // the better opener. The word is "address" and never "whale" or "holder's
+    // wallet": what was read is a balance at an address, which may be a pool
+    // or a contract, and naming it a person is a claim nothing measured.
+    if let Some(holders) = rendered("addresses holding the token now") {
+        let line = match rendered("held by the single largest address") {
+            Some(share) => {
+                format!("{holders} addresses hold it. The biggest one holds {share}.")
+            }
+            None => format!("{holders} addresses hold it, not counting the bonding curve."),
+        };
         if line.chars().count() <= 100 {
             return Some(line);
         }
@@ -476,6 +522,25 @@ fn short(label: &str) -> &str {
         l if l.contains("tokens this creator has launched") => "tokens this creator has launched",
         l if l.contains("how many reached an AMM by filling over time") => {
             "of those, how many ever filled their curve over time"
+        }
+        // The Robinhood lines. The caveats the sheet's labels carry are kept,
+        // not trimmed for length: "may be a pool, not a person" is what stops
+        // the top-address line reading as an accusation about somebody, and
+        // "not counting the curve" is what stops the holder count reading as
+        // higher than it is. A short line that sheds either says something the
+        // sheet did not measure.
+        l if l.contains("held by the single largest address") => {
+            "the largest single address's share of the supply outside the curve (may be a pool, \
+             not a person)"
+        }
+        l if l.contains("addresses holding the token now") => {
+            "addresses holding it, not counting the curve, the factory or the zero address"
+        }
+        l if l.contains("has the token graduated off the bonding curve") => {
+            "has it graduated off its bonding curve"
+        }
+        l if l.contains("ETH the launcher spent") => {
+            "the launcher's own buy in the launch transaction"
         }
         other => other,
     }
@@ -1111,5 +1176,143 @@ mod tests {
         // discriminant or merged them by accident -- `PartialEq` must treat
         // them as different, always.
         assert_ne!(Level::CantTell, Level::NothingUglyYet);
+    }
+
+    /// The sheet the box actually produced for
+    /// `0x13e6cdB0470B10AfCB96177Ae8702ace2ac72cD6` on 2026-09-17, after the
+    /// holder read was fixed: 529 addresses, the largest holding 50.2%, still
+    /// on its curve, and a launcher who bought 0.05 ETH of their own token.
+    ///
+    /// **Built through `FactSheet::build` rather than written out as facts.**
+    /// A hand-written fixture would carry my copy of each label, so a reword
+    /// in `sheet.rs` would break [`LEAD`]'s matching in production and leave
+    /// this test green -- which is the exact failure being fixed here, one
+    /// layer up. Going through the real builder means the labels in the test
+    /// are the labels the bot sees.
+    fn the_live_robinhood_sheet() -> FactSheet {
+        let dossier = realorrug_onchain::Dossier {
+            mint: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
+                [0x13u8; 20],
+            )),
+            read_at: Some(realorrug_types::ReadAt::Robinhood(3_012_345)),
+            launch: None,
+            curve: Some(realorrug_onchain::CurveFacts {
+                creator: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
+                    [9u8; 20],
+                )),
+                complete: false,
+                quote_reserves: 6_186_150_833,
+                quote_capacity: None,
+                quote_asset: Some(realorrug_onchain::QuoteAsset::eth()),
+                fees: None,
+            }),
+            creator_transactions: None,
+            chain_launch: Some(realorrug_onchain::ChainLaunch {
+                block: 2_998_000,
+                age_seconds: Some(86_400),
+                dev_buy_wei: Some(50_000_000_000_000_000),
+            }),
+            holders: Some(realorrug_onchain::Holders {
+                count: 529,
+                largest_share_bps: Some(5_022),
+            }),
+            unavailable: Vec::new(),
+            calls: 10,
+            elapsed_ms: 7_577,
+        };
+        FactSheet::build(&dossier, None, None, None, None)
+    }
+
+    #[test]
+    fn a_robinhood_reply_prints_the_facts_the_sheet_measured() {
+        // The bug this test exists for: every entry in `LEAD` was a Solana
+        // label, so on a Robinhood sheet the loop matched nothing, printed no
+        // facts at all, and shipped a reply that was the launch age and the
+        // block number -- with the 529 holders and the 50.2% top address
+        // measured, on the sheet, and dropped in silence.
+        //
+        // Re-applying the bug is deleting the four Robinhood entries from
+        // `LEAD`; every assertion below then fails.
+        let reply = template(&the_live_robinhood_sheet());
+
+        assert!(
+            reply.contains("529"),
+            "the holder count is missing: {reply}"
+        );
+        assert!(
+            reply.contains("50.2%"),
+            "the top address's share is missing: {reply}"
+        );
+        // The caveats travel with the numbers or the numbers say something
+        // that was not measured.
+        assert!(
+            reply.contains("may be a pool, not a person"),
+            "the top-address caveat is missing: {reply}"
+        );
+        assert!(
+            reply.contains("not counting the curve"),
+            "the holder-count caveat is missing: {reply}"
+        );
+        assert!(
+            reply.contains("has it graduated off its bonding curve: no"),
+            "the graduation line is missing: {reply}"
+        );
+        assert!(
+            reply.contains("0.0500 ETH"),
+            "the launcher's own buy is missing: {reply}"
+        );
+    }
+
+    #[test]
+    fn a_robinhood_reply_leads_with_the_concentration_not_the_block_number() {
+        // The first line is what gets screenshotted, so it carries the count
+        // and the number that decides how to read the count. A reply led by
+        // "Read at block 3012345" is the one the owner objected to on
+        // 2026-09-17: true, and about the instrument rather than the coin.
+        let sheet = the_live_robinhood_sheet();
+        assert_eq!(
+            headline(&sheet).as_deref(),
+            Some("529 addresses hold it. The biggest one holds 50.2%.")
+        );
+        let reply = template(&sheet);
+        let second = reply.lines().nth(1).unwrap_or_default();
+        assert!(
+            second.contains("529") && second.contains("50.2%"),
+            "the headline is not the line under the title: {reply}"
+        );
+    }
+
+    #[test]
+    fn a_robinhood_reply_without_a_top_share_still_counts_the_holders() {
+        // `largest_share_bps` is `None` when nobody holds any -- the sheet
+        // says so -- and the headline must not go silent because one of its
+        // two numbers was absent. Absent is not zero (rule 8), so the line
+        // drops the share rather than printing 0%.
+        let mut dossier_sheet = the_live_robinhood_sheet();
+        dossier_sheet
+            .facts
+            .retain(|f| !f.label.contains("held by the single largest address"));
+        assert_eq!(
+            headline(&dossier_sheet).as_deref(),
+            Some("529 addresses hold it, not counting the bonding curve.")
+        );
+    }
+
+    #[test]
+    fn a_solana_reply_is_unchanged_by_the_robinhood_entries() {
+        // The two label sets are disjoint, which is what lets one `LEAD`
+        // serve both chains. If a future Robinhood entry were worded so that
+        // a Solana label matched it, a Solana reply would start printing a
+        // fact out of order or twice; this pins the Solana output so that
+        // shows up here rather than on the account.
+        let reply = template(&a_real_shaped_sheet());
+        assert!(
+            !reply.contains("addresses hold it"),
+            "a Robinhood line reached a Solana reply: {reply}"
+        );
+        assert!(
+            reply.contains("tokens this creator has launched"),
+            "the Solana lead was displaced: {reply}"
+        );
     }
 }
