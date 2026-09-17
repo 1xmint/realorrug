@@ -47,7 +47,10 @@ the failure. Say whether you are recommending or recording.
    today; design 0020 changes it to enforce this rule instead (ADR 0027).
 5. **The analyst never states the token's price or market cap** (ADR 0013
    constraint 5), enforced by dropping those facts before the model sees them.
-6. **The operator holds none of the token, ever** (ADR 0013).
+6. **Holdings are public, and nothing trades.** A small dev buy and the bot's
+   own holding are disclosed with their addresses; nothing buys, sells or
+   swaps the token automatically (ADR 0029, superseding ADR 0013's "holds
+   none").
 7. **Deny by default when config is missing.** No budget refuses spending, no
    credential posts nothing, no origin sends no CORS header.
 8. **Absent is not zero, and unknown is not safe.**

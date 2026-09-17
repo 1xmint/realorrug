@@ -198,7 +198,7 @@ as open, not solved.
   `cabalhunter.org`, and a test fails if the name is taken back out. "drug" and
   "struggle" are still refused; that is the blunt trade the file's header
   argues for, and the cost is the template shipping instead.
-- **Superseded in part by [ADR 0027](../adr/0027-the-bot-gives-verdicts-it-can-prove.md)
+- **Superseded in part by [ADR 0027](../adr/0027-the-bot-gives-informed-verdicts-from-evidence.md)
   (2026-09-15).** The blanket ban below is replaced by an earned verdict: the
   bot may call a token rugged when the fact sheet holds the evidence, and may
   never accuse a named person, account or company. The reason the old rule

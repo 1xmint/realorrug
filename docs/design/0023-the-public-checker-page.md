@@ -11,7 +11,7 @@ the signal set, the verdict ladder and the voice) and design 0021 (per-fact
 freshness and shelf life) — both written but not yet merged to `origin/main`
 at the time of this document. This page reuses both rather than restating or
 re-deciding them; see §2 and §3.
-**Contract with:** [ADR 0027](../adr/0027-the-bot-gives-verdicts-it-can-prove.md),
+**Contract with:** [ADR 0027](../adr/0027-the-bot-gives-informed-verdicts-from-evidence.md),
 in full. The page shares the bot's verdict rule; it does not get its own.
 **Costs from:** [research 0039](../research/0039-robinhood-chain-data-on-a-budget.md),
 which priced a cold RPC read on Robinhood Chain and is the source for every

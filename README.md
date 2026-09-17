@@ -7,13 +7,13 @@ holds — and a check after generation refuses any number that is not on the fac
 sheet. **Real or rug? It shows the facts. You decide.**
 
 A community token, realorrug, funds a weekly prize for the people whose
-summons travelled furthest. The operator holds none of it, ever.
-[ADR 0013](docs/adr/0013-a-community-token-exists-and-radar-holds-none-of-it.md)
-has the six constraints and [ADR 0023](docs/adr/0023-realorrug-lives-on-robinhood-chain-and-the-bot-moves-with-it.md)
+summons travelled furthest. The bot holds some of it, in public, and trades
+none of it. [ADR 0013](docs/adr/0013-a-community-token-exists-and-radar-holds-none-of-it.md)
+has the original constraints, [ADR 0029](docs/adr/0029-the-bot-holds-its-own-token-openly.md)
+the two it replaced, and [ADR 0023](docs/adr/0023-realorrug-lives-on-robinhood-chain-and-the-bot-moves-with-it.md)
 where the token lives.
 
-**Nothing is launched.** The token does not exist yet, and the bot is not
-installed on any server.
+**Nothing is launched.** The token does not exist yet.
 
 ## What is here
 

@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# ADR 0027 — the bot gives verdicts it can prove
+# ADR 0027 — the bot gives informed verdicts from evidence
 
 **Date:** 2026-09-15
 **Status:** accepted. **Josh's decision, recorded**, in conversation
