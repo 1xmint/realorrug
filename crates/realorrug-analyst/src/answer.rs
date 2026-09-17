@@ -301,8 +301,9 @@ pub fn answer(
     // with no conversation id (an ordinary DM-shaped call, a fixture with
     // the field omitted, or a platform response that dropped it) records
     // nothing: there is no thread to remember this reply against.
+    let level = realorrug_roast::level(&sheet);
     if let Some(conversation) = &mention.conversation {
-        threads.record(conversation, &mint_text, realorrug_roast::level(&sheet));
+        threads.record(conversation, &mint_text, level);
     }
 
     Answered::Reply {
@@ -329,6 +330,10 @@ pub fn answer(
             // job scores from the record and never re-reads the chain.
             signals: Some(sheet.signals),
             pointed_at: None,
+            // Recorded so the site's live feed can show the stamp without
+            // re-reading the chain; the sheet's unread list is not kept, so
+            // the level could not be rebuilt from `signals` alone.
+            level: Some(level),
         }),
     }
 }

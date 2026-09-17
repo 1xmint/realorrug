@@ -415,6 +415,7 @@ pub fn publish_under(
             reply_id: None,
             signals: None,
             pointed_at: None,
+            level: None,
         };
         let text = match checked {
             Ok(text) => text,

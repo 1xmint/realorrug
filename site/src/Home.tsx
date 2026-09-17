@@ -19,22 +19,25 @@
 //! built from the same `leaderboard()` the `/contest` page uses, and a short
 //! link to `/how-it-works` rather than a restatement of it.
 //!
-//! # The live feed is not here, and the gap is the point
+//! # The live feed lists what was posted, and nothing else
 //!
-//! Design 0025 §4a item 5 calls for a short list of recently checked tokens.
-//! No route returns that list today — `/v1/public/stats`, `/leaderboard`,
-//! `/pool` and `/weeks` hold none of it, and `check()` in `api.ts` reads one
-//! address at a time, on demand, never a history. A fake or hard-coded list
-//! here would be exactly the LEARNINGS-5 failure the rest of this site works
-//! to avoid: a section that looks like it ran when nothing did. So there is
-//! no live-feed section below. It comes back once `realorrug-serve` ships the
-//! recency-sorted read design 0025 §4a names as a requirement on that crate.
+//! Design 0025 §4a item 5: a short list of recent verdicts, read from
+//! `/v1/public/recent`, which lists only replies the account actually posted
+//! with the level code picked for them. With nothing posted, or no server,
+//! the section says so in words rather than showing an empty list or a
+//! made-up one -- the LEARNINGS-5 failure this site works to avoid.
 
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 
-import { leaderboard as fetchLeaderboard, type Leaderboard as Data } from "./api";
-import { count } from "./honesty";
+import {
+  leaderboard as fetchLeaderboard,
+  type Leaderboard as Data,
+  recent as fetchRecent,
+  type Recent,
+} from "./api";
+import { count, measuredAgo, safeHref } from "./honesty";
+import { LADDER } from "./HowItWorks";
 import { TokenAddress } from "./TokenAddress";
 import { Card, Heading, Nothing, Section, CheckBox, Summoner } from "./ui";
 
@@ -108,7 +111,7 @@ function ContestTeaser() {
 
   return (
     <Section id="contest">
-      <Act n="02">The contest</Act>
+      <Act n="03">The contest</Act>
       <Heading>This week&apos;s top three</Heading>
       {data === null ? null : top3.length === 0 ? (
         <Nothing
@@ -149,11 +152,86 @@ function ContestTeaser() {
   );
 }
 
+/** `0x22fd…48fa`: enough to tell two tokens apart, short enough to scan. */
+export function shortAddress(address: string): string {
+  return address.length > 12
+    ? `${address.slice(0, 6)}…${address.slice(-4)}`
+    : address;
+}
+
+/** The newest verdicts the account posted, each linking to its own check. */
+function JustChecked() {
+  const [data, setData] = useState<Recent | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void fetchRecent().then((next) => {
+      if (live) setData(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  return (
+    <Section id="recent">
+      <Act n="02">Just checked</Act>
+      <Heading>The latest verdicts</Heading>
+      {data === null ? null : data.verdicts.length === 0 ? (
+        <Nothing
+          what="No verdicts posted yet."
+          why="Every reply the account posts about a token lands here, newest first, with the stamp it earned. Paste an address above to check one now."
+        />
+      ) : (
+        <Card className="max-w-2xl">
+          <ul className="space-y-3">
+            {data.verdicts.map((v) => {
+              const rung = LADDER.find((l) => l.code === v.level);
+              const reply = safeHref(v.reply_url ?? "", ["x.com"]);
+              return (
+                <li
+                  key={`${v.at}-${v.address}`}
+                  className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm"
+                >
+                  <span className="flex items-center gap-3">
+                    <span className="stamp text-base" style={{ color: rung?.ink }}>
+                      {rung?.stamp ?? v.level}
+                    </span>
+                    <Link
+                      href={`/check/${encodeURIComponent(v.address)}`}
+                      className="font-mono text-[var(--color-text)] underline underline-offset-4 hover:text-[var(--color-signal)]"
+                    >
+                      {shortAddress(v.address)}
+                    </Link>
+                  </span>
+                  <span className="flex items-center gap-3 text-[var(--color-dim)]">
+                    <span>{measuredAgo(v.at) ?? ""}</span>
+                    {reply ? (
+                      <a
+                        href={reply}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline underline-offset-4 hover:text-[var(--color-text)]"
+                      >
+                        the reply
+                      </a>
+                    ) : null}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
+    </Section>
+  );
+}
+
 /** What it will never do, in one paragraph, with the page that says the rest. */
 function NeverSays() {
   return (
     <Section id="never">
-      <Act n="03">What it will never say</Act>
+      <Act n="04">What it will never say</Act>
       <Heading>The refusals are the product</Heading>
       <p className="max-w-2xl text-[var(--color-dim)]">
         No price target, no "buy" or "sell", no "this one is safe". Real or
@@ -176,9 +254,7 @@ export function Home() {
   return (
     <>
       <Hero />
-      {/* Live feed of latest verdicts: design 0025 §4a item 5. No route
-          exists yet to read "recently checked tokens" -- see the module
-          comment above. Nothing renders here until one does. */}
+      <JustChecked />
       <ContestTeaser />
       <NeverSays />
     </>

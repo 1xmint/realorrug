@@ -101,6 +101,16 @@ pub struct Entry {
     /// them, and on every line written before 2026-09-07.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pointed_at: Option<String>,
+    /// The verdict level code picked for the sheet, on a reply about a token.
+    ///
+    /// `None` on every reply that judged nothing (a pointer, an off-topic
+    /// joke, a refusal) and on every line written before 2026-09-17. It
+    /// cannot be back-filled from `signals`: the sheet's list of facts it
+    /// could not read is not logged, and that list alone turns a clean-looking
+    /// sheet into `CantTell`. The site's live feed shows only replies that
+    /// carry it, rather than guessing a stamp for the older ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<realorrug_roast::Level>,
 }
 
 /// Appends to a log file.
@@ -243,6 +253,7 @@ mod tests {
             fellback: None,
             signals: None,
             pointed_at: None,
+            level: None,
             reply_id: Some("r1".to_owned()),
         }
     }

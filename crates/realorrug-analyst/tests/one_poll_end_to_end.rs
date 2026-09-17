@@ -1501,6 +1501,7 @@ fn a_week_whose_reads_the_budget_will_not_cover_does_not_close_and_does_not_call
             reply_id: Some("r1".to_owned()),
             signals: Some(Vec::new()),
             pointed_at: None,
+            level: None,
         },
     )
     .expect("append");
@@ -1566,6 +1567,7 @@ fn a_week_that_can_afford_the_metrics_but_not_the_accounts_still_does_not_close(
             reply_id: Some("r1".to_owned()),
             signals: Some(Vec::new()),
             pointed_at: None,
+            level: None,
         },
     )
     .expect("append");

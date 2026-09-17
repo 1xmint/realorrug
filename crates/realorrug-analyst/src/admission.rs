@@ -863,6 +863,7 @@ mod tests {
             reply_id: reply.map(ToOwned::to_owned),
             signals: Some(Vec::new()),
             pointed_at: None,
+            level: None,
         }
     }
 

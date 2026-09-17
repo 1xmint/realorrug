@@ -257,6 +257,7 @@ mod tests {
             fellback: None,
             signals: None,
             pointed_at: None,
+            level: None,
             reply_id: None,
         }
     }

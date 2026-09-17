@@ -35,6 +35,7 @@ pub fn app() -> Router {
         .route("/v1/public/pool", get(public::pool))
         .route("/v1/public/weeks", get(public::weeks))
         .route("/v1/public/hunters", get(public::hunters))
+        .route("/v1/public/recent", get(public::recent))
         .merge(check::router(check_state.clone()))
         .merge(card::router(check_state))
 }
@@ -89,6 +90,7 @@ mod tests {
             "/v1/public/pool",
             "/v1/public/weeks",
             "/v1/public/hunters",
+            "/v1/public/recent",
         ] {
             let (_, body) = get(path).await;
             assert!(body.starts_with('{'), "{path} is not routed: {body:?}");
