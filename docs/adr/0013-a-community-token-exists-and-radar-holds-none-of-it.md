@@ -2,6 +2,9 @@
 # ADR 0013 — A community token exists, and Radar holds none of it
 
 **Date:** 2026-09-04
+**Constraints 1 and 2 are superseded by
+[ADR 0029](0029-the-bot-holds-its-own-token-openly.md)** (2026-09-17): a small
+disclosed dev buy, and the bot's wallet may hold the token; nothing trades.
 **Status:** accepted. **This is Josh's decision, recorded**, and it reverses
 [GOAL.md](https://github.com/1xmint/theradar/blob/main/GOAL.md)'s "Radar will not launch one, ever" — written
 2026-09-03 and edited in the same commit as this file.

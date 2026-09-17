@@ -8,7 +8,7 @@ itself. Builds on [research 0038](0038-pons-v2-creators-and-outcomes-read-over-a
 [research 0039](0039-robinhood-chain-data-on-a-budget.md),
 [research 0040](0040-pons-v2-graduation-price-and-other-launchpads.md) and
 [research 0044](0044-liquidity-manipulation-and-sell-blocking.md), and answers
-against [ADR 0027](../adr/0027-the-bot-gives-verdicts-it-can-prove.md)'s
+against [ADR 0027](../adr/0027-the-bot-gives-informed-verdicts-from-evidence.md)'s
 verdict rule and `AGENTS.md` §1's evidence rule.
 
 ## 1. Method, and its limits
