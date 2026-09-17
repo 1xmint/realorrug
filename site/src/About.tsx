@@ -106,10 +106,12 @@ export function About() {
 
         <Block title="The token">
           <p>
-            There is a community token, and its rules are the point of it: no dev
-            buy, no allocation, no team or treasury supply. The operator holds
-            zero tokens and always will. The only money that reaches the operator
-            is the token's creator fee, and all of it becomes the weekly prize.
+            There is a community token, and its rules are the point of it: one
+            small dev buy, disclosed with its size, wallet and transaction from
+            launch day, and no other allocation, team or treasury supply. The
+            bot's wallet may hold the token, openly, at a public address. The
+            only money that reaches it is the token's creator fee, and all of it
+            becomes the weekly prize.
           </p>
           <p>
             The bot answers questions about that token on exactly the same rule

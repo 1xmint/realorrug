@@ -40,7 +40,7 @@ chain. Data costs $0 on either chain at our volume, so it decided nothing.
 | 7 | Data: free tiers and webhooks on both chains; **no stream is bought for the token or the bot**, PR #248 included | agreed |
 
 Row 1's "the rule is unchanged" is superseded in part by
-[ADR 0027](0027-the-bot-gives-verdicts-it-can-prove.md): the bot may now give
+[ADR 0027](0027-the-bot-gives-informed-verdicts-from-evidence.md): the bot may now give
 a verdict on a specific project, earned from the fact sheet, though it still
 never accuses a named person.
 

@@ -132,7 +132,35 @@ export function userHref(id: string): string | null {
 }
 
 /**
+ * A link to a transaction on Robinhood Chain's explorer, or `null`.
+ *
+ * The token, the bot's wallet and the weekly payout are all on Robinhood
+ * Chain now (ADR 0029, ADR 0025), so a payout row links Blockscout rather
+ * than Solscan. `robinhoodchain.blockscout.com` is the explorer research
+ * 0035 §6 names; a hash is 32 bytes of hex, exactly 66 characters with the
+ * `0x` prefix, and the bound is exact for the same reason `evmShaped` below
+ * is: a run that is too long is not a hash, and truncating it to a plausible
+ * length hands a reader a link to somebody else's transaction.
+ */
+export function explorerTx(hash: string): string | null {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(hash)) return null;
+  return `https://robinhoodchain.blockscout.com/tx/${hash}`;
+}
+
+/** A link to an account on Robinhood Chain's explorer, or `null`. */
+export function explorerAccount(address: string): string | null {
+  if (!evmShaped(address)) return null;
+  return `https://robinhoodchain.blockscout.com/address/${address}`;
+}
+
+/**
  * A link to a transaction on Solscan, or `null`.
+ *
+ * Kept for the general checker (`Check.tsx`, `ui/index.tsx`), which still
+ * reads either chain (`CheckResult.chain`) — a stranger can paste a Solana
+ * mint and get an answer about it. This project's own token, wallet and
+ * payouts are Robinhood Chain now; see [`explorerTx`] and
+ * [`explorerAccount`] for those.
  *
  * Signatures are 64 bytes in base58, which is 87 or 88 characters. The bound is
  * exact rather than "long enough", for the reason `mention.rs` gives about
@@ -221,4 +249,16 @@ export function account(): string | null {
  */
 export function evmShaped(text: string): boolean {
   return /^0x[0-9a-fA-F]{40}$/.test(text.trim());
+}
+
+/**
+ * Wei as ETH, at the precision a prize is worth quoting to.
+ *
+ * `api.ts`'s `sol()` divided by `1_000_000_000` for Solana's lamports; wei is
+ * `10^18`, not `10^9`, so this is a new function rather than a relabelled
+ * one — dividing by the old constant would understate every figure by nine
+ * orders of magnitude.
+ */
+export function eth(wei: number): string {
+  return (wei / 1_000_000_000_000_000_000).toFixed(4);
 }

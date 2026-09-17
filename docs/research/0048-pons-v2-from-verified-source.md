@@ -7,7 +7,7 @@
 capture. Builds on 0047 and on
 [research 0038](0038-pons-v2-creators-and-outcomes-read-over-a-range.md) §2,
 and answers against
-[ADR 0027](../adr/0027-the-bot-gives-verdicts-it-can-prove.md)'s verdict rule
+[ADR 0027](../adr/0027-the-bot-gives-informed-verdicts-from-evidence.md)'s verdict rule
 and `AGENTS.md` §1's evidence rule.
 
 ## 1. Method, its limits, and the curve-instance caveat

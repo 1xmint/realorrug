@@ -126,7 +126,7 @@ describe("the prize pool before a token exists", () => {
   });
 
   it("never renders a zero balance", async () => {
-    // The assertion this file exists for. `0.00 SOL` is the obvious thing to
+    // The assertion this file exists for. `0.0000 ETH` is the obvious thing to
     // render from `lamports ?? 0`, it looks completely fine, and it tells a
     // stranger that a contest exists and is empty.
     //
@@ -137,48 +137,44 @@ describe("the prize pool before a token exists", () => {
       expect(screen.getByText(/There is no token yet/i)).toBeTruthy();
     });
     const text = container.textContent ?? "";
-    expect(text).not.toMatch(/0\.0000\s*SOL/);
+    expect(text).not.toMatch(/0\.0000\s*ETH/);
     expect(text).not.toMatch(/\b0\.00\b/);
   });
 
   it("states the economics whether or not there is a pool to state them about", async () => {
-    // ADR 0013's constraints are the product rather than the small print, and
+    // ADR 0029's constraints are the product rather than the small print, and
     // they are as true before the launch as after it.
     render(<Pool />);
     await waitFor(() => {
-      expect(screen.getByText(/30 basis points of volume/i)).toBeTruthy();
+      expect(screen.getByText(/70 basis points of volume/i)).toBeTruthy();
     });
-    expect(screen.getByText(/operator holds zero tokens/i)).toBeTruthy();
-    expect(screen.getByText(/No dev buy/i)).toBeTruthy();
-    // Research 0028, 2026-09-05: 30 bps is the curve. After graduation the
-    // chain's own schedule runs 30 / 95 / ... / 5 by market cap, and a page
-    // that said "30 bps" without the qualifier would be understating a coin
-    // that graduated and kept going by three times.
+    expect(screen.getByText(/bot's wallet may hold the token/i)).toBeTruthy();
+    expect(screen.getByText(/One small dev buy/i)).toBeTruthy();
+    // The Pons v2 curve is a flat 70bps creator share plus a per-launch tax to
+    // 1,000bps, not pump.fun's fixed 30bps with a post-graduation ladder --
+    // a page that quoted the old rate or a ladder would be describing a
+    // different chain's economics as this token's own.
     const text =
-      screen.getByText(/30 basis points of volume/i).closest("p")
+      screen.getByText(/70 basis points of volume/i).closest("p")
         ?.textContent ?? "";
-    expect(text).toMatch(/on the bonding curve/);
-    expect(text).toMatch(/After graduation/);
-    expect(text).toMatch(/95 from there to 1,470 SOL/);
-    expect(text).toMatch(/5 above 98,240 SOL/);
+    expect(text).toMatch(/base share/);
+    expect(text).toMatch(/1,000 basis points/);
+    expect(text).toMatch(/100% of it becomes the prize/);
   });
 
-  it("does the arithmetic on the fee it states", async () => {
-    // 30 bps is 0.30%, so $10,000 of weekly volume is $30 and $100,000 is
-    // $300. The page said $3 and $30 until 2026-09-05, having read the rate as
-    // 0.03%, and three documents said the same. A page that understates the
-    // token's own economics by 10x is wrong in the flattering-to-nobody
-    // direction, and nothing here noticed until somebody multiplied.
-    //
-    // Re-apply the bug by putting `$3` back and the first assertion fails.
+  it("does the arithmetic on the fee's base share", async () => {
+    // 70 bps is 0.70%, so $10,000 of weekly volume is $70 and $100,000 is
+    // $700 -- the floor before any per-launch tax adds more. A page that
+    // states a single flat dollar figure, the way the old 30bps copy did,
+    // would be inventing a tax rate no launch has set yet.
     const { container } = render(<Pool />);
     await waitFor(() => {
-      expect(screen.getByText(/30 basis points of volume/i)).toBeTruthy();
+      expect(screen.getByText(/70 basis points of volume/i)).toBeTruthy();
     });
     const text = container.textContent ?? "";
-    expect(text).toMatch(/\$30;/);
-    expect(text).toMatch(/\$300\./);
-    expect(text).not.toMatch(/\$3;/);
+    expect(text).toMatch(/\$70;/);
+    expect(text).toMatch(/\$700\./);
+    expect(text).not.toMatch(/\$7;/);
   });
 });
 
@@ -214,13 +210,17 @@ describe("the tokenomics page before any token exists", () => {
 
   it("renders the fee ladder it imports rather than a summary of it", async () => {
     render(<Token />);
-    // The row that matters: 95 bps immediately after graduation is where the
-    // prize actually comes from, and it is the row a reader is most likely to
-    // be surprised by.
-    // getAllBy: 95 and 420 each appear in the prose above the table as well as
-    // in the row itself, which is the page working rather than a duplicate.
-    expect(screen.getAllByText("95").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/420 SOL/).length).toBeGreaterThan(0);
+    // The figures that matter: the curve's flat base fee and split, read off
+    // the fixture rather than hand-typed into the page.
+    expect(screen.getAllByText(/100 bps/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/70%/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/30%/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/1000 bps/).length).toBeGreaterThan(0);
+    // No post-graduation number was decoded (research 0040), so the page
+    // says so rather than publishing one.
+    expect(
+      screen.getByText(/not established here/i),
+    ).toBeTruthy();
   });
 });
 
@@ -568,10 +568,10 @@ describe("the history page", () => {
     },
     payout: {
       state: "paid",
-      lamports: 3_000_000_000,
-      recipient: "So11111111111111111111111111111111111111112",
+      lamports: 3_000_000_000_000_000_000,
+      recipient: "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
       signature:
-        "5xoBq7f3vT1kQ9mNpLrWcJhYzA2dEuG6sVtXnH4bKfPqxoBq7f3vT1kQ9mNpLrWcJhYzA2dEuG6sVtXnH4bKfPqa",
+        "0x5f3a1c2d4e6b7890abcdef1234567890abcdef1234567890abcdef1234567890",
       at: "2026-09-07T01:00:00Z",
     },
   };
@@ -599,11 +599,11 @@ describe("the history page", () => {
     );
     expect(links).toContain("https://x.com/i/web/status/1");
     expect(links).toContain("https://x.com/i/web/status/2");
-    expect(links.some((h) => h?.startsWith("https://solscan.io/tx/"))).toBe(
-      true,
-    );
+    expect(
+      links.some((h) => h?.startsWith("https://robinhoodchain.blockscout.com/tx/")),
+    ).toBe(true);
     // The prize, in the unit it was paid in.
-    expect(screen.getByText(/3\.0000 SOL/)).toBeTruthy();
+    expect(screen.getByText(/3\.0000 ETH/)).toBeTruthy();
     // The rule the week was scored under, printed beside it.
     expect(document.body.textContent).toContain("Scored under");
     // And the exclusions as counts, never as names.
@@ -623,7 +623,7 @@ describe("the history page", () => {
     });
     render(<History />);
     expect(await screen.findByText(/never claimed/i)).toBeTruthy();
-    expect(document.body.textContent).not.toContain("SOL");
+    expect(document.body.textContent).not.toContain("ETH");
     // Unread engagement is "not read", never a row of zeroes.
     expect(document.body.textContent).toContain("not read");
     expect(document.body.textContent).not.toContain("0/0/0");

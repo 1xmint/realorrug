@@ -11,9 +11,21 @@
 //! page holds the same line by having nothing of the kind to render.
 //!
 //! What is here instead is arithmetic a reader can check: the fee schedule, read
-//! off the chain, and where the fee goes. `fee-ladder.json` is pinned to
-//! `radar-pumpfun`'s own decoder by a test in that crate, so a number on this
-//! page cannot be edited to make the prize look better.
+//! off Robinhood Chain, and where the fee goes. `fee-ladder.json` is a fixture
+//! this repository checks by hand against
+//! [research 0036](../../docs/research/0036-pons-v2-read-from-a-real-launch.md),
+//! not a decoder-pinned file the way the old pump.fun ladder was — see that
+//! file's own comment for the sources and the date.
+//!
+//! # ADR 0029: the dev buy and the bot's wallet, disclosed rather than absent
+//!
+//! [ADR 0029](../../docs/adr/0029-the-bot-holds-its-own-token-openly.md)
+//! supersedes ADR 0013 constraints 1 and 2. There is one small dev buy, in the
+//! launch block, and the bot's wallet may hold the token — both stated here
+//! with their size, wallet and transaction from launch day, never before it.
+//! Constraints 3 to 6 stand: the creator tax still becomes the whole prize,
+//! entry is still free, the bot still never states a price, and the token is
+//! still judged exactly like any other.
 //!
 //! # Why this page exists separately from the pool
 //!
@@ -26,32 +38,26 @@ import ladder from "./fixtures/fee-ladder.json";
 import { useTitle } from "./title";
 import { Card, Heading, Nothing, Section, Steps } from "./ui";
 
-/** A row of the on-chain fee schedule, as the fixture holds it. */
-interface Row {
-  readonly from_sol: number;
-  readonly lp_bps: number;
-  readonly protocol_bps: number;
-  readonly creator_bps: number;
-}
-
 /**
- * The six rules, in ADR 0013's own order.
+ * The rules it is launched under, in ADR 0029's own order — the two it
+ * changed first, then the four ADR 0013 constraints it left standing.
  *
- * One sentence each. The ADR argues them; this states them, because a reader
+ * One sentence each. The ADRs argue them; this states them, because a reader
  * deciding in four seconds needs the constraint, not the reasoning.
  */
 const RULES: readonly { readonly rule: string; readonly plain: string }[] = [
   {
-    rule: "No dev buy, no allocation, no team or treasury tokens.",
-    plain: "The launch block pays nobody. It is the shape this bot calls out.",
+    rule: "One small dev buy, in the launch block, stated in public.",
+    plain:
+      "Its size, the wallet that made it and the transaction are on this page from launch day. Before then there is no address, size or transaction yet.",
   },
   {
-    rule: "The operator holds zero tokens.",
-    plain: "There is no bag to sell you, because there is no bag.",
+    rule: "The bot's wallet may hold the token, and its address is public.",
+    plain: "Every token it holds is visible on chain to anyone who looks.",
   },
   {
-    rule: "100% of the creator fee is paid out as a public weekly prize.",
-    plain: "Every lamport the fee earns leaves again the same week.",
+    rule: "The creator tax goes to the bot's wallet and funds the weekly prize.",
+    plain: "Nothing is kept back. It leaves again the same week.",
   },
   {
     rule: "Entry is free and never requires holding the token.",
@@ -62,8 +68,8 @@ const RULES: readonly { readonly rule: string; readonly plain: string }[] = [
     plain: "Not once, not if asked, not on this page either.",
   },
   {
-    rule: "The token is roasted like anything else.",
-    plain: "Same rule, same fact sheet, same refusals. Ask it.",
+    rule: "The token is judged like any other.",
+    plain: "Same rule, same fact sheet, same refusals — including the dev buy this page discloses. Ask it.",
   },
 ];
 
@@ -74,8 +80,9 @@ function Rules() {
       <p className="mb-8 max-w-2xl text-[var(--color-dim)]">
         A badge, not an investment. It is not a share, it does not grant a vote,
         and it buys no feature — every answer the bot gives is free to everyone,
-        with or without it. If that sounds like it leaves nothing to speculate
-        on, that is the intention.
+        with or without it. Nothing here buys, sells or swaps the token
+        automatically; any future trading needs its own decision, in public,
+        first.
       </p>
       <div className="grid gap-4 md:grid-cols-2">
         {RULES.map((r, i) => (
@@ -105,16 +112,16 @@ function Money() {
         <Steps
           steps={[
             {
-              what: "Somebody trades the token. A fee is charged on the trade.",
+              what: "Somebody trades the token. A base fee and the creator tax are charged on the trade, in ETH.",
             },
             {
-              what: "Part of that fee is the creator's, and the creator is this token's vault.",
+              what: "The creator's share is credited to a fee escrow the launchpad keeps, not paid out directly.",
             },
             {
-              what: "The vault is swept to the prize pool. Nothing is kept back.",
+              what: "The bot's own wallet — the creator fee recipient, address public — claims it. Nothing is kept back.",
             },
             {
-              what: "The week's best question wins the pool, in one public transaction.",
+              what: "The week's best question wins the pool, in one public transaction the payout wallet signs and nothing else.",
               when: "Mondays, 00:00 UTC close · payout 01:00 UTC",
             },
           ]}
@@ -125,75 +132,79 @@ function Money() {
 }
 
 function Ladder() {
-  const rows = ladder.after_graduation.rows as readonly Row[];
+  const curve = ladder.curve;
   return (
     <Section id="fees">
-      <Heading kicker="The fee, read off the chain">
-        30 basis points, then a ladder
+      <Heading kicker="The fee, read off Robinhood Chain">
+        100 basis points, split, plus a chosen tax
       </Heading>
       <p className="mb-6 max-w-2xl text-[var(--color-dim)]">
-        While a coin is still on its bonding curve the creator's fee is{" "}
+        While a coin is still on its bonding curve, every trade pays a base fee
+        of{" "}
         <strong className="text-[var(--color-text)]">
-          {ladder.curve.creator_bps} basis points
+          {curve.base_fee_bps} basis points
         </strong>{" "}
-        of volume — 0.30%. If it graduates, the fee follows a schedule the fee
-        program keeps on chain, keyed on market capitalisation. It steps{" "}
-        <em>up</em> to 95 immediately after graduation and then down to 5 at the
-        top.
+        of volume — 1%. The protocol keeps{" "}
+        {curve.protocol_share_bps / 100}% of that fee; the creator gets the
+        other {curve.creator_base_share_bps / 100}%. On top of that, the
+        creator sets a tax once, at launch, from 0 up to{" "}
+        {curve.creator_tax_ceiling_bps} basis points, paid to the creator in
+        full. All of it is in ETH, and all of the creator's side is this
+        token's weekly prize.
       </p>
-      <Card className="scroll-x">
-        <table className="w-full text-left text-sm">
-          <caption className="sr-only">
-            The creator fee by market capitalisation, in basis points
-          </caption>
-          <thead>
-            <tr className="text-[var(--color-faint)]">
-              <th scope="col" className="pb-2 font-normal">
-                Market cap from
-              </th>
-              <th scope="col" className="pb-2 text-right font-normal">
-                Creator
-              </th>
-              <th scope="col" className="pb-2 text-right font-normal">
-                Protocol
-              </th>
-              <th scope="col" className="pb-2 text-right font-normal">
-                Liquidity
-              </th>
-            </tr>
-          </thead>
-          <tbody className="tnum">
-            {rows.map((r) => (
-              <tr
-                key={r.from_sol}
-                className="border-t border-[var(--color-line)]"
-              >
-                <th
-                  scope="row"
-                  className="py-1.5 font-normal text-[var(--color-dim)]"
-                >
-                  {r.from_sol.toLocaleString()} SOL
-                </th>
-                <td className="py-1.5 text-right font-medium text-[var(--color-signal)]">
-                  {r.creator_bps}
-                </td>
-                <td className="py-1.5 text-right text-[var(--color-dim)]">
-                  {r.protocol_bps}
-                </td>
-                <td className="py-1.5 text-right text-[var(--color-dim)]">
-                  {r.lp_bps}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <Card>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+          <div>
+            <dt className="text-xs text-[var(--color-faint)]">Base fee</dt>
+            <dd className="tnum mt-1 text-[var(--color-text)]">
+              {curve.base_fee_bps} bps
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-[var(--color-faint)]">
+              Creator's share of it
+            </dt>
+            <dd className="tnum mt-1 font-medium text-[var(--color-signal)]">
+              {curve.creator_base_share_bps / 100}%
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-[var(--color-faint)]">
+              Protocol's share of it
+            </dt>
+            <dd className="tnum mt-1 text-[var(--color-dim)]">
+              {curve.protocol_share_bps / 100}%
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-[var(--color-faint)]">
+              Creator tax ceiling
+            </dt>
+            <dd className="tnum mt-1 text-[var(--color-dim)]">
+              {curve.creator_tax_ceiling_bps} bps
+            </dd>
+          </div>
+        </dl>
       </Card>
+      <p className="mt-4 max-w-2xl text-sm text-[var(--color-dim)]">
+        {!ladder.after_graduation.established && (
+          <>
+            <strong className="text-[var(--color-text)]">
+              What happens to the fee after graduation is not established
+              here.
+            </strong>{" "}
+            A graduated Pons v2 pool is Uniswap-shaped, with a hook, and its
+            fee split has not been read off chain — so this page states the
+            curve's fee, which is what applies for as long as the coin trades
+            on it, and says nothing about a number it has not checked.
+          </>
+        )}
+      </p>
       <p className="mt-4 text-xs text-[var(--color-faint)]">
-        Read from the fee program's own account on {ladder.captured}, and
-        checked against that account by a test on every build. Two live swaps
-        paid a row further down the ladder than their pool's market cap selects;
-        that disagreement is recorded and unresolved, and it is the reason this
-        table is dated.
+        Read from the launchpad's own factory on {ladder.captured}. The
+        factory owner can change these settings for future launches; a
+        launched curve keeps what it snapshotted, which is why this page is
+        dated.
       </p>
     </Section>
   );
@@ -235,10 +246,14 @@ function Status() {
   return (
     <Section id="status">
       <Heading kicker="Right now">Status</Heading>
-      <div className="max-w-2xl">
+      <div className="max-w-2xl space-y-6">
         <Nothing
           what="No token exists."
           why="Nothing has been minted, no contract address has been published, and any address claiming to be this token is not. When one exists it will be published here and in the account's own bio, and nowhere else."
+        />
+        <Nothing
+          what="The dev buy has no size, wallet or transaction yet."
+          why="ADR 0029: there is one small dev buy, in the launch block. Its size, the wallet that made it and the transaction are published on this page on launch day — not before, and not as a guess in the meantime."
         />
       </div>
     </Section>

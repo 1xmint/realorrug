@@ -10,7 +10,7 @@ This is a direction decision under `AGENTS.md` §2; it is recorded here, not
 reopened, and nothing below argues the alternative.
 **Amends:** [design 0020](../design/0020-robinhood-fact-sheet-and-voice.md)
 §4 and §6, in the same commit as this ADR — see that document's changes for
-the line-level edits. Does not amend [ADR 0027](0027-the-bot-gives-verdicts-it-can-prove.md):
+the line-level edits. Does not amend [ADR 0027](0027-the-bot-gives-informed-verdicts-from-evidence.md):
 the verdict ladder and the model/code split it settled are chain-blind
 already and this ADR only makes that explicit (point 4, below).
 **Consequence lands in:** `crates/realorrug-roast/src/clause.rs`,

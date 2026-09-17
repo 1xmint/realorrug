@@ -2,7 +2,7 @@
 # Design 0020 — the Robinhood fact sheet, the verdict, and the voice
 
 **Status:** **draft, not yet reviewed with Josh.** This is the plan
-[ADR 0027](../adr/0027-the-bot-gives-verdicts-it-can-prove.md) says it is
+[ADR 0027](../adr/0027-the-bot-gives-informed-verdicts-from-evidence.md) says it is
 waiting for: what a Robinhood Chain fact sheet holds, how code picks a
 verdict level from it, and what the model may say. Nothing in it is built.
 **Amends:** nothing. **Consequence of:** ADR 0027 (the verdict ladder and the

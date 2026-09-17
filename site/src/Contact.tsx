@@ -101,7 +101,7 @@ export function Contact() {
             anything anywhere. There is nothing here to connect and nothing to
             sign. If you have won, the account replies to you in your own thread,
             under the reply that won, and you claim by replying to that post with
-            a Solana address — described step by step on{" "}
+            a Robinhood Chain wallet address — described step by step on{" "}
             <Here href="/contest">the contest page</Here>.
           </p>
         </Block>

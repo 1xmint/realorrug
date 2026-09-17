@@ -90,7 +90,7 @@ The two are different states with a different consequence:
 
 **Does a stale required fact make the verdict `CantTell`, the same as a
 missing one? Yes — for the same reason ADR 0027 gives for missing, and no
-softer treatment is defensible.** [ADR 0027](../adr/0027-the-bot-gives-verdicts-it-can-prove.md)
+softer treatment is defensible.** [ADR 0027](../adr/0027-the-bot-gives-informed-verdicts-from-evidence.md)
 requires `CantTell` whenever "a fact we needed could not be read," and is
 explicit that getting this backwards "would turn a blind spot into an
 endorsement, which is worse than the shrug." A stale required fact is a
