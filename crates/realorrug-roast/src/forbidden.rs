@@ -1005,7 +1005,17 @@ const AGE_WORDS: &[&str] = &["ago", "old", "hour"];
 /// fabricated -- i.e. it is left out of the fabricated list, which is the
 /// only public API this module needs to ask.
 fn states_one_of(text: &str, values: &[f64]) -> bool {
-    fidelity::literals(text).len() > fidelity::check(text, values).len()
+    // Subject-free, deliberately. The question here is whether a required
+    // figure is *present*, and the narrow set passed in is a single required
+    // fact: there is no second subject for it to be confused with, so the
+    // subject rule has nothing to decide and would only subtract from the
+    // count for the wrong reason.
+    let values: Vec<fidelity::Authorised> = values
+        .iter()
+        .copied()
+        .map(fidelity::Authorised::anywhere)
+        .collect();
+    fidelity::literals(text).len() > fidelity::check(text, &values).len()
 }
 
 /// Content design 0020 §4 requires a `NothingUglyYet` reply to carry: the age,

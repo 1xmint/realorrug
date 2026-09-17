@@ -397,7 +397,15 @@ pub fn check(text: &str, authorised: &[f64]) -> Result<(), String> {
     if let Some(v) = realorrug_roast::forbidden::check(text).first() {
         return Err(format!("forbidden phrase {:?}: {}", v.phrase, v.because));
     }
-    match realorrug_roast::fidelity::check(text, authorised).first() {
+    // No subject: a bio's figures all describe the week's record, which is one
+    // thing. The subject rule has nothing to separate here and is given
+    // nothing to separate.
+    let authorised: Vec<realorrug_roast::fidelity::Authorised> = authorised
+        .iter()
+        .copied()
+        .map(realorrug_roast::fidelity::Authorised::anywhere)
+        .collect();
+    match realorrug_roast::fidelity::check(text, &authorised).first() {
         Some(f) => Err(format!("a figure the record does not carry: {}", f.literal)),
         None => Ok(()),
     }

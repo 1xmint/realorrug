@@ -128,17 +128,17 @@ fn a_hostile_name_never_authorises_a_number() {
         let authorised = sheet.authorised();
 
         assert!(
-            !authorised.iter().any(|v| (*v - 99.9).abs() < 1e-9),
+            !authorised.iter().any(|a| (a.value - 99.9).abs() < 1e-9),
             "{case}: a name authorised its own statistic"
         );
         assert!(
-            !authorised.iter().any(|v| (*v - 7.77).abs() < 1e-9),
+            !authorised.iter().any(|a| (a.value - 7.77).abs() < 1e-9),
             "{case}: a name authorised its own figure"
         );
         // The measured facts are still there -- refusing the attack must not
         // cost the answer.
         assert!(
-            authorised.iter().any(|v| (*v - 6.0).abs() < 1e-9),
+            authorised.iter().any(|a| (a.value - 6.0).abs() < 1e-9),
             "{case}: the real recipient count was lost"
         );
     }
@@ -250,7 +250,10 @@ fn a_truncated_recipient_count_is_never_placed_in_a_distribution() {
     // 25.1% is the share of instant graduations at exactly six. It must not be
     // authorised for a count that was cut short.
     assert!(
-        !sheet.authorised().iter().any(|v| (*v - 25.1).abs() < 0.05),
+        !sheet
+            .authorised()
+            .iter()
+            .any(|a| (a.value - 25.1).abs() < 0.05),
         "a truncated count reached the distribution"
     );
 }

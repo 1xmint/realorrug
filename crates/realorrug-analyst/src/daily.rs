@@ -212,8 +212,14 @@ pub fn render(rows: &Rows, vault: Option<&Vault>) -> Rendered {
     }
 
     Rendered::Post(Post {
+        // No subject: every figure in a daily post is about the day itself --
+        // dates, counts, the pool -- so there is no second subject one of them
+        // could be misattributed to.
+        authorised: authorised
+            .into_iter()
+            .map(realorrug_roast::fidelity::Authorised::anywhere)
+            .collect(),
         text,
-        authorised,
         source: serde_json::to_string(rows).unwrap_or_default(),
     })
 }

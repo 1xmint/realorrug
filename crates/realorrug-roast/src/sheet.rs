@@ -30,6 +30,7 @@ use realorrug_types::{ReadAt, SlotDelta};
 
 use crate::baserates::BaseRates;
 use crate::clause::{Clause, Kind, Voice};
+use crate::fidelity::{Authorised, Subject};
 use std::fmt::Write as _;
 
 /// What a fact is a claim about, because one kind is withheld for one mint.
@@ -646,34 +647,63 @@ impl FactSheet {
         }
     }
 
-    /// Every numeric value a reply may contain.
+    /// Every numeric value a reply may contain, and what each one is about.
     ///
     /// Three sources, and the boundary between them is the point:
     ///
     /// 1. **Each fact's declared values**, which carry the honest re-renderings
     ///    a measurement has — 0.251, 25.1 and 25 are one fact said three ways.
-    /// 2. **Every numeral in the trusted rendering**, labels included. A label
+    /// 2. **Every numeral in the fact's own line**, label included. A label
     ///    says things like "research 0022" and "$20-$200", and those numerals
     ///    were written *by Radar* and shown to the model as true. A model citing
     ///    the band it was given has invented nothing, and a check that caught it
     ///    would reject the most careful replies while passing vaguer ones.
-    /// 3. **The read point**, because a reply citing when the sheet was read
-    ///    is doing the thing this account exists to do -- a slot on Solana, a
-    ///    block number on Robinhood Chain, never the other chain's word for
+    /// 3. **The sheet's own remarks** — what could not be read, the innocent
+    ///    explanations, and the read point. A reply citing when the sheet was
+    ///    read is doing the thing this account exists to do: a slot on Solana,
+    ///    a block number on Robinhood Chain, never the other chain's word for
     ///    it.
+    ///
+    /// **Sources 1 and 2 are attributed and source 3 is not**, and that is the
+    /// fix ADR 0031 records. This function used to scan the whole rendering in
+    /// one pass and return bare numbers, which meant any numeral anywhere on
+    /// the sheet licensed that numeral anywhere in the reply: the largest
+    /// holder's 41% could be published as "the creator already dumped 41%",
+    /// a false sentence made entirely of authorised digits. Scanning per fact
+    /// keeps each number tied to the measurement it came from. Source 3 is
+    /// [`Subject::Anywhere`] because those lines are Radar's remarks *about*
+    /// the sheet rather than measurements of anything on it.
     ///
     /// What is **not** a source is [`FactSheet::untrusted`]. That is the whole
     /// boundary: a creator who names their token "99.9% of holders profited"
     /// must not thereby licence 99.9 as a publishable figure. The untrusted
     /// strings are fenced separately and never rendered into this block.
     #[must_use]
-    pub fn authorised(&self) -> Vec<f64> {
-        let mut values: Vec<f64> = self.facts.iter().flat_map(|f| f.values.clone()).collect();
-        values.extend(
-            crate::fidelity::literals(&self.render())
-                .into_iter()
-                .map(|(_, v)| v),
-        );
+    pub fn authorised(&self) -> Vec<Authorised> {
+        let mut values: Vec<Authorised> = Vec::new();
+        for fact in &self.facts {
+            let subject = Subject::of(fact.kind);
+            values.extend(
+                fact.values
+                    .iter()
+                    .map(|&value| Authorised { subject, value }),
+            );
+            // Exactly the line `render` writes for this fact, so the two
+            // cannot disagree about what the model was shown.
+            let line = format!("{}: {}", fact.label, fact.rendered);
+            values.extend(
+                crate::fidelity::literals(&line)
+                    .into_iter()
+                    .map(|(_, value)| Authorised { subject, value }),
+            );
+        }
+        for remark in self.unknown.iter().chain(self.twins.iter()) {
+            values.extend(
+                crate::fidelity::literals(remark)
+                    .into_iter()
+                    .map(|(_, value)| Authorised::anywhere(value)),
+            );
+        }
         if let Some(read_at) = self.read_at {
             let raw = match read_at {
                 ReadAt::Solana(slot) => slot.get(),
@@ -684,7 +714,7 @@ impl FactSheet {
                 reason = "a slot or a block number is well inside f64's exact integer range and \
                           this is a comparison against a literal the model wrote, not arithmetic"
             )]
-            values.push(raw as f64);
+            values.push(Authorised::anywhere(raw as f64));
         }
         values
     }
@@ -1973,7 +2003,12 @@ mod tests {
         let template = crate::verdict::template(&sheet);
         assert!(template.contains("Read at block 100."), "{template}");
 
-        assert!(sheet.authorised().iter().any(|v| (*v - 100.0).abs() < 1e-9));
+        assert!(
+            sheet
+                .authorised()
+                .iter()
+                .any(|a| (a.value - 100.0).abs() < 1e-9)
+        );
     }
 
     #[test]
@@ -2021,6 +2056,46 @@ mod tests {
     }
 
     #[test]
+    fn every_authorised_number_carries_the_measurement_it_came_from() {
+        // The hole ADR 0031 closes. `authorised` used to scan the whole
+        // rendering in one pass and return bare values, so the largest
+        // holder's 41 was licensed anywhere in the reply -- including inside
+        // "the creator already dumped 41%".
+        //
+        // Re-apply the bug by scanning `self.render()` instead of each fact's
+        // own line: 41 gains an `Anywhere` entry and the second assertion
+        // fails, because `Anywhere` is citable in a sentence about anybody.
+        let sheet = FactSheet {
+            mint: "M".to_owned(),
+            read_at: None,
+            facts: vec![
+                Fact::exact(Kind::LargestHolderShare, "largest holder", 41.0, "41%"),
+                Fact::exact(Kind::CreatorLaunches, "launches by this creator", 3.0, "3"),
+            ],
+            untrusted: Vec::new(),
+            unknown: Vec::new(),
+            signals: Vec::new(),
+            twins: Vec::new(),
+        };
+
+        let authorised = sheet.authorised();
+        let for_41: Vec<Subject> = authorised
+            .iter()
+            .filter(|a| (a.value - 41.0).abs() < 1e-9)
+            .map(|a| a.subject)
+            .collect();
+        assert!(!for_41.is_empty(), "41 must still be publishable at all");
+        assert!(
+            for_41.iter().all(|s| *s == Subject::Holders),
+            "41 was measured about the holders and nothing else: {for_41:?}"
+        );
+
+        // And the check built on it refuses the sentence that moved it.
+        let fabricated = crate::fidelity::check("The creator already dumped 41%.", &authorised);
+        assert_eq!(fabricated.len(), 1, "{fabricated:?}");
+    }
+
+    #[test]
     fn a_price_fact_is_withheld_and_the_sheet_says_why() {
         // ADR 0013 constraint 5. The figure must leave the authorised set, not
         // merely the rendering: a price the model may not see but may still
@@ -2045,11 +2120,11 @@ mod tests {
 
         let authorised = sheet.authorised();
         assert!(
-            !authorised.iter().any(|v| (*v - 69_000.0).abs() < 1e-9),
+            !authorised.iter().any(|a| (a.value - 69_000.0).abs() < 1e-9),
             "the market cap survived withholding: {authorised:?}"
         );
         assert!(
-            !authorised.iter().any(|v| (*v - 69.0).abs() < 1e-9),
+            !authorised.iter().any(|a| (a.value - 69.0).abs() < 1e-9),
             "a rendering of the market cap survived: {authorised:?}"
         );
         assert!(
@@ -2064,7 +2139,7 @@ mod tests {
         let rendered = sheet.render();
         assert!(rendered.contains("never stated"), "{rendered}");
         assert!(
-            authorised.iter().any(|v| (*v - 6.0).abs() < 1e-9),
+            authorised.iter().any(|a| (a.value - 6.0).abs() < 1e-9),
             "the measured fact was lost with the price: {authorised:?}"
         );
 
@@ -2072,7 +2147,7 @@ mod tests {
         // out of the rendered block, so a note that cited the ADR by number
         // would licence that number. Only the recipient count remains.
         assert!(
-            authorised.iter().all(|v| (*v - 6.0).abs() < 1e-9),
+            authorised.iter().all(|a| (a.value - 6.0).abs() < 1e-9),
             "the note put a number into the authorised set: {authorised:?}"
         );
     }
@@ -2741,8 +2816,8 @@ mod tests {
         // Authorised in both renderings, so a reply quoting 4.6% is not refused
         // as a fabrication of a figure the sheet stated.
         let authorised = sheet.authorised();
-        assert!(authorised.iter().any(|v| (*v - 456.0).abs() < 1e-9));
-        assert!(authorised.iter().any(|v| (*v - 4.56).abs() < 1e-9));
+        assert!(authorised.iter().any(|a| (a.value - 456.0).abs() < 1e-9));
+        assert!(authorised.iter().any(|a| (a.value - 4.56).abs() < 1e-9));
     }
 
     #[test]

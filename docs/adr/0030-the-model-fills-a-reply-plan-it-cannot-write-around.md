@@ -2,10 +2,13 @@
 # ADR 0030 — the model fills a reply plan it cannot write around
 
 **Date:** 2026-09-17
-**Status:** **proposed, and not yet Josh's decision.** This is a
-recommendation, not a record: it narrows something Josh asked to widen, and
-it should not be marked accepted until he has read the reason and said yes.
-Nothing here is built.
+**Status:** **superseded by
+[ADR 0031](0031-the-model-picks-the-story-and-the-evidence-licenses-the-joke.md),
+and never accepted.** It was a recommendation Josh read and declined on
+2026-09-17, in favour of keeping the writing with the model and binding
+figures to their subject instead. Two of its arguments were wrong; ADR 0031
+records which, so the reasoning here is read with them in view. Nothing in
+it was built.
 **Amends:** [design 0020](../design/0020-robinhood-fact-sheet-and-voice.md)
 §4 "The voice", which has the model write the whole reply as free text.
 `AGENTS.md` §3 rules 2 and 4 are unchanged — the point of this ADR is to
