@@ -680,7 +680,7 @@ where
 /// its own: it is the part that decides how many calls a full walk costs, and
 /// the part where an off-by-one turns into either a stalled walk (a window
 /// that rounds to zero) or a shower of capped calls.
-const fn next_window(window: u64, held: u64) -> u64 {
+fn next_window(window: u64, held: u64) -> u64 {
     let ceiling = window.saturating_mul(4);
     if held == 0 {
         return ceiling;
@@ -689,13 +689,13 @@ const fn next_window(window: u64, held: u64) -> u64 {
     // At least one block, or the walk stops advancing; at most four times the
     // last window, so a quiet stretch does not launch a single enormous query
     // into a busy one.
-    if scaled < 1 {
-        1
-    } else if scaled > ceiling {
-        ceiling
-    } else {
-        scaled
-    }
+    //
+    // `clamp` rather than the two comparisons written out, even though that
+    // costs this function its `const` (`Ord::clamp` is not const-callable
+    // yet): a hand-written clamp has two boundary comparisons whose `<`/`<=`
+    // and `>`/`>=` forms behave identically, so they are mutants no test can
+    // ever kill. One call with no operators of our own has no such corner.
+    scaled.clamp(1, ceiling)
 }
 
 #[cfg(test)]
@@ -1531,7 +1531,7 @@ mod tests {
 
         let mut seen: Vec<(u64, RobinhoodAddress)> = Vec::new();
         let delivered = walk_launches(0, 1_999, capped_at(50, logs.clone()), |l| {
-            seen.push((0, l.deployer))
+            seen.push((0, l.deployer));
         })
         .expect("the walk completes");
 
@@ -1592,5 +1592,33 @@ mod tests {
         assert_eq!(next_window(2, 1_000_000), 1);
         // And an empty answer grows rather than standing still.
         assert_eq!(next_window(64, 0), 256);
+        // An answer already at the target holds the window where it is: the
+        // loop converges rather than drifting up to the ceiling every step.
+        assert_eq!(next_window(100, LOGS_PER_WINDOW), 100);
+    }
+
+    #[test]
+    fn a_window_of_n_blocks_asks_for_exactly_n_blocks() {
+        // The ranges themselves, not just the launches that came back. A
+        // window that asked for one block more than it meant to would still
+        // deliver every launch and still finish in few calls -- both other
+        // tests would pass -- while every answer was a block wider than the
+        // size the cap was measured against, which is how a walk that has
+        // been tuned to stay under a limit quietly stops staying under it.
+        let mut asked: Vec<(u64, u64)> = Vec::new();
+        walk_launches(
+            1_000,
+            1_010,
+            |from, to| {
+                asked.push((from, to));
+                Ok(Vec::new())
+            },
+            |_| (),
+        )
+        .expect("an empty range completes");
+        // One block, then four, then the rest: windows 1, 4, 16 against an
+        // empty answer, each range exactly as wide as the window and the last
+        // one cut off at `to_block`.
+        assert_eq!(asked, vec![(1_000, 1_000), (1_001, 1_004), (1_005, 1_010)]);
     }
 }
