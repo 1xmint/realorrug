@@ -19,19 +19,23 @@
 //! # What this dossier holds, and what it does not
 //!
 //! Only what the reads below can actually support today: the launch record,
-//! the curve's graduation flag and quote reserves, and the current block as
-//! the read point. Everything Pons v2's curve arithmetic has not been modelled
-//! for -- capacity, fees, the launch block, a real creator-transaction count --
-//! is `None` with an [`Unavailable`] entry naming it, never a default (AGENTS.md
-//! §3 rule 8). Filling those in is later work; this reader does not guess at
-//! them to look more complete than it is.
+//! the curve's graduation flag and quote reserves, the current block as the
+//! read point, the launch block with its age and the launcher's own buy, and
+//! the holders. Everything Pons v2's curve arithmetic has not been modelled
+//! for -- capacity, fees, a real creator-transaction count -- is `None` with an
+//! [`Unavailable`] entry naming it, never a default (AGENTS.md §3 rule 8). This
+//! reader does not guess at them to look more complete than it is.
 
-use realorrug_robinhood::pons::{FACTORY, LaunchedToken, curve};
-use realorrug_robinhood::{Address as RobinhoodAddress, Rpc};
+use std::collections::HashMap;
+
+use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, topic};
+use realorrug_robinhood::{Address as RobinhoodAddress, Hash32, Log, Rpc};
 use realorrug_types::{ChainAddress, ReadAt};
 
 use crate::budget::{Budget, Exhausted};
-use crate::dossier::{ChainReader, CurveFacts, Dossier, QuoteAsset, Unavailable};
+use crate::dossier::{
+    ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, QuoteAsset, Unavailable,
+};
 
 /// Why a Robinhood dossier could not be built at all.
 ///
@@ -55,27 +59,164 @@ pub enum Error {
 
 /// One `eth_call`, budget-checked first.
 ///
-/// Every read in this module goes through this function or [`block_number`]
-/// so that none of them can skip the budget -- a budget checked only at the
-/// start is not a budget.
+/// Every read in this module takes [`take`] first, so that none of them can
+/// skip the budget -- a budget checked only at the start is not a budget.
 fn call(
     budget: &mut Budget,
     client: &Rpc,
     to: &RobinhoodAddress,
     data: &[u8],
 ) -> Result<Vec<u8>, String> {
-    budget
-        .take_call()
-        .map_err(|e| format!("budget exhausted: {e:?}"))?;
+    take(budget)?;
     client.call_contract(to, data)
 }
 
-/// `eth_blockNumber`, budget-checked.
-fn block_number(budget: &mut Budget, client: &Rpc) -> Result<u64, String> {
+/// One call's worth of budget, or why there is none.
+fn take(budget: &mut Budget) -> Result<(), String> {
     budget
         .take_call()
-        .map_err(|e| format!("budget exhausted: {e:?}"))?;
-    client.block_number()
+        .map_err(|e| format!("budget exhausted: {e:?}"))
+}
+
+/// A block's number and timestamp (the latest when `number` is `None`),
+/// budget-checked.
+fn block_time(
+    budget: &mut Budget,
+    client: &Rpc,
+    number: Option<u64>,
+) -> Result<(u64, u64), String> {
+    take(budget)?;
+    client.block_time(number)
+}
+
+/// An address as the 32-byte topic an indexed `address` parameter becomes.
+fn address_topic(address: &RobinhoodAddress) -> Hash32 {
+    let mut word = [0u8; 32];
+    word[12..].copy_from_slice(&address.0);
+    Hash32(word)
+}
+
+/// The launch: its block, its age at the read point, and the launcher's own
+/// buy in the launch transaction.
+///
+/// The block comes from the factory's `TokenLaunched` event filtered on the
+/// token as its first indexed field -- one log in the whole chain, so the
+/// provider's block-range cap never bites. The age is the difference of the
+/// two blocks' own timestamps: the chain's clock, not this server's. The buy
+/// is read from the launch transaction's receipt, because research 0036 §3
+/// captured a launch carrying the launcher's buy in the same transaction.
+///
+/// Only the block is required. An unreadable timestamp leaves the age `None`
+/// and an unreadable receipt leaves the buy `None`, each "could not see", and
+/// the launch is still returned: dropping a block that did read because a
+/// second read failed would report less than was known.
+fn launch_facts(
+    budget: &mut Budget,
+    client: &Rpc,
+    token: &RobinhoodAddress,
+    record: &LaunchedToken,
+    read_time: Option<u64>,
+) -> Result<ChainLaunch, String> {
+    take(budget)?;
+    let logs = client.logs(&FACTORY, &[topic::TOKEN_LAUNCHED, address_topic(token)])?;
+    let log = logs
+        .iter()
+        .find(|log| Launched::from_log(log).is_some_and(|l| l.token == *token))
+        .ok_or_else(|| "the factory emitted no TokenLaunched event for this token".to_owned())?;
+
+    let age_seconds = block_time(budget, client, Some(log.block))
+        .ok()
+        .zip(read_time)
+        .and_then(|((_, launched_at), read_at)| read_at.checked_sub(launched_at));
+
+    let dev_buy_wei = take(budget)
+        .and_then(|()| client.receipt(&log.transaction))
+        .ok()
+        .flatten()
+        .map(|receipt| {
+            // A reverted transaction's logs never happened.
+            if receipt.succeeded {
+                launcher_buy(&receipt.logs, record)
+            } else {
+                0
+            }
+        });
+
+    Ok(ChainLaunch {
+        block: log.block,
+        age_seconds,
+        dev_buy_wei,
+    })
+}
+
+/// Wei the launcher spent on curve buys among `logs`: buys against this
+/// token's own curve, made by or for the deployer.
+///
+/// The curve is compared because any contract can emit a `CurveBuy`'s bytes
+/// (`Trade::from_log`'s own doc comment says so). Saturating, because a sum
+/// past `u128` is not a real ETH amount and must not wrap into a small one.
+fn launcher_buy(logs: &[Log], record: &LaunchedToken) -> u128 {
+    logs.iter()
+        .filter_map(Trade::from_log)
+        .filter(|t| {
+            t.side == Side::Buy
+                && t.curve == record.curve
+                && (t.trader == record.deployer || t.recipient == record.deployer)
+        })
+        .fold(0u128, |sum, t| sum.saturating_add(t.quote))
+}
+
+/// Who holds the token, from every `Transfer` it emitted.
+///
+/// Logs arrive in chain order, so a balance cannot truly go below zero; one
+/// that would means the answer was incomplete, and the count is refused
+/// rather than published from a partial ledger. The curve, the factory and
+/// the zero address are machinery, not holders.
+fn holders_from(logs: &[Log], record: &LaunchedToken) -> Result<Holders, String> {
+    let mut balances: HashMap<RobinhoodAddress, u128> = HashMap::new();
+    for log in logs {
+        if log.topics.first() != Some(&topic::TRANSFER) {
+            continue;
+        }
+        let (Some(from), Some(to), Some(value)) =
+            (log.topic_address(1), log.topic_address(2), log.data_u128(0))
+        else {
+            return Err("a Transfer log did not decode".to_owned());
+        };
+        if from != RobinhoodAddress::ZERO {
+            let balance = balances.entry(from).or_default();
+            *balance = balance
+                .checked_sub(value)
+                .ok_or_else(|| "transfers spend more than was received".to_owned())?;
+        }
+        let balance = balances.entry(to).or_default();
+        *balance = balance.saturating_add(value);
+    }
+    let held: Vec<u128> = balances
+        .iter()
+        .filter(|(who, balance)| {
+            **balance > 0
+                && **who != RobinhoodAddress::ZERO
+                && **who != record.curve
+                && **who != FACTORY
+        })
+        .map(|(_, balance)| *balance)
+        .collect();
+    let count = u32::try_from(held.len()).unwrap_or(u32::MAX);
+    let total = held.iter().fold(0u128, |sum, b| sum.saturating_add(*b));
+    let largest_share_bps = held.iter().max().and_then(|largest| {
+        // Scale first while it fits; a balance near `u128::MAX` divides the
+        // total first instead, which loses precision but never overflows.
+        let bps = largest.checked_mul(10_000).map_or_else(
+            || largest / (total / 10_000).max(1),
+            |scaled| scaled / total,
+        );
+        u16::try_from(bps.min(10_000)).ok()
+    });
+    Ok(Holders {
+        count,
+        largest_share_bps,
+    })
 }
 
 /// The factory's record of `token`, the one read a Robinhood dossier cannot
@@ -186,6 +327,8 @@ pub fn build(
         launch: None,
         curve: None,
         creator_transactions: None,
+        chain_launch: None,
+        holders: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -201,8 +344,12 @@ pub fn build(
     // 2. The read point. Optional in the same sense Solana's launch-slot read
     // is: a budget spent by the time this runs is a truncated dossier, not a
     // failed one.
-    match block_number(budget, client) {
-        Ok(n) => dossier.read_at = Some(ReadAt::Robinhood(n)),
+    let mut read_time = None;
+    match block_time(budget, client, None) {
+        Ok((n, at)) => {
+            dossier.read_at = Some(ReadAt::Robinhood(n));
+            read_time = Some(at);
+        }
         Err(why) => dossier.unavailable.push(Unavailable {
             fact: "read point",
             why,
@@ -215,7 +362,30 @@ pub fn build(
         Err(why) => dossier.unavailable.push(Unavailable { fact: "curve", why }),
     }
 
-    // 4. Facts this reader cannot supply at all yet, regardless of budget.
+    // 4. The launch block, its age and the launcher's own buy. Required by
+    // design 0020 §1, so a miss is named and the sheet treats it as unread.
+    match launch_facts(budget, client, token, &record, read_time) {
+        Ok(launch) => dossier.chain_launch = Some(launch),
+        Err(why) => dossier.unavailable.push(Unavailable {
+            fact: "launch block",
+            why,
+        }),
+    }
+
+    // 5. The holders. Required too. A token too busy for one answer (the
+    // provider's log cap) lands here as unread, never as a partial count.
+    let holders = take(budget)
+        .and_then(|()| client.logs(token, &[topic::TRANSFER]))
+        .and_then(|logs| holders_from(&logs, &record));
+    match holders {
+        Ok(h) => dossier.holders = Some(h),
+        Err(why) => dossier.unavailable.push(Unavailable {
+            fact: "holders",
+            why,
+        }),
+    }
+
+    // 6. Facts this reader cannot supply at all yet, regardless of budget.
     // AGENTS.md §3 rule 8: absent is not zero, so each is named rather than
     // left as a silent `None`.
     dossier.unavailable.push(Unavailable {
@@ -228,12 +398,6 @@ pub fn build(
         fact: "fees",
         why: "realorrug_pumpfun::Fees is a Solana venue's schedule; Pons v2's \
               own fee schedule is not read here"
-            .to_owned(),
-    });
-    dossier.unavailable.push(Unavailable {
-        fact: "launch block",
-        why: "LaunchBlock is Solana-slot-shaped; a Robinhood launch-block read \
-              is a separate task"
             .to_owned(),
     });
     dossier.unavailable.push(Unavailable {
@@ -385,6 +549,264 @@ mod tests {
         Budget::new(60, 3, Duration::from_secs(30))
     }
 
+    /// An `eth_getBlockByNumber` answer.
+    fn block(number: u64, timestamp: u64) -> String {
+        answer(&serde_json::json!({
+            "number": format!("{number:#x}"),
+            "timestamp": format!("{timestamp:#x}"),
+        }))
+    }
+
+    fn topic_of(a: &RobinhoodAddress) -> Hash32 {
+        address_topic(a)
+    }
+
+    fn log_json(
+        address: &RobinhoodAddress,
+        topics: &[Hash32],
+        data: &[u8],
+        block: u64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "address": address.to_string(),
+            "topics": topics.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "data": realorrug_robinhood::to_hex(data),
+            "blockNumber": format!("{block:#x}"),
+            "transactionHash": LAUNCH_TX,
+        })
+    }
+
+    const LAUNCH_TX: &str = "0x5555555555555555555555555555555555555555555555555555555555555555";
+    const LAUNCH_BLOCK: u64 = 0x40;
+
+    fn launch_log(rec: &LaunchedToken) -> serde_json::Value {
+        let mut data = word_addr(&RobinhoodAddress::ZERO);
+        data.extend(word_u(0));
+        data.extend(word_u(rec.graduation_threshold));
+        log_json(
+            &FACTORY,
+            &[
+                topic::TOKEN_LAUNCHED,
+                topic_of(&rec.token),
+                topic_of(&rec.curve),
+                topic_of(&rec.deployer),
+            ],
+            &data,
+            LAUNCH_BLOCK,
+        )
+    }
+
+    fn buy_log(
+        curve: &RobinhoodAddress,
+        trader: &RobinhoodAddress,
+        quote: u128,
+    ) -> serde_json::Value {
+        let mut data = word_u(quote);
+        data.extend(word_u(1_000));
+        data.extend(word_u(0));
+        data.extend(word_u(0));
+        log_json(
+            curve,
+            &[topic::CURVE_BUY, topic_of(trader), topic_of(trader)],
+            &data,
+            LAUNCH_BLOCK,
+        )
+    }
+
+    fn transfer(from: &RobinhoodAddress, to: &RobinhoodAddress, value: u128) -> serde_json::Value {
+        log_json(
+            &token(),
+            &[topic::TRANSFER, topic_of(from), topic_of(to)],
+            &word_u(value),
+            LAUNCH_BLOCK,
+        )
+    }
+
+    const ALICE: RobinhoodAddress = RobinhoodAddress([0xa1; 20]);
+    const BOB: RobinhoodAddress = RobinhoodAddress([0xb0; 20]);
+    const DAVE: RobinhoodAddress = RobinhoodAddress([0xd0; 20]);
+    const DEV_BUY: u128 = 500_000_000_000_000_000;
+
+    /// Every answer a full read of `rec` takes, in order, with the launch
+    /// transaction's status `status`.
+    fn full_bodies(rec: &LaunchedToken, status: &str) -> Vec<String> {
+        let receipt = serde_json::json!({
+            "status": status,
+            "transactionHash": LAUNCH_TX,
+            "blockNumber": format!("{LAUNCH_BLOCK:#x}"),
+            "from": rec.deployer.to_string(),
+            "to": FACTORY.to_string(),
+            "logs": [
+                launch_log(rec),
+                buy_log(&rec.curve, &rec.deployer, DEV_BUY),
+                // Someone else's buy in the same transaction is not the launcher's.
+                buy_log(&rec.curve, &ALICE, 7),
+                // The launcher's buy against a different curve is not this launch.
+                buy_log(&RobinhoodAddress([0xee; 20]), &rec.deployer, 9),
+            ],
+        });
+        let (curve, dev) = (rec.curve, rec.deployer);
+        let transfers = serde_json::json!([
+            transfer(&RobinhoodAddress::ZERO, &curve, 1_000),
+            transfer(&curve, &dev, 100),
+            transfer(&curve, &ALICE, 300),
+            transfer(&ALICE, &BOB, 100),
+            transfer(&curve, &FACTORY, 50),
+            transfer(&curve, &DAVE, 40),
+            transfer(&DAVE, &curve, 40),
+        ]);
+        vec![
+            answer(&hex(&launched_token_return(rec))),
+            block(0x64, 10_000),
+            answer(&hex(&word_bool(false))),
+            answer(&hex(&word_u(1))),
+            answer(&serde_json::json!([launch_log(rec)])),
+            block(LAUNCH_BLOCK, 6_400),
+            answer(&receipt),
+            answer(&transfers),
+        ]
+    }
+
+    #[test]
+    fn a_launch_reads_its_block_age_launcher_buy_and_holders() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let client = Rpc::new(serve(full_bodies(&rec, "0x1")));
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        assert_eq!(
+            dossier.chain_launch,
+            Some(ChainLaunch {
+                block: LAUNCH_BLOCK,
+                age_seconds: Some(3_600),
+                dev_buy_wei: Some(DEV_BUY),
+            })
+        );
+        // The launcher 100, Alice 200, Bob 100. The curve and the factory are
+        // machinery, and Dave sold everything back.
+        assert_eq!(
+            dossier.holders,
+            Some(Holders {
+                count: 3,
+                largest_share_bps: Some(5_000),
+            })
+        );
+        for fact in ["launch block", "holders"] {
+            assert!(
+                !dossier.unavailable.iter().any(|u| u.fact == fact),
+                "{fact} read but was named unavailable"
+            );
+        }
+        assert_eq!(dossier.calls, 8);
+    }
+
+    #[test]
+    fn a_reverted_launch_transaction_bought_nothing() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x25; 20]),
+            RobinhoodAddress([0x36; 20]),
+        );
+        let client = Rpc::new(serve(full_bodies(&rec, "0x0")));
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        assert_eq!(dossier.chain_launch.expect("a launch").dev_buy_wei, Some(0));
+    }
+
+    #[test]
+    fn a_launch_older_than_the_read_point_has_no_age_not_a_wrapped_one() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x27; 20]),
+            RobinhoodAddress([0x38; 20]),
+        );
+        let mut bodies = full_bodies(&rec, "0x1");
+        // The launch block's clock reads later than the latest block's.
+        bodies[5] = block(LAUNCH_BLOCK, 10_001);
+        let client = Rpc::new(serve(bodies));
+        let mut b = budget();
+
+        let launch = build(&client, &mut b, &token())
+            .expect("a dossier")
+            .chain_launch
+            .expect("the block still read");
+        assert_eq!(launch.age_seconds, None);
+        assert_eq!(launch.dev_buy_wei, Some(DEV_BUY));
+    }
+
+    #[test]
+    fn a_token_with_no_launch_event_names_the_launch_block_unavailable() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x29; 20]),
+            RobinhoodAddress([0x39; 20]),
+        );
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[4] = answer(&serde_json::json!([]));
+        // With no launch there is no timestamp or receipt read: the transfers
+        // come next.
+        let transfers = bodies.remove(7);
+        bodies.truncate(5);
+        bodies.push(transfers);
+        let client = Rpc::new(serve(bodies));
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        assert_eq!(dossier.chain_launch, None);
+        assert!(dossier.unavailable.iter().any(|u| u.fact == "launch block"));
+        assert_eq!(dossier.holders.expect("holders").count, 3);
+    }
+
+    #[test]
+    fn a_ledger_that_spends_more_than_it_received_is_refused() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x2a; 20]),
+            RobinhoodAddress([0x3a; 20]),
+        );
+        let logs: Vec<Log> = [transfer(&ALICE, &BOB, 1)]
+            .iter()
+            .map(|v| Log::from_json(v).expect("a log"))
+            .collect();
+        assert!(holders_from(&logs, &rec).is_err());
+    }
+
+    #[test]
+    fn a_transfer_that_does_not_decode_refuses_the_count() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x2b; 20]),
+            RobinhoodAddress([0x3b; 20]),
+        );
+        let mut log = Log::from_json(&transfer(&RobinhoodAddress::ZERO, &ALICE, 1)).expect("a log");
+        log.data.clear();
+        assert!(holders_from(&[log], &rec).is_err());
+    }
+
+    #[test]
+    fn a_share_of_a_supply_near_the_integer_limit_does_not_overflow() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x2c; 20]),
+            RobinhoodAddress([0x3c; 20]),
+        );
+        let logs: Vec<Log> = [
+            transfer(&RobinhoodAddress::ZERO, &ALICE, u128::MAX / 2),
+            transfer(&RobinhoodAddress::ZERO, &BOB, u128::MAX / 4),
+        ]
+        .iter()
+        .map(|v| Log::from_json(v).expect("a log"))
+        .collect();
+        let holders = holders_from(&logs, &rec).expect("holders");
+        assert_eq!(holders.count, 2);
+        assert_eq!(holders.largest_share_bps, Some(6_666));
+    }
+
     #[test]
     fn a_reader_names_the_token_it_was_asked_for_and_the_block_it_read_at() {
         let curve = RobinhoodAddress([0x22; 20]);
@@ -392,7 +814,7 @@ mod tests {
         let rec = record(true, curve, deployer);
         let url = serve(vec![
             answer(&hex(&launched_token_return(&rec))),
-            answer(&serde_json::json!("0x64")),   // block 100
+            block(0x64, 0),                       // block 100
             answer(&hex(&word_bool(false))),      // not graduated
             answer(&hex(&word_u(6_186_150_833))), // quote reserves
         ]);
@@ -425,7 +847,7 @@ mod tests {
         let big: u128 = 20_000_000_000_000_000_000;
         let url = serve(vec![
             answer(&hex(&launched_token_return(&rec))),
-            answer(&serde_json::json!("0x1")),
+            block(0x1, 0),
             answer(&hex(&word_bool(false))),
             answer(&hex(&word_u(big))),
         ]);
@@ -448,7 +870,7 @@ mod tests {
         rec.pair = Some(RobinhoodAddress([0x42; 20]));
         let url = serve(vec![
             answer(&hex(&launched_token_return(&rec))),
-            answer(&serde_json::json!("0x1")),
+            block(0x1, 0),
             answer(&hex(&word_bool(false))),
             answer(&hex(&word_u(1))),
         ]);
@@ -468,7 +890,7 @@ mod tests {
         );
         let url = serve(vec![
             answer(&hex(&launched_token_return(&rec))),
-            answer(&serde_json::json!("0x1")),
+            block(0x1, 0),
             answer(&hex(&word_bool(true))), // graduated
             answer(&hex(&word_u(0))),
         ]);
@@ -486,14 +908,9 @@ mod tests {
             RobinhoodAddress([0x66; 20]),
             RobinhoodAddress([0x77; 20]),
         );
-        let bodies = || {
-            vec![
-                answer(&hex(&launched_token_return(&rec))),
-                answer(&serde_json::json!("0x9")),
-                answer(&hex(&word_bool(false))),
-                answer(&hex(&word_u(1))),
-            ]
-        };
+        // Every read answered: an error string names the server's port, and
+        // two servers have two ports.
+        let bodies = || full_bodies(&rec, "0x1");
         let client_a = Rpc::new(serve(bodies()));
         let mut budget_a = budget();
         let direct = build(&client_a, &mut budget_a, &token());
@@ -507,6 +924,8 @@ mod tests {
                 assert_eq!(d.mint, r.mint);
                 assert_eq!(d.read_at, r.read_at);
                 assert_eq!(d.curve, r.curve);
+                assert_eq!(d.chain_launch, r.chain_launch);
+                assert_eq!(d.holders, r.holders);
                 assert_eq!(d.unavailable, r.unavailable);
                 assert_eq!(d.calls, r.calls);
             }
@@ -559,7 +978,7 @@ mod tests {
         );
         let url = serve(vec![
             answer(&hex(&launched_token_return(&rec))),
-            answer(&serde_json::json!("0x1")),
+            block(0x1, 0),
             answer(&hex(&word_bool(false))),
             answer(&hex(&word_u(0))),
         ]);
@@ -567,7 +986,7 @@ mod tests {
         let mut b = budget();
 
         let dossier = build(&client, &mut b, &token()).expect("a dossier");
-        for fact in ["capacity", "fees", "launch block", "creator transactions"] {
+        for fact in ["capacity", "fees", "creator transactions"] {
             assert!(
                 dossier.unavailable.iter().any(|u| u.fact == fact),
                 "missing an Unavailable entry for {fact}"

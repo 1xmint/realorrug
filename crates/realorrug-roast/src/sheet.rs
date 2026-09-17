@@ -23,7 +23,7 @@
 //! that can be argued into accepting a number nobody measured.
 
 use realorrug_onchain::budget::Count;
-use realorrug_onchain::{Dossier, LaunchBlock};
+use realorrug_onchain::{ChainLaunch, Dossier, Holders, LaunchBlock};
 #[cfg(test)]
 use realorrug_types::Slot;
 use realorrug_types::{ReadAt, SlotDelta};
@@ -203,7 +203,8 @@ pub enum Signal {
     LaunchBlockInStrongestBand,
     /// The creator has measured launches and none of them filled over time.
     CreatorNeverGraduatedOrganically,
-    /// The creator bought their own token in the launch block.
+    /// The creator bought their own token at launch: in the launch block on
+    /// Solana, in the launch transaction on Robinhood Chain.
     CreatorBoughtOwnLaunch,
     /// The curve's reserves collapsed pre-graduation while holders still hold
     /// supply they cannot exit through it.
@@ -417,19 +418,24 @@ impl FactSheet {
             // `ReadAt::Solana` read, never for a Robinhood block number --
             // there is no lossy slot-from-block conversion to invent one
             // with (`ReadAt::as_slot`'s own doc comment makes the same
-            // refusal for the read point). A Robinhood sheet's `unavailable`
-            // entry already says the launch block is unreadable there
-            // (`LaunchBlock` is Solana-slot-shaped), so it has nothing to
-            // subtract from and gets no age fact -- design 0020 §4 records
-            // that as the decision, not an oversight: demoting every ageless
-            // token to `CantTell` was considered and rejected, because it
-            // would throw away every other signal the sheet did read on a
-            // whole chain.
+            // refusal for the read point). A Robinhood launch arrives as
+            // `chain_launch` below instead, with its age already taken from
+            // the two blocks' own timestamps.
             if let Some(ReadAt::Solana(read_slot)) = dossier.read_at {
                 push_age(&mut facts, read_slot.saturating_since(launch.slot));
             }
+        } else if let Some(launch) = &dossier.chain_launch {
+            push_chain_launch(&mut facts, &mut signals, launch);
         } else {
             unknown.push("the launch block could not be read".to_owned());
+        }
+
+        // Only a reader that counts holders fills this; one that tried and
+        // failed names "holders" in `unavailable`, which reaches `unknown`
+        // below. Solana's reader never counts them, and its sheet is not
+        // demoted for a read it never attempts.
+        if let Some(holders) = &dossier.holders {
+            push_holders(&mut facts, holders);
         }
 
         // **The fact that makes one reply differ from another.** The launch
@@ -682,8 +688,8 @@ impl FactSheet {
     /// absent from this string is a number the model cannot write -- and
     /// from this string is a number the model cannot write -- and
     /// `forbidden::check_required_age` requires a `NothingUglyYet` reply on a
-    /// sheet with no age (every Robinhood sheet today: `LaunchBlock` is
-    /// Solana-slot-shaped) to state the read point. Left out of this block,
+    /// sheet with no age (its launch block could not be read) to state the
+    /// read point. Left out of this block,
     /// that rule is unsatisfiable by any real model and every such reply
     /// falls back to the template, which is the free-text voice going silent
     /// on a whole chain without anything saying so.
@@ -760,6 +766,7 @@ fn withhold_price(facts: &mut Vec<Fact>) {
 fn phrase_for(fact: &str) -> String {
     match fact {
         "launch block" => "the launch block could not be read",
+        "holders" => "the holders could not be read",
         "curve" => "the bonding curve could not be read",
         "creator history" => "the creator's history could not be read",
         _ => "part of this could not be read",
@@ -877,13 +884,8 @@ fn push_launch(facts: &mut Vec<Fact>, untrusted: &mut Vec<(String, String)>, lau
 ///   exact-sounding hour count nobody could reproduce would be a fabricated
 ///   fact under rule 1.
 ///
-/// Robinhood Chain's own measured block time is 0.1019s/block (research 0039,
-/// ~100k blocks) rather than Solana's 400ms target, but nothing here reads
-/// it: [`FactSheet::build`] only ever calls this for a `ReadAt::Solana` read,
-/// because `LaunchBlock` is Solana-slot-shaped and a Robinhood sheet has
-/// nothing to subtract (see the call site). The constant is recorded here so
-/// the day a Robinhood launch block becomes readable, the source for its
-/// wall-clock conversion is already written down.
+/// Solana only. A Robinhood age needs no slot-time estimate: its blocks carry
+/// timestamps, and [`push_chain_launch`] states the difference of two of them.
 fn push_age(facts: &mut Vec<Fact>, delta: SlotDelta) {
     let slots = delta.get();
     // Rounded to one decimal, the same precision `Fact::share` uses for a
@@ -914,6 +916,158 @@ fn push_age(facts: &mut Vec<Fact>, delta: SlotDelta) {
             ),
         ],
     });
+}
+
+/// A Robinhood launch: its age, and the launcher's own buy in the launch
+/// transaction.
+///
+/// **The age is exact, and still rounded.** Both ends are block timestamps
+/// on the same chain, so nothing here is an estimate from a block time; the
+/// hour figure is rounded to one decimal so the rendered string and the
+/// authorised literal are the same digits. Past two days the days figure is
+/// the one a reader wants, and both are authorised. The block number itself
+/// is deliberately not a value: the age check refuses a reply that cites a
+/// block where an age belongs, and a block number is a block.
+fn push_chain_launch(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, launch: &ChainLaunch) {
+    if let Some(seconds) = launch.age_seconds {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "an age in seconds is well inside f64's exact integer range"
+        )]
+        let seconds = seconds as f64;
+        let hours = (seconds / 3600.0 * 10.0).round() / 10.0;
+        let days = (seconds / 86_400.0 * 10.0).round() / 10.0;
+        let (rendered, values, plain, blunt) = if hours >= 48.0 {
+            (
+                format!("about {days} days ago"),
+                vec![days, hours],
+                format!("It launched about {days} days ago, by the chain's own clock."),
+                format!("{days} days old."),
+            )
+        } else {
+            (
+                format!("about {hours} hours ago"),
+                vec![hours],
+                format!("It launched about {hours} hours ago, by the chain's own clock."),
+                format!("{hours} hours old."),
+            )
+        };
+        facts.push(Fact {
+            about: About::Measurement,
+            kind: Kind::Age,
+            label: "how long ago this token launched, from the timestamps of its launch block \
+                    and the read block"
+                .to_owned(),
+            rendered,
+            values,
+            clauses: vec![
+                Clause::new(Voice::Plain, plain),
+                Clause::new(Voice::Blunt, blunt),
+            ],
+        });
+    }
+
+    match launch.dev_buy_wei {
+        Some(wei) if wei > 0 => {
+            let eth = format!("{} ETH", render_quote(wei, 18));
+            facts.push(
+                Fact::exact(
+                    Kind::DevBuy,
+                    "ETH the launcher spent buying their own token in the launch transaction",
+                    quote_as_f64(wei, 18),
+                    eth.clone(),
+                )
+                .saying(
+                    Voice::Plain,
+                    format!(
+                        "The launcher bought {eth} of their own token in the launch transaction."
+                    ),
+                )
+                .saying(Voice::Blunt, format!("The launcher's own bid: {eth}.")),
+            );
+            signals.push(Signal::CreatorBoughtOwnLaunch);
+        }
+        // Read, and there was none. A measured zero, so it may be said -- but
+        // only about the launch transaction, which is all that was read.
+        Some(_) => facts.push(
+            Fact::exact(
+                Kind::DevBuy,
+                "ETH the launcher spent buying their own token in the launch transaction",
+                0.0,
+                "0 ETH",
+            )
+            .saying(
+                Voice::Plain,
+                "The launch transaction carried no buy by the launcher.",
+            )
+            .saying(Voice::Blunt, "No launcher bid in the launch transaction."),
+        ),
+        // Rule 9, as for Solana: "did not buy" and "could not see" are
+        // different statements about a person.
+        None => facts.push(
+            Fact {
+                about: About::Measurement,
+                kind: Kind::DevBuyUnseen,
+                label: "launcher's own buy in the launch transaction".to_owned(),
+                rendered: "not read -- absent, NOT zero. Do not say the launcher bought nothing."
+                    .to_owned(),
+                values: Vec::new(),
+                clauses: Vec::new(),
+            }
+            .saying(
+                Voice::Plain,
+                "Whether the launcher bought in the launch transaction could not be read.",
+            )
+            .saying(Voice::Blunt, "The launcher's own bid: unread."),
+        ),
+    }
+}
+
+/// Who holds a Robinhood token, and how much the largest single address has.
+///
+/// **An address, never a person.** After graduation the largest holder is
+/// usually the trading pool, and any holder may be a contract, so the share is
+/// labelled as an address's and the sentence says it may not be a person.
+/// Calling it a whale or a wallet would be a claim about who owns it, which
+/// nothing here read.
+fn push_holders(facts: &mut Vec<Fact>, holders: &Holders) {
+    facts.push(
+        Fact::exact(
+            Kind::Holders,
+            "addresses holding the token now, not counting its curve, the factory or the zero \
+             address",
+            f64::from(holders.count),
+            holders.count.to_string(),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "{} addresses hold it, not counting its bonding curve.",
+                holders.count
+            ),
+        )
+        .saying(Voice::Blunt, format!("{} holders.", holders.count)),
+    );
+    if let Some(bps) = holders.largest_share_bps {
+        let share = Fact::share(
+            Kind::LargestHolderShare,
+            "share of the supply outside the curve held by the single largest address, which \
+             may be a pool or a contract rather than a person",
+            f64::from(bps) / 10_000.0,
+        );
+        let pct = share.rendered.clone();
+        facts.push(
+            share
+                .saying(
+                    Voice::Plain,
+                    format!(
+                        "The largest single address holds {pct} of the supply outside the curve; \
+                         it may be a pool, not a person."
+                    ),
+                )
+                .saying(Voice::Blunt, format!("Top address: {pct} of what's out.")),
+        );
+    }
 }
 
 /// What this creator's other tokens did.
@@ -1924,6 +2078,8 @@ mod tests {
             launch: None,
             curve: None,
             creator_transactions: None,
+            chain_launch: None,
+            holders: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -2548,10 +2704,152 @@ mod tests {
                 fees: None,
             }),
             creator_transactions: None,
+            chain_launch: None,
+            holders: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
         }
+    }
+
+    fn robinhood_launched(age_seconds: Option<u64>, dev_buy_wei: Option<u128>) -> Dossier {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.chain_launch = Some(realorrug_onchain::ChainLaunch {
+            block: 64,
+            age_seconds,
+            dev_buy_wei,
+        });
+        dossier
+    }
+
+    fn fact_of(sheet: &FactSheet, kind: Kind) -> Option<&Fact> {
+        sheet.facts.iter().find(|f| f.kind == kind)
+    }
+
+    #[test]
+    fn a_robinhood_launch_gives_an_age_a_dev_buy_and_its_signal() {
+        let sheet = FactSheet::build(
+            &robinhood_launched(Some(5_400), Some(500_000_000_000_000_000)),
+            None,
+            None,
+            None,
+            None,
+        );
+        let age = fact_of(&sheet, Kind::Age).expect("an age fact");
+        assert_eq!(age.rendered, "about 1.5 hours ago");
+        assert_eq!(age.values, [1.5]);
+        let buy = fact_of(&sheet, Kind::DevBuy).expect("a dev buy fact");
+        assert_eq!(buy.values, [0.5]);
+        assert!(buy.rendered.ends_with(" ETH"), "{}", buy.rendered);
+        assert_eq!(sheet.signals, [Signal::CreatorBoughtOwnLaunch]);
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("launch block")),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_robinhood_launch_older_than_two_days_is_stated_in_days() {
+        // 47.96h rounds to 48.0h, the boundary itself: days from there on.
+        let sheet = FactSheet::build(
+            &robinhood_launched(Some(172_656), Some(0)),
+            None,
+            None,
+            None,
+            None,
+        );
+        let age = fact_of(&sheet, Kind::Age).expect("an age fact");
+        assert_eq!(age.rendered, "about 2 days ago");
+        assert_eq!(age.values, [2.0, 48.0]);
+        let under = FactSheet::build(
+            &robinhood_launched(Some(172_440), Some(0)),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            fact_of(&under, Kind::Age).expect("an age fact").rendered,
+            "about 47.9 hours ago"
+        );
+    }
+
+    #[test]
+    fn a_robinhood_launch_with_no_buy_says_zero_and_raises_no_signal() {
+        let sheet = FactSheet::build(&robinhood_launched(None, Some(0)), None, None, None, None);
+        assert!(fact_of(&sheet, Kind::Age).is_none());
+        let buy = fact_of(&sheet, Kind::DevBuy).expect("a measured zero");
+        assert_eq!(buy.values, [0.0]);
+        assert!(sheet.signals.is_empty(), "{:?}", sheet.signals);
+    }
+
+    #[test]
+    fn an_unread_robinhood_launch_buy_is_unseen_not_zero() {
+        let sheet = FactSheet::build(&robinhood_launched(Some(60), None), None, None, None, None);
+        assert!(fact_of(&sheet, Kind::DevBuy).is_none());
+        assert!(fact_of(&sheet, Kind::DevBuyUnseen).is_some());
+        assert!(sheet.signals.is_empty(), "{:?}", sheet.signals);
+    }
+
+    #[test]
+    fn a_robinhood_sheet_without_a_launch_still_names_the_launch_block_unknown() {
+        let sheet = FactSheet::build(&robinhood_dossier_for([1u8; 20]), None, None, None, None);
+        assert!(fact_of(&sheet, Kind::Age).is_none());
+        assert!(
+            sheet
+                .unknown
+                .iter()
+                .any(|u| u == "the launch block could not be read"),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn robinhood_holders_are_counted_and_the_top_share_is_an_address() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.holders = Some(realorrug_onchain::Holders {
+            count: 42,
+            largest_share_bps: Some(1_250),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let count = fact_of(&sheet, Kind::Holders).expect("a holder count");
+        assert_eq!(count.values, [42.0]);
+        assert_eq!(count.rendered, "42");
+        let top = fact_of(&sheet, Kind::LargestHolderShare).expect("a top share");
+        assert_eq!(top.rendered, "12.5%");
+        let words: String = top.clauses.iter().map(|c| c.text.as_str()).collect();
+        assert!(
+            !words.contains("wallet") && !words.contains("whale"),
+            "{words}"
+        );
+
+        dossier.holders = Some(realorrug_onchain::Holders {
+            count: 0,
+            largest_share_bps: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::Holders).is_some());
+        assert!(fact_of(&sheet, Kind::LargestHolderShare).is_none());
+    }
+
+    #[test]
+    fn unreadable_holders_are_named_in_plain_words() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "holders",
+            why: "rate limited".to_owned(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet
+                .unknown
+                .iter()
+                .any(|u| u == "the holders could not be read"),
+            "{:?}",
+            sheet.unknown
+        );
     }
 
     #[test]
