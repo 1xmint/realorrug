@@ -197,6 +197,12 @@ pub fn stats_in(paths: &Paths) -> Option<Value> {
     let population = summary.population;
     Some(json!({
         "measured_at": timestamp_from_seconds(summary.built_at),
+        // Which chain the five totals below were measured over. The page
+        // states them as "what Real or Rug has watched", and 778,593 launches
+        // is a different claim about pump.fun than about Pons v2 -- so the
+        // chain travels with the numbers rather than being assumed by whoever
+        // renders them.
+        "chain": summary.chain,
         "watermark_slot": summary.watermark_slot,
         "watched": {
             "launches": population.launches,
@@ -795,6 +801,7 @@ mod tests {
 
     fn a_summary() -> Summary {
         Summary {
+            chain: realorrug_roast::firstparty::Chain::Solana,
             built_at: 20_700 * 86_400 + 23 * 3600 + 55 * 60,
             watermark_slot: 444_374_676,
             creators: 116_752,
@@ -1367,6 +1374,7 @@ mod tests {
         a_summary().write(&paths.summary).expect("write");
         let doc = stats_in(&paths).expect("both files present");
         assert_eq!(doc["measured_at"], "2026-09-04T23:55:00Z");
+        assert_eq!(doc["chain"], "solana");
         assert_eq!(doc["watermark_slot"], 444_374_676);
         assert_eq!(doc["watched"]["launches"], 508_814);
         assert_eq!(doc["watched"]["creators"], 116_752);
@@ -1378,6 +1386,19 @@ mod tests {
             && (r["share_of_launches"].as_f64().expect("share") - 0.705).abs() < 1e-9));
         assert_eq!(doc["cost"]["round_trip_bps"], 456.0);
         assert_eq!(doc["aftermath"]["organic_median_bps"], -3228.0);
+
+        // The chain is read off the summary, not assumed by whoever renders
+        // the page. Asserting only the Solana case above would pass just as
+        // well if the word were typed into this function, and the whole point
+        // of carrying the chain is that the day a Pons v2 index is built the
+        // page stops calling its launches pump.fun's.
+        let mut pons = a_summary();
+        pons.chain = realorrug_roast::firstparty::Chain::Robinhood;
+        pons.write(&paths.summary).expect("write");
+        assert_eq!(
+            stats_in(&paths).expect("both files present")["chain"],
+            "robinhood"
+        );
     }
 
     #[test]

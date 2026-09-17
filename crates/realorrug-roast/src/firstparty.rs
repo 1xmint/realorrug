@@ -84,7 +84,7 @@ pub enum NotLoaded {
 /// render the same short prefix on two chains should never be treated as one
 /// entry, and the explicit tag is what rules that out rather than relying on
 /// shape alone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Chain {
     /// pump.fun and the rest of the Solana surface this bot reads.

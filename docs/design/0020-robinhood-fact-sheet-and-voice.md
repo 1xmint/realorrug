@@ -149,8 +149,7 @@ depends on.
 **Implementation status (2026-09-17, packet "Robinhood: required facts,
 part A").** Two bugs this section's table implied are fixed, ahead of the
 reads themselves: `FactSheet::build` (`realorrug-roast/src/sheet.rs`) now
-skips `push_cost`'s Solana/pump.fun base-rate line and
-`push_measured_population`'s Solana-watermarked population line for a
+skips `push_cost`'s Solana/pump.fun base-rate line for a
 Robinhood-mint dossier (`dossier.mint`'s own `ChainAddress` tag decides it,
 not an argument the caller could omit), and the `dossier.unavailable` loop
 that turns a miss into a trusted `unknown` sentence now skips the three
@@ -164,6 +163,34 @@ unremarkable. **Launch block and age, holders, `LiquidityGone` and
 every Robinhood token reaches `CantTell` today on the unconditional "the
 launch block could not be read" line in `FactSheet::build` — this section's
 required set is the target, not yet the behaviour.
+
+**Amendment (2026-09-17): the population line is decided by the index, not by
+the token.** The rule above suppressed the population line whenever the token
+was a Robinhood one. That was right about the fact and wrong about the test:
+the reason the line had to go was that the only index in existence described
+pump.fun launches, and stating its 778,593 launches under a Pons v2 verdict
+would be a claim about the wrong chain. Asking what chain the *token* is on
+answers a different question -- and it fails in the direction that matters,
+because it would go on hiding a Pons v2 index's own totals from Pons v2
+tokens, which is the only case the line was ever meant to serve.
+
+So `creator::CreatorIndex` now carries a `chain` field saying which chain it
+was measured over (`serde` default: Solana, because every file written before
+the field existed came from `radar_research::creator_index`), and
+`FactSheet::build` drops an index whose chain is not the token's, once, at the
+top. Dropping it is not the same as ignoring it: an index that reached the
+creator lookup would miss on every address and publish "this creator has no
+record here", which reads as a checked absence and pushes the verdict toward
+`CantTell` on a fact nobody checked. `None` publishes nothing, which is what
+an unchecked question is. The same field decides two more things -- which
+chain's named first-party addresses `repeat_launcher_floor` excludes (the
+index's own, never one the caller passes, since filtering a Pons v2
+distribution against Solana's names excludes nothing and silently turns the
+signal off), and whether "filled its curve in three slots" says *slots* or
+*blocks*, three Solana slots being about 1.2 seconds and three Robinhood
+blocks about six. `creator::Summary` carries the chain too, and
+`realorrug-serve`'s public `/v1/stats` states it, because that file is the one
+that leaves the machine and the site prints those five totals as plain fact.
 
 ## 2. Dispatch by address shape
 

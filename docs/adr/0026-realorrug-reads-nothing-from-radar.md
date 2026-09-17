@@ -95,3 +95,15 @@ launch counts.
 
 Built by [plan 0001](../plans/0001-after-the-split.md) step 7b, whose first
 part is the Robinhood answer.
+
+**Note, 2026-09-17: "never built" is not "never present".** Decision 3 stops a
+Solana index from being *built* here. It does not remove the one already on the
+production box: `docs/research/data/population.json`, a Radar-built pump.fun
+index (watermark slot 447,301,081, 778,593 launches), whose summary
+`realorrug-serve` was still serving on 2026-09-17. So the index type carries a
+`chain` field that defaults to Solana when absent, and the fact sheet ignores
+an index whose chain is not the token's. Reading decision 3 as "only one index
+can ever exist, so the file needs no chain tag" would take that live pump.fun
+file and relabel its launches as Pons v2's under the first Robinhood verdict
+the bot wrote. Design 0020 §1's amendment of the same date carries the
+mechanics.

@@ -484,6 +484,9 @@ fn index_with(
     let mut creators = std::collections::BTreeMap::new();
     creators.insert(creator.to_owned(), record);
     realorrug_roast::CreatorIndex {
+        // The dossiers in this file are pump.fun ones, and an index is only
+        // read when its chain matches the token's.
+        chain: realorrug_roast::firstparty::Chain::Solana,
         watermark_slot: 444_343_109,
         built_at: 1_788_000_000,
         population: None,

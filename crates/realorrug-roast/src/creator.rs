@@ -166,10 +166,48 @@ impl Population {
     }
 }
 
+/// The chain an index written before [`CreatorIndex::chain`] existed describes.
+///
+/// Solana, because every index that predates the field was built by
+/// `radar_research::creator_index` from pump.fun launches. One such file's
+/// summary was still being served from the production box on 2026-09-17
+/// (`docs/research/data/population.json`, watermark slot 447,301,081, 778,593
+/// launches). Defaulting to Robinhood would relabel those pump.fun launches as
+/// Pons v2's — the exact wrong-chain claim the field exists to stop.
+const fn chain_before_the_field_existed() -> crate::firstparty::Chain {
+    crate::firstparty::Chain::Solana
+}
+
 /// Every creator's record at one watermark.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CreatorIndex {
+    /// Which chain's launches this index describes.
+    ///
+    /// # Why a file has to say this
+    ///
+    /// There is one index path, and two chains that can fill it. The consumer
+    /// cannot tell them apart from the contents: a record is five counts, and
+    /// the population totals are five more. So a Pons v2 index dropped at the
+    /// path a pump.fun index used would be read as pump.fun's, and the reply
+    /// would state 778,593 Solana launches as this chain's measured population.
+    ///
+    /// Deciding by the *token's* chain instead — which is what
+    /// `sheet::FactSheet::build` did until 2026-09-17 — answers a different
+    /// question. It asks what chain the question is about, not what chain the
+    /// answer was measured on, and those differ exactly when it matters.
+    ///
+    /// This is the same tag [`crate::firstparty::Chain`] carries for the same
+    /// reason (ADR 0028): one file, both chains, and never a comparison across
+    /// them.
+    #[serde(default = "chain_before_the_field_existed")]
+    pub chain: crate::firstparty::Chain,
     /// The watermark this was computed at.
+    ///
+    /// A Solana slot on a Solana index, a block height on a Robinhood one. The
+    /// name kept its Solana spelling so a file written before the `chain` field
+    /// existed still parses; what it counts is the chain's own unit, and the
+    /// only thing any consumer does with it is state when the measurement
+    /// stopped.
     pub watermark_slot: u64,
     /// When it was built, as seconds since the epoch.
     pub built_at: u64,
@@ -182,7 +220,14 @@ pub struct CreatorIndex {
     /// nothing has ever graduated.
     #[serde(default)]
     pub population: Option<Population>,
-    /// Creator address, base58, to their record.
+    /// Creator address to their record, written the way that chain writes an
+    /// address: base58 on Solana, `0x` hex on Robinhood.
+    ///
+    /// Which of the two a key is, is [`CreatorIndex::chain`]'s to say. The two
+    /// spellings cannot collide, but "cannot collide" is not the property that
+    /// matters here — a lookup that misses tells the reader this creator has no
+    /// record, and a wrong-chain index would say that about every creator on
+    /// earth while sounding exactly like an index that had checked.
     pub creators: BTreeMap<String, Record>,
 }
 
@@ -266,16 +311,21 @@ impl CreatorIndex {
     /// added — a threshold that jumps when the index grows is a threshold
     /// about the index, not about creators, and `Signal::RepeatLauncher`
     /// must not fire on one.
+    /// # Which chain's first-party addresses are excluded
+    ///
+    /// This index's own ([`CreatorIndex::chain`]), never a chain the caller
+    /// passes in. The exclusion's whole job is to drop the launch factory and
+    /// its escrow from the distribution, and those are named on the list under
+    /// the chain they run on: filtering a Pons v2 distribution against Solana's
+    /// named addresses excludes nothing, leaves the factory's thousands of
+    /// launches in the sample, and pushes the 95th percentile to a number no
+    /// person reaches — which silently turns the signal off.
     #[must_use]
-    pub fn repeat_launcher_floor(
-        &self,
-        chain: crate::firstparty::Chain,
-        list: &crate::firstparty::FirstPartyList,
-    ) -> Option<u32> {
+    pub fn repeat_launcher_floor(&self, list: &crate::firstparty::FirstPartyList) -> Option<u32> {
         let mut launches: Vec<u32> = self
             .creators
             .iter()
-            .filter(|(address, _)| !list.contains(chain, address))
+            .filter(|(address, _)| !list.contains(self.chain, address))
             .map(|(_, record)| record.launches)
             .collect();
         if launches.len() < 100 {
@@ -294,6 +344,7 @@ impl CreatorIndex {
     #[must_use]
     pub fn summary(&self) -> Option<Summary> {
         self.population.map(|population| Summary {
+            chain: self.chain,
             built_at: self.built_at,
             watermark_slot: self.watermark_slot,
             creators: u64::try_from(self.creators.len()).unwrap_or(u64::MAX),
@@ -360,6 +411,15 @@ pub fn summary_path_beside(index_path: &str) -> String {
 /// three-second store scan in miniature, behind a viral link.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Summary {
+    /// Which chain these totals are measured over.
+    ///
+    /// Carried here as well as on the index because this is the file that
+    /// leaves the machine: the public site states these five numbers, and
+    /// "778,593 launches, 13,911 of them organic" is a different claim about
+    /// pump.fun than about Pons v2. Defaulted for the same reason the index's
+    /// is — a summary written before this field is a Solana one.
+    #[serde(default = "chain_before_the_field_existed")]
+    pub chain: crate::firstparty::Chain,
     /// When the index was built, as seconds since the epoch.
     pub built_at: u64,
     /// The watermark it was built at.
@@ -417,6 +477,7 @@ mod tests {
             );
         }
         CreatorIndex {
+            chain: Chain::Robinhood,
             watermark_slot: 1,
             built_at: 0,
             population: None,
@@ -442,10 +503,7 @@ mod tests {
         // of them is caught by the pinned number, not just a direction.
         let counts: Vec<u32> = (1..=250).collect();
         let index = index_of_launches(&counts);
-        assert_eq!(
-            index.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
-            Some(237)
-        );
+        assert_eq!(index.repeat_launcher_floor(&empty_list()), Some(237));
     }
 
     #[test]
@@ -458,10 +516,7 @@ mod tests {
         // direction.
         let counts = vec![1u32; 150];
         let index = index_of_launches(&counts);
-        assert_eq!(
-            index.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
-            Some(2)
-        );
+        assert_eq!(index.repeat_launcher_floor(&empty_list()), Some(2));
     }
 
     #[test]
@@ -473,14 +528,14 @@ mod tests {
         // direction that a `&&`-vs-`||` swap could also satisfy.
         let ninety_nine = index_of_launches(&vec![5u32; 99]);
         assert_eq!(
-            ninety_nine.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
+            ninety_nine.repeat_launcher_floor(&empty_list()),
             None,
             "99 remaining creators must refuse"
         );
 
         let hundred = index_of_launches(&vec![5u32; 100]);
         assert_eq!(
-            hundred.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
+            hundred.repeat_launcher_floor(&empty_list()),
             Some(5),
             "100 remaining creators must compute a floor"
         );
@@ -515,7 +570,7 @@ mod tests {
         .expect("parses");
 
         assert_eq!(
-            index.repeat_launcher_floor(Chain::Robinhood, &list),
+            index.repeat_launcher_floor(&list),
             Some(142),
             "excluding first must give the ordinary population's own floor"
         );
@@ -524,7 +579,7 @@ mod tests {
         // measured over the contaminated population and lands on a
         // different number.
         assert_eq!(
-            index.repeat_launcher_floor(Chain::Robinhood, &empty_list()),
+            index.repeat_launcher_floor(&empty_list()),
             Some(144),
             "an empty list excludes nothing, so this is the contaminated floor \
              the real signal must never use"
@@ -545,6 +600,7 @@ mod tests {
         creators.insert("c1".to_owned(), Record::default());
         creators.insert("c2".to_owned(), Record::default());
         let index = CreatorIndex {
+            chain: Chain::Robinhood,
             watermark_slot: 444_374_676,
             built_at: 1_788_000_000,
             population: Some(Population {
@@ -586,6 +642,7 @@ mod tests {
         // a creator who launched nothing, and a reply reading absence as
         // innocence would be rule 9 broken in the direction that flatters.
         let index = CreatorIndex {
+            chain: Chain::Robinhood,
             watermark_slot: 1,
             built_at: 0,
             population: None,
@@ -604,6 +661,7 @@ mod tests {
         let mut creators = BTreeMap::new();
         assert_eq!(
             CreatorIndex {
+                chain: Chain::Robinhood,
                 watermark_slot: 1,
                 built_at: 0,
                 population: None,
@@ -617,6 +675,7 @@ mod tests {
             creators.insert(format!("creator-{n}"), Record::default());
         }
         let index = CreatorIndex {
+            chain: Chain::Robinhood,
             watermark_slot: 1,
             built_at: 0,
             population: None,
@@ -645,6 +704,7 @@ mod tests {
             },
         );
         let index = CreatorIndex {
+            chain: Chain::Robinhood,
             watermark_slot: 444_339_860,
             built_at: 1_788_000_000,
             population: None,
@@ -736,6 +796,93 @@ mod tests {
         assert_eq!(
             index.population, None,
             "absent means not measured, and the consumer must say nothing"
+        );
+        assert_eq!(
+            index.chain,
+            Chain::Solana,
+            "a file with no chain key is a pump.fun index, because that is the only \
+             thing that wrote this shape before the key existed"
+        );
+    }
+
+    #[test]
+    fn the_chain_survives_a_round_trip_and_is_not_the_default() {
+        // Robinhood deliberately: `chain` defaults to Solana, so a round trip
+        // that used Solana would pass with the field dropped from the struct
+        // entirely, and would be a test that cannot fail.
+        let index = CreatorIndex {
+            chain: Chain::Robinhood,
+            watermark_slot: 9_001,
+            built_at: 1_788_000_000,
+            population: None,
+            creators: BTreeMap::new(),
+        };
+        let json = serde_json::to_string(&index).expect("an index serialises");
+        assert!(json.contains(r#""chain":"robinhood""#), "{json}");
+        let back: CreatorIndex = serde_json::from_str(&json).expect("it reads back");
+        assert_eq!(back.chain, Chain::Robinhood);
+    }
+
+    #[test]
+    fn the_floor_excludes_this_indexs_own_chains_named_addresses() {
+        // The exclusion that keeps the launch factory and its relayers out of
+        // the distribution is looked up under **this index's** chain, not one a
+        // caller passes in. Re-apply the bug -- read the same index as Solana
+        // -- and twenty named Robinhood addresses stay in the sample, which
+        // pushes the 95th percentile from 2 to 500.
+        let mut entries = Vec::new();
+        for i in 0..20u32 {
+            entries.push(format!(
+                r#"{{"address":"0x{i:040x}","chain":"robinhood",
+                    "role":"a Pons v2 relayer","source":"research 0038",
+                    "added":"2026-09-17"}}"#
+            ));
+        }
+        let list = FirstPartyList::parse(&format!(r#"{{"entries":[{}]}}"#, entries.join(",")))
+            .expect("the list parses");
+
+        let mut creators = BTreeMap::new();
+        // Exactly 100 ordinary creators survive the exclusion, which is the
+        // smallest sample `repeat_launcher_floor` will compute a floor from.
+        for i in 0..100u32 {
+            creators.insert(
+                format!("ordinary{i}"),
+                Record {
+                    launches: 1,
+                    ..Record::default()
+                },
+            );
+        }
+        for i in 0..20u32 {
+            creators.insert(
+                format!("0x{i:040x}"),
+                Record {
+                    launches: 500,
+                    ..Record::default()
+                },
+            );
+        }
+        let index = CreatorIndex {
+            chain: Chain::Robinhood,
+            watermark_slot: 1,
+            built_at: 0,
+            population: None,
+            creators,
+        };
+        assert_eq!(
+            index.repeat_launcher_floor(&list),
+            Some(2),
+            "the named addresses' 500 launches each must be out of the distribution"
+        );
+
+        let as_solana = CreatorIndex {
+            chain: Chain::Solana,
+            ..index
+        };
+        assert_eq!(
+            as_solana.repeat_launcher_floor(&list),
+            Some(500),
+            "a wrong-chain exclusion excludes nothing, so the floor becomes a threshold about the relayers rather than about creators"
         );
     }
 }
