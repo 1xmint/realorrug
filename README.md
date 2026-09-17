@@ -30,7 +30,7 @@ where the token lives.
 | `crates/realorrug-agent`, `crates/realorrug-model`, `crates/realorrug-provider` | the boundary a model sits behind, the model client, the spend meter |
 | `crates/realorrug-types`, `crates/realorrug-decode`, `crates/realorrug-pumpfun`, `crates/realorrug-journal` | shared vocabulary, Solana decoding, pump.fun, the hash-chained journal |
 | `site/` | the public site |
-| `deploy/` | systemd units and the runbook |
+| `deploy/` | systemd units, the runbook, and the launch-day checklist (`deploy/LAUNCH.md`) |
 
 It began as part of [Radar](https://github.com/1xmint/theradar), a Solana
 research system, and was split out on 2026-09-13.

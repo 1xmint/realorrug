@@ -316,6 +316,63 @@ fn the_launchers_own_buy_passes_only_when_its_tokens_arrive() {
 }
 
 #[test]
+fn a_paid_trade_passes_only_as_a_buy_for_the_launcher() {
+    // Each trade here is paid in full, so only who and which way can refuse it.
+    const TOKENS: u128 = 28_340_080_971_659_919_028_340_080;
+    const QUOTE: u128 = 50_000_000_000_000_000;
+    let deployer = addr("0x139f144b5187df68a1580ac614da02f0a04233a7");
+    let curve = addr("0x1b45231650ca724fd3e98d7f3eb2569d4ddf0751");
+    let stranger = Address([0x42; 20]);
+    let fees = Address([0x43; 20]);
+
+    assert_eq!(
+        clean_with(|l, _| launcher_buy(l, stranger, Some(TOKENS))),
+        Err(vec![
+            Unclean::TokenMoved {
+                from: curve,
+                to: stranger,
+                amount: Some(TOKENS),
+            },
+            Unclean::Traded {
+                recipient: stranger,
+                tokens: TOKENS,
+            },
+        ])
+    );
+
+    // A sell's first data word is its tokens, so the "payment" is QUOTE.
+    let sold = clean_with(|l, _| {
+        launcher_buy(l, deployer, Some(QUOTE));
+        l.logs.last_mut().expect("the trade").topics[0] = topic::CURVE_SELL;
+    });
+    assert_eq!(
+        sold,
+        Err(vec![
+            Unclean::TokenMoved {
+                from: curve,
+                to: deployer,
+                amount: Some(QUOTE),
+            },
+            Unclean::Traded {
+                recipient: deployer,
+                tokens: QUOTE,
+            },
+        ])
+    );
+
+    // A fee recipient that is not the deployer: both may buy, nobody else.
+    let with_fees = |who: Address| {
+        clean_with(move |l, r| {
+            r.creator_fee_recipient = fees;
+            launcher_buy(l, who, Some(TOKENS));
+        })
+    };
+    assert!(with_fees(fees).is_ok());
+    assert!(with_fees(deployer).is_ok());
+    assert!(with_fees(stranger).is_err());
+}
+
+#[test]
 fn a_trade_on_some_other_curve_is_not_this_launchs_business() {
     let (dirty_launch, _) = dirty();
     let other: Log = dirty_launch.logs[index_of(&dirty_launch, topic::CURVE_BUY)].clone();
