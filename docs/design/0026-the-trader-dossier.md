@@ -5,7 +5,9 @@
 reviewed with him. **Amends:** nothing yet; §4 and §7 name the changes to
 [design 0020](0020-robinhood-fact-sheet-and-voice.md) that shipping this
 requires, and §7's typed composition is a narrowing of 0020's free-text
-voice that will need its own ADR before it is built.
+voice recorded as
+[ADR 0030](../adr/0030-the-model-fills-a-reply-plan-it-cannot-write-around.md),
+which is proposed, not decided.
 **Consequence of:** design 0020 (the fact sheet, the five verdict levels,
 the post-generation checks), [design 0021](0021-the-read-memory.md) (the
 read memory this extends rather than replaces),
@@ -354,4 +356,6 @@ level is worded the way it is.
 
 The share card image, the site, the launch checklist, the payout rehearsal.
 The ADR narrowing design 0020's free-text voice to §7's typed composition is
-not written; slice 1 cannot merge without it.
+[ADR 0030](../adr/0030-the-model-fills-a-reply-plan-it-cannot-write-around.md),
+proposed alongside this document and not yet decided; slice 1 cannot merge
+until it is.
