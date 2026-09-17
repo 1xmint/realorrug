@@ -1212,6 +1212,7 @@ dependencies = [
  "realorrug-agent",
  "realorrug-model",
  "realorrug-onchain",
+ "realorrug-robinhood",
  "realorrug-types",
  "serde",
  "serde_json",

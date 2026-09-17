@@ -371,6 +371,13 @@ impl FactSheet {
     /// prevalence measured over a population that still contains the launch
     /// factory would look like a result while being wrong.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the Robinhood chain-gate (no base-rate cost line, no Solana population line, \
+                  optional misses skipped) is a few short, well-commented branches added to an \
+                  already-long assembly function; splitting it out for a line count would move \
+                  the comments away from the code they explain for no behaviour change"
+    )]
     pub fn build(
         dossier: &Dossier,
         rates: Option<&BaseRates>,
@@ -517,15 +524,47 @@ impl FactSheet {
         // could not be read still gets it. It is also what gives the creator's
         // counts a scale -- "none of 150 filled its curve" reads differently
         // once you know what share of everything does.
-        if let Some(population) = creators.and_then(|c| c.population) {
+        //
+        // **Solana-only, and gated on the dossier's own chain, not on which
+        // arguments happened to be passed in.** `CreatorIndex::population` is
+        // built from `watermark_slot` -- a Solana slot -- over pump.fun
+        // launches; there is no Robinhood equivalent yet. Passing `creators`
+        // for a Robinhood dossier (the caller may hold one `CreatorIndex` for
+        // the whole process) must not print Solana's population figures on a
+        // Robinhood sheet as if they described this chain.
+        let robinhood = matches!(dossier.mint, realorrug_types::ChainAddress::Robinhood(_));
+        if !robinhood && let Some(population) = creators.and_then(|c| c.population) {
             push_measured_population(&mut facts, &population);
         }
 
-        if let Some(rates) = rates {
+        // **Solana-only base rates.** `rates` (`BaseRates`) is Radar's kernel
+        // measured against Solana/pump.fun fresh launches (`push_cost`'s own
+        // "850 bps" line, "round trip Radar's kernel assumes, on fresh
+        // launches"); Robinhood Chain has no such measurement yet, so stating
+        // it on a Robinhood sheet is a wrong-chain fact, not a conservative
+        // estimate.
+        if !robinhood && let Some(rates) = rates {
             push_cost(&mut facts, rates);
         }
 
         for miss in &dossier.unavailable {
+            // **Optional facts never become an "unknown" line.** `phrase_for`
+            // turns every entry here into a sentence the model may cite as a
+            // reason it cannot say more, and `verdict::level` reads a nonempty
+            // `unknown` as "a required fact is unread" (that function's own
+            // doc comment). `capacity`, `fees` and `creator transactions` are
+            // optional per design 0020 §1 -- today only Robinhood's reader
+            // records them as `Unavailable` (Solana either reads them or
+            // reports the whole curve/creator arm missing under a different
+            // name), so skipping these three names here is the one place that
+            // keeps rule 8 ("absent is not zero") without also inventing a
+            // second "which facts are required" list to keep in sync with
+            // `verdict::level`. The raw reason still lives on
+            // `Dossier::unavailable` for the operator; only the sheet's public
+            // rendering treats the miss as unremarkable.
+            if matches!(miss.fact, "capacity" | "fees" | "creator transactions") {
+                continue;
+            }
             // **Radar's own phrase, never the raw reason.** `miss.why` is
             // diagnostic text -- "rpc transport: http status: 429", "no account
             // at <mint>" -- and two things are wrong with publishing it.
@@ -2489,6 +2528,145 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("0.0%"), "{rendered}");
+    }
+
+    /// A dossier about one Robinhood token and nothing else, mirroring
+    /// `dossier_for`'s Solana counterpart.
+    fn robinhood_dossier_for(token: [u8; 20]) -> Dossier {
+        Dossier {
+            mint: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(token)),
+            read_at: Some(realorrug_types::ReadAt::Robinhood(100)),
+            launch: None,
+            curve: Some(realorrug_onchain::CurveFacts {
+                creator: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
+                    [9u8; 20],
+                )),
+                complete: false,
+                quote_reserves: 6_186_150_833,
+                quote_capacity: None,
+                quote_asset: Some(realorrug_onchain::QuoteAsset::eth()),
+                fees: None,
+            }),
+            creator_transactions: None,
+            unavailable: Vec::new(),
+            calls: 0,
+            elapsed_ms: 0,
+        }
+    }
+
+    #[test]
+    fn a_robinhood_sheet_carries_no_base_rate_cost_line() {
+        // `push_cost` measures Solana/pump.fun fresh launches -- the "850 bps"
+        // line names Radar's kernel, not Robinhood Chain. Printing it on a
+        // Robinhood sheet states a base rate for the wrong venue, which is a
+        // fabricated fact by AGENTS.md §3 rule 2 even though every digit in
+        // it is real -- real for a different chain.
+        let rates = BaseRates::parse(SNAPSHOT).expect("the published snapshot");
+        let sheet = FactSheet::build(
+            &robinhood_dossier_for([1u8; 20]),
+            Some(&rates),
+            None,
+            None,
+            None,
+        );
+        let rendered = sheet.render();
+        assert!(
+            !rendered.contains("round trip Radar's kernel assumes"),
+            "a Solana base-rate cost line leaked onto a Robinhood sheet: {rendered}"
+        );
+        assert!(
+            !rendered.contains("expected edge a strategy must clear"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("bps"), "{rendered}");
+
+        // A matching Solana dossier still carries the line -- Solana behaviour
+        // is unchanged by the Robinhood gate.
+        let solana_rendered =
+            FactSheet::build(&dossier_for([3u8; 32]), Some(&rates), None, None, None).render();
+        assert!(
+            solana_rendered.contains("round trip Radar's kernel assumes"),
+            "{solana_rendered}"
+        );
+    }
+
+    #[test]
+    fn a_robinhood_sheet_carries_no_measured_population_line() {
+        // Same gate, the other Solana-shaped input: `CreatorIndex::population`
+        // is watermarked by Solana slot over pump.fun launches.
+        let index = crate::creator::CreatorIndex {
+            watermark_slot: 444_374_676,
+            built_at: 1_788_000_000,
+            population: Some(crate::creator::Population {
+                launches: 508_814,
+                measured: 506_991,
+                organic: 9_060,
+                instant: 5_222,
+                stillborn: 116_608,
+            }),
+            creators: std::collections::BTreeMap::new(),
+        };
+        let rendered = FactSheet::build(
+            &robinhood_dossier_for([2u8; 20]),
+            None,
+            Some(&index),
+            None,
+            None,
+        )
+        .render();
+        assert!(
+            !rendered.contains("launches Radar has recorded and measured"),
+            "a Solana population line leaked onto a Robinhood sheet: {rendered}"
+        );
+    }
+
+    #[test]
+    fn an_optional_miss_alone_does_not_reach_cant_tell() {
+        // `fees`, `capacity` and `creator transactions` are optional per
+        // design 0020 §1: a token that read everything required but could not
+        // supply one of these three must still reach a real verdict, not
+        // `CantTell`. Re-apply the bug -- deleting the `matches!` skip in the
+        // `dossier.unavailable` loop above -- and this fails, because *any*
+        // nonempty `unknown` forces `CantTell` (`verdict::level`'s own rule
+        // 2).
+        let mut dossier = dossier_for([5u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(11), None));
+        dossier.curve = Some(realorrug_onchain::CurveFacts {
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
+            complete: false,
+            quote_reserves: 6_186_150_833,
+            quote_capacity: None,
+            quote_asset: None,
+            fees: None,
+        });
+        dossier.unavailable = vec![
+            realorrug_onchain::dossier::Unavailable {
+                fact: "fees",
+                why: "no fee schedule read".to_owned(),
+            },
+            realorrug_onchain::dossier::Unavailable {
+                fact: "capacity",
+                why: "curve arithmetic not modelled".to_owned(),
+            },
+            realorrug_onchain::dossier::Unavailable {
+                fact: "creator transactions",
+                why: "not counted".to_owned(),
+            },
+        ];
+
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet.unknown.is_empty(),
+            "an optional miss reached the trusted unknown list: {:?}",
+            sheet.unknown
+        );
+        assert_ne!(
+            crate::verdict::level(&sheet),
+            crate::verdict::Level::CantTell,
+            "an optional-only miss forced CantTell"
+        );
     }
 
     #[test]

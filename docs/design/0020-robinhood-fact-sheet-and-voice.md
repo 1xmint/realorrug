@@ -146,6 +146,25 @@ already answers "whether", cheaply; "when, and how much was raised" is a
 second call that only a graduated token needs and that no signal in §3
 depends on.
 
+**Implementation status (2026-09-17, packet "Robinhood: required facts,
+part A").** Two bugs this section's table implied are fixed, ahead of the
+reads themselves: `FactSheet::build` (`realorrug-roast/src/sheet.rs`) now
+skips `push_cost`'s Solana/pump.fun base-rate line and
+`push_measured_population`'s Solana-watermarked population line for a
+Robinhood-mint dossier (`dossier.mint`'s own `ChainAddress` tag decides it,
+not an argument the caller could omit), and the `dossier.unavailable` loop
+that turns a miss into a trusted `unknown` sentence now skips the three
+fact names this table marks **optional** (`capacity`, `fees`, `creator
+transactions`) rather than reporting every miss as if it were required —
+`realorrug_onchain::robinhood::build` still records each on `Dossier` for
+the operator, only the public rendering treats an optional miss as
+unremarkable. **Launch block and age, holders, `LiquidityGone` and
+`CreatorBoughtOwnLaunch` (parts B and C of that packet) are not built yet**:
+`realorrug_onchain::robinhood::build` still has no read for any of them, so
+every Robinhood token reaches `CantTell` today on the unconditional "the
+launch block could not be read" line in `FactSheet::build` — this section's
+required set is the target, not yet the behaviour.
+
 ## 2. Dispatch by address shape
 
 `crates/realorrug-analyst/src/mention.rs`'s `first_address` today scans a
