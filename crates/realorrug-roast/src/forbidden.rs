@@ -569,7 +569,32 @@ pub fn check_target(text: &str) -> Vec<Violation> {
 
 /// One row of §5's per-level word table: a word this level's sheet has not
 /// earned, and why.
-type LevelRule = (&'static str, &'static str);
+pub type LevelRule = (&'static str, &'static str);
+
+/// The words a reply at `level` may not contain, and why each is refused.
+///
+/// Public because the table has two readers and they must never disagree.
+/// [`check_level`] reads it *after* generation to refuse a word; `voice.rs`
+/// reads it *before*, to tell the model which words this token's verdict does
+/// not license. Until 2026-09-17 only the first reader existed, so the model
+/// was refused for breaking a rule nobody had shown it -- it was never told
+/// the level at all -- and every such refusal cost a paid call and shipped
+/// the template instead.
+///
+/// One function rather than a copy of the list in the prompt: a word added
+/// here reaches the instruction and the check in the same edit, and a prompt
+/// that quoted its own copy would drift silently, refusing replies for a word
+/// it had stopped mentioning.
+#[must_use]
+pub fn words_refused_at(level: Level) -> &'static [LevelRule] {
+    match level {
+        Level::CantTell => CANTTELL_WORDS,
+        Level::NothingUglyYet => NOTHINGUGLYYET_WORDS,
+        Level::Sketchy => SKETCHY_WORDS,
+        Level::RugMechanicsLive => RUGMECHANICSLIVE_WORDS,
+        Level::Rugged => RUGGED_WORDS,
+    }
+}
 
 /// `CantTell`'s ceiling: a fact the sheet needed could not be read, so
 /// nothing on this list may be said regardless of what else is true --
@@ -846,14 +871,7 @@ pub fn check_unconditional(reply: &str) -> Vec<Violation> {
 #[must_use]
 pub fn check_level(text: &str, level: Level) -> Vec<Violation> {
     let lower = masked(text);
-    let rules: &[LevelRule] = match level {
-        Level::CantTell => CANTTELL_WORDS,
-        Level::NothingUglyYet => NOTHINGUGLYYET_WORDS,
-        Level::Sketchy => SKETCHY_WORDS,
-        Level::RugMechanicsLive => RUGMECHANICSLIVE_WORDS,
-        Level::Rugged => RUGGED_WORDS,
-    };
-    rules
+    words_refused_at(level)
         .iter()
         .filter(|(word, _)| word_occurs(&lower, word))
         .map(|(word, because)| Violation {
