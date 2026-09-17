@@ -54,6 +54,18 @@ repository. Everything without that prefix is a path here.
   index — so the honest framing is: **0007's method has not been re-run on any
   chain this repository trades on, and the index it would feed does not exist
   yet either.**
+- **Follow-up, 2026-09-17: the reading half no longer assumes Solana; the file
+  it reads still does not exist.** `creator::CreatorIndex` now carries a
+  `chain` field, `FactSheet::build` ignores an index whose chain is not the
+  token's, `repeat_launcher_floor` excludes the index's own chain's named
+  addresses, and the curve-fill wording says *blocks* on Robinhood and *slots*
+  on Solana (design 0020 §1's 2026-09-17 amendment). The `watermark_slot` name
+  kept its Solana spelling on purpose so a file written before the field
+  existed still parses; on a Robinhood index it holds a block height. This
+  closes the vocabulary half of the finding above. The measurement half is
+  untouched: no Pons v2 index file or build path exists yet, and until one
+  does every Robinhood token still reaches the creator lookup with nothing to
+  look it up in.
 
 ### (b) Was "trades-to-depth" / liquidity velocity ever built in either repo?
 

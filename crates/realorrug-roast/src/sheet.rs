@@ -391,6 +391,18 @@ impl FactSheet {
         let mut unknown = Vec::new();
         let mut signals = Vec::new();
 
+        // An index describes one chain's launches, and says which
+        // (`creator::CreatorIndex::chain`). Dropping a wrong-chain one here,
+        // once, is what keeps every reader below honest — the lookup, the two
+        // signals and the population line.
+        //
+        // **Dropping it is not the same as ignoring it.** A wrong-chain index
+        // that reached `push_creator` would miss on every address and publish
+        // "this creator has no record here", which reads as a checked absence.
+        // `None` publishes nothing, which is what an unchecked question is.
+        let chain = crate::firstparty::Chain::of(&dossier.mint);
+        let creators = creators.filter(|index| index.chain == chain);
+
         if let Some(launch) = &dossier.launch {
             push_launch(&mut facts, &mut untrusted, launch);
             if let Some(rates) = rates {
@@ -458,7 +470,7 @@ impl FactSheet {
             .or_else(|| dossier.curve.as_ref().map(|c| c.creator));
         if let (Some(index), Some(address)) = (creators, creator) {
             let creator = address.to_string();
-            push_creator(&mut facts, &mut unknown, &creator, index);
+            push_creator(&mut facts, &mut unknown, &creator, index, chain);
             // Measured and none organic. A creator whose launches have not been
             // measured has no record to hold against them.
             if let Some(record) = index.get(&creator)
@@ -491,8 +503,7 @@ impl FactSheet {
             // later packet's job (design 0020 §3's own note), not this one's.
             if let Some(list) = first_party
                 && let Some(record) = index.get(&creator)
-                && let Some(floor) =
-                    index.repeat_launcher_floor(crate::firstparty::Chain::of(&address), list)
+                && let Some(floor) = index.repeat_launcher_floor(list)
                 && record.launches >= floor
             {
                 signals.push(Signal::RepeatLauncher);
@@ -531,15 +542,17 @@ impl FactSheet {
         // counts a scale -- "none of 150 filled its curve" reads differently
         // once you know what share of everything does.
         //
-        // **Solana-only, and gated on the dossier's own chain, not on which
-        // arguments happened to be passed in.** `CreatorIndex::population` is
-        // built from `watermark_slot` -- a Solana slot -- over pump.fun
-        // launches; there is no Robinhood equivalent yet. Passing `creators`
-        // for a Robinhood dossier (the caller may hold one `CreatorIndex` for
-        // the whole process) must not print Solana's population figures on a
-        // Robinhood sheet as if they described this chain.
+        // **Gated on the index's chain, which the filter at the top of this
+        // function has already applied.** Until 2026-09-17 this asked whether
+        // the *token* was on Robinhood and refused the figures if it was, on
+        // the reasoning that the only index in existence was a pump.fun one.
+        // That reasoning was right about the fact and wrong about the test: it
+        // suppressed the population line for the one chain a Pons v2 index
+        // describes, and would have gone on suppressing it after that index
+        // was built, while still printing pump.fun's totals for pump.fun
+        // whatever file happened to be at the path.
         let robinhood = matches!(dossier.mint, realorrug_types::ChainAddress::Robinhood(_));
-        if !robinhood && let Some(population) = creators.and_then(|c| c.population) {
+        if let Some(population) = creators.and_then(|c| c.population) {
             push_measured_population(&mut facts, &population);
         }
 
@@ -1094,12 +1107,31 @@ fn push_holders(facts: &mut Vec<Fact>, holders: &Holders) {
 /// graduations end at a median −3,228 bps against −853 for tokens that never
 /// graduate. So the graduation count is published as a measurement and the
 /// label never suggests it is encouraging.
+/// What "filled its curve immediately" is counted in, on a given chain.
+///
+/// Not decoration. Three Solana slots is about 1.2 seconds and three Robinhood
+/// blocks is about six, so the word is part of what the figure means -- and a
+/// reply that said "slots" about a Pons v2 launch would be quoting a
+/// measurement in a unit nobody measured it in.
+const fn immediate_fill_unit(chain: crate::firstparty::Chain) -> &'static str {
+    match chain {
+        crate::firstparty::Chain::Solana => "slots",
+        crate::firstparty::Chain::Robinhood => "blocks",
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "five near-identical fact pushes in a row, each with the comment explaining why its               denominator travels with it; carrying the chain's unit for the instant-fill line               put it one line over, and splitting a straight list of facts in two to satisfy a               line count would separate those comments from the pushes they explain"
+)]
 fn push_creator(
     facts: &mut Vec<Fact>,
     unknown: &mut Vec<String>,
     creator: &str,
     index: &crate::creator::CreatorIndex,
+    chain: crate::firstparty::Chain,
 ) {
+    let unit = immediate_fill_unit(chain);
     let Some(record) = index.get(creator) else {
         // One line, no continuation. A `\` continuation in a Rust string keeps
         // the *leading* whitespace of the next line, so this rendered with a
@@ -1183,19 +1215,21 @@ fn push_creator(
     facts.push(
         Fact::exact(
             Kind::CreatorInstant,
-            "of the measured, how many filled their curve within three slots (capital committed before the token existed, not demand)",
+            format!(
+                "of the measured, how many filled their curve within three {unit} (capital committed before the token existed, not demand)"
+            ),
             f64::from(record.instant),
             instant.clone(),
         )
         .saying(
             Voice::Plain,
             format!(
-                "{instant} of those {measured} filled inside three slots, which is capital arranged before the token existed."
+                "{instant} of those {measured} filled inside three {unit}, which is capital arranged before the token existed."
             ),
         )
         .saying(
             Voice::Blunt,
-            format!("{instant} of {measured} filled inside three slots. That is arrangement, not demand."),
+            format!("{instant} of {measured} filled inside three {unit}. That is arrangement, not demand."),
         ),
     );
     let stillborn = record.stillborn.to_string();
@@ -2139,6 +2173,7 @@ mod tests {
         let mut creators = std::collections::BTreeMap::new();
         creators.insert(realorrug_types::Address::new([9u8; 32]).to_string(), record);
         crate::creator::CreatorIndex {
+            chain: crate::firstparty::Chain::Solana,
             watermark_slot: 444_343_109,
             built_at: 1_788_000_000,
             population: None,
@@ -2280,6 +2315,7 @@ mod tests {
             },
         );
         crate::creator::CreatorIndex {
+            chain: crate::firstparty::Chain::Solana,
             watermark_slot: 444_343_109,
             built_at: 1_788_000_000,
             population: None,
@@ -2642,6 +2678,7 @@ mod tests {
         // run. This is the denominator every creator count is read against;
         // without it "none of 150 filled its curve" has no scale.
         let index = crate::creator::CreatorIndex {
+            chain: crate::firstparty::Chain::Solana,
             watermark_slot: 444_374_676,
             built_at: 1_788_000_000,
             population: Some(crate::creator::Population {
@@ -2890,35 +2927,76 @@ mod tests {
     }
 
     #[test]
-    fn a_robinhood_sheet_carries_no_measured_population_line() {
-        // Same gate, the other Solana-shaped input: `CreatorIndex::population`
-        // is watermarked by Solana slot over pump.fun launches.
-        let index = crate::creator::CreatorIndex {
+    fn a_population_line_is_printed_by_the_index_chain_not_the_token_chain() {
+        // Until 2026-09-17 this asked whether the *token* was on Robinhood and
+        // dropped the population figures if it was. That was right about the
+        // only file then in existence (a pump.fun index) and wrong about the
+        // test, because it would have gone on hiding a Pons v2 index's totals
+        // from the one chain those totals describe.
+        //
+        // Both halves are asserted, because one alone passes on a `build` that
+        // ignores the chain entirely in either direction.
+        let population = crate::creator::Population {
+            launches: 508_814,
+            measured: 506_991,
+            organic: 9_060,
+            instant: 5_222,
+            stillborn: 116_608,
+        };
+        let solana_index = crate::creator::CreatorIndex {
+            chain: crate::firstparty::Chain::Solana,
             watermark_slot: 444_374_676,
             built_at: 1_788_000_000,
-            population: Some(crate::creator::Population {
-                launches: 508_814,
-                measured: 506_991,
-                organic: 9_060,
-                instant: 5_222,
-                stillborn: 116_608,
-            }),
+            population: Some(population),
             creators: std::collections::BTreeMap::new(),
         };
-        let rendered = FactSheet::build(
+        let line = "launches Real or Rug has recorded and measured";
+
+        let leaked = FactSheet::build(
             &robinhood_dossier_for([2u8; 20]),
             None,
-            Some(&index),
+            Some(&solana_index),
             None,
             None,
         )
         .render();
         assert!(
-            !rendered.contains("launches Real or Rug has recorded and measured"),
-            "a Solana population line leaked onto a Robinhood sheet: {rendered}"
+            !leaked.contains(line),
+            "a pump.fun population line leaked onto a Pons v2 sheet: {leaked}"
+        );
+
+        let robinhood_index = crate::creator::CreatorIndex {
+            chain: crate::firstparty::Chain::Robinhood,
+            ..solana_index.clone()
+        };
+        let printed = FactSheet::build(
+            &robinhood_dossier_for([2u8; 20]),
+            None,
+            Some(&robinhood_index),
+            None,
+            None,
+        )
+        .render();
+        assert!(
+            printed.contains(line),
+            "a Pons v2 index's own totals were withheld from a Pons v2 sheet: {printed}"
+        );
+
+        // And the mirror, so neither chain is special-cased: a Pons v2 index
+        // says nothing on a pump.fun sheet.
+        let wrong_way = FactSheet::build(
+            &dossier_for([3u8; 32]),
+            None,
+            Some(&robinhood_index),
+            None,
+            None,
+        )
+        .render();
+        assert!(
+            !wrong_way.contains(line),
+            "a Pons v2 population line leaked onto a pump.fun sheet: {wrong_way}"
         );
     }
-
     #[test]
     fn an_optional_miss_alone_does_not_reach_cant_tell() {
         // `fees`, `capacity` and `creator transactions` are optional per
