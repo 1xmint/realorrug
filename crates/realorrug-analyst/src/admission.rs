@@ -883,9 +883,20 @@ mod tests {
             DAY,
         );
 
+        // Exactly the window: already outside it. The freshness test is
+        // `now - at < dedupe_seconds`, one character from `<=`, and the two
+        // disagree only here -- so without this assertion the sheet stays
+        // reusable a second longer than the window says, and every answer at
+        // the edge quotes a chain read it should have taken again.
+        assert_eq!(
+            gate.admit("bob", "MintOne", Some("t2"), DAY + 60),
+            Admitted::Yes,
+            "the freshness window is exclusive at its edge"
+        );
+
         // Past the window: no cached sheet reuse, this asker's own fresh read.
         assert_eq!(
-            gate.admit("bob", "MintOne", Some("t2"), DAY + 61),
+            gate.admit("carol", "MintOne", Some("t3"), DAY + 61),
             Admitted::Yes,
             "past the window, the sheet is stale and the chain is read again"
         );
