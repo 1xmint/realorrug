@@ -322,10 +322,15 @@ impl Gate {
         // below, subject to every cap exactly as a first-time ask is. A young
         // token moves fast enough that a second distinct post asking about it
         // deserves another look, not the first look's sentence again.
+        // A platform that gives no thread id at all (Telegram) compares `None`
+        // with `None` here and keeps the old blanket dedupe. That is the safe
+        // direction rather than an omission: without a thread id there is no
+        // way to tell a second genuine question from the same message
+        // delivered twice, and answering one message twice is the worse of the
+        // two errors -- it is the loop the dedupe was written to stop.
         if let Some((at, reply_id, prev_summoner, prev_conversation)) = self.answered.get(mint)
             && now.saturating_sub(*at) < limits.dedupe_seconds
             && prev_summoner == summoner
-            && conversation.is_some()
             && conversation == prev_conversation.as_deref()
         {
             return Admitted::No(Refused::AlreadyAnswered {

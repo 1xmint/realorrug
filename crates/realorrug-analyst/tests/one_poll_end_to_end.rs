@@ -1306,20 +1306,24 @@ fn a_symbol_gets_an_answer_rather_than_silence() {
 }
 
 #[test]
-fn a_second_asker_is_pointed_at_the_answer_rather_than_ignored() {
-    // Two people ask about the same mint in one page. The first is answered;
-    // the second is refused as a duplicate — and until now that refusal went
-    // nowhere. `AlreadyAnswered` has carried the existing reply's id since the
-    // day it was written and nothing read it.
+fn the_same_asker_in_the_same_thread_is_pointed_and_a_different_asker_is_not() {
+    // One person asks the same thing twice in one thread, and a second person
+    // asks in a thread of their own.
     //
-    // The cost of the silence is not only rudeness. The first asker's reply is
-    // their contest entry, so a script that asks first about every trending
-    // launch owns the entry on the hottest coins — the contest rewarded speed
-    // and automation, which is the exact behaviour this account exists to
-    // expose.
+    // The repeat gets a pointer at the answer that already exists: it costs no
+    // model call and no read, and `AlreadyAnswered` has carried that reply's
+    // id since the day it was written with nothing reading it.
+    //
+    // The second person gets their own answer. That is the owner's correction
+    // of 2026-09-17: a genuinely different post is a genuinely different
+    // question, and pointing its author at somebody else's reply both reads as
+    // a brush-off and hands the first asker the contest entry on every
+    // trending launch — the speed-and-automation behaviour this account exists
+    // to expose.
     let page = r#"{"data":[
-        {"id":"3001","author_id":"alice","text":"@radar what about $ABC"},
-        {"id":"3002","author_id":"bob","text":"@radar and $ABC again"}
+        {"id":"3001","author_id":"alice","text":"@radar what about $ABC","conversation_id":"conv-p"},
+        {"id":"3002","author_id":"alice","text":"@radar and $ABC again","conversation_id":"conv-p"},
+        {"id":"3003","author_id":"bob","text":"@radar what about $ABC","conversation_id":"conv-q"}
     ]}"#;
     let (base, _seen) = platform(page);
     let dir = workspace("pointer");
@@ -1345,12 +1349,19 @@ fn a_second_asker_is_pointed_at_the_answer_rather_than_ignored() {
     );
 
     let said = publisher.0.lock().expect("not poisoned");
-    assert_eq!(said.len(), 2, "both askers got something back");
+    assert_eq!(said.len(), 3, "every asker got something back");
     assert_eq!(said[1].0, "3002");
     assert!(
         said[1].1.contains("p1"),
         "the pointer must carry the id of the reply it points at: {}",
         said[1].1
+    );
+    // Bob's is an answer of his own, not alice's reply id handed to him.
+    assert_eq!(said[2].0, "3003");
+    assert!(
+        !said[2].1.contains("p1"),
+        "a different asker is answered, not pointed: {}",
+        said[2].1
     );
 
     // The pointer is in the record, marked as one. Everything downstream keys
@@ -1364,10 +1375,11 @@ fn a_second_asker_is_pointed_at_the_answer_rather_than_ignored() {
     assert_eq!(pointer.pointed_at.as_deref(), Some("p1"));
     assert_eq!(pointer.mint, None, "a pointer states no fact about a coin");
 
-    // And the refusal is still on the record for the week-close job.
+    // And the refusal is still on the record for the week-close job. One
+    // refusal, not two: bob was admitted and answered.
     let refusals = realorrug_analyst::contest::read_refusals(&paths.refusals);
     assert_eq!(refusals.len(), 1);
-    assert_eq!(refusals[0].summoner, "bob");
+    assert_eq!(refusals[0].summoner, "alice");
 }
 
 #[test]
