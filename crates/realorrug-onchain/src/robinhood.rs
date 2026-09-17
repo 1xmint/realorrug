@@ -232,23 +232,56 @@ const TOO_BUSY: &str = "too many transfers to read within this answer's budget";
 ///
 /// Not the only ceiling: see [`MAX_HOLDER_PAGES`]'s own comment for why a
 /// second, budget-independent cap is also needed.
-const HOLDER_PAGE_BUDGET_DIVISOR: u32 = 4;
+const HOLDER_PAGE_BUDGET_DIVISOR: u32 = 2;
 
 /// The largest number of pages [`holders_paged`] may fetch for one token,
 /// regardless of how much budget is left.
 ///
-/// Sized so a busy token cannot spend the whole call budget it happens to
-/// have been handed, even when that budget is generous: research
-/// (`docs/research/robinhood-trader-signals.md` §0, reproduced live
-/// 2026-09-17 against a real graduated token a few hours old) estimates
-/// 3-5 pages to sum a heavily-traded young token's transfers in full, so 12
-/// leaves headroom for a halving retry or two beyond that estimate without
-/// approaching [`crate::budget::DEFAULT_MAX_CALLS`] (60) on its own. The actual cap
-/// used is the smaller of this and a quarter of the calls the budget passed
-/// in today has left when the walk starts (see [`HOLDER_PAGE_BUDGET_DIVISOR`]),
-/// so a budget constructed smaller than the default cannot be emptied by
-/// holder paging alone either.
-const MAX_HOLDER_PAGES: u32 = 12;
+/// Sized from a measurement rather than an estimate. The estimate this
+/// constant first carried -- 3-5 pages, from
+/// `docs/research/0050-robinhood-trader-signals.md` §0 -- was wrong by a
+/// factor of three. Walked in full on 2026-09-17, the live token
+/// `0x13e6cdB0470B10AfCB96177Ae8702ace2ac72cD6` held **28,652** transfers
+/// across the ~175,000 blocks between its launch and the read, and the walk
+/// below reached all of them in **12 requests** (8 pages plus 4 halving
+/// retries) taking 7.1 seconds. Twelve was therefore not headroom over the
+/// need; it was exactly the need, and the walk stopped one page short of an
+/// answer on the very token Josh asked about. Twenty-four is double the
+/// measurement, still well under [`crate::budget::DEFAULT_MAX_CALLS`] (60),
+/// and in practice the budget's 20-second deadline stops a pathological token
+/// long before this does. The actual cap used is the smaller of this and half
+/// the calls the budget passed in today has left when the walk starts (see
+/// [`HOLDER_PAGE_BUDGET_DIVISOR`]), so a budget constructed smaller than the
+/// default cannot be emptied by holder paging alone either.
+const MAX_HOLDER_PAGES: u32 = 24;
+
+/// How wide [`holders_paged`]'s first window is, in blocks.
+///
+/// Deliberately *not* the whole range. Asking for the whole range first reads
+/// as the cheap thing to do -- one call answers a quiet token -- but measured
+/// on the token above it cost four requests and three seconds of pure refusal
+/// before the first page came back, because a busy token's full span never
+/// fits. Starting here and doubling after each success read the same ledger in
+/// 12 requests and 7.1s against 16 and 10.3s for the full-span start. A quiet
+/// token pays almost nothing for the change: the window doubles past a whole
+/// day of this chain within five calls, and a token whose entire span is
+/// narrower than this still takes exactly one call, because the end of each
+/// window is clamped to the block being read at.
+///
+/// Twenty thousand blocks is roughly half an hour at the ~0.1s blocks measured
+/// on this chain -- comfortably inside every provider's block-range limit
+/// (Alchemy's is 5,000 blocks *or* 10,000 logs, and this walk relies on the
+/// second), while wide enough that a normal token finishes in a handful of
+/// calls.
+const FIRST_HOLDER_WINDOW: u64 = 20_000;
+
+/// The widest window the doubling will reach for.
+///
+/// A ceiling on growth only, so a chain quieter than this one cannot send the
+/// window climbing into ranges a provider refuses on block count alone rather
+/// than on log count. The provider's own cap is what normally stops the
+/// growth; this stops it when nothing else would.
+const MAX_HOLDER_WINDOW: u64 = 200_000;
 
 /// How many pages [`holders_paged`] may spend on `budget`, chosen from what
 /// it has left right now rather than from a constant alone.
@@ -261,14 +294,18 @@ fn holder_page_cap(budget: &Budget) -> u32 {
 /// provider's per-call result cap (10,000 logs, `Rpc::logs_range`'s own doc
 /// comment) is still readable rather than refused outright.
 ///
-/// Starts with the whole range as one window -- the common case, a token
-/// quiet enough that one call already answers in full, costs exactly the
-/// single request [`Rpc::logs`] always did. Only when the provider reports
-/// the result-count cap does the window halve and retry from the same
-/// starting block; once a window size succeeds, later pages reuse it rather
-/// than re-probing the full remaining range each time, since a window sized
-/// for the busiest part of a token's history is sized for the rest of it
-/// too.
+/// Starts at [`FIRST_HOLDER_WINDOW`] blocks (or the whole range, when that is
+/// narrower), halves and retries from the same block whenever the provider
+/// reports its cap, and **doubles after every success** up to
+/// [`MAX_HOLDER_WINDOW`].
+///
+/// The doubling is the part that is easy to leave out and expensive to leave
+/// out. A walk that only ever halves keeps, for the whole rest of the token's
+/// history, whatever narrow window the busiest minute of its launch forced --
+/// and a launch burst is precisely the part of a token's life that is not
+/// representative of the rest. Measured on the live token in
+/// [`MAX_HOLDER_PAGES`]'s comment, holding the narrow window cost 38 requests
+/// where growing it back cost 12, for the identical answer.
 ///
 /// # Errors
 ///
@@ -289,7 +326,10 @@ fn holders_paged(
     let cap = holder_page_cap(budget);
     let mut logs: Vec<Log> = Vec::new();
     let mut start = from_block;
-    let mut window = to_block.saturating_sub(from_block).saturating_add(1);
+    // Not clamped to the range: `end` below is already clamped to `to_block`,
+    // so a token whose whole life is narrower than one window still costs the
+    // single request it always did.
+    let mut window = FIRST_HOLDER_WINDOW;
     let mut pages = 0u32;
     while start <= to_block {
         if pages >= cap {
@@ -302,6 +342,7 @@ fn holders_paged(
             Ok(page) => {
                 logs.extend(page);
                 start = end.saturating_add(1);
+                window = window.saturating_mul(2).min(MAX_HOLDER_WINDOW);
             }
             Err(LogsError::TooManyResults) => {
                 if window <= 1 {
@@ -776,8 +817,8 @@ mod tests {
 
     /// A raw JSON-RPC error body carrying the provider's own result-count
     /// cap wording, byte-identical to the one reproduced live 2026-09-17
-    /// against a real graduated token (docs/research/robinhood-trader-signals.md
-    /// §0).
+    /// against a real graduated token
+    /// (docs/research/0050-robinhood-trader-signals.md §0).
     fn too_many_results_error() -> String {
         r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"logs matched by query exceeds limit of 10000"}}"#
             .to_owned()
@@ -970,12 +1011,13 @@ mod tests {
 
     #[test]
     fn a_token_whose_transfers_come_back_in_three_pages_sums_to_the_right_holders() {
-        // The provider's cap fires on the whole range (width 6) and on the
-        // first halved window too (width 3), so covering blocks 0..=5 takes
-        // a window of 2: two failed attempts, then three successful pages
-        // (0-1, 2-3, 4-5). Each page contributes a transfer, and the three
-        // joined in order give the same balances a single unbounded call
-        // would have, which is the property this walk exists to keep.
+        // The provider's cap fires on the first window (20,000 blocks) and on
+        // the first halving too (10,000), so the walk settles at 5,000 and
+        // then widens: two failed attempts, then three successful pages
+        // covering 0-4,999, 5,000-14,999 and 15,000-34,999. Each page
+        // contributes a transfer, and the three joined in order give the same
+        // balances a single unbounded call would have, which is the property
+        // this walk exists to keep.
         let curve = RobinhoodAddress([0x51; 20]);
         let deployer = RobinhoodAddress([0x52; 20]);
         let rec = record(true, curve, deployer);
@@ -988,15 +1030,63 @@ mod tests {
                 1_000,
                 0
             )])),
-            answer(&serde_json::json!([transfer_at(&curve, &ALICE, 400, 2)])),
-            answer(&serde_json::json!([transfer_at(&curve, &BOB, 600, 5)])),
+            answer(&serde_json::json!([transfer_at(&curve, &ALICE, 400, 5_000)])),
+            answer(&serde_json::json!([transfer_at(&curve, &BOB, 600, 20_000)])),
         ]));
         let mut b = budget();
 
-        let holders = holders_paged(&mut b, &client, &token(), 0, 5, &rec).expect("holders");
+        let holders = holders_paged(&mut b, &client, &token(), 0, 34_999, &rec).expect("holders");
         assert_eq!(holders.count, 2);
         assert_eq!(holders.largest_share_bps, Some(6_000));
         assert_eq!(b.calls_made(), 5);
+    }
+
+    #[test]
+    fn a_window_narrowed_by_a_busy_stretch_widens_again_once_pages_succeed() {
+        // The launch burst is the densest stretch of a token's life and the
+        // least representative of the rest of it. Here the first two windows
+        // (20,000 then 10,000 blocks) are refused and 5,000 succeeds -- and a
+        // walk that kept 5,000 would then need 131 more pages to cross the
+        // remaining 640,000 blocks, nearly all of them empty.
+        //
+        // Doubling after each success crosses the whole range in eight pages:
+        // 5k, 10k, 20k, 40k, 80k, 160k, then two at the 200,000-block ceiling.
+        // Ten canned answers are served, which is exactly what the widening
+        // walk asks for, so deleting the doubling fails this test twice over
+        // -- on the call count, and on running out of server.
+        let curve = RobinhoodAddress([0x59; 20]);
+        let deployer = RobinhoodAddress([0x5a; 20]);
+        let rec = record(true, curve, deployer);
+        let empty = || answer(&serde_json::json!([]));
+        let client = Rpc::new(serve(vec![
+            too_many_results_error(),
+            too_many_results_error(),
+            answer(&serde_json::json!([transfer_at(
+                &RobinhoodAddress::ZERO,
+                &curve,
+                1_000,
+                0
+            )])),
+            empty(),
+            empty(),
+            answer(&serde_json::json!([transfer_at(
+                &curve, &ALICE, 400, 40_000
+            )])),
+            empty(),
+            empty(),
+            empty(),
+            answer(&serde_json::json!([transfer_at(
+                &curve, &BOB, 600, 600_000
+            )])),
+        ]));
+        let mut b = budget();
+
+        let holders = holders_paged(&mut b, &client, &token(), 0, 655_359, &rec).expect("holders");
+        assert_eq!(b.calls_made(), 10, "two refusals and eight widening pages");
+        // And the ledger is whole: a page missed anywhere in the range would
+        // leave the curve holding what it never sent.
+        assert_eq!(holders.count, 2);
+        assert_eq!(holders.largest_share_bps, Some(6_000));
     }
 
     #[test]
@@ -1012,11 +1102,13 @@ mod tests {
                 10,
                 0
             )])),
-            answer(&serde_json::json!([transfer_at(&ALICE, &BOB, 4, 3)])),
+            answer(&serde_json::json!([transfer_at(&ALICE, &BOB, 4, 15_000)])),
         ]));
         let mut b = budget();
 
-        let holders = holders_paged(&mut b, &client, &token(), 0, 3, &rec).expect("holders");
+        // 20,000 blocks is refused, 10,000 answers, and the widened second
+        // page (20,000 again) reaches the end: one refusal, two pages.
+        let holders = holders_paged(&mut b, &client, &token(), 0, 29_999, &rec).expect("holders");
         assert_eq!(holders.count, 2);
         assert_eq!(b.calls_made(), 3);
     }
@@ -1024,7 +1116,7 @@ mod tests {
     #[test]
     fn a_page_budget_that_runs_out_mid_walk_is_unread_not_a_partial_count() {
         // A small budget derives a small page cap (`holder_page_cap`): with
-        // 4 calls left the cap is 1, so a token that needs a second page to
+        // 2 calls left the cap is 1, so a token that needs a second page to
         // finish its range is refused outright rather than answering with
         // only the first page's balances -- a partial ledger presented as
         // complete is exactly what AGENTS.md rule 8 forbids.
@@ -1032,7 +1124,7 @@ mod tests {
         let deployer = RobinhoodAddress([0x56; 20]);
         let rec = record(true, curve, deployer);
         let client = Rpc::new(serve(vec![too_many_results_error()]));
-        let mut b = Budget::new(4, 3, Duration::from_secs(30));
+        let mut b = Budget::new(2, 3, Duration::from_secs(30));
 
         let err = holders_paged(&mut b, &client, &token(), 0, 3, &rec).expect_err("refused");
         assert_eq!(err, TOO_BUSY);

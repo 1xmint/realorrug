@@ -532,16 +532,36 @@ impl Rpc {
     ) -> Result<serde_json::Value, String> {
         let body =
             serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+        // Read the body whatever the status says. Measured 2026-09-17 against
+        // the endpoint the bot actually uses: a `eth_getLogs` range too wide
+        // for the provider comes back as HTTP 400 whose body is a perfectly
+        // ordinary JSON-RPC error explaining the limit and how to stay inside
+        // it. With ureq's default the status alone becomes the error, the body
+        // is dropped unread, and the one message that says "ask for a narrower
+        // range" never reaches the code that would have done so -- which is
+        // exactly how every busy token's holders became unreadable.
         let mut response = ureq::post(endpoint)
+            .config()
+            .http_status_as_error(false)
+            .build()
             .content_type("application/json")
             .send(body.to_string())
             .map_err(|e| e.to_string())?;
+        let status = response.status();
         let text = response
             .body_mut()
             .read_to_string()
             .map_err(|e| e.to_string())?;
-        let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("not json: {e}"))?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            // A non-JSON body is only worth reporting with its status, which
+            // is now the only thing distinguishing "the endpoint refused" from
+            // "the endpoint answered something we cannot read".
+            return Err(if status.is_success() {
+                format!("{method}: not json")
+            } else {
+                format!("{method}: http {status}")
+            });
+        };
         if let Some(err) = value.get("error") {
             return Err(format!("{method}: {err}"));
         }
@@ -603,12 +623,12 @@ impl Rpc {
     ///
     /// This is the same call [`Rpc::logs`] makes with an explicit range
     /// instead of genesis-to-latest, so that a caller that has already hit
-    /// the provider's result-count cap (docs/research/robinhood-trader-signals.md
-    /// §0, reproduced live 2026-09-17: `"logs matched by query exceeds limit
-    /// of 10000"`) can retry a narrower window and page through a busy
-    /// token's history a range at a time. [`LogsError::TooManyResults`] is
-    /// the signal to halve the window and retry, not to give up: the cap is
-    /// on the answer's size, and a range with fewer logs in it answers fine.
+    /// the provider's result-size cap (see [`LogsError::TooManyResults`] for
+    /// both providers' wordings, measured 2026-09-17) can retry a narrower
+    /// window and page through a busy token's history a range at a time.
+    /// [`LogsError::TooManyResults`] is the signal to halve the window and
+    /// retry, not to give up: the cap is on the answer's size, and a range
+    /// with fewer logs in it answers fine.
     ///
     /// # Errors
     ///
@@ -834,10 +854,19 @@ fn parse_logs(result: &serde_json::Value) -> Result<Vec<Log>, String> {
 /// exists to avoid at the boundary where it matters.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LogsError {
-    /// The provider's result-count cap fired (measured 2026-09-17 on this
-    /// chain: `"logs matched by query exceeds limit of 10000"`,
-    /// docs/research/robinhood-trader-signals.md §0). Not a block-range
-    /// cap -- the same range with fewer logs in it will answer.
+    /// A provider's result-size cap fired. Not a fixed block-range cap: a
+    /// narrower window, or the same window over a quieter stretch of the
+    /// chain, answers fine.
+    ///
+    /// Two wordings are in play, both measured 2026-09-17.
+    /// `rpc.mainnet.chain.robinhood.com` returns HTTP 200 carrying
+    /// `"logs matched by query exceeds limit of 10000"`
+    /// (docs/research/0050-robinhood-trader-signals.md §0). Alchemy -- the
+    /// endpoint the deployed bot actually reads through -- returns **HTTP
+    /// 400** carrying `"Log response size exceeded. You can make eth_getLogs
+    /// requests with up to a 5,000 block range ... or you can request any
+    /// block range with a cap of 10K logs in the response"`. Both reach here
+    /// as this one variant, which is the point of the type.
     #[error("logs matched by query exceeds limit")]
     TooManyResults,
     /// Anything else: transport, the endpoint's own non-limit error, or a
@@ -846,21 +875,114 @@ pub enum LogsError {
     Other(String),
 }
 
-/// Whether `message` is the provider's `eth_getLogs` result-count cap.
+/// Whether `message` is a provider's `eth_getLogs` result-size cap.
 ///
-/// Matched on the stable middle of the message -- "logs matched by query
-/// exceeds limit" -- rather than the full sentence, so a provider that
-/// phrases the number differently (a different cap, or a differently
-/// pluralized count) still trips this. Alchemy, the endpoint this was
-/// reproduced against, is quoted verbatim in the doc comment above; this
-/// check is deliberately looser than that exact string.
+/// Each provider's phrase is matched on its stable middle rather than in
+/// full, so a different cap number or a differently pluralized count still
+/// trips this.
 fn is_log_limit_error(message: &str) -> bool {
+    // Two providers, two sentences, one meaning: the answer was too big, ask
+    // for less of it. Both measured on this chain, 2026-09-17 --
+    // `rpc.mainnet.chain.robinhood.com` says "logs matched by query exceeds
+    // limit of 10000" (research 0050 §0) and Alchemy says "Log response size
+    // exceeded. You can make eth_getLogs requests with up to a 5,000 block
+    // range ... or you can request any block range with a cap of 10K logs".
+    // Matching on the shared word "exceed" alone would also catch a rate
+    // limit, which halving a window does not fix, so each provider's phrase
+    // is named.
     message.contains("logs matched by query exceeds limit")
+        || message.contains("Log response size exceeded")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    use std::net::TcpListener;
+
+    /// One HTTP answer with a chosen status, served once on a loopback port.
+    ///
+    /// The status is a parameter because the bug this crate's newest test
+    /// covers lives entirely in the status: the same JSON-RPC error body is
+    /// handled correctly at 200 and was thrown away unread at 400.
+    fn serve_once(status: u16, reason: &str, body: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let url = format!("http://{}", listener.local_addr().expect("an address"));
+        let body = body.to_owned();
+        let reason = reason.to_owned();
+        std::thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() || line == "\r\n" {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut request = vec![0; length];
+            let _ = reader.read_exact(&mut request);
+            let mut stream = reader.into_inner();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        });
+        url
+    }
+
+    #[test]
+    fn a_range_capped_over_http_400_is_a_narrow_the_window_signal_not_a_transport_failure() {
+        // The whole of the outage Josh saw, in one test. Alchemy answers an
+        // over-wide `eth_getLogs` with HTTP 400 whose body is an ordinary
+        // JSON-RPC error saying which narrower range would work. Read with
+        // ureq's defaults, the status alone becomes the error and the body is
+        // dropped unread -- so the one message that says "ask for less" never
+        // reaches `holders_paged`, which then gives up on its first probe and
+        // reports every busy token's holders as unreadable.
+        //
+        // Body quoted from the live endpoint, 2026-09-17.
+        let url = serve_once(
+            400,
+            "Bad Request",
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Log response size exceeded. You can make eth_getLogs requests with up to a 5,000 block range and no limit on the response size, or you can request any block range with a cap of 10K logs in the response. Based on your parameters and the response size limit, this block range should work: [0x0, 0x1388]"}}"#,
+        );
+        let rpc = Rpc::new(url);
+
+        let err = rpc
+            .logs_range(&Address([0x11; 20]), &[], 0, 200_000)
+            .expect_err("the endpoint refused this range");
+
+        assert_eq!(
+            err,
+            LogsError::TooManyResults,
+            "a 400 carrying the cap message must still be the retryable case"
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_is_not_mistaken_for_a_range_cap() {
+        // Both providers' cap sentences are recognised, and neither is
+        // recognised by the word they share with a rate limit. Halving the
+        // window fixes a range cap; it does nothing for a rate limit except
+        // send twice as many requests at an endpoint already saying stop.
+        assert!(is_log_limit_error(
+            "logs matched by query exceeds limit of 10000"
+        ));
+        assert!(is_log_limit_error(
+            "Log response size exceeded. You can make eth_getLogs requests with up to a 5,000 block range"
+        ));
+        assert!(!is_log_limit_error(
+            "Your app has exceeded its compute units per second capacity"
+        ));
+        assert!(!is_log_limit_error("execution reverted"));
+    }
 
     #[test]
     fn an_address_reads_in_either_case_and_prints_lowercase() {
