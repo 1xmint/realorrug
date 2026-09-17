@@ -106,6 +106,23 @@ check we have. Rule 2 says the model may not introduce a fact. Today the
 code enforces "may not introduce a number". §7 closes that, and it is the
 reason this design constrains the voice rather than freeing it.
 
+**And the fallback printed no facts at all on Robinhood — fixed 2026-09-17.**
+`verdict::template` picks which facts to print from `LEAD`, a list of label
+fragments. Every entry in it was written for Solana ("SOL the creator spent",
+"distinct token accounts receiving"), and no Robinhood label contains any of
+them, so for a Robinhood token the loop matched nothing, printed zero facts,
+and shipped the launch age and the block number. Measured against the live
+sheet for `0x13e6cdB0470B10AfCB96177Ae8702ace2ac72cD6` the same day: 529
+holders and a largest address at 50.2% were both on the sheet, both dropped.
+
+`LEAD` now carries the four Robinhood labels after the Solana ones — the
+largest address's share, the holder count, the graduation status, the
+launcher's own buy — and `headline` leads a Robinhood reply with the holder
+count beside that share. The two label sets are disjoint, so one list serves
+both chains and a Solana reply is unchanged; a test pins that. This is
+independent of ADR 0030 and of §9's slice 1: it is the floor every path falls
+back to, and it was empty.
+
 Everything after this section is worth less than this one.
 
 ## 2. What the data can actually do
