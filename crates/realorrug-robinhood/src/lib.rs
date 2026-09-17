@@ -2,8 +2,9 @@
 //! Robinhood Chain, read: receipts and the logs in them, typed at the edge.
 //!
 //! Design 0019 §4.4, plan 0001 step 6. The token lives on Robinhood Chain
-//! (ADR 0023), and ADR 0013's constraint 1 -- no dev buy, the curve the only
-//! recipient -- is a property of one transaction there. This crate reads that
+//! (ADR 0023), and ADR 0029's launch rule -- the mint to the curve, at most the
+//! launcher's own stated buy, nothing else -- is a property of one transaction
+//! there. This crate reads that
 //! transaction; [`pons`] says what it means, and [`escrow`] reads where the
 //! creator's fees wait to be claimed.
 //!

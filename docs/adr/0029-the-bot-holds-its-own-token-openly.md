@@ -29,7 +29,9 @@ this ADR answers them with disclosure instead of absence.
 
 1. **One small dev buy, in the launch block, stated in public.** Its size, the
    wallet that made it and the transaction are on the tokenomics page from
-   launch day.
+   launch day. `realorrug launch-check` passes a buy whose tokens go to the
+   deployer or the creator fee recipient, prints it, and still refuses any
+   other trade, transfer or snipe-tax exemption in the launch transaction.
 2. **The bot's wallet may hold the token.** Its address is published. Every
    token it holds is visible on chain to anyone.
 3. **The creator tax goes to the bot's wallet and funds the weekly prize**, as
