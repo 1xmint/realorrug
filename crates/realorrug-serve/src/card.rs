@@ -150,7 +150,7 @@ async fn handle(
 ///
 /// `None`, or any string this list does not recognise, draws "Can't tell" —
 /// unknown is never a guess at a stronger verdict (design 0025 §5).
-fn stamp_word(level: Option<&str>) -> &'static str {
+pub(crate) fn stamp_word(level: Option<&str>) -> &'static str {
     match level {
         Some("Rugged") => "Rugged",
         Some("RugMechanicsLive") => "Rug mechanics live",
@@ -173,7 +173,7 @@ fn stamp_color(word: &str) -> &'static str {
 /// symbol are untrusted (design 0023 §6, extended to this second surface by
 /// design 0025 §7): rendered as inert text, never as markup a renderer could
 /// interpret.
-fn escape_xml(s: &str) -> String {
+pub(crate) fn escape_xml(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '&' => "&amp;".to_owned(),
@@ -189,10 +189,10 @@ fn escape_xml(s: &str) -> String {
 /// Truncates a name/symbol to a length the card's fixed-width text region
 /// can hold, so an attacker-controlled launcher-chosen name cannot overflow
 /// the card (it can still be ugly text, never markup or overflow).
-const MAX_NAME_CHARS: usize = 40;
-const MAX_SYMBOL_CHARS: usize = 12;
+pub(crate) const MAX_NAME_CHARS: usize = 40;
+pub(crate) const MAX_SYMBOL_CHARS: usize = 12;
 
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_owned();
     }
