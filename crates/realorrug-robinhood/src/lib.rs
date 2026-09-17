@@ -577,7 +577,9 @@ impl Rpc {
     /// 2026-09-17 on this chain), so one token's own launch event, or its own
     /// transfers until it is busy, fit in a single answer. A capped answer is
     /// the endpoint's error and reaches the caller as one -- never as a short
-    /// list that reads as complete.
+    /// list that reads as complete. A caller that expects to cross the cap
+    /// (a busy token's `Transfer` history) should walk [`Rpc::logs_range`]
+    /// over a bounded window instead.
     ///
     /// # Errors
     ///
@@ -593,12 +595,51 @@ impl Rpc {
                 "topics": topics,
             }]),
         )?;
-        result
-            .as_array()
-            .ok_or("eth_getLogs returned no list")?
-            .iter()
-            .map(|log| Log::from_json(log).map_err(|e| format!("log: {e}")))
-            .collect()
+        parse_logs(&result)
+    }
+
+    /// Every log `address` emitted whose leading topics match `topics`,
+    /// between `from_block` and `to_block` inclusive.
+    ///
+    /// This is the same call [`Rpc::logs`] makes with an explicit range
+    /// instead of genesis-to-latest, so that a caller that has already hit
+    /// the provider's result-count cap (docs/research/robinhood-trader-signals.md
+    /// §0, reproduced live 2026-09-17: `"logs matched by query exceeds limit
+    /// of 10000"`) can retry a narrower window and page through a busy
+    /// token's history a range at a time. [`LogsError::TooManyResults`] is
+    /// the signal to halve the window and retry, not to give up: the cap is
+    /// on the answer's size, and a range with fewer logs in it answers fine.
+    ///
+    /// # Errors
+    ///
+    /// [`LogsError`]: the provider's result-count cap distinguished from
+    /// every other failure, since only the cap has a defined recovery.
+    pub fn logs_range(
+        &self,
+        address: &Address,
+        topics: &[Hash32],
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>, LogsError> {
+        let topics: Vec<String> = topics.iter().map(ToString::to_string).collect();
+        let result = self
+            .call(
+                "eth_getLogs",
+                &serde_json::json!([{
+                    "address": address.to_string(),
+                    "fromBlock": format!("{from_block:#x}"),
+                    "toBlock": format!("{to_block:#x}"),
+                    "topics": topics,
+                }]),
+            )
+            .map_err(|e| {
+                if is_log_limit_error(&e) {
+                    LogsError::TooManyResults
+                } else {
+                    LogsError::Other(e)
+                }
+            })?;
+        parse_logs(&result).map_err(LogsError::Other)
     }
 
     /// A block's number and its timestamp in seconds: block `number`, or the
@@ -768,6 +809,53 @@ impl Rpc {
             .map(Some)
             .map_err(|e| format!("transaction: {e}"))
     }
+}
+
+/// A JSON-RPC log array into parsed [`Log`]s.
+///
+/// Shared by [`Rpc::logs`] and [`Rpc::logs_range`] so the two calls parse the
+/// same shape the same way; only the request they send differs.
+fn parse_logs(result: &serde_json::Value) -> Result<Vec<Log>, String> {
+    result
+        .as_array()
+        .ok_or("eth_getLogs returned no list")?
+        .iter()
+        .map(|log| Log::from_json(log).map_err(|e| format!("log: {e}")))
+        .collect()
+}
+
+/// Why [`Rpc::logs_range`] failed.
+///
+/// [`LogsError::TooManyResults`] is split out from every other failure
+/// because it is the only one with a defined recovery: halve the window and
+/// retry. Folding it into a plain `String` like the rest of this crate's
+/// errors would force a caller to pattern-match on error text to find that
+/// one case, which is exactly the kind of brittle string-sniffing this type
+/// exists to avoid at the boundary where it matters.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum LogsError {
+    /// The provider's result-count cap fired (measured 2026-09-17 on this
+    /// chain: `"logs matched by query exceeds limit of 10000"`,
+    /// docs/research/robinhood-trader-signals.md §0). Not a block-range
+    /// cap -- the same range with fewer logs in it will answer.
+    #[error("logs matched by query exceeds limit")]
+    TooManyResults,
+    /// Anything else: transport, the endpoint's own non-limit error, or a
+    /// log that did not parse.
+    #[error("{0}")]
+    Other(String),
+}
+
+/// Whether `message` is the provider's `eth_getLogs` result-count cap.
+///
+/// Matched on the stable middle of the message -- "logs matched by query
+/// exceeds limit" -- rather than the full sentence, so a provider that
+/// phrases the number differently (a different cap, or a differently
+/// pluralized count) still trips this. Alchemy, the endpoint this was
+/// reproduced against, is quoted verbatim in the doc comment above; this
+/// check is deliberately looser than that exact string.
+fn is_log_limit_error(message: &str) -> bool {
+    message.contains("logs matched by query exceeds limit")
 }
 
 #[cfg(test)]

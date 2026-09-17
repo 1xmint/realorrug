@@ -142,6 +142,18 @@ impl Budget {
         self.calls_made
     }
 
+    /// How many calls remain, right now, for whoever asks.
+    ///
+    /// Lets a read that can burn an unbounded number of calls on its own --
+    /// the Robinhood holder-log paging in `realorrug-onchain::robinhood` is
+    /// the first of these -- size its own inner cap from what today's budget
+    /// actually has left, rather than from a constant that ignores how much
+    /// the calls before it already spent.
+    #[must_use]
+    pub const fn calls_left(&self) -> u32 {
+        self.calls_left
+    }
+
     /// How long the read has been running.
     #[must_use]
     pub fn elapsed(&self) -> Duration {
