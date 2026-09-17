@@ -66,6 +66,18 @@ pub struct Entry {
     /// `None` means the model's reply was used. Anything else is the early
     /// warning that the voice pass is drifting.
     pub fellback: Option<String>,
+    /// The model's own text, when a check refused it and the template shipped.
+    ///
+    /// `fellback` says a draft was thrown away; without this, nothing says
+    /// *what* was thrown away. On 2026-09-17 the box held one Robinhood reply,
+    /// refused by `check_required_canttell`, and the refused text existed
+    /// nowhere -- not here, not in the journal -- so why the voice missed could
+    /// only be guessed at. `None` on every line written before 2026-09-17, and
+    /// on any fallback where no readable draft existed (no provider, no
+    /// contact, an answer that cleaned away to nothing): absent, which is not
+    /// the same as an empty draft.
+    #[serde(default)]
+    pub refused: Option<String>,
     /// The published reply's id, when one was actually sent.
     ///
     /// `None` for a dry run or a failed post. Distinguishing "we decided this"
@@ -251,6 +263,7 @@ mod tests {
             fact_sheet: "recipients: 6\n".to_owned(),
             reply: "Six token accounts.".to_owned(),
             fellback: None,
+            refused: None,
             signals: None,
             pointed_at: None,
             level: None,

@@ -168,6 +168,18 @@ pub struct Reply {
     /// unreadable one was billed — so a caller re-deriving the mapping from the
     /// fallback reason gets that case wrong, in the direction that overspends.
     pub billed: Billed,
+    /// The model's own text, when a check refused it and the template shipped
+    /// instead.
+    ///
+    /// Measured on the box, 2026-09-17: the one Robinhood reply the bot had
+    /// sent fell back with `Forbidden`, which means the model answered and
+    /// this pass threw the answer away -- and nothing anywhere kept it. The
+    /// operator could see *that* a draft was refused and never *what* was
+    /// refused, so the only way to learn why the voice keeps missing was to
+    /// guess. Kept for `Forbidden` and `Fabricated`, the two refusals where a
+    /// readable draft existed; `Empty` cleaned away to nothing and has no
+    /// text worth keeping, and the other two reasons never produced one.
+    pub refused: Option<String>,
 }
 
 impl Reply {
@@ -191,6 +203,7 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
             text: fallback,
             fellback: Some(Fellback::NoProvider),
             billed: Billed::NoCall,
+            refused: None,
         };
     };
 
@@ -213,6 +226,7 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
                 text: fallback,
                 fellback: Some(Fellback::Unreachable(e.to_string())),
                 billed,
+                refused: None,
             };
         }
     };
@@ -233,6 +247,7 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
             text: fallback,
             fellback: Some(Fellback::Empty),
             billed,
+            refused: None,
         };
     }
 
@@ -273,6 +288,7 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
             text: fallback,
             fellback: Some(Fellback::Forbidden(violations)),
             billed,
+            refused: Some(text),
         };
     }
     // The second lock. Free text has no construction that guarantees this the
@@ -285,6 +301,7 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
             text: fallback,
             fellback: Some(Fellback::Fabricated(fabricated)),
             billed,
+            refused: Some(text),
         };
     }
 
@@ -292,6 +309,7 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
         text,
         fellback: None,
         billed,
+        refused: None,
     }
 }
 
@@ -799,6 +817,48 @@ mod tests {
         assert!(reply.is_template());
         assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
         assert!(!reply.text.contains("scammer"));
+    }
+
+    #[test]
+    fn a_refused_draft_is_kept_so_an_operator_can_read_what_the_model_wrote() {
+        // On 2026-09-17 the box held one Robinhood reply. It fell back with
+        // `Forbidden`, meaning the model answered and this pass binned the
+        // answer -- and the answer existed nowhere afterwards, so why the
+        // voice missed could only be guessed at. `fellback` says a draft was
+        // refused; without this field nothing says what it was.
+        let reply = write(
+            &sheet(),
+            Some(&Says("11 accounts at birth. The creator is a scammer.")),
+        );
+        assert!(reply.is_template());
+        assert_eq!(
+            reply.refused.as_deref(),
+            Some("11 accounts at birth. The creator is a scammer."),
+            "the refused draft is kept whole"
+        );
+        // And it is not what ships.
+        assert!(!reply.text.contains("scammer"));
+    }
+
+    #[test]
+    fn a_reply_that_was_published_keeps_no_refused_draft() {
+        // `refused` is the record of something thrown away. A reply nobody
+        // threw away has none, so an operator scanning for refusals never
+        // reads a published reply as one.
+        // The same draft `a_clean_free_text_answer_ships_exactly_as_written`
+        // uses, because this needs a reply that survives every check.
+        let good = "Eleven accounts held it at birth, against an 850 bps round trip --                     thin either way, about 7.1 hours old, read at slot 444007820.";
+        let reply = write(&sheet(), Some(&Says(good)));
+        assert!(!reply.is_template(), "{:?}", reply.fellback);
+        assert_eq!(reply.refused, None);
+    }
+
+    #[test]
+    fn a_fallback_with_no_draft_behind_it_keeps_nothing() {
+        // No provider means no draft existed. Recording an empty string here
+        // would say the model wrote nothing, which is a different claim from
+        // the model never having been asked.
+        assert_eq!(write(&sheet(), None).refused, None);
     }
 
     #[test]

@@ -412,6 +412,7 @@ pub fn publish_under(
                 Err(_) => post.text.clone(),
             },
             fellback: None,
+            refused: None,
             reply_id: None,
             signals: None,
             pointed_at: None,

@@ -906,6 +906,38 @@ fn topic(phrase: &str) -> &str {
     phrase.strip_suffix(UNKNOWN_SUFFIX).unwrap_or(phrase)
 }
 
+/// The words a reply must mention to have named `phrase`'s topic.
+///
+/// Every phrase `sheet::phrase_for` builds opens with "the" -- "the holders",
+/// "the bonding curve", "the creator's history" -- and until 2026-09-17 the
+/// check below asked whether the reply *contained that whole string*. So a
+/// reply had to write "the holders", and "holders can't be read" failed a
+/// rule it plainly satisfies. Measured on the box that day: the one Robinhood
+/// reply the bot had sent fell back for exactly this violation, on exactly
+/// this sheet entry.
+///
+/// Matching word by word, with the article dropped and a possessive reduced
+/// to its noun, asks what the rule actually means: did the reply name the
+/// thing that could not be read. It is still a real gate -- every content
+/// word must appear -- and it no longer turns on grammar the model was never
+/// told to copy.
+///
+/// It does **not** stem: "holder" does not satisfy "holders". Stemming trades
+/// a false refusal for a false pass, and on a check whose whole job is to
+/// stop a bare "can't tell" reaching a reader, the false refusal is the safer
+/// one. It costs a fallback; the other costs the rule.
+fn topic_words(phrase: &str) -> Vec<String> {
+    topic(phrase)
+        .split_whitespace()
+        .filter(|w| !matches!(w.to_lowercase().as_str(), "the" | "a" | "an" | "of"))
+        .map(|w| {
+            let w = w.to_lowercase();
+            w.strip_suffix("'s").map_or(w.clone(), str::to_owned)
+        })
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
 fn check_required_canttell(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violation> {
     if sheet.unknown.is_empty() {
         // Dead in production: `verdict::level` returns `CantTell` exactly
@@ -918,10 +950,14 @@ fn check_required_canttell(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<V
         return Vec::new();
     }
     let lower = text.to_lowercase();
-    let named = sheet
-        .unknown
-        .iter()
-        .any(|miss| lower.contains(&topic(miss).to_lowercase()));
+    let named = sheet.unknown.iter().any(|miss| {
+        let words = topic_words(miss);
+        // An empty word list would make every reply pass, which is the one
+        // answer this check may never give by accident. No phrase
+        // `sheet::phrase_for` builds reduces to nothing, so this is a guard
+        // against a future phrase, not a case seen today.
+        !words.is_empty() && words.iter().all(|w| lower.contains(w.as_str()))
+    });
     if named {
         Vec::new()
     } else {
@@ -1786,6 +1822,61 @@ mod tests {
                 &sheet
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_canttell_reply_naming_the_topic_without_the_article_passes() {
+        // The live failure of 2026-09-17. `sheet::phrase_for` writes every
+        // unknown as "the X could not be read", and the check used to ask
+        // whether the reply contained "the holders" as one string. A reply
+        // that names the holders in ordinary English does not carry the
+        // article, so the rule refused a reply that satisfied it, the
+        // template shipped, and the reader got the fact dump Josh complained
+        // about.
+        let sheet = required_sheet(vec!["the holders could not be read".to_owned()]);
+        for reply in [
+            "Holders couldn't be read, so this is a shrug for now.",
+            "No read on holders here.",
+            "holders: unreadable at this block.",
+        ] {
+            assert!(
+                check_required(reply, Level::CantTell, &sheet).is_empty(),
+                "{reply}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_canttell_reply_naming_a_possessive_topic_without_its_apostrophe_passes() {
+        // "the creator's history" needs both words, not the punctuation. A
+        // reply writing "creator history" names the same thing.
+        let sheet = required_sheet(vec!["the creator's history could not be read".to_owned()]);
+        assert!(
+            check_required(
+                "Couldn't pull the creator history, so nothing to say there.",
+                Level::CantTell,
+                &sheet
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_canttell_reply_naming_only_half_a_topic_is_still_refused() {
+        // Dropping the article must not drop the gate. "the creator's
+        // history" takes both words: a reply that says "creator" and never
+        // says what about the creator could not be read has not named the
+        // thing, and this is the loosening's own boundary.
+        let sheet = required_sheet(vec!["the creator's history could not be read".to_owned()]);
+        assert_eq!(
+            check_required(
+                "The creator is around somewhere, but this is a shrug.",
+                Level::CantTell,
+                &sheet
+            )
+            .len(),
+            1
         );
     }
 
