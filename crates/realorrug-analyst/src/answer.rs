@@ -363,6 +363,7 @@ pub fn answer(
             fact_sheet: sheet.render(),
             reply: reply.text,
             fellback: reply.fellback.as_ref().map(|f| format!("{f:?}")),
+            refused: reply.refused,
             reply_id: None,
             // Counted where the sheet was built, carried here so the week-close
             // job scores from the record and never re-reads the chain.

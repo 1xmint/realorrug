@@ -1151,6 +1151,7 @@ mod tests {
             fact_sheet: String::new(),
             reply: "said something".to_owned(),
             fellback: None,
+            refused: None,
             reply_id: reply.map(ToOwned::to_owned),
             signals: Some(Vec::new()),
             pointed_at: None,

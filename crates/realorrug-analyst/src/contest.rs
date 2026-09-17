@@ -1502,6 +1502,7 @@ mod tests {
             fact_sheet: String::new(),
             reply: "measured".to_owned(),
             fellback: None,
+            refused: None,
             reply_id: reply.map(str::to_owned),
             signals: signals
                 .map(|n| vec![realorrug_roast::sheet::Signal::CreatorBoughtOwnLaunch; n]),
@@ -1865,6 +1866,7 @@ mod tests {
             fact_sheet: String::new(),
             reply: String::new(),
             fellback: None,
+            refused: None,
             reply_id: Some("r1".to_owned()),
             signals: None,
             pointed_at: None,

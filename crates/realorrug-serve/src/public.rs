@@ -819,6 +819,7 @@ mod tests {
             fact_sheet: String::new(),
             reply: "measured".to_owned(),
             fellback: None,
+            refused: None,
             signals: None,
             pointed_at: None,
             level: None,

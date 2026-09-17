@@ -451,6 +451,18 @@ reserve read," not a bare "can't tell." That is enforced the same way §1
 makes a miss a required line: the sheet carries the `unknown` list before
 the model can be asked to say it.
 
+**What counts as saying it, measured 2026-09-17.** The check first asked for
+the sheet's phrase minus " could not be read" as one literal run of
+characters, so "the holders" matched and "holders couldn't be read" did not.
+That refused the only Robinhood reply the bot had written. It now asks for
+every content word of the phrase to appear somewhere in the reply, dropping
+"the", "a", "an", "of" and a trailing "'s" -- so a reply may reorder the
+words and drop the article, but a reply that names half the topic
+("the creator", when the sheet missed the creator's history) is still
+refused. It deliberately does not stem: matching "holder" to "holders" would
+also match "holding", and a check that lets the wrong sentence through is
+worse here than one that makes the model say the plain noun.
+
 `NothingUglyYet` must account for how old the token is, and **there are two
 ways to do that, because the chain gives us two different things.** Both are
 enforced by `forbidden::check_required_age`, which reads the level and the
