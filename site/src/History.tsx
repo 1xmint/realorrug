@@ -6,9 +6,9 @@
 //! Every other page is a claim about the present. This one is the record, and
 //! it is the only place a stranger can establish that the thing has ever
 //! actually paid anybody. So nothing here is a bare assertion: the winning
-//! reply is a link, the claim is a link, the payment is a transaction
-//! signature on Solscan, and the rule the week was scored under is printed
-//! beside the week rather than looked up from today's rule.
+//! reply is a link, the claim is a link, the payment is a transaction on
+//! Robinhood Chain's Blockscout, and the rule the week was scored under is
+//! printed beside the week rather than looked up from today's rule.
 //!
 //! # "Not paid" is four different facts and the page says which
 //!
@@ -28,14 +28,13 @@
 import { useEffect, useState } from "react";
 
 import {
-  sol,
   weeks as fetchWeeks,
   type Payout,
   type Claim,
   type Week,
   type Weeks,
 } from "./api";
-import { measuredAgo, solscanTx } from "./honesty";
+import { eth, explorerTx, measuredAgo } from "./honesty";
 import { useTitle } from "./title";
 import { Heading, Measured, Nothing, Section, Summoner } from "./ui";
 
@@ -80,19 +79,19 @@ function Out({
  */
 function Paid({ payout }: { payout: Payout }) {
   if (payout.state === "paid") {
-    const href = payout.signature ? solscanTx(payout.signature) : null;
+    const href = payout.signature ? explorerTx(payout.signature) : null;
     return (
       <div>
         <div className="tnum text-[var(--color-text)]">
-          {sol(payout.lamports ?? 0)} SOL
+          {eth(payout.lamports ?? 0)} ETH
         </div>
         <div className="mt-1 font-mono text-xs">
           {payout.signature ? (
             <Out href={href}>
-              {href ? `${payout.signature.slice(0, 12)}…` : "not a signature"}
+              {href ? `${payout.signature.slice(0, 12)}…` : "not a transaction"}
             </Out>
           ) : (
-            <span className="text-[var(--color-faint)]">no signature</span>
+            <span className="text-[var(--color-faint)]">no transaction</span>
           )}
         </div>
       </div>

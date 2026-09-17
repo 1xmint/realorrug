@@ -5,7 +5,10 @@
 //!
 //! There is no committed fixture behind these calls (there was, for the
 //! Solana/pump.fun population figures `Home.tsx` no longer shows — see that
-//! file's module comment). Every function here either returns a live read or
+//! file's module comment). `sol()` below is unused now that the token is on
+//! Robinhood Chain and paid in ETH; `Pool.tsx` and `History.tsx` format their
+//! own wei figures instead of adding a chain-specific helper here. Every
+//! function here either returns a live read or
 //! the same empty shape its caller renders as "nothing to show yet", and the
 //! page says which. That is the opposite of the usual pattern, where a fetch
 //! failure shows a spinner forever or a zero. Both of those have shipped in
@@ -120,7 +123,7 @@ export interface Voided {
  *
  * `vault` is `null` until a token exists. That is a different state from a
  * balance of zero and the page renders it differently: a pool reading
- * `0.00 SOL` looks like a contest nobody won.
+ * `0.00 ETH` looks like a contest nobody won.
  */
 export interface Pool {
   /** The creator vault address, once there is one. */

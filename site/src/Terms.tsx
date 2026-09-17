@@ -15,8 +15,8 @@
 //! # Everything else here is already true elsewhere
 //!
 //! The refusals are not new promises invented for a legal page. "Not financial
-//! advice", "never predicts a price", "the operator holds zero tokens",
-//! "entry is free" and "corrections are published in the same place as the
+//! advice", "never predicts a price", "the bot's own token is judged like
+//! any other", "entry is free" and "corrections are published in the same place as the
 //! original" are the product's own rules — ADR 0013 and `forbidden.rs` enforce
 //! them on the bot, `/about` and `/token` state them, and this page restates
 //! them in the register a reader expects to find them in. A terms page that
@@ -57,11 +57,11 @@ export function Terms() {
 
         <Block title="What the service does">
           <p>
-            It reads public Solana chain data — token launches, the accounts
-            paid in a launch block, bonding curves, what a creator has launched
-            before — and reports what it measured, with the moment it measured
-            it. Every figure is published with a date because every figure is
-            expected to move.
+            It reads public chain data, on Robinhood Chain and on Solana —
+            token launches, the accounts paid in a launch block, bonding
+            curves, what a creator has launched before — and reports what it
+            measured, with the moment it measured it. Every figure is
+            published with a date because every figure is expected to move.
           </p>
           <p>
             It does not predict prices. It does not rank coins as investments,
@@ -145,9 +145,11 @@ export function Terms() {
           <p>
             The token is a badge. It is not a share of anything, it grants no
             vote, it buys no feature, and it entitles you to no part of any
-            revenue. The operator holds none of it. A prize is paid to whoever
-            the published rule ranks first and who claims within the published
-            window, and a week can be voided with the reason stated in public.
+            revenue. The bot's own wallet may hold it, openly, at a published
+            address — <Here href="/tokenomics">the tokenomics page</Here> states
+            what it holds and why. A prize is paid to whoever the published
+            rule ranks first and who claims within the published window, and a
+            week can be voided with the reason stated in public.
           </p>
         </Block>
 
@@ -161,9 +163,9 @@ export function Terms() {
 
         <Block title="Links to other sites">
           <p>
-            Links to X, to Solscan and to the repository lead to services this
-            operator does not run and cannot vouch for. Their terms govern what
-            happens once you arrive.
+            Links to X, to a chain explorer and to the repository lead to
+            services this operator does not run and cannot vouch for. Their
+            terms govern what happens once you arrive.
           </p>
         </Block>
 

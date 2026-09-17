@@ -61,18 +61,17 @@ describe("the card that unfurls when the link is shared", () => {
 });
 
 describe("the fee ladder the tokenomics page renders", () => {
-  // The rows are checked against the chain by radar-pumpfun. What is checked
-  // here is only that the file this page imports has the shape the page walks,
-  // so a truncated fixture fails as a test rather than as an empty table.
-  it("has every row the page needs, with a creator share on each", () => {
-    expect(ladder.after_graduation.rows.length).toBe(25);
-    for (const row of ladder.after_graduation.rows) {
-      expect(typeof row.from_sol).toBe("number");
-      expect(typeof row.creator_bps).toBe("number");
-      expect(typeof row.protocol_bps).toBe("number");
-      expect(typeof row.lp_bps).toBe("number");
-    }
-    expect(ladder.curve.creator_bps).toBe(30);
+  // Robinhood Chain's Pons v2 curve is a flat rate, not pump.fun's
+  // market-cap-keyed table, and there is no post-graduation number to check —
+  // research 0040 found the graduated pool's fee split was never decoded.
+  // What is checked here is that the fixture keeps the shape the page reads,
+  // so a truncated fixture fails as a test rather than as an empty page.
+  it("has the curve's flat fee, and admits graduation is not established", () => {
+    expect(ladder.curve.base_fee_bps).toBe(100);
+    expect(ladder.curve.creator_base_share_bps).toBe(7000);
+    expect(ladder.curve.protocol_share_bps).toBe(3000);
+    expect(ladder.curve.creator_tax_ceiling_bps).toBe(1000);
+    expect(ladder.after_graduation.established).toBe(false);
   });
 });
 

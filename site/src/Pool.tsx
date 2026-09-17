@@ -1,37 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The prize pool.
 //!
-//! # `0.00 SOL` would be a lie, and it is the obvious thing to render
+//! # `0.0000 ETH` would be a lie, and it is the obvious thing to render
 //!
-//! There is no token, so there is no creator vault, so there is no balance. A
-//! page showing `0.00 SOL` says a pool exists and is empty — which reads as a
-//! contest nobody won, or one that pays nothing. Both are worse than the truth
-//! and both are what a reader would take away.
+//! There is no token, so there is no creator fee escrow, so there is no
+//! balance. A page showing `0.0000 ETH` says a pool exists and is empty —
+//! which reads as a contest nobody won, or one that pays nothing. Both are
+//! worse than the truth and both are what a reader would take away.
 //!
 //! Rule 9 of `AGENTS.md`: absent is not zero, and this is the direction that
 //! flatters. `lamports === null` and `lamports === 0` render differently here,
-//! and a test asserts the first case does not contain "0.00".
+//! and a test asserts the first case does not contain "0.0000".
 //!
 //! # The economics are stated, not implied
 //!
-//! ADR 0013's constraints are the product, not the small print: no dev buy, no
-//! allocation, the operator holds zero tokens, and the only cash flow is
-//! pump.fun's creator fee, all of which becomes the prize: 30 bps on the
-//! bonding curve, and after graduation the chain's own ladder by market cap,
-//! 30 / 95 / ... / 5 (research 0028, 2026-09-05). At $10k of weekly volume on
-//! the curve that is about $30. Saying so is the whole difference between
-//! this and the thing it is built to expose.
-//!
-//! 30 bps is 0.30%, and 0.30% of $10,000 is $30. This file said $3 until
-//! 2026-09-05 -- the rate read as 0.03% -- and so did three documents; design
-//! 0009 §1 records the correction. The direction was the one that understates
-//! the token's own economics, which is the safe direction and still wrong.
+//! ADR 0029 supersedes ADR 0013 constraints 1 and 2: there is one small dev
+//! buy, disclosed on `/tokenomics` from launch day, and the bot's wallet may
+//! hold the token openly. What is unchanged is the cash flow: the only money
+//! that reaches the bot's wallet is the token's creator fee, on Robinhood
+//! Chain's Pons v2 curve — a 70 bps base share plus a creator tax of up to
+//! 1,000 bps, both in ETH — and all of it becomes the prize (`fee-ladder.json`,
+//! read from the launchpad's own factory; see `/tokenomics#fees` for the
+//! figures and their date). There is no single rate to multiply by volume the
+//! way pump.fun's fixed 30 bps had: the tax is chosen per launch, so this page
+//! states the two components rather than one invented dollar figure.
 
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 
-import { pool as fetchPool, sol, type Pool as Data } from "./api";
-import { measuredAgo, solscanTx } from "./honesty";
+import { pool as fetchPool, type Pool as Data } from "./api";
+import { eth, explorerAccount, explorerTx, measuredAgo } from "./honesty";
 import { useTitle } from "./title";
 import { Card, Heading, Measured, Nothing, Section, Steps, Summoner } from "./ui";
 
@@ -42,16 +40,20 @@ function Economics() {
         Where the money comes from
       </h3>
       <p className="mt-3 text-sm text-[var(--color-dim)]">
-        pump.fun pays a creator fee of <strong>30 basis points of volume</strong>{" "}
-        on the bonding curve to whoever launched a coin. After graduation the
-        fee follows a schedule the venue publishes on chain, by market cap: 30
-        basis points below 420 SOL, 95 from there to 1,470 SOL, then stepping
-        down to 5 above 98,240 SOL. That fee is the only money in this
-        contest, and <strong>100% of it becomes the prize</strong>.
+        While the coin trades on its Robinhood Chain bonding curve, the
+        creator gets <strong>70 basis points of volume</strong> as a base
+        share, plus a tax the launcher sets once at launch, from 0 up to{" "}
+        <strong>1,000 basis points</strong>, paid in full. Both are in ETH.
+        That fee is the only money in this contest, and{" "}
+        <strong>100% of it becomes the prize</strong>.
       </p>
       <ul className="mt-4 space-y-2 text-sm text-[var(--color-dim)]">
-        <li>· No dev buy. No allocation. No team or treasury tokens.</li>
-        <li>· The operator holds zero tokens, and always will.</li>
+        <li>
+          · One small dev buy, in the launch block, disclosed with its size,
+          wallet and transaction on <Link href="/tokenomics">/tokenomics</Link>{" "}
+          from launch day.
+        </li>
+        <li>· The bot's wallet may hold the token; its address is public.</li>
         <li>· The bot never mentions the token's price. Not once.</li>
         <li>
           · It answers questions about its own token on exactly the same rule as
@@ -59,11 +61,14 @@ function Economics() {
         </li>
       </ul>
       <p className="mt-4 text-sm text-[var(--color-faint)]">
-        So the prize scales with volume and nothing else. At $10,000 of weekly
-        volume on the curve it is roughly <span className="tnum">$30</span>; at
-        $100,000, roughly <span className="tnum">$300</span>. That is small, and saying so
-        is the point — a memecoin that lies about its economics is the thing this
-        bot exists to expose.
+        So the prize scales with volume, plus whatever tax the launch set. The
+        base share alone puts a floor under it: 70 basis points of $10,000 of
+        weekly volume is roughly <span className="tnum">$70</span>; of
+        $100,000, roughly <span className="tnum">$700</span>. The tax adds
+        more on top, up to 10% of volume — see the fee ladder for the number a
+        specific launch chose. That floor is still small, and saying so is the
+        point — a memecoin that lies about its economics is the thing this bot
+        exists to expose.
       </p>
       <p className="mt-4 text-sm">
         <Link
@@ -94,7 +99,7 @@ function Week() {
               what: "The account posts the result and a claim prompt under the winning reply.",
             },
             {
-              what: "The winner replies with a wallet address, and the pool is paid in one transaction.",
+              what: "The winner replies with a Robinhood Chain wallet address, and the pool is paid in one transaction.",
               when: "Daily, 01:00 UTC",
             },
           ]}
@@ -127,15 +132,15 @@ function Winners({ data }: { data: Data }) {
                   <Summoner id={w.summoner} handle={w.handle} />
                 </td>
                 <td className="tnum py-3 pr-4 text-[var(--color-text)]">
-                  {sol(w.lamports)} SOL
+                  {eth(w.lamports)} ETH
                 </td>
                 <td className="py-3">
-                  {/* The signature, always. A prize nobody can verify was paid
-                      is a claim, and this page is built so that every claim on
-                      it can be checked by a stranger. */}
-                  {solscanTx(w.signature) ? (
+                  {/* The transaction, always. A prize nobody can verify was
+                      paid is a claim, and this page is built so that every
+                      claim on it can be checked by a stranger. */}
+                  {explorerTx(w.signature) ? (
                     <a
-                      href={solscanTx(w.signature) ?? undefined}
+                      href={explorerTx(w.signature) ?? undefined}
                       rel="noopener noreferrer nofollow"
                       target="_blank"
                       className="font-mono text-xs text-[var(--color-signal)] underline underline-offset-4"
@@ -202,15 +207,15 @@ export function Pool() {
           ) : (
             <>
               <div className="tnum text-5xl font-semibold text-[var(--color-signal)] sm:text-6xl">
-                {sol(data.lamports ?? 0)} SOL
+                {eth(data.lamports ?? 0)} ETH
               </div>
               <p className="mt-3 text-[var(--color-dim)]">
                 collected this week, and going to one person on Monday.
               </p>
-              {data.vault && (
+              {data.vault && explorerAccount(data.vault) && (
                 <p className="mt-4 font-mono text-xs break-all text-[var(--color-faint)]">
                   <a
-                    href={`https://solscan.io/account/${data.vault}`}
+                    href={explorerAccount(data.vault) ?? undefined}
                     rel="noopener noreferrer nofollow"
                     target="_blank"
                     className="underline underline-offset-4"
@@ -242,7 +247,7 @@ export function Pool() {
         </div>
       </div>
       <p className="mt-10 max-w-2xl text-xs text-[var(--color-faint)]">
-        Prizes are shown in SOL because that is the unit the fee is paid in. A
+        Prizes are shown in ETH because that is the unit the fee is paid in. A
         dollar figure would need a price feed, with its own source and its own
         timestamp, and this page does not have one.
       </p>

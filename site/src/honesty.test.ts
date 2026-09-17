@@ -9,6 +9,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   count,
+  eth,
+  evmShaped,
+  explorerAccount,
+  explorerTx,
   measuredAgo,
   handleHref,
   mintShaped,
@@ -132,5 +136,37 @@ describe("links", () => {
     expect(url).not.toBe(null);
     expect(url).toContain("%40");
     expect(url).not.toContain("@");
+  });
+
+  it("refuses a transaction hash the wrong length or shape for Robinhood Chain", () => {
+    // The token, the bot's wallet and the weekly payout are all Robinhood
+    // Chain now (ADR 0029, ADR 0025) -- these are the links Pool.tsx and
+    // History.tsx actually render.
+    const good = `0x${"a".repeat(64)}`;
+    expect(explorerTx(good)).toBe(`https://robinhoodchain.blockscout.com/tx/${good}`);
+    expect(explorerTx("a".repeat(64))).toBe(null);
+    expect(explorerTx(`0x${"a".repeat(63)}`)).toBe(null);
+    expect(explorerTx(`0x${"a".repeat(65)}`)).toBe(null);
+    expect(explorerTx(`0x${"g".repeat(64)}`)).toBe(null);
+  });
+
+  it("refuses an account address the wrong length or shape for Robinhood Chain", () => {
+    const good = `0x${"b".repeat(40)}`;
+    expect(evmShaped(good)).toBe(true);
+    expect(explorerAccount(good)).toBe(
+      `https://robinhoodchain.blockscout.com/address/${good}`,
+    );
+    expect(explorerAccount(`0x${"b".repeat(39)}`)).toBe(null);
+    expect(explorerAccount("not an address")).toBe(null);
+  });
+});
+
+describe("eth", () => {
+  it("formats wei as ETH to four decimal places", () => {
+    // wei is 10^18, not Solana's 10^9 lamports -- a fixture written in the
+    // old unit would render as a figure nine orders of magnitude too small.
+    expect(eth(3_000_000_000_000_000_000)).toBe("3.0000");
+    expect(eth(0)).toBe("0.0000");
+    expect(eth(1_500_000_000_000_000)).toBe("0.0015");
   });
 });

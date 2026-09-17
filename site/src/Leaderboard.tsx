@@ -113,14 +113,15 @@ function HowToClaim() {
             {
               what: (
                 <>
-                  Reply to <strong>that post</strong> with a Solana wallet
-                  address, from the same account that asked the question.
+                  Reply to <strong>that post</strong> with a Robinhood Chain
+                  wallet address, from the same account that asked the
+                  question.
                 </>
               ),
               when: "Within seven days",
             },
             {
-              what: "The payout runs once a day: one transaction, the whole pool above the vault's rent reserve, signature published here.",
+              what: "The payout runs once a day: the whole pool, in one public transaction the payout wallet signs and nothing else.",
               when: "Daily, 01:00 UTC",
             },
             {
