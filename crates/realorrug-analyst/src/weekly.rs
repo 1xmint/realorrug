@@ -27,6 +27,7 @@
 use std::fmt::Write as _;
 
 use realorrug_contest::{Balance, Record, Vault};
+use realorrug_roast::fidelity::Authorised;
 use realorrug_roast::sheet::FactSheet;
 use realorrug_roast::voice::Reply;
 use realorrug_types::civil::{date_from_days, timestamp_from_seconds};
@@ -40,11 +41,21 @@ use crate::publish::{Publisher, Undeliverable};
 pub struct Post {
     /// What is said.
     pub text: String,
-    /// Every numeric value the text may contain.
-    pub authorised: Vec<f64>,
+    /// Every numeric value the text may contain, and what each is about.
+    ///
+    /// Carries a subject because a teardown post is about a token, where the
+    /// largest holder's figure and the creator's are different claims. The
+    /// weekly record's own numbers -- dates, scores, counts -- describe one
+    /// thing and are built with `Authorised::anywhere`.
+    pub authorised: Vec<Authorised>,
     /// What it was written from, recorded beside it: the record's JSON, or
     /// the fact sheet as the model saw it.
     pub source: String,
+}
+
+/// The week's own numbers, which describe one thing and need no subject.
+fn anywhere(values: Vec<f64>) -> Vec<Authorised> {
+    values.into_iter().map(Authorised::anywhere).collect()
 }
 
 /// Lamports in one SOL.
@@ -101,7 +112,7 @@ pub fn claim_prompt(record: &Record) -> Option<Post> {
     );
     Some(Post {
         text,
-        authorised,
+        authorised: anywhere(authorised),
         source: record.to_json().unwrap_or_default(),
     })
 }
@@ -190,7 +201,7 @@ pub fn summary(record: &Record, vault: Option<&Vault>) -> Post {
 
     Post {
         text,
-        authorised,
+        authorised: anywhere(authorised),
         source: record.to_json().unwrap_or_default(),
     }
 }
@@ -281,7 +292,7 @@ pub fn hunters(record: &Record, board: &[realorrug_contest::hunter::Placing]) ->
 
     Some(Post {
         text,
-        authorised,
+        authorised: anywhere(authorised),
         source: record.to_json().unwrap_or_default(),
     })
 }
@@ -769,7 +780,7 @@ mod tests {
             summary(&record(true), None),
             Post {
                 text: "The winning coin: six token accounts in the launch block.".to_owned(),
-                authorised: vec![6.0],
+                authorised: anywhere(vec![6.0]),
                 source: "sheet".to_owned(),
             },
         ];

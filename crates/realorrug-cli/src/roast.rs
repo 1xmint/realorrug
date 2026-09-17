@@ -190,9 +190,30 @@ fn why_it_fell_back(reply: &realorrug_roast::Reply) -> String {
         }
         Some(Fellback::Fabricated(f)) => {
             let mut s =
-                "(deterministic template: the model wrote a number nothing measured)\n".to_owned();
+                "(deterministic template: the model wrote a number the sheet does not license)\n"
+                    .to_owned();
             for fab in f {
-                let _ = writeln!(s, "    {} is not on the fact sheet", fab.literal);
+                // The two failures read differently and an operator acts on
+                // them differently: a number nothing measured means the model
+                // invented, and a number moved to another subject means it
+                // reasoned past its evidence -- which looks like a correct
+                // reply unless the line says so.
+                match fab.why {
+                    realorrug_roast::fidelity::Why::NotMeasured => {
+                        let _ = writeln!(s, "    {} is not on the fact sheet", fab.literal);
+                    }
+                    realorrug_roast::fidelity::Why::WrongSubject {
+                        measured,
+                        written_about,
+                    } => {
+                        let _ = writeln!(
+                            s,
+                            "    {} was measured about {measured:?}, written about \
+                             {written_about:?}",
+                            fab.literal
+                        );
+                    }
+                }
             }
             s
         }

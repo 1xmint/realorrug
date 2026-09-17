@@ -33,12 +33,143 @@
 //! That rule is itself tested, because a tolerance nobody checked is a hole
 //! nobody knows the size of.
 //!
+//! # A number belongs to the thing it was measured about
+//!
+//! Membership alone is not enough, and the hole it leaves is the sharpest one
+//! this module has had. A sheet that measured the largest holder at 41% put 41
+//! in the permitted set; a reply saying "the creator already dumped 41%" is
+//! then made entirely of permitted digits and is false. Worse, it is false in
+//! the direction that gets screenshotted, because the accusation lands on a
+//! person.
+//!
+//! So an authorised value carries the [`Subject`] it was measured about, and a
+//! sentence that names exactly one subject may only use numbers measured about
+//! that subject. A sentence naming none, or naming two, falls back to plain
+//! membership: the rule fires where it is unambiguous and stays out of the way
+//! everywhere else. See [ADR 0031](../../../docs/adr/0031-the-model-picks-the-story-and-the-evidence-licenses-the-joke.md).
+//!
 //! # What it cannot do
 //!
 //! It checks *numbers*, not claims. "The creator is a scammer" contains no
 //! numeral and passes here — [`crate::forbidden`] is what refuses that, and the
 //! two are separate because they fail for different reasons and a reader of
 //! either should not have to hold both in mind.
+//!
+//! The subject rule does not change that. "The biggest holder is the deployer"
+//! has no digit in it, is false whenever the biggest holder is a pool, and
+//! passes every check in this repository. ADR 0031 §"What the checks cannot do"
+//! records why the answer to that is measurement before it is a gate.
+
+use crate::clause::Kind;
+
+/// What a measured number is about.
+///
+/// Every fact on a sheet is tagged with one of these, derived from its
+/// [`Kind`]. The tag is what stops a real figure moving to the wrong actor.
+///
+/// Only four of these have words that name them in ordinary prose — see
+/// [`named_in`] — but every fact still gets a precise tag, because the tag's
+/// job is to be *refused* by a sentence naming somebody else. Tagging the
+/// launch block's transaction count as "about nothing in particular" would
+/// licence it inside "the creator sent 7 of them", which is the whole failure
+/// this exists to stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Subject {
+    /// The person or address that deployed the token, and their history.
+    Creator,
+    /// Who holds the supply now.
+    Holders,
+    /// The launch itself: the block, its recipients, its transactions.
+    Launch,
+    /// The launchpad, its population rates and its fees. Not this token.
+    Venue,
+    /// The pool: what can be traded and at what cost.
+    Liquidity,
+    /// The token as a thing: its age, whether it graduated.
+    Token,
+    /// Not measured about any one of the above, and citable in any sentence.
+    ///
+    /// The read point, the list of what could not be read, and the innocent
+    /// explanations. All three are Radar's own words about the sheet rather
+    /// than about a subject in it, and a reply is meant to be able to cite
+    /// them wherever they fit.
+    Anywhere,
+}
+
+impl Subject {
+    /// What a kind of measurement is about.
+    ///
+    /// Exhaustive on purpose, with no wildcard arm: a measurement added later
+    /// must be placed by the person adding it, and the compiler is a cheaper
+    /// reviewer than a wrong reply. A wildcard defaulting to [`Self::Anywhere`]
+    /// would make every future fact publishable about every actor, silently.
+    #[must_use]
+    pub fn of(kind: Kind) -> Self {
+        match kind {
+            Kind::CreatorLaunches
+            | Kind::CreatorMeasured
+            | Kind::CreatorOrganic
+            | Kind::CreatorInstant
+            | Kind::CreatorStillborn
+            | Kind::CreatorTransactions
+            // The creator's own spending, so a sentence about the creator may
+            // cite it and a sentence about holders may not.
+            | Kind::DevBuy
+            | Kind::DevBuyUnseen => Self::Creator,
+            Kind::Holders | Kind::LargestHolderShare => Self::Holders,
+            Kind::LaunchRecipients | Kind::LaunchTransactions => Self::Launch,
+            Kind::VenueUnmeasured
+            | Kind::VenueMeasured
+            | Kind::VenueGraduated
+            | Kind::VenueOrganic
+            | Kind::VenueInstant
+            | Kind::VenueStillborn
+            // A band is a slice of the venue's population, not a fact about
+            // this token, and a reply that cites a band rate as if it were
+            // this token's own number is the second-most-likely way to be
+            // wrong in public.
+            | Kind::BandUnavailable
+            | Kind::BandNeverGraduated
+            | Kind::BandOrganic
+            | Kind::BandInstant
+            | Kind::BandInstantProbability
+            | Kind::BandTimesBaseRate
+            | Kind::BaseInstant
+            | Kind::BaseGraduates
+            | Kind::VenueFee
+            | Kind::RoundTripKernel
+            | Kind::RoundTripBar
+            | Kind::CostBand => Self::Venue,
+            Kind::Capacity | Kind::CapacityNone | Kind::CapacityAfterGraduation => {
+                Self::Liquidity
+            }
+            Kind::Graduated | Kind::Age | Kind::SelfMintWithheld => Self::Token,
+        }
+    }
+}
+
+/// A number a reply may contain, and what it was measured about.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Authorised {
+    /// What the measurement was about.
+    pub subject: Subject,
+    /// The value.
+    pub value: f64,
+}
+
+impl Authorised {
+    /// A value with no subject, citable in any sentence.
+    ///
+    /// For callers whose numbers all describe one thing — the weekly record,
+    /// the bot's own bio — where a subject rule has nothing to separate.
+    #[must_use]
+    pub const fn anywhere(value: f64) -> Self {
+        Self {
+            subject: Subject::Anywhere,
+            value,
+        }
+    }
+}
 
 /// Why a reply was rejected.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +178,27 @@ pub struct Fabricated {
     pub literal: String,
     /// Its value.
     pub value: f64,
+    /// Which of the two ways it was wrong.
+    pub why: Why,
+}
+
+/// The two ways a number in a reply fails.
+///
+/// Separate because they mean different things about the model. A number
+/// nothing measured is the model inventing; a number moved to the wrong
+/// subject is the model reasoning past its evidence, which is the harder
+/// failure to notice and the one worth reading in a log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Why {
+    /// No fact on the sheet carries this value at all.
+    NotMeasured,
+    /// The sheet carries it, about something else.
+    WrongSubject {
+        /// What the sheet measured it about.
+        measured: Subject,
+        /// What the sentence it was written in was about.
+        written_about: Subject,
+    },
 }
 
 /// Checks a reply against the numbers a fact sheet authorises.
@@ -54,41 +206,173 @@ pub struct Fabricated {
 /// Returns every literal that is not accounted for, in the order they appear.
 /// An empty result means the reply may ship.
 #[must_use]
-pub fn check(reply: &str, authorised: &[f64]) -> Vec<Fabricated> {
-    literals(reply)
-        .into_iter()
-        .filter(|(literal, value)| !accounted_for(*value, literal, authorised))
-        .map(|(literal, value)| Fabricated { literal, value })
-        .collect()
+pub fn check(reply: &str, authorised: &[Authorised]) -> Vec<Fabricated> {
+    let mut out = Vec::new();
+    for sentence in sentences(reply) {
+        // One named subject and no more. Two is not a contradiction to
+        // resolve, it is a sentence like "the creator's launches all died on
+        // this launchpad", where either subject could own the figure and
+        // refusing would cost a true reply. Ambiguity falls back to plain
+        // membership, which is exactly the rule that shipped before this.
+        let named = named_in(sentence);
+        let about = if named.len() == 1 {
+            named.first()
+        } else {
+            None
+        };
+
+        for (literal, value) in literals(sentence) {
+            let measured = subjects_of(value, &literal, authorised);
+            if measured.is_empty() {
+                out.push(Fabricated {
+                    literal,
+                    value,
+                    why: Why::NotMeasured,
+                });
+            } else if let Some(&about) = about
+                && !measured.contains(&about)
+                && !measured.contains(&Subject::Anywhere)
+            {
+                out.push(Fabricated {
+                    literal,
+                    value,
+                    // The first, because the list is in sheet order and the
+                    // first fact carrying the value is the one an operator
+                    // reading the log will go and look at.
+                    why: Why::WrongSubject {
+                        measured: measured[0],
+                        written_about: about,
+                    },
+                });
+            }
+        }
+    }
+    out
 }
 
-/// Whether one literal is explained by an authorised value.
-fn accounted_for(value: f64, literal: &str, authorised: &[f64]) -> bool {
-    // A year, a slot or an ordinal is still a number, and there is no safe
-    // general exemption: "6 recipients" and "2026" are the same token to a
-    // scanner. So nothing is exempt, and anything the reply is genuinely
-    // allowed to say -- the slot included -- is put on the sheet instead.
-    let decimals = decimals_in(literal);
-    authorised.iter().any(|a| {
-        // Exact, for the common case and for integers.
-        if (a - value).abs() < 1e-9 {
-            return true;
+/// Every subject a literal could honestly have come from.
+///
+/// More than one because two facts can share a value: a venue that graduates
+/// 11% and a creator with 11 launches both authorise `11`, and a sentence
+/// naming either of them is entitled to it.
+fn subjects_of(value: f64, literal: &str, authorised: &[Authorised]) -> Vec<Subject> {
+    let mut out: Vec<Subject> = Vec::new();
+    for a in authorised {
+        if matches_at_written_precision(a.value, value, literal) && !out.contains(&a.subject) {
+            out.push(a.subject);
         }
-        // Or the authorised value rounded to the precision the model wrote.
-        //
-        // An exact comparison is correct here and the lint is wrong about it:
-        // both sides have just been rounded to the SAME number of decimals, so
-        // they are the same grid points or they are different ones. A tolerance
-        // on top would widen the rule by an unstated amount, which is the one
-        // thing a fidelity check must not have.
-        #[expect(
-            clippy::float_cmp,
-            reason = "both sides are rounded to the same precision immediately above; a \
-                      margin here would widen the tolerance rule by an unstated amount"
-        )]
-        let same = round_to(*a, decimals) == round_to(value, decimals);
-        same
-    })
+    }
+    out
+}
+
+/// Splits text into sentences for the subject rule.
+///
+/// A full stop between two digits is a decimal point and not a sentence end:
+/// splitting "25.1" would put `25` in one sentence and `1` in another, and the
+/// subject rule would then judge half a number against the wrong words.
+fn sentences(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        let ends = match b {
+            b'!' | b'?' | b'\n' => true,
+            b'.' => {
+                let before_is_digit = i > 0 && bytes[i - 1].is_ascii_digit();
+                let after_is_digit = bytes.get(i + 1).is_some_and(u8::is_ascii_digit);
+                !(before_is_digit && after_is_digit)
+            }
+            _ => false,
+        };
+        if ends {
+            // `i + 1` is a character boundary: every byte matched above is
+            // ASCII, and an ASCII byte in UTF-8 is a whole character.
+            out.push(&text[start..=i]);
+            start = i + 1;
+        }
+    }
+    if start < text.len() {
+        out.push(&text[start..]);
+    }
+    out
+}
+
+/// Which subjects a sentence names out loud.
+///
+/// A deliberately short vocabulary of the words that can only mean one
+/// subject. "Wallet" is not here, because the creator has one and so does the
+/// largest holder; a word that points at two subjects would make true
+/// sentences look like misattributions. Matching is on whole lowercased words,
+/// so "developer" does not match inside "development" and a hashtag does not
+/// hide a word from it.
+fn named_in(sentence: &str) -> Vec<Subject> {
+    const CREATOR: &[&str] = &[
+        "creator",
+        "creators",
+        "deployer",
+        "deployers",
+        "dev",
+        "devs",
+        "developer",
+        "developers",
+        "founder",
+        "founders",
+        "minter",
+    ];
+    const HOLDERS: &[&str] = &["holder", "holders", "whale", "whales"];
+    const VENUE: &[&str] = &["launchpad", "launchpads", "venue", "pons", "pump"];
+    const LIQUIDITY: &[&str] = &["liquidity", "pool", "pools", "lp"];
+
+    let mut out: Vec<Subject> = Vec::new();
+    for word in sentence
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
+        let word = word.to_ascii_lowercase();
+        let subject = if CREATOR.contains(&word.as_str()) {
+            Subject::Creator
+        } else if HOLDERS.contains(&word.as_str()) {
+            Subject::Holders
+        } else if VENUE.contains(&word.as_str()) {
+            Subject::Venue
+        } else if LIQUIDITY.contains(&word.as_str()) {
+            Subject::Liquidity
+        } else {
+            continue;
+        };
+        if !out.contains(&subject) {
+            out.push(subject);
+        }
+    }
+    out
+}
+
+/// Whether one authorised value explains one literal.
+///
+/// A year, a slot or an ordinal is still a number, and there is no safe
+/// general exemption: "6 recipients" and "2026" are the same token to a
+/// scanner. So nothing is exempt, and anything the reply is genuinely allowed
+/// to say -- the slot included -- is put on the sheet instead.
+fn matches_at_written_precision(authorised: f64, value: f64, literal: &str) -> bool {
+    // Exact, for the common case and for integers.
+    if (authorised - value).abs() < 1e-9 {
+        return true;
+    }
+    // Or the authorised value rounded to the precision the model wrote.
+    //
+    // An exact comparison is correct here and the lint is wrong about it:
+    // both sides have just been rounded to the SAME number of decimals, so
+    // they are the same grid points or they are different ones. A tolerance
+    // on top would widen the rule by an unstated amount, which is the one
+    // thing a fidelity check must not have.
+    let decimals = decimals_in(literal);
+    #[expect(
+        clippy::float_cmp,
+        reason = "both sides are rounded to the same precision immediately above; a \
+                  margin here would widen the tolerance rule by an unstated amount"
+    )]
+    let same = round_to(authorised, decimals) == round_to(value, decimals);
+    same
 }
 
 /// Rounds to a number of decimal places.
@@ -224,6 +508,23 @@ pub fn literals(text: &str) -> Vec<(String, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The membership rule on its own, with no subject attached to anything.
+    ///
+    /// Shadows [`super::check`] for the tests below it, which predate ADR 0031
+    /// and are all about whether a value is on the sheet at all. Written as a
+    /// shim rather than by rewriting fourteen call sites because those tests
+    /// are the record of the tolerance rule, and a diff that touches every one
+    /// of them hides which ones actually changed. The subject rule's own tests
+    /// call `super::check` directly.
+    fn check(reply: &str, authorised: &[f64]) -> Vec<Fabricated> {
+        let authorised: Vec<Authorised> = authorised
+            .iter()
+            .copied()
+            .map(Authorised::anywhere)
+            .collect();
+        super::check(reply, &authorised)
+    }
 
     #[test]
     fn a_fabricated_figure_is_caught() {
@@ -431,5 +732,113 @@ mod tests {
         // otherwise put an unmeasured figure under a name that promises
         // measurement.
         assert!(!check("850 plus 456 is 1306 bps", &[850.0, 456.0]).is_empty());
+    }
+
+    /// A sheet that measured one thing at 41%.
+    fn holders_at_41() -> Vec<Authorised> {
+        vec![Authorised {
+            subject: Subject::Holders,
+            value: 41.0,
+        }]
+    }
+
+    #[test]
+    fn a_figure_measured_about_the_holders_cannot_be_published_about_the_creator() {
+        // The sentence this whole change exists for. Every digit in it is on
+        // the sheet, and it accuses a person of something nobody measured.
+        let caught = super::check("The creator already dumped 41%.", &holders_at_41());
+        assert_eq!(caught.len(), 1, "{caught:?}");
+        assert_eq!(caught[0].literal, "41");
+        assert_eq!(
+            caught[0].why,
+            Why::WrongSubject {
+                measured: Subject::Holders,
+                written_about: Subject::Creator,
+            }
+        );
+
+        // The true version of the same figure ships.
+        assert!(
+            super::check("The top holder has 41%.", &holders_at_41()).is_empty(),
+            "the sentence the sheet actually supports must still pass"
+        );
+    }
+
+    #[test]
+    fn the_subject_rule_stays_out_of_an_ambiguous_sentence() {
+        // Two subjects named: either could own the figure, and refusing would
+        // cost a true reply. Falls back to plain membership, which passes.
+        assert!(
+            super::check(
+                "The creator is also the largest holder at 41%.",
+                &holders_at_41()
+            )
+            .is_empty()
+        );
+        // And none named at all.
+        assert!(super::check("41% sits in one place.", &holders_at_41()).is_empty());
+    }
+
+    #[test]
+    fn one_wrong_sentence_does_not_condemn_the_right_one_beside_it() {
+        // Per sentence, not per reply: the subject is read from the words
+        // around the number, so the sentence boundary is what the rule is
+        // measured against.
+        let caught = super::check(
+            "The top holder has 41%. The creator already dumped 41%.",
+            &holders_at_41(),
+        );
+        assert_eq!(caught.len(), 1, "{caught:?}");
+        assert!(matches!(caught[0].why, Why::WrongSubject { .. }));
+    }
+
+    #[test]
+    fn a_remark_about_the_sheet_is_citable_in_any_sentence() {
+        // The read point and the not-known lines are Radar's words about the
+        // sheet rather than measurements of a subject on it, so a sentence
+        // naming an actor may still cite them.
+        let authorised = vec![Authorised::anywhere(444_007_820.0)];
+        assert!(
+            super::check(
+                "The creator's side of this was read at slot 444007820.",
+                &authorised
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_decimal_point_does_not_end_a_sentence() {
+        // If it did, "25.1" would be judged as `25` in one sentence and `1` in
+        // the next, and the subject rule would rule on half a number.
+        assert_eq!(
+            sentences("the top holder has 25.1% of it"),
+            vec!["the top holder has 25.1% of it"]
+        );
+        let authorised = vec![Authorised {
+            subject: Subject::Holders,
+            value: 25.1,
+        }];
+        assert!(super::check("The top holder has 25.1%.", &authorised).is_empty());
+    }
+
+    #[test]
+    fn a_number_nothing_measured_is_still_caught_and_says_so() {
+        let caught = super::check("The creator already dumped 77%.", &holders_at_41());
+        assert_eq!(caught.len(), 1, "{caught:?}");
+        assert_eq!(caught[0].why, Why::NotMeasured);
+    }
+
+    #[test]
+    fn a_word_is_matched_whole_and_not_inside_another() {
+        // "development" is not the creator, and a rule that thought it was
+        // would refuse true sentences about a token's roadmap.
+        assert_eq!(named_in("development is 41% done"), Vec::new());
+        // Case and punctuation do not hide a word from it, and each subject
+        // is named once however many of its words appear.
+        assert_eq!(
+            named_in("the DEV, the dev's holder"),
+            vec![Subject::Creator, Subject::Holders]
+        );
     }
 }
