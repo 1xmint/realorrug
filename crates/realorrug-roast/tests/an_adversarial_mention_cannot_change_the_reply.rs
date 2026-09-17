@@ -594,16 +594,32 @@ fn a_creator_whose_launches_are_all_unmeasured_says_so() {
     );
 
     let sheet = FactSheet::build(&dossier, Some(&rates()), Some(&index), None, None);
+    let rendered = sheet.render();
+    // The caveat rides on the number it qualifies, and it is in the label
+    // because `render` shows the model `label: value` and never the voice
+    // sentences -- a caveat only in `.saying(..)` is invisible to the one
+    // reader it is written for.
     assert!(
-        sheet
+        rendered.contains("12") && rendered.contains("none with an outcome measured yet"),
+        "{rendered}"
+    );
+
+    // And *not* in `sheet.unknown`, which is where it used to go. That list
+    // does two jobs at once: the reply must say every line in it, and
+    // `verdict::level` returns `CantTell` the moment it is non-empty. So the
+    // old placement blanked the verdict on every token whose launcher the
+    // index knew -- "this person has launched 12 tokens, therefore I can't
+    // tell you anything" -- which is backwards. A launch count is evidence;
+    // an unmeasured outcome is the absence of *further* evidence, not the
+    // loss of what was read.
+    assert!(
+        !sheet
             .unknown
             .iter()
-            .any(|u| u.contains("none has been measured")),
+            .any(|u| u.contains("measured") || u.contains("turned out")),
         "{:?}",
         sheet.unknown
     );
-    // The launch count is still published: it is known.
-    assert!(sheet.render().contains("12"), "{}", sheet.render());
 }
 
 #[test]

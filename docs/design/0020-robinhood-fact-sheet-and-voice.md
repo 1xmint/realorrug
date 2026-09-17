@@ -174,6 +174,35 @@ answers a different question -- and it fails in the direction that matters,
 because it would go on hiding a Pons v2 index's own totals from Pons v2
 tokens, which is the only case the line was ever meant to serve.
 
+**Amendment (2026-09-17): a launch count with no outcomes is stated, not
+withheld.** `push_creator` used to put "how those launches turned out: none has
+been measured yet" into `sheet.unknown` and return. That list does two jobs at
+once -- the reply must say every line in it, and `verdict::level` returns
+`CantTell` the moment it is non-empty -- so a creator the index knew about but
+had not measured outcomes for would blank the verdict on every token they
+launched. "I can see this person launched 41 tokens, therefore I can't tell you
+anything" is backwards: the launch count is evidence, and an unmeasured outcome
+is the absence of *further* evidence, not the loss of what was read. The count
+is now a `CreatorLaunches` fact whose label and both voice sentences carry the
+caveat ("none with an outcome measured yet"), and nothing goes into `unknown`.
+The caveat rides in the label because `FactSheet::render` shows the model
+`label: value` and never the voice sentences -- putting it only in `.saying(..)`
+would have hidden it from the one reader it is for. Rule 8 is unchanged: the
+sheet still never says zero outcomes, it says none measured.
+
+**The Pons v2 index is built by `realorrug creator-index`**
+(`crates/realorrug-cli/src/creator_index.rs`), which walks the factory's own
+`TokenLaunched` logs through `realorrug_onchain::robinhood::walk_launches` and
+counts launches per deployer. Launch counts only: research 0038 §4 measures the
+outcome pass at roughly 171,000 `getLaunchedToken` calls, about a day of
+continuous polite calling, while the launch history is twenty to forty
+`eth_getLogs` calls. So the index arrives in two passes, and the amendment
+above is what makes the first pass useful on its own. The key is the deployer,
+not 0038 §2's preferred `creator_fee_recipient`, for the same cost reason --
+the fee recipient is only in the per-token call -- and it is also the address
+`FactSheet` looks a creator up by; a deployer-to-fee-recipient alias arrives
+later, built one cheap call at a time as new launches happen.
+
 So `creator::CreatorIndex` now carries a `chain` field saying which chain it
 was measured over (`serde` default: Solana, because every file written before
 the field existed came from `radar_research::creator_index`), and

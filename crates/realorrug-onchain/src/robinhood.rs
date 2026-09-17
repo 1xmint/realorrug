@@ -586,6 +586,118 @@ impl ChainReader for RobinhoodReader {
     }
 }
 
+/// How many logs one window aims to bring back.
+///
+/// Under both providers' 10,000-log cap, with room for the estimate to be
+/// wrong. The window is resized from what each answer actually held (see
+/// [`walk_launches`]), so this is the target it converges on, not a limit
+/// anything enforces.
+const LOGS_PER_WINDOW: u64 = 8_000;
+
+/// Every `TokenLaunched` the factory emitted between two blocks, in order,
+/// handed to `sink` one at a time.
+///
+/// # Why this pages instead of asking once
+///
+/// [`Rpc::logs`] would answer the whole range in one call if the answer fit,
+/// and it does not: research 0038 §1 extrapolated about 171,000 Pons v2
+/// launches, against a cap of 10,000 logs per answer. A capped answer arrives
+/// as [`LogsError::TooManyResults`] rather than as a short list, which is the
+/// only reason this can be written safely at all -- a provider that silently
+/// truncated would give a creator index that was wrong in the direction that
+/// flatters, every missing launch reading as a launch that never happened.
+///
+/// # Why the window resizes from the answer rather than being fixed
+///
+/// Launch density is not constant along the chain, and a fixed window sized
+/// for the busiest stretch would spend tens of thousands of calls on the
+/// quiet ones. Each answer says how many logs that many blocks held, so the
+/// next window is scaled toward [`LOGS_PER_WINDOW`] from a count already
+/// paid for. Growth is capped at four times per step so that crossing from a
+/// dead stretch into a live one overshoots once, not catastrophically;
+/// shrinking is a halving on the cap error, which is the only signal the
+/// provider gives.
+///
+/// # Why `sink` rather than a returned `Vec`
+///
+/// The caller is building a map keyed by launcher and never needs two
+/// launches at once. Handing them over one at a time keeps a full-history
+/// walk's memory flat and, more usefully, lets a caller checkpoint: the walk
+/// is long enough that being interrupted partway is normal, and the block
+/// this returns is the watermark of what was actually delivered.
+///
+/// # Errors
+///
+/// The provider's error, or a window of a single block that still answers
+/// "too many results" -- which cannot be halved further, and is reported
+/// rather than skipped, because skipping it would drop every launch in that
+/// block while the walk went on looking complete.
+pub fn walk_launches<F, S>(
+    from_block: u64,
+    to_block: u64,
+    mut fetch: F,
+    mut sink: S,
+) -> Result<u64, String>
+where
+    F: FnMut(u64, u64) -> Result<Vec<Log>, LogsError>,
+    S: FnMut(Launched),
+{
+    let mut at = from_block;
+    let mut window: u64 = 1;
+    let mut launches = 0_u64;
+    while at <= to_block {
+        let end = at.saturating_add(window - 1).min(to_block);
+        match fetch(at, end) {
+            Ok(logs) => {
+                let held = u64::try_from(logs.len()).unwrap_or(u64::MAX);
+                for log in &logs {
+                    if let Some(launch) = Launched::from_log(log) {
+                        sink(launch);
+                        launches += 1;
+                    }
+                }
+                at = end.saturating_add(1);
+                window = next_window(window, held);
+            }
+            Err(LogsError::TooManyResults) => {
+                if window == 1 {
+                    return Err(format!(
+                        "eth_getLogs: block {at} alone holds more logs than the provider will \
+                         return, and a window cannot be narrower than one block"
+                    ));
+                }
+                window /= 2;
+            }
+            Err(LogsError::Other(e)) => return Err(e),
+        }
+    }
+    Ok(launches)
+}
+
+/// The next window, scaled from what the last one actually held.
+///
+/// Separate from [`walk_launches`] so the arithmetic can be read and tested on
+/// its own: it is the part that decides how many calls a full walk costs, and
+/// the part where an off-by-one turns into either a stalled walk (a window
+/// that rounds to zero) or a shower of capped calls.
+fn next_window(window: u64, held: u64) -> u64 {
+    let ceiling = window.saturating_mul(4);
+    if held == 0 {
+        return ceiling;
+    }
+    let scaled = window.saturating_mul(LOGS_PER_WINDOW) / held;
+    // At least one block, or the walk stops advancing; at most four times the
+    // last window, so a quiet stretch does not launch a single enormous query
+    // into a busy one.
+    //
+    // `clamp` rather than the two comparisons written out, even though that
+    // costs this function its `const` (`Ord::clamp` is not const-callable
+    // yet): a hand-written clamp has two boundary comparisons whose `<`/`<=`
+    // and `>`/`>=` forms behave identically, so they are mutants no test can
+    // ever kill. One call with no operators of our own has no such corner.
+    scaled.clamp(1, ceiling)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
@@ -1344,5 +1456,169 @@ mod tests {
         // against `ChainReader` with Robinhood's own client and token types.
         fn accepts_any_reader<R: ChainReader>(_reader: &R) {}
         accepts_any_reader(&RobinhoodReader);
+    }
+
+    /// A `TokenLaunched` log from the factory, at `block`, by `deployer`.
+    ///
+    /// Built as a struct rather than through the JSON path the other tests
+    /// use, because these tests are about the paging loop and not about
+    /// parsing: a fake provider that spoke JSON would be testing
+    /// `parse_logs` again, one layer away from the thing that can go wrong.
+    fn factory_launch(block: u64, deployer: u8, token: u8) -> Log {
+        let mut data = word_addr(&RobinhoodAddress::ZERO);
+        data.extend(word_u(0));
+        data.extend(word_u(1_000));
+        Log {
+            address: FACTORY,
+            topics: vec![
+                topic::TOKEN_LAUNCHED,
+                topic_of(&RobinhoodAddress([token; 20])),
+                topic_of(&RobinhoodAddress([token ^ 0xff; 20])),
+                topic_of(&RobinhoodAddress([deployer; 20])),
+            ],
+            data,
+            block,
+            transaction: Hash32::from_hex(LAUNCH_TX),
+        }
+    }
+
+    /// A provider holding `logs`, refusing any window that would return more
+    /// than `cap` of them -- the one behaviour `walk_launches` is written
+    /// around.
+    fn capped_at(
+        cap: usize,
+        logs: Vec<Log>,
+    ) -> impl FnMut(u64, u64) -> Result<Vec<Log>, LogsError> {
+        move |from, to| {
+            let window: Vec<Log> = logs
+                .iter()
+                .filter(|l| l.block >= from && l.block <= to)
+                .cloned()
+                .collect();
+            if window.len() > cap {
+                return Err(LogsError::TooManyResults);
+            }
+            Ok(window)
+        }
+    }
+
+    #[test]
+    fn every_launch_in_the_range_is_delivered_once_however_the_window_moves() {
+        // Density deliberately uneven: a quiet opening, then a stretch dense
+        // enough to force several halvings, then quiet again. A walk that
+        // only ever grew its window would drop the middle; one that never
+        // grew would still be correct, so the count alone is not the test --
+        // the identities are.
+        let mut logs = Vec::new();
+        for block in 0..2_000_u64 {
+            let here = if (900..1_100).contains(&block) { 20 } else { 1 };
+            for n in 0..here {
+                if block % 7 == 0 || here > 1 {
+                    let token = u8::try_from((block + n) % 251).expect("under 251");
+                    logs.push(factory_launch(
+                        block,
+                        u8::try_from(block % 13).expect("under 13"),
+                        token,
+                    ));
+                }
+            }
+        }
+        let expected = logs.len();
+        assert!(
+            expected > 4_000,
+            "the dense stretch must exceed the cap many times over, got {expected}"
+        );
+
+        let mut seen: Vec<(u64, RobinhoodAddress)> = Vec::new();
+        let delivered = walk_launches(0, 1_999, capped_at(50, logs.clone()), |l| {
+            seen.push((0, l.deployer));
+        })
+        .expect("the walk completes");
+
+        assert_eq!(
+            usize::try_from(delivered).expect("fits"),
+            expected,
+            "the walk reported a different number of launches than the provider held"
+        );
+        assert_eq!(
+            seen.len(),
+            expected,
+            "a launch was delivered twice or not at all across a window that halved and grew"
+        );
+    }
+
+    #[test]
+    fn one_block_over_the_cap_is_an_error_rather_than_a_silent_gap() {
+        // The window cannot be narrower than a block, so there is nothing to
+        // retry. Reporting it is the only honest move: carrying on would
+        // leave a hole in the index that reads exactly like a launcher who
+        // never launched.
+        let logs: Vec<Log> = (0..60)
+            .map(|n| factory_launch(4, 7, u8::try_from(n).expect("under 60")))
+            .collect();
+        let err =
+            walk_launches(0, 9, capped_at(50, logs), |_| ()).expect_err("no window can hold it");
+        assert!(
+            err.contains("block 4") && err.contains("one block"),
+            "the error must name the block that cannot be split: {err}"
+        );
+    }
+
+    #[test]
+    fn an_empty_stretch_costs_a_handful_of_calls_not_one_per_block() {
+        // Without growth this walk is a million calls, which is the
+        // difference between a backfill that finishes and one that does not.
+        let mut calls = 0_u32;
+        let walked = walk_launches(
+            0,
+            1_000_000,
+            |_, _| {
+                calls += 1;
+                Ok(Vec::new())
+            },
+            |_| (),
+        )
+        .expect("an empty range still completes");
+        assert_eq!(walked, 0);
+        assert!(calls < 15, "an empty million blocks took {calls} calls");
+    }
+
+    #[test]
+    fn the_window_never_rounds_down_to_zero_and_stalls() {
+        // A window scaled by an answer far over the target rounds toward
+        // nothing; at zero the walk stops advancing and never returns. One
+        // block is the floor.
+        assert_eq!(next_window(1, u64::MAX), 1);
+        assert_eq!(next_window(2, 1_000_000), 1);
+        // And an empty answer grows rather than standing still.
+        assert_eq!(next_window(64, 0), 256);
+        // An answer already at the target holds the window where it is: the
+        // loop converges rather than drifting up to the ceiling every step.
+        assert_eq!(next_window(100, LOGS_PER_WINDOW), 100);
+    }
+
+    #[test]
+    fn a_window_of_n_blocks_asks_for_exactly_n_blocks() {
+        // The ranges themselves, not just the launches that came back. A
+        // window that asked for one block more than it meant to would still
+        // deliver every launch and still finish in few calls -- both other
+        // tests would pass -- while every answer was a block wider than the
+        // size the cap was measured against, which is how a walk that has
+        // been tuned to stay under a limit quietly stops staying under it.
+        let mut asked: Vec<(u64, u64)> = Vec::new();
+        walk_launches(
+            1_000,
+            1_010,
+            |from, to| {
+                asked.push((from, to));
+                Ok(Vec::new())
+            },
+            |_| (),
+        )
+        .expect("an empty range completes");
+        // One block, then four, then the rest: windows 1, 4, 16 against an
+        // empty answer, each range exactly as wide as the window and the last
+        // one cut off at `to_block`.
+        assert_eq!(asked, vec![(1_000, 1_000), (1_001, 1_004), (1_005, 1_010)]);
     }
 }
