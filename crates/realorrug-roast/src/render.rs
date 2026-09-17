@@ -80,12 +80,57 @@ pub fn for_publication(text: &str) -> String {
     if trimmed.chars().count() <= MAX_CHARS {
         return trimmed.to_owned();
     }
-    trimmed
-        .chars()
-        .take(MAX_CHARS)
-        .collect::<String>()
-        .trim_end()
-        .to_owned()
+    let cut: String = trimmed.chars().take(MAX_CHARS).collect();
+    // Back up to the last sentence that finished inside the budget.
+    //
+    // Cutting at the character was harmless while the model wrote short
+    // recitals: nothing reached the limit. Asking it what the facts *mean*
+    // (design 0026 §1) made replies longer, and the first live one on the box
+    // ended "...but the concentration is" -- a stump, published, with the
+    // thought it existed to deliver missing. Every check passed it, because
+    // no check reads for a finished sentence.
+    //
+    // Two complete sentences say less than three and say it whole, which is
+    // the trade taken here. The alternative -- treating an over-long reply as
+    // a fallback and shipping the template -- throws away a good reply's read
+    // because its last sentence ran long, and the template says less than the
+    // two sentences that did fit.
+    if let Some(end) = last_sentence_end(&cut) {
+        return cut[..end].trim_end().to_owned();
+    }
+    // Nothing finished inside the budget: one very long sentence, or a reply
+    // with no full stop in it at all. The old hard cut stands -- it is the
+    // only option left that fits, and it is what shipped before this.
+    cut.trim_end().to_owned()
+}
+
+/// The byte index just past the last complete sentence in `text`.
+///
+/// A full stop is a sentence end only when what follows it is whitespace or
+/// nothing. That is the whole reason this is not a `rfind('.')`: every reply
+/// this analyst writes is full of figures, and "the largest address holds
+/// 50.4% of the supply" would otherwise end its sentence inside the number.
+///
+/// A closing quote or bracket after the stop belongs to the sentence, so a
+/// run of them is stepped over before the whitespace test and kept in the
+/// result.
+fn last_sentence_end(text: &str) -> Option<usize> {
+    const CLOSERS: [char; 6] = ['"', '\'', ')', ']', '\u{201d}', '\u{2019}'];
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut end = None;
+    for (n, (_, c)) in chars.iter().enumerate() {
+        if !matches!(c, '.' | '!' | '?') {
+            continue;
+        }
+        let mut after = n + 1;
+        while chars.get(after).is_some_and(|(_, c)| CLOSERS.contains(c)) {
+            after += 1;
+        }
+        if chars.get(after).is_none_or(|(_, c)| c.is_whitespace()) {
+            end = Some(chars.get(after).map_or(text.len(), |(i, _)| *i));
+        }
+    }
+    end
 }
 
 /// Whether a character renders as nothing.
@@ -171,6 +216,49 @@ mod tests {
         let long = "a".repeat(MAX_CHARS + 50);
         let out = for_publication(&long);
         assert_eq!(out.chars().count(), MAX_CHARS);
+    }
+
+    #[test]
+    fn an_over_long_reply_keeps_the_sentences_that_finished() {
+        // The live failure, 2026-09-17. The model's first reply under the new
+        // prompt ran past the limit and shipped as "...but the concentration
+        // is" -- the point of the reply, cut off one word in.
+        let s1 = "The largest address holds 50.4% of the supply outside the curve.";
+        let s2 = " The launcher spent 0.0500 ETH buying in at launch.";
+        let s3 = " That is half the float sitting at one address on a token that has already \
+                  graduated to the pool, and a launch buy that size does nothing to offset it, \
+                  whatever anybody wants to read into it.";
+        let whole = format!("{s1}{s2}{s3}");
+        // Stated, not assumed: this test means nothing if the fixture stops
+        // being over-long, or if the two kept sentences stop fitting.
+        assert!(
+            whole.chars().count() > MAX_CHARS,
+            "fixture is not over-long"
+        );
+        let kept = format!("{s1}{s2}");
+        assert!(
+            kept.chars().count() <= MAX_CHARS,
+            "the kept pair does not fit"
+        );
+        assert_eq!(for_publication(&whole), kept);
+    }
+
+    #[test]
+    fn a_full_stop_inside_a_figure_does_not_end_a_sentence() {
+        // Every reply this analyst writes is full of figures, so a naive
+        // "cut at the last full stop" would end this one at "50." -- inside
+        // the number, which is worse than the character cut it replaced.
+        let run_on = format!("one address holds 50.4% of it{}", "x".repeat(MAX_CHARS));
+        let out = for_publication(&run_on);
+        assert_eq!(out.chars().count(), MAX_CHARS);
+        assert!(out.ends_with('x'), "the cut landed inside a figure: {out}");
+    }
+
+    #[test]
+    fn a_closing_bracket_after_the_stop_stays_with_its_sentence() {
+        let s1 = "One address holds half of it (it may be a pool.)";
+        let long = format!("{s1} {}", "y".repeat(MAX_CHARS));
+        assert_eq!(for_publication(&long), s1);
     }
 
     #[test]
