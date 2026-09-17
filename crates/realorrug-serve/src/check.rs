@@ -184,6 +184,15 @@ impl CheckState {
         Self::from_vars(&|k| std::env::var(k).ok())
     }
 
+    /// The shared, `Arc`-wrapped state both this route and `card.rs`'s
+    /// route are built on — one process-wide cache/budget/rate-limiter, not
+    /// two independent copies that would each think they own the daily
+    /// budget.
+    #[must_use]
+    pub fn shared() -> Arc<Self> {
+        Arc::new(Self::from_env())
+    }
+
     /// Reserves one cold read against today's budget, rolling the day over
     /// first. `Err(())` when nothing is left — the caller answers `budget`.
     fn reserve_cold_read(&self, today: u64) -> Result<(), ()> {
@@ -253,8 +262,7 @@ impl CheckState {
 /// A separate function, the same shape `public.rs`'s handlers use for their
 /// own paths, so the state this route needs is built once and never leaks
 /// into the five read-only handlers beside it.
-pub fn router() -> Router {
-    let state = Arc::new(CheckState::from_env());
+pub fn router(state: Arc<CheckState>) -> Router {
     Router::new()
         .route("/v1/check/{address}", get(handle))
         .with_state(state)
@@ -290,7 +298,7 @@ async fn handle(
 /// sits behind Cloudflare — otherwise the socket peer address, and never the
 /// header, because an untrusted header is exactly how a visitor would spoof
 /// past their own limit (AGENTS.md §3 rule 7).
-fn client_ip(
+pub(crate) fn client_ip(
     state: &CheckState,
     headers: &HeaderMap,
     connect_info: Option<ConnectInfo<std::net::SocketAddr>>,
@@ -310,7 +318,11 @@ fn client_ip(
 
 /// The full route logic, taking the pieces `handle` extracts so it is
 /// testable without an HTTP request.
-async fn check(state: &Arc<CheckState>, raw_address: &str, ip: &str) -> (StatusCode, Value) {
+pub(crate) async fn check(
+    state: &Arc<CheckState>,
+    raw_address: &str,
+    ip: &str,
+) -> (StatusCode, Value) {
     if !state.allow(ip, Instant::now()) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -414,8 +426,31 @@ async fn check(state: &Arc<CheckState>, raw_address: &str, ip: &str) -> (StatusC
     let measured_at = realorrug_types::civil::timestamp_from_seconds(now_secs());
     let doc = verdict_doc(raw_address, &chain, &verdict, &measured_at);
 
-    let _ = write_cache(&cache_path, &doc, now_secs());
+    // The card route (§7's requirement) needs the token name/symbol to draw
+    // on the image, but the JSON contract below (`assert_contract`) never
+    // carries them. Stash them in the cache file only, under `_`-prefixed
+    // keys `fresh_cached` already knows to strip before a client sees them —
+    // the same trick `_written_at` uses. `sheet.untrusted` is
+    // `FactSheet::build`'s own labeled pair list; "token name"/"token
+    // symbol" are only pushed there when a launch block was read (`sheet.rs`),
+    // so a partial dossier simply leaves these absent, never guessed.
+    let mut stored = doc.clone();
+    if let Some(name) = untrusted_field(&sheet.untrusted, "token name") {
+        stored["_name"] = json!(name);
+    }
+    if let Some(symbol) = untrusted_field(&sheet.untrusted, "token symbol") {
+        stored["_symbol"] = json!(symbol);
+    }
+    let _ = write_cache(&cache_path, &stored, now_secs());
     (StatusCode::OK, doc)
+}
+
+/// Looks up one label in a `FactSheet::untrusted` pair list.
+fn untrusted_field<'a>(untrusted: &'a [(String, String)], label: &str) -> Option<&'a str> {
+    untrusted
+        .iter()
+        .find(|(l, _)| l == label)
+        .map(|(_, v)| v.as_str())
 }
 
 /// Whether `dispatch::Error::Unreadable`'s message names the one case design
@@ -529,7 +564,7 @@ fn level_name(level: Level) -> &'static str {
     }
 }
 
-fn chain_name(address: &ChainAddress) -> String {
+pub(crate) fn chain_name(address: &ChainAddress) -> String {
     match address {
         ChainAddress::Solana(_) => "solana".to_owned(),
         ChainAddress::Robinhood(_) => "robinhood".to_owned(),
@@ -538,7 +573,7 @@ fn chain_name(address: &ChainAddress) -> String {
 
 /// A stable, filesystem-safe name for a cache file — the key itself may
 /// contain characters a path segment should not carry verbatim.
-fn cache_key(key: &str) -> String {
+pub(crate) fn cache_key(key: &str) -> String {
     key.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' {
@@ -560,15 +595,25 @@ fn day_of(secs: u64) -> u64 {
 /// still inside [`CACHE_TTL_SECS`] — a stale file is a cache miss, not a
 /// silent reuse of a number that may no longer be true (design 0023 §3).
 fn fresh_cached(path: &std::path::Path, now: u64) -> Option<Value> {
+    let mut doc = fresh_cached_raw(path, now)?;
+    // Strip every internal `_`-prefixed field (`_written_at`, and the card
+    // route's `_name`/`_symbol` stash) — the client-facing contract is
+    // exactly the eight fields `assert_contract` pins, never these.
+    doc.as_object_mut()?.retain(|k, _| !k.starts_with('_'));
+    Some(doc)
+}
+
+/// Like [`fresh_cached`], but keeps every internal `_`-prefixed field —
+/// the card route (`card.rs`) reads `_name`/`_symbol` off this, never off
+/// the client-facing, stripped document.
+pub(crate) fn fresh_cached_raw(path: &std::path::Path, now: u64) -> Option<Value> {
     let text = std::fs::read_to_string(path).ok()?;
     let stored: Value = serde_json::from_str(&text).ok()?;
     let written_at = stored.get("_written_at")?.as_u64()?;
     if now.saturating_sub(written_at) > CACHE_TTL_SECS {
         return None;
     }
-    let mut doc = stored;
-    doc.as_object_mut()?.remove("_written_at");
-    Some(doc)
+    Some(stored)
 }
 
 /// Writes `doc` to the cache with the moment it was written, so the next
@@ -582,7 +627,7 @@ fn write_cache(path: &std::path::Path, doc: &Value, now: u64) -> std::io::Result
     std::fs::write(path, stored.to_string())
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
@@ -878,6 +923,30 @@ mod tests {
     #[test]
     fn the_cache_key_is_filesystem_safe() {
         assert_eq!(cache_key("solana:abc/../etc"), "solana_abc____etc");
+    }
+
+    #[test]
+    fn an_untrusted_field_is_found_by_its_own_label() {
+        let pairs = vec![
+            ("token name".to_owned(), "Pepe".to_owned()),
+            ("token symbol".to_owned(), "PEPE".to_owned()),
+        ];
+        assert_eq!(untrusted_field(&pairs, "token symbol"), Some("PEPE"));
+        assert_eq!(untrusted_field(&pairs, "token name"), Some("Pepe"));
+        assert_eq!(untrusted_field(&pairs, "website"), None);
+    }
+
+    #[test]
+    fn the_client_document_drops_the_card_stash_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("entry.json");
+        let doc = json!({"state": "verdict", "_name": "Pepe", "_symbol": "PEPE"});
+        write_cache(&path, &doc, 1_000).expect("write");
+        let served = fresh_cached(&path, 1_001).expect("fresh");
+        assert_eq!(served["state"], "verdict");
+        assert!(served.get("_name").is_none() && served.get("_symbol").is_none());
+        let raw = fresh_cached_raw(&path, 1_001).expect("fresh");
+        assert_eq!(raw["_name"], "Pepe");
     }
 
     #[test]

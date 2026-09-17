@@ -6,6 +6,7 @@
 //! an operator's working material and stay on the box, so nothing here serves
 //! them.
 
+pub mod card;
 pub mod check;
 pub mod public;
 
@@ -22,6 +23,11 @@ use serde_json::{Value, json};
 /// merged in rather than added to this router's own state-free routes.
 /// Anything unrouted is a 404, including other methods.
 pub fn app() -> Router {
+    // One `CheckState` shared by `/v1/check/{address}` and
+    // `/v1/check/{address}/card.png` -- they must agree on the same cache,
+    // rate limiter and daily budget, not each hold their own (card.rs's own
+    // doc comment: "never a second chain read").
+    let check_state = check::CheckState::shared();
     Router::new()
         .route("/health", get(health))
         .route("/v1/public/stats", get(public::stats))
@@ -29,7 +35,8 @@ pub fn app() -> Router {
         .route("/v1/public/pool", get(public::pool))
         .route("/v1/public/weeks", get(public::weeks))
         .route("/v1/public/hunters", get(public::hunters))
-        .merge(check::router())
+        .merge(check::router(check_state.clone()))
+        .merge(card::router(check_state))
 }
 
 /// `GET /health`: the version and the commit, so "is the running process the

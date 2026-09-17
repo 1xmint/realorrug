@@ -49,6 +49,10 @@ allow = [
     "CDLA-Permissive-2.0",
     "MIT",
     "Unicode-3.0",
+    # arrayref (BSD-2-Clause) and slotmap (Zlib), reached through resvg for the
+    # verdict share card. Both permissive and compatible with Apache-2.0.
+    "BSD-2-Clause",
+    "Zlib",
 ]
 
 [bans]
