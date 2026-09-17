@@ -210,6 +210,10 @@ pub struct Reply {
     /// guess. Kept for `Forbidden` and `Fabricated`, the two refusals where a
     /// readable draft existed; `Empty` cleaned away to nothing and has no
     /// text worth keeping, and the other two reasons never produced one.
+    ///
+    /// **Exactly what the model returned**, before `render::for_publication`
+    /// strips invisibles and cuts it to length. A cleaned copy would hide the
+    /// two defects this field exists to expose.
     pub refused: Option<String>,
 }
 
@@ -319,7 +323,14 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
             text: fallback,
             fellback: Some(Fellback::Forbidden(violations)),
             billed,
-            refused: Some(text),
+            // The model's own bytes, not `text`. `text` is what
+            // `render::for_publication` made of them: invisibles stripped and
+            // the reply cut to fit. Both of those are reasons a draft reads
+            // badly, so storing the cleaned copy hides the two defects an
+            // operator most needs to see -- a reply that was fine until the
+            // length cut its last thought off looks, in the log, like a reply
+            // the model ended mid-sentence.
+            refused: Some(answer.text),
         };
     }
     // The second lock. Free text has no construction that guarantees this the
@@ -332,7 +343,8 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
             text: fallback,
             fellback: Some(Fellback::Fabricated(fabricated)),
             billed,
-            refused: Some(text),
+            // Raw, for the reason given at the `Forbidden` arm above.
+            refused: Some(answer.text),
         };
     }
 
@@ -962,6 +974,26 @@ mod tests {
         );
         // And it is not what ships.
         assert!(!reply.text.contains("scammer"));
+    }
+
+    #[test]
+    fn the_refused_draft_is_what_the_model_wrote_not_what_cleanup_made_of_it() {
+        // `render::for_publication` runs *before* the checks, so the text the
+        // checks refuse has already had its invisible characters stripped and
+        // its length cut. Keeping that copy would hide the two defects this
+        // record exists to expose: a model padding with characters a reader
+        // cannot see, and a reply that was sound until the length cut its last
+        // thought off -- which in a log of cleaned text is indistinguishable
+        // from a model that stopped mid-sentence on its own.
+        const PADDED: &str = "11 accounts at birth.\u{200b} The creator is a scammer.";
+        let reply = write(&sheet(), Some(&Says(PADDED)));
+        assert!(reply.is_template());
+        let draft = reply.refused.as_deref().expect("a draft was refused");
+        assert_eq!(draft, PADDED);
+        assert!(
+            draft.contains('\u{200b}'),
+            "the character the cleaner removes is still in the record: {draft:?}"
+        );
     }
 
     #[test]

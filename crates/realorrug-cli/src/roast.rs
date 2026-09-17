@@ -143,29 +143,77 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // A reply that fell back because the model fabricated a figure is the only
     // early warning that the voice pass is drifting, and a silent fallback
     // would hide exactly that.
-    match &reply.fellback {
-        None => eprintln!("(model reply, both checks passed)"),
+    //
+    // On stderr, so a caller piping this command reads only the text that
+    // would post. A refused draft is by definition text that would not.
+    eprint!("{}", why_it_fell_back(&reply));
+    Ok(())
+}
+
+/// Why the reply this command printed is the template, and what was thrown
+/// away to get there.
+///
+/// Built as a string rather than printed in place so a test can read it. The
+/// printing version had no test that could fail, which for the one diagnostic
+/// an operator actually reads is the wrong trade.
+///
+/// # Why it prints the draft and not only the reason
+///
+/// Design 0026 §1, measured on the box 2026-09-17: every substantive reply the
+/// bot had ever sent was a fallback, and nobody could read a single one of the
+/// drafts behind them. So every statement about how the voice reads -- that it
+/// is too flat, too wordy, too eager -- was a guess about text no human had
+/// seen. The daemon keeps it now (`realorrug_analyst` writes `refused` into
+/// the reply log); this is the same evidence for the operator at a terminal,
+/// who is the person actually deciding whether the voice is any good.
+fn why_it_fell_back(reply: &realorrug_roast::Reply) -> String {
+    // Writing into the string rather than formatting and appending: clippy
+    // refuses the second, and a write into a `String` cannot fail, so the
+    // `Result` is discarded rather than carried up a function that has none.
+    use std::fmt::Write as _;
+    let mut out = match &reply.fellback {
+        None => "(model reply, both checks passed)\n".to_owned(),
         Some(Fellback::NoProvider) => {
-            eprintln!("(deterministic template: no model provider configured)");
+            "(deterministic template: no model provider configured)\n".to_owned()
         }
         Some(Fellback::Unreachable(why)) => {
-            eprintln!("(deterministic template: provider unreachable -- {why})");
+            format!("(deterministic template: provider unreachable -- {why})\n")
         }
-        Some(Fellback::Empty) => eprintln!("(deterministic template: provider said nothing)"),
+        Some(Fellback::Empty) => "(deterministic template: provider said nothing)\n".to_owned(),
         Some(Fellback::Forbidden(v)) => {
-            eprintln!("(deterministic template: the model wrote a claim it may not publish)");
+            let mut s =
+                "(deterministic template: the model wrote a claim it may not publish)\n".to_owned();
             for violation in v {
-                eprintln!("    {:?} -- {}", violation.phrase, violation.because);
+                let _ = writeln!(s, "    {:?} -- {}", violation.phrase, violation.because);
             }
+            s
         }
         Some(Fellback::Fabricated(f)) => {
-            eprintln!("(deterministic template: the model wrote a number nothing measured)");
+            let mut s =
+                "(deterministic template: the model wrote a number nothing measured)\n".to_owned();
             for fab in f {
-                eprintln!("    {} is not on the fact sheet", fab.literal);
+                let _ = writeln!(s, "    {} is not on the fact sheet", fab.literal);
             }
+            s
         }
+    };
+    if let Some(draft) = &reply.refused {
+        out.push_str("--- the draft that was refused ---\n");
+        // Escaped, unlike `reply.text` above, and the difference is not an
+        // inconsistency. Published text has been through
+        // `render::for_publication`, which removes every control character; a
+        // refused draft is deliberately the model's raw bytes, and the model
+        // has seen the token's own name and symbol. Printing those raw to a
+        // terminal is the one place this command could be made to emit an
+        // escape sequence a token's creator chose.
+        //
+        // It costs legibility -- an em dash prints as `\u{2014}` -- and buys
+        // the thing the draft is kept for: a zero-width space the model padded
+        // with is visible here and nowhere else.
+        out.push_str(&safe(draft, 600));
+        out.push('\n');
     }
-    Ok(())
+    out
 }
 
 /// The mint a `realorrug roast` invocation names, if any.
@@ -359,6 +407,49 @@ mod tests {
 
         // The day this was written, cross-checked against a calendar.
         assert_eq!(from_days(20_699), "2026-09-03");
+    }
+
+    #[test]
+    fn a_refused_draft_is_printed_under_the_reason_it_was_refused() {
+        use realorrug_roast::forbidden::Violation;
+        use realorrug_roast::voice::Billed;
+
+        let refused = realorrug_roast::Reply {
+            text: "the template that shipped instead".to_owned(),
+            fellback: Some(Fellback::Forbidden(vec![Violation {
+                phrase: "canttell reply names nothing that could not be read",
+                because: "design 0020 §4",
+            }])),
+            billed: Billed::Unreported,
+            refused: Some(
+                "holder data is unavailable, so I can't call this one\u{200b}".to_owned(),
+            ),
+        };
+        let out = super::why_it_fell_back(&refused);
+        // The reason, unchanged: this must not become a diagnostic that says
+        // what the model wrote and no longer says why it was thrown away.
+        assert!(out.contains("a claim it may not publish"), "{out}");
+        assert!(out.contains("design 0020 §4"), "{out}");
+        // And the draft itself, which is the whole point of the function.
+        assert!(out.contains("--- the draft that was refused ---"), "{out}");
+        assert!(out.contains("holder data is unavailable"), "{out}");
+        // Escaped on the way out, because a raw draft is model output and this
+        // is a terminal. It is also the only way the character worth seeing is
+        // visible at all: a zero-width space printed raw prints as nothing.
+        assert!(out.contains(r"\u{200b}"), "{out}");
+        assert!(out.ends_with('\n'), "{out:?}");
+
+        // A reply nothing refused prints no draft header. Without this the
+        // arm could print the header unconditionally and every passing reply
+        // would announce a draft that does not exist.
+        let published = realorrug_roast::Reply {
+            text: "a reply that passed".to_owned(),
+            fellback: None,
+            billed: Billed::Unreported,
+            refused: None,
+        };
+        let out = super::why_it_fell_back(&published);
+        assert_eq!(out, "(model reply, both checks passed)\n");
     }
 
     #[test]
