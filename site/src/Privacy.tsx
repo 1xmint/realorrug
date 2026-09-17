@@ -116,8 +116,8 @@ export function Privacy() {
             that did not count are published as counts, never as names.
           </p>
           <p>
-            If you win and claim, you reply in public with a Solana address and
-            the prize is paid on chain. The site links that transaction, because
+            If you win and claim, you reply in public with a Robinhood Chain
+            address and the prize is paid on chain. The site links that transaction, because
             a prize nobody can check is not evidence of anything. The address is
             public because the chain is public, not because this site disclosed
             it.
@@ -134,9 +134,9 @@ export function Privacy() {
 
         <Block title="Links away from here">
           <p>
-            Links to X and to Solscan take you to sites this operator does not
-            run. What they collect is theirs to state, and their terms apply
-            once you arrive.
+            Links to X and to a chain explorer take you to sites this operator
+            does not run. What they collect is theirs to state, and their
+            terms apply once you arrive.
           </p>
         </Block>
 
