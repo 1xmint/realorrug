@@ -44,12 +44,14 @@ commands:
   contest <pay --dry-run | record-payout --signature <sig> | void --reason <word>> --week N
                                  the payout's manual fallback, through the same
                                  check the automated payout uses
-  creator-index --rpc URL --out PATH [--from N] [--to N]
+  creator-index --rpc URL --out PATH [--from N] [--to N] [--verify N]
+                [--base-rates-out PATH]
                                  who has launched on Robinhood Chain and how
                                  many times, walked out of the Pons v2
-                                 factory's own launch events. Launch counts
-                                 only: outcomes need a call per token and are
-                                 filled by a later pass. Read-only
+                                 factory's own launch events. Writes creator
+                                 outcomes and Robinhood population/24h rates
+                                 (default docs/research/data/0051-robinhood-base-rates.json).
+                                 Read-only chain access
   launch-check --tx <hash> --rpc URL
                                  whether a Pons v2 launch on Robinhood Chain
                                  is clean (ADR 0029): the mint to the curve,
