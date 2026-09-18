@@ -12,8 +12,9 @@
 //! Launches, per launcher, and now every outcome column too
 //! (`measured`, `organic`, `instant`, `stillborn` on both `Record` and
 //! `Population`), plus launch-block base rates and 24-hour curve-price
-//! outcomes, from four log walks in the same range and cached block timestamps.
-//! There is no per-token `eth_call` except the optional verification sample.
+//! outcomes, from four log walks in the same range and a handful of sampled
+//! block timestamps, not one read per launch or trade block. There is no
+//! per-token `eth_call` except the optional verification sample.
 //!
 //! The module doc this replaced argued that an outcome needed
 //! `getLaunchedToken` per token -- about 171,000 calls, roughly a day of
@@ -66,10 +67,13 @@
 //! `docs/research/data/0051-robinhood-base-rates.json`. It writes 0024's bands
 //! and histogram schema with `chain: robinhood`, and optional `outcomes_24h`
 //! counts. Unfinished windows and absent/zero-sized fills are reported
-//! separately, never as failed returns. Each distinct launch/trade block's
-//! timestamp is fetched at most once; once a curve's window ends its later
-//! trades need no timestamps. The summary counts these extra RPC reads and
-//! the Transfer walk, alongside the expanded shared trade walk.
+//! separately, never as failed returns. Every block's timestamp is
+//! *estimated* by [`BlockTimeModel`] from a bounded number of exact reads
+//! spread across `[from, to]` (Robinhood Chain's block time is close to
+//! constant, research 0038), not fetched per block: a rebuild over the whole
+//! launch population would otherwise cost one read per launch alone. The
+//! summary counts these sample reads and the Transfer walk, alongside the
+//! expanded shared trade walk.
 //!
 //! ## What `stillborn` means here, and why it is not Solana's definition
 //!
@@ -158,28 +162,92 @@ const BANDS: [(&str, u32, u32); 4] = [
     ("ten to thirteen", 10, 13),
 ];
 
-#[derive(Default)]
-struct BlockTimes {
-    times: BTreeMap<u64, u64>,
+/// Anchors used to *estimate* a block's timestamp from its number, rather
+/// than reading every block that turns out to matter.
+///
+/// A launch-block or trade-block read per block does not scale: a rebuild
+/// over the whole Robinhood launch population would need one read per launch
+/// alone (research 0038 counted ~171,000 historical launches on 2026-09-15;
+/// deploy/README.md's own rebuild has since seen 531,581), on top of however
+/// many trade blocks it takes each curve to cross the 24-hour window. Research
+/// 0038 also measured this chain's block time as close to constant
+/// (0.1019 s/block); a handful of exact reads spread across the walked range
+/// is enough to interpolate every other block's time to within a small,
+/// bounded error, instead of paying for one.
+const TIME_SAMPLES: u64 = 32;
+
+struct BlockTimeModel {
+    // Sorted, deduplicated (block, time) anchors spanning the walked range.
+    anchors: Vec<(u64, u64)>,
     calls: u64,
 }
 
-impl BlockTimes {
-    fn get(
-        &mut self,
-        block: u64,
+impl BlockTimeModel {
+    /// Builds the model from `head` (the watermark's own exact read, free
+    /// here) plus up to [`TIME_SAMPLES`] further exact reads, evenly spaced
+    /// across `[from, to]`.
+    fn build(
+        from: u64,
+        to: u64,
+        head: (u64, u64),
         mut fetch: impl FnMut(u64) -> Result<(u64, u64), String>,
-    ) -> Result<u64, String> {
-        if let Some(time) = self.times.get(&block) {
-            return Ok(*time);
+    ) -> Result<Self, String> {
+        let mut anchors = vec![head];
+        let span = to.saturating_sub(from);
+        let steps = TIME_SAMPLES.min(span.saturating_add(1));
+        let mut calls = 0_u64;
+        for i in 0..steps {
+            let block = from + span * i / steps.max(1);
+            if anchors.iter().any(|&(b, _)| b == block) {
+                continue;
+            }
+            let (returned, time) = fetch(block)?;
+            if returned != block {
+                return Err("timestamp response names another block".to_owned());
+            }
+            anchors.push((block, time));
+            calls += 1;
         }
-        self.calls += 1;
-        let (returned, time) = fetch(block)?;
-        if returned != block {
-            return Err("timestamp response names another block".to_owned());
+        anchors.sort_unstable();
+        anchors.dedup();
+        Ok(Self { anchors, calls })
+    }
+
+    /// The estimated timestamp of `block`: exact at an anchor, linearly
+    /// interpolated between the two nearest anchors otherwise, or
+    /// extrapolated from the nearest pair past either end of the range.
+    fn estimate(&self, block: u64) -> u64 {
+        if self.anchors.len() < 2 {
+            return self.anchors.first().map_or(0, |&(_, time)| time);
         }
-        self.times.insert(block, time);
-        Ok(time)
+        let idx = self.anchors.partition_point(|&(b, _)| b <= block);
+        let ((b0, t0), (b1, t1)) = if idx == 0 {
+            (self.anchors[0], self.anchors[1])
+        } else if idx >= self.anchors.len() {
+            (self.anchors[self.anchors.len() - 2], self.anchors[self.anchors.len() - 1])
+        } else {
+            (self.anchors[idx - 1], self.anchors[idx])
+        };
+        if b1 == b0 {
+            return t0;
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "block-time interpolation is an approximate f64 estimate"
+        )]
+        let frac = block.saturating_sub(b0) as f64 / (b1 - b0) as f64;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "block-time interpolation is an approximate f64 estimate"
+        )]
+        let estimate = t0 as f64 + frac * (t1 as f64 - t0 as f64);
+        #[expect(
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation,
+            reason = "interpolated seconds are never negative and fit u64"
+        )]
+        let estimate = estimate.round() as u64;
+        estimate
     }
 }
 
@@ -439,6 +507,18 @@ struct Walk1 {
 /// against -- `walk_logs` hands over the raw log, which carries the block
 /// a decoded-only sink would have thrown away, so this needs only the one
 /// pass, not a second re-walk of the factory to recover it.
+/// A `TokenLaunched` log naming a token or a curve this pass has already
+/// seen: the factory should never emit either twice, and trusting a repeat
+/// would silently drop or overwrite the launch info the other two walks key
+/// their lookups against.
+fn repeats_a_token_or_curve(
+    launch_map: &BTreeMap<Address, LaunchInfo>,
+    curve_to_launch_block: &BTreeMap<Address, u64>,
+    launch: &Launched,
+) -> bool {
+    launch_map.contains_key(&launch.token) || curve_to_launch_block.contains_key(&launch.curve)
+}
+
 fn walk_token_launched(
     rpc: &Rpc,
     from: u64,
@@ -458,9 +538,7 @@ fn walk_token_launched(
                 invalid = true;
                 return;
             };
-            if launch_map.contains_key(&launch.token)
-                || curve_to_launch_block.contains_key(&launch.curve)
-            {
+            if repeats_a_token_or_curve(&launch_map, &curve_to_launch_block, &launch) {
                 invalid = true;
                 return;
             }
@@ -503,6 +581,22 @@ struct Walk2 {
 /// walk 1, not the 171,000 per-token calls the old module doc costed
 /// outcomes at. Credits each graduation's deployer with `instant` or
 /// `organic`, per the boundary in [`INSTANT_BLOCKS`].
+/// A `Graduated` log for a known token that names a block before its own
+/// launch, or a second graduation for a token already graduated this pass.
+/// Either would invent an ordering or double-count a launcher's graduation;
+/// an unknown token is not this function's concern (walk 2's caller skips
+/// it, uncredited, rather than guess who launched it).
+fn invalid_graduation(
+    launch_map: &BTreeMap<Address, LaunchInfo>,
+    graduation_blocks: &BTreeMap<Address, u64>,
+    token: Address,
+    log_block: u64,
+) -> bool {
+    launch_map
+        .get(&token)
+        .is_some_and(|info| log_block < info.block || graduation_blocks.contains_key(&token))
+}
+
 fn walk_graduated(
     rpc: &Rpc,
     from: u64,
@@ -523,9 +617,7 @@ fn walk_graduated(
                 invalid = true;
                 return;
             };
-            if let Some(info) = launch_map.get(&graduated.token)
-                && (log.block < info.block || graduation_blocks.contains_key(&graduated.token))
-            {
+            if invalid_graduation(launch_map, &graduation_blocks, graduated.token, log.block) {
                 invalid = true;
                 return;
             }
@@ -598,6 +690,20 @@ struct Walk3 {
     calls: u64,
 }
 
+/// Whether a log from the combined buy/sell walk is a `CurveBuy` rather than
+/// a `CurveSell`. `logs_range_any_event` puts the matched signature at topic
+/// position zero; treating anything else here as a buy would count sells as
+/// dev buys and inflate `curve_has_later_buy`.
+fn is_curve_buy(log: &Log) -> bool {
+    log.topics.first() == Some(&topic::CURVE_BUY)
+}
+
+/// A trade naming a block before the curve's own launch block: an ordering
+/// that cannot exist and would corrupt the first-fill baseline if trusted.
+fn trade_precedes_launch(trade_block: u64, launch_block: u64) -> bool {
+    trade_block < launch_block
+}
+
 /// Walk 3: buys and sells in chain order, across every address -- the curve that emits
 /// it is a different contract per token, so there is no one address to scope
 /// to. The biggest walk of the three; only whether each known curve had a
@@ -610,7 +716,7 @@ fn walk_curve_trades(
     curve_to_launch_block: &BTreeMap<Address, u64>,
     curve_to_token: &BTreeMap<Address, Address>,
     measurements: &mut BTreeMap<Address, LaunchMeasurement>,
-    times: &mut BlockTimes,
+    times: &BlockTimeModel,
 ) -> Result<Walk3, String> {
     let mut curve_has_later_buy: BTreeSet<Address> = BTreeSet::new();
     let mut failure = None;
@@ -619,7 +725,7 @@ fn walk_curve_trades(
         to,
         |a, b| rpc.logs_range_any_event(&[topic::CURVE_BUY, topic::CURVE_SELL], a, b),
         |log| {
-            if log.topics.first() == Some(&topic::CURVE_BUY) {
+            if is_curve_buy(log) {
                 note_curve_buy(
                     curve_to_launch_block,
                     &mut curve_has_later_buy,
@@ -639,11 +745,11 @@ fn walk_curve_trades(
                 return;
             }
             let result = (|| {
-                if log.block < curve_to_launch_block[&log.address] {
+                if trade_precedes_launch(log.block, curve_to_launch_block[&log.address]) {
                     return Err("curve trade precedes its launch block".to_owned());
                 }
                 let trade = Trade::from_log(log).ok_or("a known curve trade did not decode")?;
-                let time = times.get(log.block, |b| rpc.block_time(Some(b)))?;
+                let time = times.estimate(log.block);
                 measurements
                     .get_mut(token)
                     .ok_or("launch measurement missing")?
@@ -706,36 +812,47 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // walk rather than after is what makes the file's claim exact: a block
     // mined while the walk is running is outside the range that was asked
     // for, and a watermark read afterwards would claim it was included.
-    let mut times = BlockTimes::default();
-    let mut head_calls = 0;
-    let to = match number(args, "--to")? {
+    //
+    // The endpoint stays unreachable until every argument-only check,
+    // including `--from`/`--to` ordering, has passed: a typo should not cost
+    // a network round trip before saying so.
+    let explicit_to = number(args, "--to")?;
+    if explicit_to.is_some() && verify.is_some() {
+        // `--verify` asks the factory what a token's phase is *now* and
+        // compares it to what the walk concluded for the range. Those two
+        // only answer the same question when the range ends at the head: a
+        // token that graduated after `--to` disagrees for a reason that says
+        // nothing about the decode `--verify` exists to check. The refusal
+        // is here rather than in the sampler because a check that fires for
+        // the wrong reason is worse than no check -- an operator who has
+        // seen one false disagreement discounts the true one. Found by
+        // hitting it: a hundred-thousand-block range ending four thousand
+        // blocks short of the head refused to write over one token that had
+        // graduated in between.
+        return Err(
+            "--verify compares against the token's state now, so it only holds when the range \
+             ends at the head of the chain: drop --to, or drop --verify"
+                .to_owned(),
+        );
+    }
+    if let Some(to) = explicit_to
+        && to < from
+    {
+        return Err(format!("--from {from} is after --to {to}"));
+    }
+    // Exactly one exact read gives both the watermark block (when `--to` is
+    // left off) or its timestamp (when `--to` is given), and doubles as a
+    // free anchor for the block-time model below.
+    let head_calls: u64 = 1;
+    let (to, watermark_time) = match explicit_to {
         Some(block) => {
-            // `--verify` asks the factory what a token's phase is *now* and
-            // compares it to what the walk concluded for the range. Those two
-            // only answer the same question when the range ends at the head:
-            // a token that graduated after `--to` disagrees for a reason that
-            // says nothing about the decode `--verify` exists to check. The
-            // refusal is here rather than in the sampler because a check that
-            // fires for the wrong reason is worse than no check -- an
-            // operator who has seen one false disagreement discounts the true
-            // one. Found by hitting it: a hundred-thousand-block range ending
-            // four thousand blocks short of the head refused to write over
-            // one token that had graduated in between.
-            if verify.is_some() {
-                return Err(
-                    "--verify compares against the token's state now, so it only holds when the \
-                     range ends at the head of the chain: drop --to, or drop --verify"
-                        .to_owned(),
-                );
+            let (returned, time) = rpc.block_time(Some(block)).map_err(|e| format!("--to: {e}"))?;
+            if returned != block {
+                return Err("--to: timestamp response names another block".to_owned());
             }
-            block
+            (block, time)
         }
-        None => {
-            head_calls = 1;
-            let (block, time) = rpc.block_time(None).map_err(|e| format!("--to: {e}"))?;
-            times.times.insert(block, time);
-            block
-        }
+        None => rpc.block_time(None).map_err(|e| format!("--to: {e}"))?,
     };
     if to < from {
         return Err(format!("--from {from} is after --to {to}"));
@@ -756,11 +873,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
         skipped: skipped_graduations,
     } = walk_graduated(&rpc, from, to, &launch_map, &mut creators)?;
 
-    let watermark_time = times.get(to, |b| rpc.block_time(Some(b)))?;
+    // A handful of anchor reads, not one read per launch or trade block: see
+    // `BlockTimeModel`'s doc comment for why a per-block read does not scale.
+    let times = BlockTimeModel::build(from, to, (to, watermark_time), |b| {
+        rpc.block_time(Some(b))
+    })?;
     let mut measurements = BTreeMap::new();
     let mut curve_to_token = BTreeMap::new();
     for (token, info) in &launch_map {
-        let time = times.get(info.block, |b| rpc.block_time(Some(b)))?;
+        let time = times.estimate(info.block);
         measurements.insert(*token, LaunchMeasurement::new(time));
         curve_to_token.insert(info.curve, *token);
     }
@@ -775,7 +896,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         &curve_to_launch_block,
         &curve_to_token,
         &mut measurements,
-        &mut times,
+        &times,
     )?;
 
     let transfer_calls = walk_recipients(&rpc, from, to, &launch_map, &mut measurements)?;
@@ -1031,9 +1152,10 @@ mod tests {
     use realorrug_robinhood::{Address, Hash32, Log};
 
     use super::{
-        BlockTimes, DAY, LaunchInfo, LaunchMeasurement, Summary, base_rates_json, count_stillborn,
-        credit_graduation, disagreement, note_curve_buy, note_recipient, number, run, sample,
-        summary,
+        BlockTimeModel, DAY, LaunchInfo, LaunchMeasurement, Summary, TIME_SAMPLES, base_rates_json,
+        count_stillborn, credit_graduation, disagreement, invalid_graduation, is_curve_buy,
+        note_curve_buy, note_recipient, number, repeats_a_token_or_curve, run, sample, summary,
+        trade_precedes_launch,
     };
 
     fn args(v: &[&str]) -> Vec<String> {
@@ -1135,6 +1257,81 @@ mod tests {
     }
 
     #[test]
+    fn a_repeated_token_or_a_repeated_curve_is_refused_but_a_fresh_pair_is_not() {
+        let launch = |token: Address, curve: Address| realorrug_robinhood::pons::Launched {
+            token,
+            curve,
+            deployer: addr(9),
+        };
+        let launch_map = BTreeMap::from([(
+            addr(1),
+            LaunchInfo {
+                deployer: addr(9),
+                block: 1,
+                curve: addr(2),
+            },
+        )]);
+        let curve_to_launch_block = BTreeMap::from([(addr(2), 1_u64)]);
+        // A fresh token and curve: not a repeat of either map.
+        assert!(!repeats_a_token_or_curve(
+            &launch_map,
+            &curve_to_launch_block,
+            &launch(addr(3), addr(4))
+        ));
+        // The same token again, even paired with a new curve.
+        assert!(repeats_a_token_or_curve(
+            &launch_map,
+            &curve_to_launch_block,
+            &launch(addr(1), addr(4))
+        ));
+        // A fresh token, but the curve was already claimed by another launch.
+        assert!(repeats_a_token_or_curve(
+            &launch_map,
+            &curve_to_launch_block,
+            &launch(addr(3), addr(2))
+        ));
+    }
+
+    #[test]
+    fn a_graduation_before_its_own_launch_or_a_second_graduation_is_invalid_but_the_first_is_not() {
+        let token = addr(1);
+        let launch_map = BTreeMap::from([(
+            token,
+            LaunchInfo {
+                deployer: addr(9),
+                block: 100,
+                curve: addr(2),
+            },
+        )]);
+        // An unknown token is not this function's concern.
+        assert!(!invalid_graduation(
+            &launch_map,
+            &BTreeMap::new(),
+            addr(3),
+            50
+        ));
+        // A graduation naming a block before its own launch invents an ordering.
+        assert!(invalid_graduation(&launch_map, &BTreeMap::new(), token, 99));
+        // The graduation's own launch block is not "before" it.
+        assert!(!invalid_graduation(
+            &launch_map,
+            &BTreeMap::new(),
+            token,
+            100
+        ));
+        // A later, first graduation for a known token is valid...
+        assert!(!invalid_graduation(
+            &launch_map,
+            &BTreeMap::new(),
+            token,
+            101
+        ));
+        // ...but a second graduation for the same token is not.
+        let graduation_blocks = BTreeMap::from([(token, 101_u64)]);
+        assert!(invalid_graduation(&launch_map, &graduation_blocks, token, 200));
+    }
+
+    #[test]
     fn population_bands_share_the_full_denominator_and_outcomes_exclude_unfinished_and_unpriced_launches()
      {
         let mut launches = BTreeMap::new();
@@ -1206,22 +1403,101 @@ mod tests {
             .expect("no graduations");
         assert_eq!(no_instant["launch_block"]["base_rate_instant"], 0.0);
         assert_eq!(no_instant["launch_block"]["bands"], serde_json::json!([]));
+        // Both empty at once, not just an empty `launches`: a `&&` in place of
+        // this `||` would let a nonsensical zero-length-but-matching pair
+        // through and misreport an empty rebuild as a valid one.
+        assert!(base_rates_json(&BTreeMap::new(), &graduations, &BTreeMap::new(), 0, (200, DAY)).is_err());
+        // `measured_on` is `now() / DAY`: a day-boundary case that `/`-in-place-
+        // of-`%`-or-`*` would not silently pass, unlike a mid-day timestamp.
+        assert_eq!(
+            json["measured_on"],
+            serde_json::json!(realorrug_types::civil::date_from_days(
+                i64::try_from(now() / DAY).expect("today fits an i64")
+            ))
+        );
     }
 
     #[test]
-    fn timestamp_reads_are_cached_and_failed_or_mismatched_reads_are_not_measurements() {
-        let mut times = BlockTimes::default();
-        assert_eq!(times.get(7, |b| Ok((b, 100))), Ok(100));
-        assert_eq!(
-            times.get(7, |_| panic!("cached blocks must not call RPC")),
-            Ok(100)
+    fn reaching_exactly_five_x_counts_toward_the_five_x_band_but_not_past_it_alone() {
+        // A single, asymmetric peak isolates the `>=` on `reached_5x`: with the
+        // paired 10/5/2/1 peaks in the population test above, `>=` and `<`
+        // happen to agree on the count, so a mutant there survives that test.
+        // One launch at exactly 5.0, and only one, does not.
+        let mut launches = BTreeMap::new();
+        let mut measurements = BTreeMap::new();
+        launches.insert(
+            addr(1),
+            LaunchInfo {
+                deployer: addr(9),
+                block: 100,
+                curve: addr(2),
+            },
         );
-        assert_eq!(times.calls, 1);
-        assert!(times.get(8, |_| Err("unavailable".to_owned())).is_err());
-        assert!(times.get(8, |_| Ok((9, 200))).is_err());
-        assert!(!times.times.contains_key(&8));
-        assert_eq!(times.get(8, |b| Ok((b, 201))), Ok(201));
-        assert_eq!(times.calls, 4);
+        let mut m = LaunchMeasurement::new(0);
+        m.recipients.extend((1..=6).map(addr));
+        m.trade(&fill(1, 1), 0).expect("first");
+        m.trade(&fill(5, 1), 0).expect("peak of exactly 5x");
+        measurements.insert(addr(1), m);
+        let json = base_rates_json(&launches, &BTreeMap::new(), &measurements, 0, (DAY, DAY))
+            .expect("snapshot");
+        let band = json["outcomes_24h"]["bands"]
+            .as_array()
+            .expect("bands")
+            .iter()
+            .find(|b| b["lo"] == 6 && b["hi"] == 6)
+            .expect("a band covering six recipients");
+        assert_eq!(band["reached_2x"], 1);
+        assert_eq!(band["reached_5x"], 1);
+        assert_eq!(band["reached_10x"], 0);
+    }
+
+    #[test]
+    fn a_block_time_model_samples_a_bounded_number_of_anchors_regardless_of_range_size() {
+        // The whole reason this model exists: a 531,581-launch range must not
+        // cost 531,581 timestamp reads. `calls` is what's billed; it must
+        // stay at or under the fixed sample budget no matter how wide `to -
+        // from` is.
+        let mut calls = 0_u64;
+        let model = BlockTimeModel::build(0, 1_000_000, (1_000_000, 10_000_000), |b| {
+            calls += 1;
+            Ok((b, b * 10))
+        })
+        .expect("build");
+        assert!(calls <= TIME_SAMPLES, "{calls} exceeds the sample budget");
+        assert_eq!(model.calls, calls);
+    }
+
+    #[test]
+    fn a_block_time_model_interpolates_linearly_between_anchors_and_extrapolates_at_the_ends() {
+        let model = BlockTimeModel::build(0, 1_000, (1_000, 10_000), |b| Ok((b, b * 10)))
+            .expect("build");
+        // Every sampled block sits on the same line, so linear interpolation
+        // between any two of them reproduces it exactly, not approximately.
+        assert_eq!(model.estimate(0), 0);
+        assert_eq!(model.estimate(500), 5_000);
+        assert_eq!(model.estimate(1_000), 10_000);
+        // A block outside every anchor extrapolates from the nearest pair
+        // rather than refusing or clamping to an anchor's own time.
+        assert_eq!(model.estimate(2_000), 20_000);
+    }
+
+    #[test]
+    fn a_block_time_model_with_one_anchor_reports_that_anchor_for_every_block() {
+        // A zero-width range (`--from` equal to `--to`) has nothing to
+        // interpolate; the single anchor is exact everywhere and needs no
+        // further reads to say so.
+        let model = BlockTimeModel::build(5, 5, (5, 500), |_| {
+            panic!("an empty span needs no additional samples")
+        })
+        .expect("build");
+        assert_eq!(model.calls, 0);
+        assert_eq!(model.estimate(5), 500);
+        assert_eq!(model.estimate(999), 500);
+    }
+
+    #[test]
+    fn a_block_time_model_refuses_a_timestamp_response_naming_another_block() {
+        assert!(BlockTimeModel::build(0, 100, (100, 1_000), |_| Ok((999, 1))).is_err());
     }
 
     #[test]
@@ -1245,6 +1521,38 @@ mod tests {
             "--from 900 is after --to 100"
         );
         assert!(!std::path::Path::new("unwritten.json").exists());
+    }
+
+    #[test]
+    fn base_rates_out_colliding_with_either_output_path_is_refused_before_any_network_call() {
+        // Same unreachable-endpoint proof as the backwards-range test above:
+        // both collision checks must fire from the flags alone.
+        let same_as_out = args(&[
+            "creator-index",
+            "--rpc",
+            "http://127.0.0.1:1/never",
+            "--out",
+            "index.json",
+            "--base-rates-out",
+            "index.json",
+        ]);
+        assert_eq!(
+            run(&same_as_out).expect_err("--base-rates-out equal to --out"),
+            "--base-rates-out must differ from the index and population paths"
+        );
+        let same_as_summary = args(&[
+            "creator-index",
+            "--rpc",
+            "http://127.0.0.1:1/never",
+            "--out",
+            "index.json",
+            "--base-rates-out",
+            realorrug_roast::creator::summary_path_beside("index.json").as_str(),
+        ]);
+        assert_eq!(
+            run(&same_as_summary).expect_err("--base-rates-out equal to the summary path"),
+            "--base-rates-out must differ from the index and population paths"
+        );
     }
 
     /// The pairing that makes `--verify` answer a question nobody asked.
@@ -1430,6 +1738,29 @@ mod tests {
             seen.contains(&curve),
             "the first buy after the launch block was not counted"
         );
+    }
+
+    #[test]
+    fn only_a_curve_buy_topic_at_position_zero_is_a_buy() {
+        let mut log = Log {
+            address: addr(1),
+            topics: vec![topic::CURVE_BUY],
+            data: Vec::new(),
+            block: 1,
+            transaction: Hash32([0; 32]),
+        };
+        assert!(is_curve_buy(&log));
+        log.topics[0] = topic::CURVE_SELL;
+        assert!(!is_curve_buy(&log));
+        log.topics.clear();
+        assert!(!is_curve_buy(&log));
+    }
+
+    #[test]
+    fn a_trade_before_its_curves_launch_block_precedes_it_and_the_launch_block_itself_does_not() {
+        assert!(trade_precedes_launch(99, 100));
+        assert!(!trade_precedes_launch(100, 100));
+        assert!(!trade_precedes_launch(101, 100));
     }
 
     #[test]

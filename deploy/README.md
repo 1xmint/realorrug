@@ -173,25 +173,35 @@ requests, including result-cap retries. The walker targets 8,000 logs per
 response, so each `Q` is roughly its matching log count divided by 8,000,
 plus startup/range-resizing requests; this is an estimate, not a quota bound.
 The trade and transfer queries match events across **all addresses**, even
-though only known launches contribute. Let `U` be distinct blocks needing
-timestamps: launch blocks plus known-curve trade blocks through the first
-trade beyond each 24-hour window, excluding the already-read head. The exact
-successful command total is:
+though only known launches contribute. Block timestamps no longer cost one
+RPC call per block: `BlockTimeModel` reads the head (already counted in the
+leading `1`) plus up to `TIME_SAMPLES` (32, a fixed constant, not a function
+of population size) evenly-spaced exact timestamps across `[from, to]`, then
+estimates every other block's time by linear interpolation between the
+nearest two samples. Robinhood Chain's block time is measured at ~0.1019
+s/block and does not drift enough within one rebuild's range for the
+interpolation error to move a launch across the 24-hour outcome boundary
+(research 0038); a walk this cheap trades that small, stated error for
+avoiding the per-block-read design below. The exact successful command total
+is:
 
 ```text
-1 + Qlaunch + Qgraduation + Qtrade + Qtransfer + U + V
+1 + TIME_SAMPLES + Qlaunch + Qgraduation + Qtrade + Qtransfer + V
 V = min(20, graduated launches) + min(20, non-graduated launches)
+TIME_SAMPLES = 32
 ```
 
-The new separate passes cost `Qtransfer + U`; `Qtrade` replaces the old buy
-walk and includes the extra sell traffic. These counts, verification and the
-head read are all printed separately and totaled. Cached timestamps mean at
-most one read per relevant block, but the 531,581-launch run recorded above
-could still need up to 531,581 launch-block reads alone (fewer when launches
-share blocks), plus trade-block reads. Do not budget this as another 134-call
-launch-only rebuild. The actual full-history trade/transfer counts await the
-box run; multiple endpoints passed manually can add internal failover HTTP
-attempts beyond the logical RPC counts printed by the command.
+That bounds the whole rebuild's *timestamp* cost at 32 calls regardless of
+launch count: a design that read one block's timestamp per launch would have
+needed up to 531,581 calls at the 2026-09-15 population (research 0038,
+0039), which is why that per-block design was rejected before this file
+first described a rebuild command. `Qtrade` replaces the old buy-only walk
+and includes the extra sell traffic; `Qtransfer` is the new recipient-count
+pass. These counts, verification and the head/sample reads are all printed
+separately and totaled. The actual full-history log-walk counts (`Qlaunch`,
+`Qgraduation`, `Qtrade`, `Qtransfer`) await the box run; multiple endpoints
+passed manually can add internal failover HTTP attempts beyond the logical
+RPC counts printed by the command.
 
 ## Moving off Radar's folders
 

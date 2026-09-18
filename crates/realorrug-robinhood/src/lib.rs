@@ -684,7 +684,7 @@ impl Rpc {
         to_block: u64,
     ) -> Result<Vec<Log>, LogsError> {
         let topics: Vec<String> = topics.iter().map(ToString::to_string).collect();
-        self.logs_range_filter(address, serde_json::json!(topics), from_block, to_block)
+        self.logs_range_filter(address, &serde_json::json!(topics), from_block, to_block)
     }
 
     /// Logs for any of these event signatures, in block/log-index order.
@@ -704,13 +704,13 @@ impl Rpc {
         to_block: u64,
     ) -> Result<Vec<Log>, LogsError> {
         let events: Vec<String> = events.iter().map(ToString::to_string).collect();
-        self.logs_range_filter(None, serde_json::json!([events]), from_block, to_block)
+        self.logs_range_filter(None, &serde_json::json!([events]), from_block, to_block)
     }
 
     fn logs_range_filter(
         &self,
         address: Option<&Address>,
-        topics: serde_json::Value,
+        topics: &serde_json::Value,
         from_block: u64,
         to_block: u64,
     ) -> Result<Vec<Log>, LogsError> {
