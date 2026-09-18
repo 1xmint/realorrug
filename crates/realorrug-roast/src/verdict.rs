@@ -1244,6 +1244,8 @@ mod tests {
                 largest_share_bps: Some(5_022),
             }),
             funding: None,
+            market: None,
+            token_ownership: None,
             unavailable: Vec::new(),
             calls: 10,
             elapsed_ms: 7_577,

@@ -316,6 +316,13 @@ pub struct Dossier {
     /// investigated"; a reader that tried and failed names "funding" in
     /// `unavailable`.
     pub funding: Option<crate::wallets::Funding>,
+    /// A dated market snapshot (`crate::market`, Robinhood only today).
+    /// `None` is "not read"; a reader that tried and failed names "market"
+    /// in `unavailable`. Its own price/cap always carry the wall-clock
+    /// moment they were read at (AGENTS.md §3 rule 5); its liquidity dollars
+    /// are never wired into `CurveFacts::quote_capacity` -- see
+    /// `crate::market`'s module doc.
+    pub market: Option<crate::market::MarketSnapshot>,
     /// The largest token accounts, aggregated by owner, and the mint's own
     /// authorities (design 0027 row 6/7, Solana only today). `None` is "not
     /// investigated"; a reader that tried and failed names "token ownership"
@@ -382,6 +389,7 @@ pub fn build(
         chain_launch: None,
         holders: None,
         funding: None,
+        market: None,
         token_ownership: None,
         unavailable: Vec::new(),
         calls: 0,
@@ -972,6 +980,7 @@ mod tests {
             chain_launch: None,
             holders: None,
             funding: None,
+            market: None,
             token_ownership: None,
             unavailable: Vec::new(),
             calls: 0,
@@ -1251,6 +1260,7 @@ mod tests {
                 chain_launch: None,
                 holders: None,
                 funding: None,
+                market: None,
                 token_ownership: None,
                 unavailable: vec![Unavailable {
                     fact: "robinhood reads",

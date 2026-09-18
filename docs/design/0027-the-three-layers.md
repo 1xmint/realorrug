@@ -297,9 +297,58 @@ facts: `FundingChecked` ("4 of 4", with the coverage) and `SharedFunder`
 denominator is always the checked count, "checked" is in the words, and
 the sentence names the innocent reading (an exchange paying out
 withdrawals). It never says "one person", "insiders", "the same owner" or
-"common control", and its tests fail if it does. Slices 5 and 6 build on
+"common control", and its tests fail if it does. salience.rs ranks the
+two as one bundle: when one address funded more than half of the checked
+buyers it leads over concentration (below only a creator record); fewer,
+or no checked count, ranks it below concentration. Slices 5 and 6 build on
 `wallets::investigate`, `Funding`, `Candidate`, `Funder` and
 `Memory::funding_edges`.
+
+### Slice 4: started, not built (2026-09-18)
+
+Recording, not recommending, and recording a partial start honestly rather
+than marking row 4 built before it is. `crates/realorrug-onchain/src/
+roles.rs` adds the type this row's "only with proof" requirement needed:
+`Role`/`Proof`/`RoleClaim` name a pool, curve, factory, locker or the zero
+address, but only via a `Proof::VerifiedAddress` or `Proof::DecodedEvent` —
+there is no code path that assigns a `Role` from balance size or "looks
+like a contract." `concentration()` splits a balance list into proven
+infrastructure and everything else, states the non-infrastructure
+denominator, and flags anything at or over 5% of it as unresolved rather
+than naming a role for it. `robinhood.rs`'s `holders_from` now calls
+`roles::verified_infrastructure` for its curve/factory/zero exclusion
+instead of a bare address array, with the same output.
+
+`crates/realorrug-onchain/src/market.rs` adds `MarketSnapshot` (price,
+market cap with its basis, liquidity, pair address, source, and the
+wall-clock moment it was read, per ADR 0033) behind an `HttpGet` seam
+mirroring `rpc.rs`'s `Transport`, reading DexScreener first and
+GeckoTerminal on failure. `attach()` writes only `Dossier::market`; a
+regression test (`liquidity_dollars_never_reach_capacity`) asserts it
+cannot touch `Dossier::curve.quote_capacity`, which is this row's
+"liquidity dollars never become capacity" requirement made a running
+check rather than a reviewer's promise.
+
+**Not done, and left for the next slice-4 session:** neither module is
+wired into a live read path yet. `dispatch.rs`'s `robinhood()` arm needs
+a `Clients.market: Option<&dyn market::HttpGet>` field (deny-by-default,
+the same shape as `Clients.robinhood`'s "no endpoint configured" rule) so
+a real DexScreener call reaches `radar dossier` and the analyst daemon,
+with a named "market" gap when it is absent or fails. `crates/realorrug-roast/src/sheet.rs`
+does not yet publish the snapshot or a denominator-carrying concentration
+fact — `push_holders`'s existing wording (checked against `origin/main`,
+built by an earlier, different slice) already excludes curve/factory/zero
+by construction and already uses unresolved-role wording ("may be a pool
+or a contract rather than a person"), so this row's (a), (b) and (f) are
+largely already met by that prior work; what is missing is the market
+snapshot fact and its moment. Custody and admin-power facts
+(`isLocked(token)` etc.) are not implemented at all: `pons.rs`'s existing
+selector table is verified against deployed bytecode by a documented
+methodology, and no real locker contract's bytecode has been verified
+that way in this sandbox — inventing one would be introducing a fact
+AGENTS.md rule 2 forbids, not recording one. Row 4 stays open in the
+table above until a session with that verification, and the dispatch and
+sheet wiring, closes it.
 
 ### Slice 6a as built (2026-09-18)
 
@@ -430,6 +479,30 @@ non-model learned baseline; slice 10 carries item 5; slice 12 may publish a
 per-reply model ceiling of $0.002 is recommended to rise to about $0.02 so
 the reply is not forced onto the cheapest model; that is a recommendation,
 not yet a decision.
+
+**The good side, approved by Josh on 2026-09-18** ("yes"). The catalog
+also holds patterns of healthy launches, not only scams. Each entry is
+tagged as either a *warning* or a *reassurance*, and both live in the same
+catalog, matcher and packet log (slice 7b), so nothing extra is built.
+
+- **Why.** Without it the bot can only say "nothing ugly yet". With it a
+  reply can name what went right with the same specificity as a warning
+  (a creator whose last launches filled their curve, early buyers funded
+  from unrelated sources). That is fairer to honest launches, gives
+  holders a reply worth sharing, and explains an odd-looking launch that
+  has an innocent reason.
+- **A reassurance must separate.** Scammers copy good signs on purpose (a
+  locked pool, a renounced mint). An entry is measured on the labelled set
+  against rugs as well as survivors; one that is common among rugs stays
+  in the catalog as a checked fact but carries no weight.
+- **What a reassurance may do:** support `NothingUglyYet` and give the
+  reply a specific reason for it.
+- **What it may never do:** say "safe"; lower a live rug mechanic, which
+  code scored and a match cannot cancel; or fill in for a check that was
+  never read (absent is not zero, and unknown is not safe). The mirror of
+  item 2: a match never lowers a band on its own either.
+- **The weekly review (9b)** proposes both kinds, and a reassurance
+  candidate's PR shows the same back-test on both held-out splits.
 
 Still pending from §4: model band choice stays shadow-only, contest
 weights, the honeypot and wallet-language gates, and age prose.

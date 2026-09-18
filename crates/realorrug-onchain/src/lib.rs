@@ -56,9 +56,11 @@ pub mod budget;
 pub mod dispatch;
 pub mod dossier;
 pub mod launch;
+pub mod market;
 pub mod memory;
 pub mod reserves;
 pub mod robinhood;
+pub mod roles;
 pub mod rpc;
 pub mod wallets;
 
