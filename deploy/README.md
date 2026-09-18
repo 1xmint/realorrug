@@ -80,21 +80,35 @@ Three files are read at paths relative to that working directory:
   `/v1/public/stats`. Written by the `creator-index` job, beside the index and
   from the same walk, so the two can never disagree. It held the last one Radar
   built until 2026-09-17, when building the Robinhood index overwrote it; it now
-  states Pons v2's totals, with its `chain` field saying so. Its outcome columns
-  are absent rather than zero until the pass below runs, and `/v1/public/stats`
-  publishes them as JSON `null` for the same reason. Without the file the page
-  answers "not measured yet" and the site shows its own dated figures.
+  states Pons v2's totals, with its `chain` field saying so. As of the run
+  described below, `creator-index` measures its outcome columns from logs in
+  the same pass that counts launches -- `TokenLaunched`, `Graduated` and
+  `CurveBuy`, all over the same block range -- so they are no longer absent by
+  default. They are still written absent, not zero, if any of those three
+  walks fails to finish the range, or if `--verify` disagrees with a sampled
+  `getLaunchedToken` call: a half-finished outcome pass must not overwrite a
+  good file with small numbers. `/v1/public/stats` publishes JSON `null` for
+  whichever columns are absent, and the page answers "not measured yet" for
+  those; without the file at all it shows its own dated figures.
 - `docs/research/data/creator-index.json`, who launched what. **Built on the box
   on 2026-09-17** from Robinhood Chain launches (plan 0001 step 7b): 531,581
   launches by 301,820 launchers, blocks 0 to 65,763,847, 134 requests, 33.5 MB
-  on disk and about 50 MB of the analyst's memory. The outcome pass that fills
-  `measured`/`organic`/`instant`/`stillborn` and the deployer-to-fee-recipient
-  alias has **not** run, so a reply can say this launcher has launched before
-  and how often, and cannot yet say how those went. Without the file entirely,
-  replies say nothing about who launched a token and the analyst says so once at
-  startup; a successful load is silent, so the absence of that line is the
-  confirmation. A copy of Radar's would be worse than nothing: it is a different
-  chain, and a creator it had not seen would read as a first launch.
+  on disk and about 50 MB of the analyst's memory. That run predates the
+  outcome pass; a re-run now also fills `measured`/`organic`/`instant`/
+  `stillborn` from the `Graduated` and `CurveBuy` walks above (the
+  deployer-to-fee-recipient alias is still separate future work), so a reply
+  can say this launcher has launched before, how often, and -- once re-run --
+  how those went. `stillborn` here means "no `CurveBuy` in any block after the
+  launch block": Robinhood's own definition, chosen because the Solana
+  measurement this index mirrors used a wall-clock window and both trade
+  directions, neither of which a Robinhood log answers cheaply; see
+  `realorrug-cli/src/creator_index.rs`'s module doc and
+  `realorrug-roast/src/creator.rs`'s field docs for the full reasoning.
+  Without the file entirely, replies say nothing about who launched a token
+  and the analyst says so once at startup; a successful load is silent, so the
+  absence of that line is the confirmation. A copy of Radar's would be worse
+  than nothing: it is a different chain, and a creator it had not seen would
+  read as a first launch.
 
 The daily "seven days later" post reads a day's file in `data/analyst/daily/`.
 Radar's join wrote those; nothing does now, so the post is silent until

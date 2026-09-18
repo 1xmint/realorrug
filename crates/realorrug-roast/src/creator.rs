@@ -46,7 +46,23 @@
 //! And **graduation is split**. A curve bought out within three slots of launch
 //! was bought by capital committed before the token existed, so it is evidence
 //! of coordination rather than demand. A creator ranked on the undifferentiated
-//! count is ranked partly on how well they bundle.
+//! count is ranked partly on how well they bundle. Robinhood Chain has blocks,
+//! not slots; `realorrug-cli/src/creator_index.rs` reads "three slots" as three
+//! *blocks* of the factory's `Graduated` event landing after `TokenLaunched`,
+//! because the underlying claim — capital already in place beats capital that
+//! has to arrive — does not depend on which chain is doing the ordering.
+//!
+//! **Stillborn is Robinhood's own definition, not Solana's.** The Solana
+//! measurement this module was written against never got a calibrated rule (see
+//! `docs/research/0038-pons-v2-creators-and-outcomes-read-over-a-range.md` §4);
+//! what it sketched — few or zero buys *and* sells in a wall-clock window — does
+//! not map onto an Ethereum-style log, which carries no timestamp and where a
+//! sell presupposes a buy that already happened. Robinhood's outcome pass
+//! instead calls a curve stillborn when it has **no `CurveBuy` in any block
+//! after its launch block**: cheap to answer from logs alone (one pass over
+//! every curve's buys, keeping only the address, not the log), and it still
+//! means the thing "stillborn" is supposed to mean — nobody, ever, chose to buy
+//! this token once the moment of launch had passed.
 
 use std::collections::BTreeMap;
 
@@ -69,9 +85,12 @@ pub struct Record {
     pub measured: u32,
     /// Measured tokens whose curve filled over time rather than in a block.
     pub organic: u32,
-    /// Measured tokens whose curve completed within three slots of launch.
+    /// Measured tokens whose curve completed within three blocks of launch --
+    /// see the module doc's "graduation is split" section.
     pub instant: u32,
-    /// Measured tokens that showed almost no life.
+    /// Measured tokens with no `CurveBuy` in any block after the launch
+    /// block -- Robinhood's own definition; see the module doc's "stillborn"
+    /// section.
     pub stillborn: u32,
 }
 
@@ -107,9 +126,12 @@ pub struct Population {
     pub measured: u64,
     /// Measured tokens whose curve filled over time.
     pub organic: u64,
-    /// Measured tokens whose curve completed within three slots of launch.
+    /// Measured tokens whose curve completed within three blocks of launch --
+    /// see the module doc's "graduation is split" section.
     pub instant: u64,
-    /// Measured tokens that showed almost no life.
+    /// Measured tokens with no `CurveBuy` in any block after the launch
+    /// block -- Robinhood's own definition; see the module doc's "stillborn"
+    /// section.
     pub stillborn: u64,
 }
 

@@ -635,26 +635,66 @@ const LOGS_PER_WINDOW: u64 = 8_000;
 pub fn walk_launches<F, S>(
     from_block: u64,
     to_block: u64,
-    mut fetch: F,
+    fetch: F,
     mut sink: S,
 ) -> Result<u64, String>
 where
     F: FnMut(u64, u64) -> Result<Vec<Log>, LogsError>,
     S: FnMut(Launched),
 {
+    let mut launches = 0_u64;
+    // The walk's own tallies are dropped here on purpose: this function's
+    // contract is "how many launches", and `Walked::logs` would be the same
+    // number only by coincidence of every log decoding.
+    let _ = walk_logs(from_block, to_block, fetch, |log| {
+        if let Some(launch) = Launched::from_log(log) {
+            sink(launch);
+            launches = launches.saturating_add(1);
+        }
+    })?;
+    Ok(launches)
+}
+
+/// Every log between two blocks matching whatever filter `fetch` already
+/// carries (an address, a topic list, or both), in order, handed to `sink`
+/// one at a time, undecoded.
+///
+/// [`walk_launches`] is this with a `TokenLaunched` decode wired in; it is
+/// pulled out on its own because the `creator-index` command runs the same
+/// windowed walk two more times over the same block range for `Graduated`
+/// (still scoped to the factory) and `CurveBuy` (scoped to no address at
+/// all, since a curve's own address is not known until its `TokenLaunched`
+/// is seen) -- the resizing logic that survives the provider's result cap is
+/// the part worth sharing, not the decode.
+///
+/// # Errors
+///
+/// The provider's error, or a window of a single block that still answers
+/// "too many results" -- which cannot be halved further, and is reported
+/// rather than skipped, because skipping it would drop every log in that
+/// block while the walk went on looking complete.
+pub fn walk_logs<F>(
+    from_block: u64,
+    to_block: u64,
+    mut fetch: F,
+    mut sink: impl FnMut(&Log),
+) -> Result<Walked, String>
+where
+    F: FnMut(u64, u64) -> Result<Vec<Log>, LogsError>,
+{
     let mut at = from_block;
     let mut window: u64 = 1;
-    let mut launches = 0_u64;
+    let mut seen = 0_u64;
+    let mut fetches = 0_u64;
     while at <= to_block {
         let end = at.saturating_add(window - 1).min(to_block);
+        fetches = fetches.saturating_add(1);
         match fetch(at, end) {
             Ok(logs) => {
                 let held = u64::try_from(logs.len()).unwrap_or(u64::MAX);
                 for log in &logs {
-                    if let Some(launch) = Launched::from_log(log) {
-                        sink(launch);
-                        launches += 1;
-                    }
+                    sink(log);
+                    seen = seen.saturating_add(1);
                 }
                 at = end.saturating_add(1);
                 window = next_window(window, held);
@@ -671,7 +711,29 @@ where
             Err(LogsError::Other(e)) => return Err(e),
         }
     }
-    Ok(launches)
+    Ok(Walked {
+        requests: fetches,
+        logs: seen,
+    })
+}
+
+/// What one [`walk_logs`] cost and what it found.
+///
+/// `requests` is here rather than counted by each caller inside its own
+/// `fetch` closure, which is where it lived until 2026-09-17. A caller's
+/// counter cannot be tested without a fake endpoint, so the three walks in
+/// `creator-index` each had an untested `calls += 1` deciding the cost figure
+/// an operator reads to answer "can I afford to run this on the free plan".
+/// Counted here, it is the walk's own arithmetic and a plain `fetch` closure
+/// in a test can prove it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Walked {
+    /// How many times `fetch` was called -- **including** the retries after a
+    /// "too many results" answer, because a capped request is a request the
+    /// provider counted against the plan's quota just like any other.
+    pub requests: u64,
+    /// How many logs reached `sink`.
+    pub logs: u64,
 }
 
 /// The next window, scaled from what the last one actually held.
@@ -1544,6 +1606,48 @@ mod tests {
             seen.len(),
             expected,
             "a launch was delivered twice or not at all across a window that halved and grew"
+        );
+    }
+
+    #[test]
+    fn the_request_count_includes_the_capped_attempts_a_provider_still_bills() {
+        // The number an operator reads to answer "can I run this on the free
+        // plan". A count of only the successful windows understates it by
+        // exactly the halvings, which is worst on the busiest range -- the one
+        // where being wrong about the cost matters.
+        let mut attempts = 0_u64;
+        let logs: Vec<Log> = (0_u8..60)
+            .map(|n| factory_launch(u64::from(n) % 8, 7, n))
+            .collect();
+        let walked = walk_logs(
+            0,
+            7,
+            |from, to| {
+                attempts += 1;
+                capped_at(20, logs.clone())(from, to)
+            },
+            |_| (),
+        )
+        .expect("eight blocks of sixty logs, capped at twenty, splits fine");
+
+        assert_eq!(
+            walked.requests, attempts,
+            "the walk counted a different number of requests than it made"
+        );
+        assert_eq!(
+            usize::try_from(walked.logs).expect("fits"),
+            logs.len(),
+            "every log the provider held must reach the sink"
+        );
+        // Re-apply the bug by moving `fetches` past the `match`: the window
+        // starts at one block and grows, so it must have been capped at least
+        // once here, and only a count that includes the capped attempt can
+        // equal `attempts`.
+        assert!(
+            walked.requests > 8,
+            "eight blocks took {} requests, so nothing was ever capped and this \
+             test proves nothing about retries",
+            walked.requests
         );
     }
 
