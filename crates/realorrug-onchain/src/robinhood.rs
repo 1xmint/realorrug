@@ -244,11 +244,19 @@ fn holders_from(logs: &[Log], record: &LaunchedToken) -> Result<Holders, String>
         let balance = balances.entry(to).or_default();
         *balance = balance.saturating_add(value);
     }
-    let machinery = [RobinhoodAddress::ZERO, record.curve, FACTORY];
+    // `roles::verified_infrastructure` names the same three addresses this
+    // used to spell out as a bare `[ZERO, curve, FACTORY]` array, but now the
+    // "only with proof" rule (design 0027 §2.1's third distinction) is a type
+    // this function calls into rather than a convention every caller has to
+    // keep re-stating -- see `crate::roles` for the six tests that pin it
+    // down. Each is a `Proof::VerifiedAddress`: the zero address is a fixed
+    // constant, and the curve and factory are read from the factory's own
+    // `LaunchedToken` record, never guessed from balance size.
+    let claims = crate::roles::verified_infrastructure(record.curve, FACTORY);
     Ok(holders_of(
         balances
             .into_iter()
-            .filter(|(who, _)| !machinery.contains(who))
+            .filter(|(who, _)| !claims.iter().any(|c| c.address == *who))
             .map(|(_, balance)| balance),
     ))
 }

@@ -197,7 +197,11 @@ pub fn concentration(balances: &[(Address, u128)], proven: &[RoleClaim]) -> Conc
             share_bps: share_bps(balance),
         })
         .collect();
-    ranked.sort_by(|a, b| b.balance.cmp(&a.balance).then(a.address.0.cmp(&b.address.0)));
+    ranked.sort_by(|a, b| {
+        b.balance
+            .cmp(&a.balance)
+            .then(a.address.0.cmp(&b.address.0))
+    });
 
     let largest_non_infrastructure = ranked.first().cloned();
     let unresolved_large = ranked
@@ -278,8 +282,13 @@ mod tests {
         assert_eq!(c.unresolved_large.len(), 1);
         assert_eq!(c.unresolved_large[0].address, big);
         assert_eq!(c.unresolved_large[0].share_bps, 9_900);
-        let largest = c.largest_non_infrastructure.expect("largest still reported");
-        assert_eq!(largest.address, big, "an unproven whale is still the largest holder");
+        let largest = c
+            .largest_non_infrastructure
+            .expect("largest still reported");
+        assert_eq!(
+            largest.address, big,
+            "an unproven whale is still the largest holder"
+        );
     }
 
     #[test]
@@ -301,9 +310,21 @@ mod tests {
         let factory = addr(0x22);
         let claims = verified_infrastructure(curve, factory);
         assert_eq!(claims.len(), 3);
-        assert!(claims.iter().any(|c| c.address == Address::ZERO && c.role == Role::Zero));
-        assert!(claims.iter().any(|c| c.address == curve && c.role == Role::Curve));
-        assert!(claims.iter().any(|c| c.address == factory && c.role == Role::Factory));
+        assert!(
+            claims
+                .iter()
+                .any(|c| c.address == Address::ZERO && c.role == Role::Zero)
+        );
+        assert!(
+            claims
+                .iter()
+                .any(|c| c.address == curve && c.role == Role::Curve)
+        );
+        assert!(
+            claims
+                .iter()
+                .any(|c| c.address == factory && c.role == Role::Factory)
+        );
         for c in &claims {
             assert!(matches!(c.proof, Proof::VerifiedAddress(_)));
         }

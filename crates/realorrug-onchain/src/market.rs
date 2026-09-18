@@ -328,8 +328,13 @@ mod tests {
         })
         .to_string();
         let http = canned(vec![Err("timed out".to_owned()), Ok(gecko_body)]);
-        let snap = snapshot(&http, &mut budget, "https://dex.invalid", "https://gecko.invalid")
-            .expect("gecko fallback succeeds");
+        let snap = snapshot(
+            &http,
+            &mut budget,
+            "https://dex.invalid",
+            "https://gecko.invalid",
+        )
+        .expect("gecko fallback succeeds");
         assert_eq!(snap.source, Source::GeckoTerminal);
         assert_eq!(budget.calls_made(), 2, "both lookups were priced");
     }
@@ -337,9 +342,17 @@ mod tests {
     #[test]
     fn both_aggregators_failing_names_both_reasons() {
         let mut budget = Budget::default();
-        let http = canned(vec![Err("timed out".to_owned()), Err("also down".to_owned())]);
-        let err = snapshot(&http, &mut budget, "https://dex.invalid", "https://gecko.invalid")
-            .unwrap_err();
+        let http = canned(vec![
+            Err("timed out".to_owned()),
+            Err("also down".to_owned()),
+        ]);
+        let err = snapshot(
+            &http,
+            &mut budget,
+            "https://dex.invalid",
+            "https://gecko.invalid",
+        )
+        .unwrap_err();
         assert!(err.contains("timed out"), "{err}");
         assert!(err.contains("also down"), "{err}");
     }
@@ -348,8 +361,13 @@ mod tests {
     fn a_budget_with_no_calls_left_never_reaches_the_network() {
         let mut budget = Budget::new(0, 1, std::time::Duration::from_secs(1));
         let http = canned(vec![]);
-        let err = snapshot(&http, &mut budget, "https://dex.invalid", "https://gecko.invalid")
-            .unwrap_err();
+        let err = snapshot(
+            &http,
+            &mut budget,
+            "https://dex.invalid",
+            "https://gecko.invalid",
+        )
+        .unwrap_err();
         assert!(err.contains("budget exhausted"), "{err}");
     }
 
@@ -365,7 +383,9 @@ mod tests {
             quote_reserves: 1_000,
             quote_capacity: Some(777),
             quote_asset: Some(QuoteAsset::eth()),
-            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new([0u8; 32])),
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [0u8; 32],
+            )),
             fees: None,
         });
         let snap = MarketSnapshot {
