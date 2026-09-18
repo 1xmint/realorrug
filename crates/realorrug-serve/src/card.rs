@@ -546,16 +546,96 @@ mod tests {
     /// [`no_signal_line`], the single place that mapping lives.
     #[test]
     fn no_flags_draws_the_levels_own_line() {
-        let svg = build_svg("Nothing ugly yet", "solana", None, None, &[]);
-        assert!(
-            svg.contains("nothing ugly in what was read"),
-            "the no-signal fallback line for this word must be drawn: {svg}"
-        );
+        // Every rung, not two of them: a card drawn for a rugged token with
+        // no signal stashed must not fall through to the grey "could not be
+        // read" sentence, which contradicts the red word above it. Deleting
+        // any one arm of `no_signal_line` fails here.
+        for (word, line) in [
+            ("Rugged", "the mechanics of this token did the harm"),
+            (
+                "Rug mechanics live",
+                "the mechanics of this token did the harm",
+            ),
+            ("Sketchy", "something about this token did not read clean"),
+            ("Nothing ugly yet", "nothing ugly in what was read"),
+            ("Can't tell", "not enough of it could be read"),
+        ] {
+            assert_eq!(
+                no_signal_line(word),
+                line,
+                "the no-signal line for {word} is wrong"
+            );
+            let svg = build_svg(word, "solana", None, None, &[]);
+            assert!(
+                svg.contains(line),
+                "the no-signal fallback line for {word} must be drawn: {svg}"
+            );
+        }
+    }
 
-        let svg = build_svg("Can't tell", "solana", None, None, &[]);
+    #[test]
+    fn each_ladder_word_gets_its_own_no_signal_line_and_they_differ() {
+        // Four rungs, three sentences -- "Rugged" and "Rug mechanics live"
+        // share one on purpose. What must never happen is all of them
+        // collapsing onto one sentence, which is what a body replaced
+        // wholesale looks like.
+        let lines: Vec<&str> = ["Rugged", "Sketchy", "Nothing ugly yet", "Can't tell"]
+            .into_iter()
+            .map(no_signal_line)
+            .collect();
+        let mut unique = lines.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            4,
+            "each ladder rung needs its own no-signal sentence, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn three_flags_are_drawn_on_three_separate_descending_lines() {
+        // The y of each line is arithmetic nothing else reads back, so a
+        // wrong step (or a `-` where a `+` belongs) silently stacks all
+        // three on one baseline or throws them off the card. Re-apply any
+        // of those by editing the `FLAG_FIRST_Y + i * FLAG_STEP_Y`
+        // expression and the three assertions below stop matching.
+        let flags = vec![
+            "first line".to_owned(),
+            "second line".to_owned(),
+            "third line".to_owned(),
+        ];
+        let svg = build_svg("Sketchy", "solana", None, None, &flags);
+        for i in 0..MAX_FLAG_LINES {
+            let y = FLAG_FIRST_Y + i * FLAG_STEP_Y;
+            assert_eq!(
+                y,
+                360 + i * 46,
+                "the flag baselines moved; check they still clear the chain label"
+            );
+            assert!(
+                svg.contains(&format!(r#"y="{y}""#)),
+                "flag line {i} should sit at y={y}: {svg}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_chain_label_sits_inside_the_card_below_the_flags() {
+        // `HEIGHT - 140` off by a sign puts the label at y=770, off a 630px
+        // image entirely -- the card would render with no chain on it and
+        // nothing else would notice.
+        let card_bottom = HEIGHT as usize - 60;
+        let last_flag = FLAG_FIRST_Y + (MAX_FLAG_LINES - 1) * FLAG_STEP_Y;
         assert!(
-            svg.contains("not enough of it could be read"),
-            "the no-signal fallback line for this word must be drawn: {svg}"
+            CHAIN_LABEL_Y > last_flag && CHAIN_LABEL_Y < card_bottom,
+            "the chain label at y={CHAIN_LABEL_Y} must fall between the last flag \
+             line at y={last_flag} and the card's bottom edge at y={card_bottom}"
+        );
+        let svg = build_svg("Sketchy", "robinhood", None, None, &[]);
+        assert!(
+            svg.contains(&format!(r#"y="{CHAIN_LABEL_Y}""#)),
+            "the chain label should be drawn at y={CHAIN_LABEL_Y}: {svg}"
         );
     }
 

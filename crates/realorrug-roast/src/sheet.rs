@@ -2439,23 +2439,46 @@ mod tests {
         }
     }
 
+    /// Every variant, listed once for the two tests below. A new variant
+    /// will not fail to compile against this array, but it will fail
+    /// `Signal::plain`'s own exhaustive match, which is the cheaper guard.
+    const EVERY_SIGNAL: [Signal; 9] = [
+        Signal::LaunchBlockInStrongestBand,
+        Signal::CreatorNeverGraduatedOrganically,
+        Signal::CreatorBoughtOwnLaunch,
+        Signal::LiquidityGone,
+        Signal::CreatorSoldOut,
+        Signal::BuyersCannotSell,
+        Signal::RepeatLauncher,
+        Signal::HolderConcentration,
+        Signal::OwnerCanStillMintOrPause,
+    ];
+
+    #[test]
+    fn every_signal_has_a_plain_phrase_no_other_signal_shares() {
+        // The checks below pin what a phrase must look like; this pins that
+        // there are nine of them. One body returning a single string for
+        // every variant passes "non-empty, short, digit-free" perfectly and
+        // draws a card whose three lines all say the same thing.
+        let phrases: Vec<&str> = EVERY_SIGNAL.iter().map(|s| s.plain()).collect();
+        let mut unique = phrases.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            EVERY_SIGNAL.len(),
+            "two signals share a plain phrase, so the card would say the same \
+             thing twice: {phrases:?}"
+        );
+    }
+
     #[test]
     fn every_signal_variant_has_a_short_nonempty_digit_free_plain_phrase() {
         // Same discipline as the twin test above, for `Signal::plain`: the
         // exhaustive match with no `_ =>` arm means a new variant fails to
         // compile without a phrase here; this test catches an empty, too
         // long, or digit-smuggling one, which exhaustiveness alone cannot.
-        for signal in [
-            Signal::LaunchBlockInStrongestBand,
-            Signal::CreatorNeverGraduatedOrganically,
-            Signal::CreatorBoughtOwnLaunch,
-            Signal::LiquidityGone,
-            Signal::CreatorSoldOut,
-            Signal::BuyersCannotSell,
-            Signal::RepeatLauncher,
-            Signal::HolderConcentration,
-            Signal::OwnerCanStillMintOrPause,
-        ] {
+        for signal in EVERY_SIGNAL {
             let plain = signal.plain();
             assert!(!plain.is_empty(), "{signal:?} has an empty plain phrase");
             assert!(
