@@ -79,17 +79,37 @@ pub enum Error {
 /// [`Error::Unreadable`] when it names a real address on a chain that could
 /// not be read -- including a Robinhood address with no endpoint configured.
 pub fn read(mint_text: &str, clients: &Clients<'_>) -> Result<Dossier, Error> {
-    let address: ChainAddress = mint_text.parse().map_err(|_| Error::NotAnAddress)?;
     let mut budget = Budget::default();
+    read_with_memory(mint_text, clients, None, &mut budget)
+}
+
+/// Reads with the caller's launch memory and budget. Keeping the budget at
+/// the caller lets it count calls even when no dossier can be returned.
+///
+/// # Errors
+///
+/// The same address and chain failures as [`read`].
+pub fn read_with_memory(
+    mint_text: &str,
+    clients: &Clients<'_>,
+    memory: Option<&crate::memory::Memory>,
+    budget: &mut Budget,
+) -> Result<Dossier, Error> {
+    let address: ChainAddress = mint_text.parse().map_err(|_| Error::NotAnAddress)?;
     match address {
-        ChainAddress::Solana(mint) => solana(clients.solana, &mut budget, &mint),
-        ChainAddress::Robinhood(token) => robinhood(clients.robinhood, &mut budget, &token),
+        ChainAddress::Solana(mint) => solana(clients.solana, budget, &mint, memory),
+        ChainAddress::Robinhood(token) => robinhood(clients.robinhood, budget, &token),
     }
 }
 
 /// The Solana arm, split out so [`read`]'s match stays one line per chain.
-fn solana(client: &RpcClient, budget: &mut Budget, mint: &Address) -> Result<Dossier, Error> {
-    SolanaReader
+fn solana(
+    client: &RpcClient,
+    budget: &mut Budget,
+    mint: &Address,
+    memory: Option<&crate::memory::Memory>,
+) -> Result<Dossier, Error> {
+    SolanaReader { memory }
         .read(client, budget, mint)
         .map_err(|e| Error::Unreadable(e.to_string()))
 }
@@ -207,7 +227,7 @@ mod tests {
         let client_a =
             RpcClient::with_transport("http://test.invalid", Box::new(Always(body.clone())));
         let mut budget_a = Budget::default();
-        let direct = SolanaReader.read(&client_a, &mut budget_a, &mint);
+        let direct = SolanaReader::default().read(&client_a, &mut budget_a, &mint);
 
         let client_b = RpcClient::with_transport("http://test.invalid", Box::new(Always(body)));
         let clients = Clients {

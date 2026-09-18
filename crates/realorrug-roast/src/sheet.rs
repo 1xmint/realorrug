@@ -49,7 +49,7 @@ use std::fmt::Write as _;
 /// is stated plainly: [`Fact::exact`] and [`Fact::share`] tag a measurement, so
 /// an author adding a market-cap line through them and not through a literal
 /// still has to choose the tag. There is no way to make the compiler ask.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum About {
     /// Structure, history, depth, cost or population -- what the analyst
     /// exists to state, about any token including its own.
@@ -59,7 +59,7 @@ pub enum About {
 }
 
 /// One publishable number, with the words that make it a claim.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Fact {
     /// What kind of claim this is. Decides whether the self-mint rule drops it.
     pub about: About,
@@ -344,7 +344,7 @@ impl Signal {
 }
 
 /// Everything the analyst may assert about one token.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FactSheet {
     /// The mint, as text. Not a number, and never checked as one.
     pub mint: String,

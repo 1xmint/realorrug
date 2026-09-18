@@ -435,10 +435,13 @@ pub trait ChainReader {
 /// Exists so Solana is on the seam from day one rather than being the one
 /// chain that predates it -- a second chain's reader is written against this
 /// trait, not against a special case for "the chain that came first."
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SolanaReader;
+#[derive(Clone, Copy, Default)]
+pub struct SolanaReader<'a> {
+    /// Optional durable memory for immutable launch records only.
+    pub memory: Option<&'a Memory>,
+}
 
-impl ChainReader for SolanaReader {
+impl ChainReader for SolanaReader<'_> {
     type Client = RpcClient;
     type Token = Address;
     type Error = RpcError;
@@ -449,11 +452,7 @@ impl ChainReader for SolanaReader {
         budget: &mut Budget,
         mint: &Address,
     ) -> Result<Dossier, RpcError> {
-        // No memory: the seam `dispatch.rs` and `robinhood.rs` both call
-        // through does not carry one today (packet 0039 only owns
-        // `dossier.rs`, `memory.rs`, `lib.rs` and the CLI caller). A `None`
-        // here reads the chain every time, correctly, per `build`'s own doc.
-        build(client, budget, mint, None)
+        build(client, budget, mint, self.memory)
     }
 }
 
@@ -961,7 +960,7 @@ mod tests {
 
         let client_b = RpcClient::with_transport("http://test.invalid", Box::new(Always(response)));
         let mut budget_b = Budget::new(60, 3, std::time::Duration::from_secs(30));
-        let via_reader = SolanaReader.read(&client_b, &mut budget_b, &mint);
+        let via_reader = SolanaReader::default().read(&client_b, &mut budget_b, &mint);
 
         match (direct, via_reader) {
             (Ok(d), Ok(r)) => {
@@ -1140,6 +1139,47 @@ mod tests {
     struct SuccessfulLaunch {
         signatures: String,
         transaction: String,
+    }
+
+    #[test]
+    fn the_dispatcher_reuses_a_launch_after_the_memory_is_reopened() {
+        // Exercise the caller seam, not just `build`: leaving None in the
+        // reader or dispatcher must bring back the expensive signature walk.
+        let mint = Address::new([2u8; 32]);
+        let mint_key = mint.to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("memory.sqlite3");
+        let memory = Memory::open(&path).expect("open");
+        let launch = LaunchBlock {
+            slot: Slot(500),
+            creator: Address::new([3u8; 32]),
+            recipients: Count::Exactly(1),
+            transactions: Count::Exactly(1),
+            dev_buy_lamports: None,
+            metadata: Metadata {
+                name: "Name".to_owned(),
+                symbol: "SYM".to_owned(),
+                uri: "uri".to_owned(),
+            },
+        };
+        store_launch(&memory, &mint_key, &launch).expect("store launch");
+        drop(memory);
+        let memory = Memory::open(&path).expect("reopen");
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(HitVsMiss(mint_key.clone())),
+        );
+        let clients = crate::dispatch::Clients {
+            solana: &client,
+            robinhood: None,
+        };
+        let mut budget = Budget::default();
+        let dossier =
+            crate::dispatch::read_with_memory(&mint_key, &clients, Some(&memory), &mut budget)
+                .expect("read");
+        assert_eq!(dossier.launch, Some(launch));
+        assert_eq!(dossier.calls, 2);
+        assert_eq!(budget.calls_made(), 2);
     }
 
     impl crate::rpc::Transport for SuccessfulLaunch {

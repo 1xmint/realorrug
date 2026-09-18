@@ -34,6 +34,8 @@ use realorrug_roast::Billed;
 pub struct Answering<'a> {
     /// The chain, read on demand.
     pub client: &'a RpcClient,
+    /// Durable Solana launch records; changing facts still come from the chain.
+    pub memory: Option<&'a realorrug_onchain::memory::Memory>,
     /// Robinhood Chain's endpoint, or `None` when it is not configured.
     ///
     /// AGENTS.md §3 rule 7: there is no default (`realorrug-cli`'s
@@ -209,6 +211,35 @@ pub fn answer(
     lane2: &mut crate::lane2::Gate,
     ctx: &Answering<'_>,
 ) -> Answered {
+    let mut metrics = DossierMetrics::default();
+    let outcome = answer_measured(mention, gate, threads, lane2, ctx, &mut metrics);
+    eprintln!("{}", metrics.notice(&mention.id));
+    outcome
+}
+
+#[derive(Default)]
+struct DossierMetrics {
+    calls: u32,
+    elapsed_ms: u128,
+}
+
+impl DossierMetrics {
+    fn notice(&self, mention_id: &str) -> String {
+        format!(
+            "realorrug-analyst: {mention_id} -> dossier calls={} elapsed_ms={}",
+            self.calls, self.elapsed_ms
+        )
+    }
+}
+
+fn answer_measured(
+    mention: &Mention,
+    gate: &mut Gate,
+    threads: &mut crate::followup::ThreadMemory,
+    lane2: &mut crate::lane2::Gate,
+    ctx: &Answering<'_>,
+    metrics: &mut DossierMetrics,
+) -> Answered {
     // **A follow-up that names nothing design 0020 §2 lists** gets design
     // 0022 §1's fixed refusal, before the mint/ticker parse below ever runs.
     // Only mentions inside a thread this process has already answered in are
@@ -300,17 +331,20 @@ pub fn answer(
         // anything else is tried as Solana's base58 -- never on configuration
         // and never guessed. The one function this whole task exists to
         // introduce: both analyst entry points and the CLI call it rather
-        // than each writing its own "which chain is this" match. It also owns
-        // the call budget (`realorrug-onchain`'s own default, sixty calls,
-        // three pages, twenty seconds) for the same reason `answer.rs` used
-        // to build it by hand and no longer does: a stranger chooses when
-        // this runs and how many run at once, and a second copy of the
-        // ceiling is a second thing to forget to change.
+        // than each writing its own "which chain is this" match. The budget
+        // uses `realorrug-onchain`'s default: a stranger chooses when this
+        // runs, so the ceiling must not drift between callers.
         let clients = dispatch::Clients {
             solana: ctx.client,
             robinhood: ctx.robinhood,
         };
-        let dossier = match dispatch::read(&mint_text, &clients) {
+        let mut budget = realorrug_onchain::Budget::default();
+        let result = dispatch::read_with_memory(&mint_text, &clients, ctx.memory, &mut budget);
+        // Read the meter even on error: failed RPCs also cost calls. A cache
+        // hit or an answer with no chain read leaves both measurements zero.
+        metrics.calls = budget.calls_made();
+        metrics.elapsed_ms = budget.elapsed().as_millis();
+        let dossier = match result {
             Ok(d) => d,
             Err(dispatch::Error::NotAnAddress) => return Answered::NotAnAddress,
             Err(dispatch::Error::Unreadable(why)) => return Answered::Unreadable(why),
@@ -322,6 +356,7 @@ pub fn answer(
             ctx.self_mint,
             None,
         );
+        gate.cache_sheet(&mint_text, sheet.clone(), dossier.read_at, ctx.now);
         (sheet, dossier.read_at)
     };
     // Written fresh every time, even from a cached sheet: two people asking
@@ -338,9 +373,8 @@ pub fn answer(
     if let Some(conversation) = &mention.conversation {
         threads.record(conversation, &mint_text, level);
     }
-    // Cloned before `sheet.signals` is moved out of it below for the log
-    // entry: the caller needs the whole sheet, unmodified, to cache it for
-    // reuse by the next distinct post about this mint.
+    // Kept whole for callers inspecting the answer, before `sheet.signals`
+    // is moved into the log. The gate already holds any newly read sheet.
     let cached_sheet = Box::new((sheet.clone(), read_at));
 
     Answered::Reply {
@@ -431,6 +465,7 @@ mod tests {
     fn ctx(client: &RpcClient) -> Answering<'_> {
         Answering {
             client,
+            memory: None,
             robinhood: None,
             rates: None,
             creators: None,
@@ -447,6 +482,116 @@ mod tests {
     /// would fail rather than quietly depend on it.
     fn unreachable_client() -> RpcClient {
         RpcClient::new("http://127.0.0.1:1".to_owned())
+    }
+
+    struct EmptyChain;
+
+    impl realorrug_onchain::rpc::Transport for EmptyChain {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            if body.contains("getSignaturesForAddress") {
+                Ok(r#"{"jsonrpc":"2.0","id":1,"result":[]}"#.to_owned())
+            } else {
+                Ok(r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_owned())
+            }
+        }
+    }
+
+    #[test]
+    fn an_unpublished_answer_survives_restart_and_cached_answers_do_not_renew_it() {
+        let path =
+            std::env::temp_dir().join(format!("realorrug-answer-{}.json", rand::random::<u64>()));
+        let client = RpcClient::with_transport("http://test.invalid", Box::new(EmptyChain));
+        let mut context = ctx(&client);
+        let asked = mention("@radar So11111111111111111111111111111111111111112");
+        let mut first = gate();
+        first.load_sheets(&path, context.now);
+        let mut metrics = DossierMetrics::default();
+        let outcome = answer_measured(
+            &asked,
+            &mut first,
+            &mut threads(),
+            &mut lane2_gate(),
+            &context,
+            &mut metrics,
+        );
+        assert!(matches!(outcome, Answered::Reply { .. }));
+        assert_eq!(metrics.calls, 2);
+        drop(first);
+
+        // No `record` or publisher ran. The paid read must already be durable.
+        let mut restarted = gate();
+        context.now += 3599;
+        restarted.load_sheets(&path, context.now);
+        let mut cached = DossierMetrics::default();
+        let outcome = answer_measured(
+            &asked,
+            &mut restarted,
+            &mut threads(),
+            &mut lane2_gate(),
+            &context,
+            &mut cached,
+        );
+        assert!(matches!(outcome, Answered::Reply { .. }));
+        assert_eq!(
+            cached.notice("m1"),
+            "realorrug-analyst: m1 -> dossier calls=0 elapsed_ms=0"
+        );
+
+        context.now += 1;
+        let mut expired = DossierMetrics::default();
+        let outcome = answer_measured(
+            &asked,
+            &mut restarted,
+            &mut threads(),
+            &mut lane2_gate(),
+            &context,
+            &mut expired,
+        );
+        assert!(matches!(outcome, Answered::Reply { .. }));
+        assert_eq!(expired.calls, 2);
+        std::fs::remove_file(path).expect("remove snapshot");
+    }
+
+    struct FailedChain;
+
+    impl realorrug_onchain::rpc::Transport for FailedChain {
+        fn post(&self, _: &str, _: String) -> Result<String, String> {
+            Err("unavailable".to_owned())
+        }
+    }
+
+    #[test]
+    fn failed_reads_are_counted_and_answers_without_reads_report_zero() {
+        let client = RpcClient::with_transport("http://test.invalid", Box::new(FailedChain));
+        let context = ctx(&client);
+        let mut failed = DossierMetrics::default();
+        let outcome = answer_measured(
+            &mention("@radar So11111111111111111111111111111111111111112"),
+            &mut gate(),
+            &mut threads(),
+            &mut lane2_gate(),
+            &context,
+            &mut failed,
+        );
+        assert!(matches!(outcome, Answered::Unreadable(_)));
+        assert_eq!(failed.calls, 1);
+        assert_eq!(failed.notice("m1").lines().count(), 1);
+        assert!(failed.notice("m1").contains(&format!("elapsed_ms={}", failed.elapsed_ms)));
+
+        let mut no_read = DossierMetrics::default();
+        let outcome = answer_measured(
+            &mention("@radar $ABC"),
+            &mut gate(),
+            &mut threads(),
+            &mut lane2_gate(),
+            &context,
+            &mut no_read,
+        );
+        assert!(matches!(outcome, Answered::Ticker { .. }));
+        assert_eq!(
+            no_read.notice("m1"),
+            "realorrug-analyst: m1 -> dossier calls=0 elapsed_ms=0"
+        );
     }
 
     #[test]

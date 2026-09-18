@@ -168,6 +168,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let ctx = Answering {
         client: &client,
+        memory: None,
         robinhood: robinhood.as_ref(),
         rates: rates.as_ref(),
         creators: creators.as_ref(),

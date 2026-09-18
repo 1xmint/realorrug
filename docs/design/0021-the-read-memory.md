@@ -5,9 +5,47 @@
 document writes them up and works the one number he asked for by name (§5).
 **Built so far:** the store (`crates/realorrug-onchain/src/memory.rs`), and
 `realorrug_onchain::build` taking an optional memory in front of the Solana
-launch-record read only (§1, "What is served from memory today"). Every
-caller still passes none, so no running path uses it yet: turning it on needs
-a state path for the file on the box, which is its own change.
+launch-record read only (§1, "What is served from memory today"). The daemon's
+X and Telegram mention paths now open `memory.sqlite3` under
+`REALORRUG_ANALYST_DIR` once per poll and pass it through the dispatcher and
+`SolanaReader`. An unavailable memory is logged and that poll reads the chain;
+the next poll can retry opening it. Curve and creator-activity reads remain
+live, and Robinhood memory is not wired by this change.
+
+**Daemon restart handling (2026-09-17):** the Gate also saves complete fact
+sheets to `sheets.json` (X) and `telegram-sheets.json` (Telegram) under the
+same data directory. These are short-lived snapshots, separate from the
+per-fact read memory: the existing lane's `dedupe_seconds` rule still decides
+freshness, strictly less than the window. The original read timestamp survives
+both restart and reuse. A new sheet is saved before the model call and before
+publishing, so a failed post does not discard an already-paid read. Snapshots
+are written beside the destination and renamed; missing, unreadable, corrupt
+or incompatible snapshots mean an empty cache. Expired sheets are pruned on
+load and when another read is cached. A save failure logs a warning and leaves
+the live cache usable.
+
+Every mention answer logs `dossier calls=<count> elapsed_ms=<duration>` on one
+line. The duration covers the chain read, excluding the model and publication;
+failed reads retain their call count, and cached or non-chain answers report
+zero. Startup reports missing model provider selector names or the existing
+incomplete-configuration reason, without configuration values, before any
+configuration path can idle the daemon.
+
+**Restart investigation, source inspection only:**
+[`daemon.rs`](../../crates/realorrug-analyst/src/daemon.rs) previously exited
+when creating the data directory failed; it now waits and retries without
+reading or publishing. Its polling, journal, publishing and cursor errors
+already return from a tick or stop its current batch, not the process. No
+explicit production panic was found in that module. The
+[`service unit`](../../deploy/realorrug-analyst.service) sets `Restart=always`
+and `MemoryMax=256M`: an OOM kill, an external service restart, or a panic in a
+called dependency remain suspects. The daemon reads entire reply logs and
+journals, and keeps thread history in memory; pruning expired sheets removes
+one source of growth, not all of them. No deployed journal or exit status was
+available in this edit-only task, so none of these suspects establishes the
+cause of the reported restarts. New unit tests were added but not run locally;
+CI and the lead's commit remain outstanding by the owner's instruction.
+
 **Date:** 2026-09-15.
 **Facts from:** [research 0039](../research/0039-robinhood-chain-data-on-a-budget.md)
 (the cost numbers and the volume assumptions) and

@@ -22,9 +22,10 @@
 //!
 //! # Pure, so the refusals are testable
 //!
-//! No clock and no I/O. The caller passes the current time in, exactly as
+//! No clock. The caller passes the current time in, exactly as
 //! `radar-risk` takes the slot as an argument, so every refusal here can be
-//! reproduced from a recording rather than by waiting a day.
+//! reproduced from a recording rather than by waiting a day. Sheet persistence
+//! is optional and does not decide admission.
 
 use std::collections::HashMap;
 
@@ -146,6 +147,7 @@ pub struct Gate {
             u64,
         ),
     >,
+    sheets_path: Option<std::path::PathBuf>,
     ignored: Vec<String>,
 }
 
@@ -162,6 +164,7 @@ impl Gate {
             refilled_at: 0,
             answered: HashMap::new(),
             sheets: HashMap::new(),
+            sheets_path: None,
             ignored,
         }
     }
@@ -223,6 +226,7 @@ impl Gate {
             refilled_at: 0,
             answered: HashMap::new(),
             sheets: HashMap::new(),
+            sheets_path: None,
             ignored: Vec::new(),
         }
     }
@@ -396,6 +400,60 @@ impl Gate {
             .map(|(sheet, read_at, _)| (sheet, *read_at))
     }
 
+    /// Restores fresh sheets and enables saving subsequent reads at this path.
+    /// Missing, corrupt and incompatible snapshots are all an empty cache.
+    pub fn load_sheets(&mut self, path: &std::path::Path, now: u64) {
+        self.sheets = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<(u32, _)>(bytes.as_slice()).ok())
+            .filter(|(version, _)| *version == 1)
+            .map(|(_, sheets)| sheets)
+            .unwrap_or_default();
+        self.prune_sheets(now);
+        self.sheets_path = Some(path.to_owned());
+    }
+
+    fn prune_sheets(&mut self, now: u64) {
+        let window = self.limits.map_or(0, |limits| limits.dedupe_seconds);
+        self.sheets
+            .retain(|_, (_, _, at)| now.saturating_sub(*at) < window);
+    }
+
+    /// Saves a newly read sheet before the model or publisher can fail.
+    /// Reusing a sheet must not call this: its original freshness clock stands.
+    pub fn cache_sheet(
+        &mut self,
+        mint: &str,
+        sheet: realorrug_roast::FactSheet,
+        read_at: Option<realorrug_types::ReadAt>,
+        now: u64,
+    ) {
+        self.sheets.insert(mint.to_owned(), (sheet, read_at, now));
+        // Expired sheets cannot answer anything; retaining them forever only
+        // grows the daemon and its snapshot for every different token asked.
+        self.prune_sheets(now);
+        if self.save_sheets().is_err() {
+            eprintln!("realorrug-analyst: cannot save sheet cache; restart may repeat chain reads");
+        }
+    }
+
+    fn save_sheets(&self) -> std::io::Result<()> {
+        use std::io::Write as _;
+
+        let Some(path) = &self.sheets_path else {
+            return Ok(());
+        };
+        // Keep the previous snapshot until the replacement is complete, as
+        // with the ledger. A failed cache write costs reads, never an exit.
+        let temporary = path.with_extension("json.new");
+        let mut file = std::fs::File::create(&temporary)?;
+        serde_json::to_writer(&mut file, &(1_u32, &self.sheets)).map_err(std::io::Error::other)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(temporary, path)
+    }
+
     /// Records that a reply was actually sent.
     ///
     /// Separate from [`Gate::admit`] on purpose, for the **account's** cap. A
@@ -408,10 +466,12 @@ impl Gate {
     /// `conversation` is carried alongside the reply so a later `admit` for
     /// the same mint can tell whether a repeat is the same thread (the free
     /// pointer) or a different one (a fresh answer). `sheet` is the fact
-    /// sheet and read-at just used to answer, kept for reuse by
+    /// sheet and read-at newly read to answer, kept for reuse by
     /// [`Gate::cached_sheet`] when the window is still open — `None` for a
     /// caller with no sheet to offer (a ticker or a follow-up key), which
-    /// leaves any existing cache for that key untouched.
+    /// leaves any existing cache for that key untouched. Callers that saved
+    /// the read with [`Gate::cache_sheet`] already, or reused a cached sheet,
+    /// pass `None` so publishing does not renew the read's freshness.
     pub fn record(
         &mut self,
         summoner: &str,
@@ -434,7 +494,7 @@ impl Gate {
             ),
         );
         if let Some((sheet, read_at)) = sheet {
-            self.sheets.insert(mint.to_owned(), (sheet, read_at, now));
+            self.cache_sheet(mint, sheet, read_at, now);
         }
     }
 
@@ -540,9 +600,8 @@ impl Gate {
                     // The thread is not restored: the log does not carry a
                     // conversation id (only the live mention does), so a
                     // restart loses the free-pointer case for whatever was
-                    // in flight and re-reads instead — the same direction
-                    // `Gate::sheets` is not restored either, and for the same
-                    // reason: an under-answer is the safe way to be wrong.
+                    // in flight. Fresh sheets are restored separately from
+                    // their snapshot; the reply log cannot reconstruct them.
                     self.answered.insert(
                         mint.clone(),
                         (entry.at, reply_id.clone(), entry.summoner.clone(), None),
@@ -779,6 +838,111 @@ mod tests {
         }
     }
 
+    fn cache_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("realorrug-sheets-{}.json", rand::random::<u64>()))
+    }
+
+    #[test]
+    fn a_restart_restores_the_whole_sheet_without_renewing_its_freshness() {
+        let path = cache_path();
+        let mut limits = limits();
+        limits.dedupe_seconds = 60;
+        let mut gate = Gate::new(limits, Vec::new());
+        gate.load_sheets(&path, DAY);
+        let read_at = Some(realorrug_types::ReadAt::Solana(realorrug_types::Slot(123)));
+        let mut original = sheet("MintOne");
+        original.read_at = read_at;
+        original.facts.push(realorrug_roast::Fact {
+            about: realorrug_roast::About::Measurement,
+            kind: realorrug_roast::Kind::LaunchRecipients,
+            label: "launch recipients".to_owned(),
+            rendered: "2".to_owned(),
+            values: vec![2.0],
+            clauses: vec![realorrug_roast::Clause::new(
+                realorrug_roast::Voice::Plain,
+                "Two recipients.",
+            )],
+        });
+        original
+            .untrusted
+            .push(("name".to_owned(), "Untrusted".to_owned()));
+        original.unknown.push("curve".to_owned());
+        original
+            .signals
+            .push(realorrug_roast::sheet::Signal::CreatorBoughtOwnLaunch);
+        original.twins.push("An ordinary purchase.".to_owned());
+        gate.cache_sheet("MintOne", original.clone(), read_at, DAY);
+        drop(gate);
+
+        let mut restarted = Gate::new(limits, Vec::new());
+        restarted.load_sheets(&path, DAY + 59);
+        let (loaded, point) = restarted.cached_sheet("MintOne").expect("a fresh sheet");
+        assert_eq!(point, read_at);
+        assert_eq!(
+            serde_json::to_value(loaded).expect("serialize"),
+            serde_json::to_value(&original).expect("serialize")
+        );
+        assert_eq!(
+            restarted.admit("bob", "MintOne", None, DAY + 59),
+            Admitted::YesCached
+        );
+        // Posting the reused read records an answer, never another read.
+        restarted.record("bob", "MintOne", "r2", None, None, DAY + 59);
+        restarted.load_sheets(&path, DAY + 60);
+        assert!(restarted.cached_sheet("MintOne").is_none());
+        assert_eq!(
+            restarted.admit("carol", "MintOne", None, DAY + 60),
+            Admitted::Yes
+        );
+        std::fs::remove_file(path).expect("remove snapshot");
+    }
+
+    #[test]
+    fn missing_corrupt_and_incompatible_snapshots_are_empty_caches() {
+        let path = cache_path();
+        let mut gate = Gate::new(limits(), Vec::new());
+        gate.load_sheets(&path, DAY);
+        assert!(gate.sheets.is_empty());
+        for broken in ["{", "[1, {\"MintOne\": []}]", "[2, {}]"] {
+            gate.cache_sheet("MintOne", sheet("MintOne"), None, DAY);
+            std::fs::write(&path, broken).expect("write broken snapshot");
+            gate.load_sheets(&path, DAY);
+            assert!(gate.sheets.is_empty());
+        }
+        std::fs::remove_file(path).expect("remove snapshot");
+    }
+
+    #[test]
+    fn saving_another_read_prunes_expired_sheets_and_replaces_the_snapshot() {
+        let path = cache_path();
+        let mut limits = limits();
+        limits.dedupe_seconds = 60;
+        let mut gate = Gate::new(limits, Vec::new());
+        gate.load_sheets(&path, DAY);
+        gate.cache_sheet("Old", sheet("Old"), None, DAY);
+        gate.cache_sheet("New", sheet("New"), None, DAY + 60);
+        assert!(gate.cached_sheet("Old").is_none());
+        gate.load_sheets(&path, DAY + 60);
+        assert!(gate.cached_sheet("Old").is_none());
+        assert!(gate.cached_sheet("New").is_some());
+        // The restored cache uses today's configuration, not a saved TTL.
+        let mut closed = Gate::unconfigured();
+        closed.load_sheets(&path, DAY + 60);
+        assert!(closed.sheets.is_empty());
+        std::fs::remove_file(path).expect("remove snapshot");
+    }
+
+    #[test]
+    fn an_unwritable_snapshot_keeps_the_live_cache_and_does_not_panic() {
+        let blocker = cache_path();
+        std::fs::write(&blocker, "not a directory").expect("create blocker");
+        let mut gate = Gate::new(limits(), Vec::new());
+        gate.load_sheets(&blocker.join("sheets.json"), DAY);
+        gate.cache_sheet("MintOne", sheet("MintOne"), None, DAY);
+        assert!(gate.cached_sheet("MintOne").is_some());
+        std::fs::remove_file(blocker).expect("remove blocker");
+    }
+
     #[test]
     fn the_same_person_asking_in_two_different_threads_gets_a_real_answer_each_time() {
         // A young token moves fast enough that a second distinct post about it
@@ -855,7 +1019,7 @@ mod tests {
             "MintOne",
             "r2",
             Some("t2"),
-            Some((sheet("MintOne"), None)),
+            None,
             DAY + 30,
         );
         // Bob's own answer is on record, distinct from alice's.
