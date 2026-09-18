@@ -160,14 +160,10 @@ fn walk_token_launched(
     let mut launch_map: BTreeMap<Address, LaunchInfo> = BTreeMap::new();
     let mut curve_to_launch_block: BTreeMap<Address, u64> = BTreeMap::new();
     let mut launches = 0_u64;
-    let mut calls = 0_u64;
-    realorrug_onchain::robinhood::walk_logs(
+    let walked = realorrug_onchain::robinhood::walk_logs(
         from,
         to,
-        |a, b| {
-            calls += 1;
-            rpc.logs_range(&FACTORY, &[topic::TOKEN_LAUNCHED], a, b)
-        },
+        |a, b| rpc.logs_range(&FACTORY, &[topic::TOKEN_LAUNCHED], a, b),
         |log| {
             let Some(launch) = Launched::from_log(log) else {
                 return;
@@ -191,7 +187,7 @@ fn walk_token_launched(
         launch_map,
         curve_to_launch_block,
         launches,
-        calls,
+        calls: walked.requests,
     })
 }
 
@@ -214,42 +210,70 @@ fn walk_graduated(
     launch_map: &BTreeMap<Address, LaunchInfo>,
     creators: &mut BTreeMap<String, Record>,
 ) -> Result<Walk2, String> {
-    let mut calls = 0_u64;
     let mut skipped = 0_u64;
     let mut graduated_tokens: BTreeSet<Address> = BTreeSet::new();
-    realorrug_onchain::robinhood::walk_logs(
+    let walked = realorrug_onchain::robinhood::walk_logs(
         from,
         to,
-        |a, b| {
-            calls += 1;
-            rpc.logs_range(&FACTORY, &[topic::GRADUATED], a, b)
-        },
+        |a, b| rpc.logs_range(&FACTORY, &[topic::GRADUATED], a, b),
         |log| {
             let Some(graduated) = Graduated::from_log(log) else {
                 return;
             };
-            let Some(info) = launch_map.get(&graduated.token) else {
-                // Graduated outside [from, to], or launched before --from:
-                // not this pass's to measure, and not a phantom deployer's
-                // problem. Counted so the summary can say how many.
-                skipped += 1;
-                return;
-            };
-            let record = creators.entry(info.deployer.to_string()).or_default();
-            if log.block.saturating_sub(info.block) <= INSTANT_BLOCKS {
-                record.instant = record.instant.saturating_add(1);
+            if credit_graduation(launch_map, creators, graduated.token, log.block) {
+                graduated_tokens.insert(graduated.token);
             } else {
-                record.organic = record.organic.saturating_add(1);
+                skipped = skipped.saturating_add(1);
             }
-            graduated_tokens.insert(graduated.token);
         },
     )
     .map_err(|e| format!("Graduated walk: {e}"))?;
     Ok(Walk2 {
         graduated_tokens,
-        calls,
+        calls: walked.requests,
         skipped,
     })
+}
+
+/// Credits one graduation to whoever launched the token, and says whether it
+/// belonged to this pass at all.
+///
+/// Pulled out of [`walk_graduated`]'s sink because everything it decides --
+/// which launcher, `instant` or `organic`, or neither -- is decided from
+/// three plain values, while the sink around it can only be reached through
+/// a live endpoint. Until 2026-09-17 the rule lived inside that sink and the
+/// test beside it re-implemented the same comparison on its own, so flipping
+/// the real `<=` broke nothing: the test was checking its own copy.
+///
+/// Returns `false` for a token with no launch in `launch_map`: it graduated
+/// inside `[from, to]` but launched before it, so this pass knows no launcher
+/// to credit and must not invent one (rule 8).
+fn credit_graduation(
+    launch_map: &BTreeMap<Address, LaunchInfo>,
+    creators: &mut BTreeMap<String, Record>,
+    token: Address,
+    graduation_block: u64,
+) -> bool {
+    let Some(info) = launch_map.get(&token) else {
+        return false;
+    };
+    let record = creators.entry(info.deployer.to_string()).or_default();
+    if instant(info.block, graduation_block) {
+        record.instant = record.instant.saturating_add(1);
+    } else {
+        record.organic = record.organic.saturating_add(1);
+    }
+    true
+}
+
+/// Whether a graduation that many blocks after its launch was bought by
+/// capital that was already committed before the token existed.
+///
+/// [`INSTANT_BLOCKS`] blocks or fewer is `instant`; one block later is
+/// `organic`. The boundary is inclusive, and a graduation in the launch block
+/// itself is the most instant there is, not an error.
+fn instant(launch_block: u64, graduation_block: u64) -> bool {
+    graduation_block.saturating_sub(launch_block) <= INSTANT_BLOCKS
 }
 
 /// What walk 3 leaves behind.
@@ -269,28 +293,46 @@ fn walk_curve_buy(
     to: u64,
     curve_to_launch_block: &BTreeMap<Address, u64>,
 ) -> Result<Walk3, String> {
-    let mut calls = 0_u64;
     let mut curve_has_later_buy: BTreeSet<Address> = BTreeSet::new();
-    realorrug_onchain::robinhood::walk_logs(
+    let walked = realorrug_onchain::robinhood::walk_logs(
         from,
         to,
-        |a, b| {
-            calls += 1;
-            rpc.logs_range_any_address(&[topic::CURVE_BUY], a, b)
-        },
+        |a, b| rpc.logs_range_any_address(&[topic::CURVE_BUY], a, b),
         |log| {
-            if let Some(&launch_block) = curve_to_launch_block.get(&log.address)
-                && log.block > launch_block
-            {
-                curve_has_later_buy.insert(log.address);
-            }
+            note_curve_buy(
+                curve_to_launch_block,
+                &mut curve_has_later_buy,
+                log.address,
+                log.block,
+            );
         },
     )
     .map_err(|e| format!("CurveBuy walk: {e}"))?;
     Ok(Walk3 {
         curve_has_later_buy,
-        calls,
+        calls: walked.requests,
     })
+}
+
+/// Notes one `CurveBuy`, if it belongs to a curve this pass launched and
+/// happened after that launch.
+///
+/// The walk has no address filter, so most logs handed to it are from curves
+/// outside `[from, to]` entirely and are dropped here. A buy **in** the launch
+/// block is not a later buy: the dev buy that funds a launch lands in the same
+/// block as the launch, and counting it would make every token that a launcher
+/// bought their own way into look alive.
+fn note_curve_buy(
+    curve_to_launch_block: &BTreeMap<Address, u64>,
+    curve_has_later_buy: &mut BTreeSet<Address>,
+    curve: Address,
+    block: u64,
+) {
+    if let Some(&launch_block) = curve_to_launch_block.get(&curve)
+        && block > launch_block
+    {
+        curve_has_later_buy.insert(curve);
+    }
 }
 
 /// Runs the command.
@@ -338,14 +380,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         calls: curve_buy_calls,
     } = walk_curve_buy(&rpc, from, to, &curve_to_launch_block)?;
 
-    // `stillborn`: a launch whose curve never saw this pass's set gain its
-    // address, i.e. never had a `CurveBuy` in a block after its own launch.
-    for info in launch_map.values() {
-        if !curve_has_later_buy.contains(&info.curve) {
-            let record = creators.entry(info.deployer.to_string()).or_default();
-            record.stillborn = record.stillborn.saturating_add(1);
-        }
-    }
+    count_stillborn(&launch_map, &curve_has_later_buy, &mut creators);
 
     // Every launch this pass found is measured: all three walks spanned its
     // launch block, by construction of using the same [from, to] in each.
@@ -377,18 +412,82 @@ pub fn run(args: &[String]) -> Result<(), String> {
     index.write(&out).map_err(|e| format!("{out}: {e}"))?;
     let summary_path = realorrug_roast::creator::summary_path_beside(&out);
 
-    let total_calls = launch_calls + graduation_calls + curve_buy_calls;
     println!(
-        "{launches} launches by {} launchers, blocks {from} to {to}\n\
-         TokenLaunched: {launch_calls} calls\n\
-         Graduated: {graduation_calls} calls, {} graduated, {skipped_graduations} skipped (outside range)\n\
-         CurveBuy: {curve_buy_calls} calls\n\
-         {total_calls} calls total\n\
-         {out}\n{summary_path}",
-        index.len(),
-        graduated_tokens.len(),
+        "{}\n{out}\n{summary_path}",
+        summary(&Summary {
+            launches,
+            launchers: index.len(),
+            from,
+            to,
+            launch_calls,
+            graduation_calls,
+            graduated: graduated_tokens.len(),
+            skipped_graduations,
+            curve_buy_calls,
+        })
     );
     Ok(())
+}
+
+/// Credits every launch whose curve never saw a buy after its launch block.
+///
+/// Separate from [`run`] only so it can be tested: `run` needs an endpoint,
+/// and this is the whole of the `stillborn` rule -- the one number in the
+/// index that no other pass can check, since a curve with no buys leaves no
+/// log of its own to count.
+fn count_stillborn(
+    launch_map: &BTreeMap<Address, LaunchInfo>,
+    curve_has_later_buy: &BTreeSet<Address>,
+    creators: &mut BTreeMap<String, Record>,
+) {
+    for info in launch_map.values() {
+        if !curve_has_later_buy.contains(&info.curve) {
+            let record = creators.entry(info.deployer.to_string()).or_default();
+            record.stillborn = record.stillborn.saturating_add(1);
+        }
+    }
+}
+
+/// What one pass cost and found, for the line it prints when it finishes.
+struct Summary {
+    launches: u64,
+    launchers: usize,
+    from: u64,
+    to: u64,
+    launch_calls: u64,
+    graduation_calls: u64,
+    graduated: usize,
+    skipped_graduations: u64,
+    curve_buy_calls: u64,
+}
+
+/// The finished pass, in the words an operator reads to decide whether the
+/// next range fits in a free plan's quota.
+///
+/// A function returning a `String` rather than a `println!` in [`run`]: the
+/// total is arithmetic over three counts, and arithmetic inside a function
+/// that needs a live endpoint is arithmetic nothing checks.
+fn summary(s: &Summary) -> String {
+    let total = s
+        .launch_calls
+        .saturating_add(s.graduation_calls)
+        .saturating_add(s.curve_buy_calls);
+    format!(
+        "{} launches by {} launchers, blocks {} to {}\n\
+         TokenLaunched: {} calls\n\
+         Graduated: {} calls, {} graduated, {} skipped (outside range)\n\
+         CurveBuy: {} calls\n\
+         {total} calls total",
+        s.launches,
+        s.launchers,
+        s.from,
+        s.to,
+        s.launch_calls,
+        s.graduation_calls,
+        s.graduated,
+        s.skipped_graduations,
+        s.curve_buy_calls,
+    )
 }
 
 /// Samples up to `n` tokens this pass says graduated and up to `n` it says
@@ -407,42 +506,16 @@ fn verify_sample(
     graduated_tokens: &BTreeSet<Address>,
     n: u64,
 ) -> Result<(), String> {
-    let n = usize::try_from(n).unwrap_or(usize::MAX);
-    let not_graduated: Vec<Address> = launch_map
-        .keys()
-        .filter(|t| !graduated_tokens.contains(t))
-        .take(n)
-        .copied()
-        .collect();
-    let graduated_sample: Vec<Address> = graduated_tokens.iter().take(n).copied().collect();
-
     let mut disagreements = Vec::new();
-    for (token, expect_graduated) in graduated_sample
-        .into_iter()
-        .map(|t| (t, true))
-        .chain(not_graduated.into_iter().map(|t| (t, false)))
-    {
+    for (token, expect_graduated) in sample(launch_map, graduated_tokens, n) {
         let data = LaunchedToken::call_data(&token);
         let bytes = rpc
             .call_contract(&FACTORY, &data)
             .map_err(|e| format!("--verify: getLaunchedToken({token}): {e}"))?;
         let record = LaunchedToken::from_return(&bytes)
             .ok_or_else(|| format!("--verify: getLaunchedToken({token}): unreadable return"))?;
-        let actual_graduated = record.phase == 2;
-        if actual_graduated != expect_graduated {
-            disagreements.push(format!(
-                "{token}: walk said {}, getLaunchedToken says {}",
-                if expect_graduated {
-                    "graduated"
-                } else {
-                    "not graduated"
-                },
-                if actual_graduated {
-                    "graduated"
-                } else {
-                    "not graduated"
-                },
-            ));
+        if let Some(said) = disagreement(&token, record.phase, expect_graduated) {
+            disagreements.push(said);
         }
     }
     if disagreements.is_empty() {
@@ -454,6 +527,46 @@ fn verify_sample(
             disagreements.join("; ")
         ))
     }
+}
+
+/// Up to `n` tokens this pass says graduated and up to `n` it says did not,
+/// each paired with what the pass claims about it.
+///
+/// Both halves, never one: a pass that credited every token as graduated
+/// would pass a sample drawn only from its graduated set, and a pass that
+/// credited none would pass a sample drawn only from the rest. The check is
+/// worth its calls because the two halves can fail in opposite directions.
+fn sample(
+    launch_map: &BTreeMap<Address, LaunchInfo>,
+    graduated_tokens: &BTreeSet<Address>,
+    n: u64,
+) -> Vec<(Address, bool)> {
+    let n = usize::try_from(n).unwrap_or(usize::MAX);
+    let graduated = graduated_tokens.iter().take(n).map(|t| (*t, true));
+    let not_graduated = launch_map
+        .keys()
+        .filter(|t| !graduated_tokens.contains(t))
+        .take(n)
+        .map(|t| (*t, false));
+    graduated.chain(not_graduated).collect()
+}
+
+/// What to report when the factory's own view of a token contradicts the
+/// walk's, or `None` when the two agree.
+///
+/// `phase == 2` is the factory's word for graduated
+/// (`realorrug_robinhood::pons::LaunchedToken`). Any other phase is not.
+fn disagreement(token: &Address, phase: u8, expect_graduated: bool) -> Option<String> {
+    let actual_graduated = phase == 2;
+    if actual_graduated == expect_graduated {
+        return None;
+    }
+    let said = |g: bool| if g { "graduated" } else { "not graduated" };
+    Some(format!(
+        "{token}: walk said {}, getLaunchedToken says {} (phase {phase})",
+        said(expect_graduated),
+        said(actual_graduated),
+    ))
 }
 
 /// A `u64` flag, or `None` when it was not given.
@@ -480,7 +593,10 @@ mod tests {
     use realorrug_robinhood::pons::topic;
     use realorrug_robinhood::{Address, Hash32, Log};
 
-    use super::{LaunchInfo, number, run};
+    use super::{
+        LaunchInfo, Summary, count_stillborn, credit_graduation, disagreement, note_curve_buy,
+        number, run, sample, summary,
+    };
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
@@ -571,32 +687,189 @@ mod tests {
         }
     }
 
-    /// Runs the same graduation-crediting rule `run` uses inline, against a
-    /// one-launch map, and returns whether it landed `instant` or `organic`.
+    /// One launch, one graduation, through the code the walk itself runs:
+    /// which column of the real `Record` the graduation landed in.
     ///
-    /// Kept as a small helper rather than duplicated in each test below so
-    /// the boundary test's inversion (see that test) is changing one place.
+    /// It decodes a real `Graduated` log and calls [`credit_graduation`], so
+    /// the boundary this returns is the boundary shipped. The version of this
+    /// helper written on 2026-09-17 did the `<=` comparison itself, which
+    /// made every test below pass against its own arithmetic while the walk's
+    /// copy went unchecked -- four surviving mutants said so.
     fn credit(launch_block: u64, graduation_block: u64) -> &'static str {
         let deployer = addr(1);
         let token = addr(2);
-        let curve = addr(3);
         let mut launch_map = BTreeMap::new();
         launch_map.insert(
             token,
             LaunchInfo {
                 deployer,
                 block: launch_block,
-                curve,
+                curve: addr(3),
             },
         );
         let log = graduated_log(token, graduation_block);
         let graduated = realorrug_robinhood::pons::Graduated::from_log(&log).expect("decodes");
-        let info = launch_map.get(&graduated.token).expect("in map");
-        if log.block.saturating_sub(info.block) <= super::INSTANT_BLOCKS {
-            "instant"
-        } else {
-            "organic"
+        let mut creators = BTreeMap::new();
+        assert!(
+            credit_graduation(&launch_map, &mut creators, graduated.token, log.block),
+            "a token that is in the launch map is this pass's to credit"
+        );
+        let record = creators.get(&deployer.to_string()).expect("credited");
+        match (record.instant, record.organic) {
+            (1, 0) => "instant",
+            (0, 1) => "organic",
+            other => panic!("one graduation credited {other:?} outcomes"),
         }
+    }
+
+    #[test]
+    fn a_graduation_whose_launch_is_outside_the_range_credits_no_one() {
+        // Rule 8: this pass does not know who launched it, so it invents
+        // neither a launcher nor an outcome. `walk_graduated` counts it as
+        // skipped on the strength of the `false` this returns.
+        let mut creators = BTreeMap::new();
+        assert!(
+            !credit_graduation(&BTreeMap::new(), &mut creators, addr(2), 500),
+            "a token with no launch in this pass is not this pass's to credit"
+        );
+        assert!(
+            creators.is_empty(),
+            "an unknown token created a launcher record: {creators:?}"
+        );
+    }
+
+    #[test]
+    fn a_curve_buy_counts_only_after_the_launch_block_and_only_for_a_known_curve() {
+        let curve = addr(3);
+        let mut launched = BTreeMap::new();
+        launched.insert(curve, 100);
+
+        let mut seen = BTreeSet::new();
+        note_curve_buy(&launched, &mut seen, curve, 100);
+        assert!(
+            seen.is_empty(),
+            "a buy in the launch block is the dev buy, not proof anyone else came"
+        );
+
+        note_curve_buy(&launched, &mut seen, addr(9), 500);
+        assert!(
+            seen.is_empty(),
+            "a buy on a curve this pass never launched was counted"
+        );
+
+        note_curve_buy(&launched, &mut seen, curve, 101);
+        assert!(
+            seen.contains(&curve),
+            "the first buy after the launch block was not counted"
+        );
+    }
+
+    #[test]
+    fn a_launch_whose_curve_never_saw_a_later_buy_is_stillborn_and_one_that_did_is_not() {
+        let quiet = addr(3);
+        let lively = addr(4);
+        let mut launch_map = BTreeMap::new();
+        launch_map.insert(
+            addr(2),
+            LaunchInfo {
+                deployer: addr(1),
+                block: 10,
+                curve: quiet,
+            },
+        );
+        launch_map.insert(
+            addr(5),
+            LaunchInfo {
+                deployer: addr(1),
+                block: 11,
+                curve: lively,
+            },
+        );
+        let bought: BTreeSet<Address> = [lively].into_iter().collect();
+
+        let mut creators = BTreeMap::new();
+        count_stillborn(&launch_map, &bought, &mut creators);
+        assert_eq!(
+            creators
+                .get(&addr(1).to_string())
+                .expect("the launcher was credited")
+                .stillborn,
+            1,
+            "one of this launcher's two curves saw a buy, so exactly one is stillborn"
+        );
+    }
+
+    #[test]
+    fn the_sample_draws_from_both_sides_so_a_pass_that_says_yes_to_everything_fails_it() {
+        let graduated = addr(2);
+        let not = addr(5);
+        let mut launch_map = BTreeMap::new();
+        for (token, block) in [(graduated, 10), (not, 11)] {
+            launch_map.insert(
+                token,
+                LaunchInfo {
+                    deployer: addr(1),
+                    block,
+                    curve: addr(3),
+                },
+            );
+        }
+        let graduated_tokens: BTreeSet<Address> = [graduated].into_iter().collect();
+
+        let drawn = sample(&launch_map, &graduated_tokens, 5);
+        assert!(
+            drawn.contains(&(graduated, true)) && drawn.contains(&(not, false)),
+            "the sample must carry both claims to be able to catch either error: {drawn:?}"
+        );
+        assert_eq!(drawn.len(), 2, "a token was sampled twice: {drawn:?}");
+        assert_eq!(
+            sample(&launch_map, &graduated_tokens, 0).len(),
+            0,
+            "--verify 0 must call nothing"
+        );
+    }
+
+    #[test]
+    fn the_factory_disagreeing_with_the_walk_is_reported_in_both_directions() {
+        let token = addr(2);
+        assert_eq!(disagreement(&token, 2, true), None);
+        assert_eq!(disagreement(&token, 1, false), None);
+
+        let missed =
+            disagreement(&token, 2, false).expect("the factory says graduated, walk did not");
+        assert!(
+            missed.contains("walk said not graduated") && missed.contains("says graduated"),
+            "{missed}"
+        );
+        let phantom =
+            disagreement(&token, 1, true).expect("the walk says graduated, factory does not");
+        assert!(
+            phantom.contains("walk said graduated") && phantom.contains("says not graduated"),
+            "{phantom}"
+        );
+    }
+
+    #[test]
+    fn the_summary_adds_the_three_walks_calls_up_rather_than_any_other_arithmetic() {
+        // The figure that answers "can I afford the next range". Three counts
+        // that are only ever added: a `-` or `*` here reads as a cheap run.
+        let line = summary(&Summary {
+            launches: 7,
+            launchers: 2,
+            from: 1,
+            to: 9,
+            launch_calls: 3,
+            graduation_calls: 5,
+            graduated: 4,
+            skipped_graduations: 1,
+            curve_buy_calls: 11,
+        });
+        assert!(line.contains("19 calls total"), "{line}");
+        assert!(
+            line.contains("7 launches by 2 launchers, blocks 1 to 9"),
+            "{line}"
+        );
+        assert!(line.contains("4 graduated, 1 skipped"), "{line}");
     }
 
     #[test]
@@ -618,13 +891,13 @@ mod tests {
         // `INSTANT_BLOCKS` is instant, one more is organic.
         assert_eq!(credit(100, 103), "instant");
         assert_eq!(credit(100, 104), "organic");
-        // Inverting the rule (`<` instead of `<=`) is what a mutation test
-        // would try here. Done by hand: with `<` in place of `<=`, a
-        // graduation exactly 3 blocks after launch (`104 - ... ` no --
-        // `103 - 100 == 3`) would read `organic` instead of `instant`,
-        // flipping the first assertion above to fail. That is the failure
-        // this test exists to catch; see the report for what actually
-        // printed when this was tried.
+        // A graduation in the launch block itself is the most instant there
+        // is, and `saturating_sub` is what keeps it from being a panic.
+        assert_eq!(credit(100, 100), "instant");
+        // Re-applied by hand in `instant`: `<` in place of `<=` turns the
+        // first line here into `organic` and fails this test. It did not
+        // before 2026-09-17, because the helper above ran its own copy of
+        // the comparison instead of the shipped one.
     }
 
     #[test]
@@ -675,7 +948,7 @@ mod tests {
         let launch_map: BTreeMap<Address, LaunchInfo> = BTreeMap::new();
         let log = graduated_log(addr(9), 50);
         let graduated = realorrug_robinhood::pons::Graduated::from_log(&log).expect("decodes");
-        assert!(launch_map.get(&graduated.token).is_none());
+        assert!(!launch_map.contains_key(&graduated.token));
         // The real code's `let Some(info) = ... else { skipped += 1; return; }`
         // is exactly this lookup; a `None` here is what drives that branch,
         // and there is no `.unwrap()` on the path, so it cannot panic.
