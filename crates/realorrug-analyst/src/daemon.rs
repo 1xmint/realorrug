@@ -226,9 +226,9 @@ fn rates_in_use(
     match loaded {
         Ok(rates) if rates.is_stale_at(today) => {
             let notice = format!(
-                "realorrug-analyst: base rates were measured on {} and are stale after {} days; \
-                 dropping them, so replies will carry no population context until \
-                 research 0024 is re-run",
+                "realorrug-analyst: base rates were measured on {} and are stale -- past the \
+                 {}-day backstop with no rebuild in that time; dropping them, so replies \
+                 will carry no population context until the rebuild runs again",
                 rates.measured_on,
                 realorrug_roast::baserates::STALE_AFTER_DAYS
             );

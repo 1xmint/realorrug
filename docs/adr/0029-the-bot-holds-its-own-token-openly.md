@@ -2,6 +2,10 @@
 # ADR 0029 — the bot holds its own token, openly
 
 **Date:** 2026-09-17
+**Its "the bot never states the price" is superseded by
+[ADR 0033](0033-the-analyst-talks-price-and-hints-only-on-a-measured-rate.md)**
+(2026-09-17): the analyst states price with its block or time, and hints only
+on a measured rate.
 **Status:** accepted. **Josh's decision, recorded**, in conversation
 2026-09-17: "As dev I will put in a dev buy, small one. The bot will hold the
 token and collect the tax for giveaways, one day it may trade on its own but
