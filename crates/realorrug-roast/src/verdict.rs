@@ -1321,10 +1321,10 @@ mod tests {
             Some("529 addresses hold it. The biggest one holds 50.2%.")
         );
         let reply = template(&sheet);
-        let second = reply.lines().nth(1).unwrap_or_default();
+        let first = reply.lines().next().unwrap_or_default();
         assert!(
-            second.contains("529") && second.contains("50.2%"),
-            "the headline is not the line under the title: {reply}"
+            first.contains("529") && first.contains("50.2%"),
+            "the headline is not the first line: {reply}"
         );
     }
 
