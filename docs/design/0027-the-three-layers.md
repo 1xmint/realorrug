@@ -427,40 +427,69 @@ EVM gas floor; `GAS_ALLOWANCE_LAMPORTS` (0.00005 SOL) is Solana's. Callers in
 `robinhood.rs` and the `sheet.rs` test fixture were updated for the type
 change; no other crate builds these three types.
 
-`investigate_solana` (`wallets.rs`) is the Solana funding read. It has no
-`CurveBuy` log to read purchases from, so early buyers are found by walking
-the mint's own signature history, oldest first
-(`RpcClient::signatures_back_to_oldest` on the mint), and reading each
-transaction's `post_token_balances` against `pre_token_balances`: a distinct
-wallet whose balance of the mint rose is a buy, keyed by
+`investigate_solana` (`crates/realorrug-onchain/src/wallets.rs`) is the
+Solana funding read. It has no `CurveBuy` log to read purchases from, so its
+launch window is the mint's own first `SOLANA_WINDOW_TRANSACTIONS` (25)
+*successful* transactions, read oldest first
+(`RpcClient::signatures_back_to_oldest` on the mint) and walked in that
+order: each transaction's `post_token_balances` against `pre_token_balances`
+gives a distinct wallet whose balance of the mint rose, keyed by
 `TokenBalance::owner`. The bonding-curve PDA
 (`realorrug_pumpfun::pda::bonding_curve`, the same proven check slice 6a uses
 to exclude the curve as an owner) is never counted as a buyer — it is the
-pool side of every trade. At most `MAX_CANDIDATES` (4, matching Robinhood)
-distinct buyers are kept, in the order their balance first rose; that
-transaction's slot is the candidate's `first_purchase_block`. Each
-candidate's own oldest signature is then read separately for the native
-lamport transfer that funded it, the same largest-lamport-drop-in-one-
-transaction reader (`funder_of`) already used before this slice, reused
-unchanged.
+pool side of every trade. `Funding::buyers` is every distinct buyer found in
+that 25-transaction window, not the capped candidate count; the first
+`MAX_CANDIDATES` (4, matching Robinhood) of them by first purchase are kept
+as candidates, in the order their balance first rose, and that transaction's
+slot is the candidate's first-purchase slot. Each candidate's own oldest
+signature is then read separately for the native lamport transfer that
+funded it (`funder_of`, the same largest-lamport-drop-in-one-transaction
+reader used before this slice), but the transfer only counts as a funder
+when its transaction's slot is at or before the candidate's first-purchase
+slot — a transfer that landed afterward did not finance the buy, and is
+dropped with a gap explaining why rather than recorded as a funder.
 
 **If the mint's own signature history is longer than the page budget
-allows, that is recorded in `Funding::gaps` as an incomplete read — never as
-"no early buyers were found" — and the same applies per candidate whose own
-signature history is truncated before its oldest transaction**
-(AGENTS.md rule 8). A transport failure reading the mint's own history fails
-the whole call, which `dossier.rs::build` records as "funding" in
-`Dossier::unavailable`; a failure reading one candidate's history, or one
-transaction, is a named gap on a result that is still returned.
+allows, the buyers found in that partial read are not "the early buyers"**
+(a budget that runs out first drops the oldest, undiscovered page, per
+AGENTS.md rule 8) **so `investigate_solana` returns no checked candidates,
+`buyers: 0`, and a gap saying the launch's first buyers could not be reached
+within the read budget — never a partial buyer list presented as
+complete.** The same rule applies per candidate: if a candidate's own
+signature history is truncated before its oldest transaction,
+`signatures.last()` is not that transaction, so no funder is recorded (only
+the gap, with `Candidate::funding_complete` left `false`) rather than a
+funder read from whatever transaction the truncated page happened to reach.
+A transport failure reading the mint's own history fails the whole call,
+which `dossier.rs::build` records as "funding" in `Dossier::unavailable`; a
+failure reading one candidate's history, or one transaction, is a named gap
+on a result that is still returned.
+
+`Funding::coverage_bps` is `Option<u16>`: `Some` on Robinhood, where the
+quote-weighted share of the checked candidates' buying is a real number, and
+`None` on Solana, which has no quote amount to weigh a share against —
+`Some(0)` would claim the checked wallets bought nothing, which is false,
+not merely unmeasured. `crates/realorrug-roast/src/sheet.rs`'s
+`push_funding` drops the "they bought {pct} of what the launch window
+bought" clause (and the parallel "({pct} of the window's buys)" clause in
+the blunt voice) entirely when `coverage_bps` is `None`, rather than
+rendering a percentage that isn't there.
 
 `dossier.rs::build` calls `investigate_solana` as an independent step, not
 gated on the owner-sample step 4: funding candidates come from the mint's
-own history, not from `TokenOwnership`. Fixture tests in `wallets.rs` cover
-two buyers found in the mint's history and funded by the same address (a
-shared funder), a page-budget cap producing an incomplete result rather than
-an absent one, and a transport failure surfacing as a named "funding" error
-rather than an empty result. The Robinhood path (`investigate`,
-`purchases_from`, `SELECTION_RULE`) is untouched by this slice.
+own history, not from `TokenOwnership`. Fixture tests in
+`crates/realorrug-onchain/src/wallets.rs` cover two buyers found in the
+mint's history and funded by the same address (a shared funder), a
+page-budget cap producing an incomplete result rather than an absent one, a
+transport failure surfacing as a named "funding" error rather than an empty
+result, a truncated mint history checking nobody instead of the wrong
+buyers, a truncated candidate history recording no funder, a funder
+transaction that landed after the first purchase not counting, and
+`Funding::buyers` reflecting the whole window rather than the capped
+candidate count; `crates/realorrug-roast/src/sheet.rs` has a fixture
+confirming a `None` coverage never renders a percentage. The Robinhood path
+(`investigate`, `purchases_from`, `SELECTION_RULE`) is untouched by this
+slice.
 
 **Not done in this slice**: the SOL cost of the observed buy itself is not
 read, so `is_material` is applied with `quote = 0` for a Solana candidate,
