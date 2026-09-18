@@ -327,14 +327,17 @@ pub struct Violation {
 #[must_use]
 pub fn check(reply: &str) -> Vec<Violation> {
     let lower = masked(reply);
-    RULES
+    let mut violations: Vec<Violation> = RULES
         .iter()
         .filter(|r| lower.contains(r.phrase))
         .map(|r| Violation {
             phrase: r.phrase,
             because: r.because,
         })
-        .collect()
+        .collect();
+    // These callers have no sheet, so they cannot authorise an outcome hint.
+    violations.extend(hint_violations(reply, false));
+    violations
 }
 
 // ---------------------------------------------------------------------------
@@ -849,6 +852,86 @@ pub fn check_unconditional(reply: &str) -> Vec<Violation> {
             because: r.because,
         })
         .collect()
+}
+
+/// ADR 0033: a future-move hint needs a measured outcome rate, a hedge and
+/// reasoning in the same sentence. Production sheets do not yet carry the
+/// rate; only the later outcome-measurement pass may populate that kind.
+/// Advice and unconditional predictions remain forbidden even with a rate.
+#[must_use]
+pub fn check_hint(reply: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violation> {
+    let has_rate = sheet.facts.iter().any(|fact| {
+        fact.kind == Kind::OutcomeRate
+            && !fact.rendered.trim().is_empty()
+            && !fact.values.is_empty()
+            && fact.values.iter().all(|value| value.is_finite())
+    });
+    hint_violations(reply, has_rate)
+}
+
+fn hint_violations(reply: &str, has_rate: bool) -> Vec<Violation> {
+    let lower = masked(reply).replace('\u{2019}', "'");
+    let mut violations = Vec::new();
+    for sentence in sentences(&lower) {
+        let words: Vec<&str> = sentence
+            .split(|c: char| !c.is_alphanumeric() && c != '\'')
+            .filter(|word| !word.is_empty())
+            .collect();
+        // Imperatives are advice; measured selling/buying and "holders can't
+        // sell" must remain sayable. Also catch advice after a conjunction.
+        let advice = words.iter().enumerate().any(|(at, word)| {
+            ["buy", "sell", "hold"].contains(word)
+                && (at == 0
+                    || ["and", "then", "please", "should", "must", "just", "to"]
+                        .contains(&words[at - 1])
+                    || words.get(at + 1).is_some_and(|next| {
+                        ["now", "this", "it", "your", "until"].contains(next)
+                    }))
+        });
+        if advice {
+            violations.push(Violation {
+                phrase: "buy/sell/hold advice",
+                because: "advice, not commentary",
+            });
+        }
+        // Match any numeric multiple, including "10x'd" and "100X", not
+        // only the two magnitudes the old phrase list happened to name.
+        let multiple = words.iter().any(|word| {
+            word.split_once('x').is_some_and(|(number, suffix)| {
+                !number.is_empty()
+                    && number.bytes().all(|byte| byte.is_ascii_digit())
+                    && (suffix.is_empty() || suffix == "'d")
+            })
+        });
+        let movement = words.iter().any(|word| {
+            [
+                "pump", "dump", "moon", "moonshot", "rise", "fall", "rally", "crash",
+                "recover", "soar", "double", "triple", "upside", "downside",
+            ]
+            .contains(word)
+        });
+        if !multiple && !movement {
+            continue;
+        }
+        let hedged = sentence.contains("wouldn't be surprised if")
+            || word_occurs(sentence, "could")
+            || sentence.contains("if the trend holds");
+        let reasoned = ["because", "given", "since"]
+            .iter()
+            .any(|word| word_occurs(sentence, word));
+        let certain = word_occurs(sentence, "will")
+            || sentence.contains("'ll ")
+            || sentence.contains("going to")
+            || word_occurs(sentence, "moon")
+            || word_occurs(sentence, "moonshot");
+        if !has_rate || !hedged || !reasoned || certain {
+            violations.push(Violation {
+                phrase: "outcome hint",
+                because: "a hint needs a measured outcome rate, a hedge and reasoning; never certainty",
+            });
+        }
+    }
+    violations
 }
 
 /// Refuses a word above the ceiling the sheet's computed level earned,
