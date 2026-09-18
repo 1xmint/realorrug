@@ -422,7 +422,7 @@ pub fn template(sheet: &FactSheet) -> String {
         };
         // The caveats live in the label and are restated in short form here
         // rather than dropped: "token accounts, not people" and "Radar's budget,
-        // not the venue's ceiling" are the parts that keep the numbers honest,
+        // not a trading limit" are the parts that keep the numbers honest,
         // and a reply that sheds them is a reply that says something else.
         let _ = writeln!(out, "- {}: {}", short(&fact.label), fact.rendered);
         shown += 1;
@@ -515,8 +515,14 @@ fn short(label: &str) -> &str {
         l if l.contains("share of launches that NEVER graduated") => {
             "share of never-graduated launches in that band"
         }
-        l if l.contains("SOL that can be bought before price moves") => {
-            "SOL before 1% impact (Real or Rug's budget, not the venue's ceiling)"
+        // Matched on the words both the old "SOL that can be bought" label and
+        // today's "quote asset that can be bought" one share: after the rename
+        // this arm stopped firing, and the long label -- "(research 0022)" and
+        // "the venue" included -- reached the floor, where `fidelity` read 0022
+        // as a number and the capacity as a claim about the venue. No venue
+        // word here for the same reason.
+        l if l.contains("that can be bought before price moves 1%") => {
+            "how much can be bought before 1% price impact (Real or Rug's own sizing budget, not a trading limit)"
         }
         l if l.contains("SOL the creator spent") => "the creator's own buy",
         l if l.contains("round trip for a position of") => "round trip on a $20-$200 position",
