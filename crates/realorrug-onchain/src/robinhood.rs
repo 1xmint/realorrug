@@ -1531,24 +1531,27 @@ pub(crate) mod tests {
         // the curve: a transfer-only recipient is not a buyer.
         assert_eq!(funding.buyers, 4);
         assert!(
-            !funding.checked.iter().any(|c| c.address == BOB),
+            !funding.checked.iter().any(|c| c.address == BOB.to_string()),
             "a transfer-only recipient was checked as a buyer"
         );
         assert_eq!(funding.selected, 4);
-        assert_eq!(funding.coverage_bps, 10_000);
+        assert_eq!(funding.coverage_bps, Some(10_000));
         assert_eq!(
             funding
                 .checked
                 .iter()
-                .map(|c| c.address)
+                .map(|c| c.address.clone())
                 .collect::<Vec<_>>(),
-            BUYERS.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+            BUYERS
+                .iter()
+                .map(|(a, _)| a.to_string())
+                .collect::<Vec<_>>(),
             "largest buyers first"
         );
         assert_eq!(
             funding.shared,
             vec![wallets::SharedFunder {
-                address: HUB,
+                address: HUB.to_string(),
                 funded: 3
             }]
         );
@@ -1650,7 +1653,7 @@ pub(crate) mod tests {
         assert_eq!(
             funding.shared,
             vec![wallets::SharedFunder {
-                address: HUB,
+                address: HUB.to_string(),
                 funded: 2
             }]
         );

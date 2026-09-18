@@ -96,6 +96,16 @@ pub struct Transaction {
     pub pre_token_balances: Vec<TokenBalance>,
     /// Token balances after.
     pub post_token_balances: Vec<TokenBalance>,
+    /// Native lamport balances before the transaction, indexed the same way
+    /// as `accounts`. Empty when the node omitted `meta.preBalances`.
+    ///
+    /// Needed for `crate::wallets`' Solana funding read: a funding transfer
+    /// is a native-lamport move, not a token one, so it cannot be seen in
+    /// `pre_token_balances`/`post_token_balances` at all.
+    pub pre_balances: Vec<u64>,
+    /// Native lamport balances after the transaction, on the same terms as
+    /// `pre_balances`.
+    pub post_balances: Vec<u64>,
     /// Whether the transaction failed.
     pub failed: bool,
 }
@@ -757,10 +767,25 @@ pub fn parse_transaction(raw: &serde_json::Value) -> Option<Transaction> {
         slot,
         pre_token_balances: token_balances(meta, "preTokenBalances"),
         post_token_balances: token_balances(meta, "postTokenBalances"),
+        pre_balances: lamport_balances(meta, "preBalances"),
+        post_balances: lamport_balances(meta, "postBalances"),
         accounts,
         instructions,
         failed,
     })
+}
+
+/// Reads `meta.preBalances`/`meta.postBalances`: a plain array of lamport
+/// counts, one per account key, in the same order as `accountKeys`.
+///
+/// A missing or malformed entry is dropped rather than defaulted to zero
+/// (rule 9) -- a caller that indexes past what came back must treat that
+/// account's balance as unread, not as empty.
+fn lamport_balances(meta: Option<&serde_json::Value>, field: &str) -> Vec<u64> {
+    let Some(list) = meta.and_then(|m| m.get(field)).and_then(|b| b.as_array()) else {
+        return Vec::new();
+    };
+    list.iter().filter_map(serde_json::Value::as_u64).collect()
 }
 
 fn collect_instructions(

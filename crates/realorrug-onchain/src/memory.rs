@@ -515,17 +515,19 @@ pub struct TransferEvent {
 /// an observed edge, never an ownership claim (design 0027 §2.1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FundingEdge {
-    /// The buyer that received the funds (its address, lowercase hex).
+    /// The buyer that received the funds, in the chain's own canonical text
+    /// form (0x-lowercase hex for Robinhood, base58 for Solana).
     pub recipient: String,
-    /// The address that sent them.
+    /// The address that sent them, on the same terms as `recipient`.
     pub funder: String,
-    /// The block the transfer landed in.
+    /// The block (or slot) the transfer landed in.
     pub block: u64,
     /// The transaction that carried it.
     pub transaction: String,
     /// The provider's identity for this transfer, the dedupe key.
     pub unique_id: String,
-    /// Wei transferred.
+    /// The amount transferred, in the chain's native smallest unit (wei for
+    /// Robinhood, lamports for Solana).
     pub amount: u128,
     /// Whether the amount was material against the buyer's purchase; dust
     /// is kept as an observation but never counts for attribution.

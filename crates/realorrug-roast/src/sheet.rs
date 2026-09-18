@@ -1211,7 +1211,42 @@ fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Fund
         }
         return;
     }
-    let pct = format!("{:.0}%", f64::from(funding.coverage_bps) / 100.0);
+    // Solana has no quote amount to weigh a share against; `coverage_bps` is
+    // `None` there, and the clause that would name a share is dropped
+    // entirely rather than rendering a false "0%" (AGENTS.md rule 8: absent
+    // is not zero).
+    let coverage = funding
+        .coverage_bps
+        .map(|bps| format!("{:.0}%", f64::from(bps) / 100.0));
+    let plain_words = coverage.as_ref().map_or_else(
+        || {
+            format!(
+                "Where {checked} of the {} early buyers got their money was checked.",
+                funding.buyers
+            )
+        },
+        |pct| {
+            format!(
+                "Where {checked} of the {} early buyers got their money was checked; they bought \
+                 {pct} of what the launch window bought.",
+                funding.buyers
+            )
+        },
+    );
+    let blunt_words = coverage.as_ref().map_or_else(
+        || {
+            format!(
+                "Funding checked for {checked} of {} early buyers.",
+                funding.buyers
+            )
+        },
+        |pct| {
+            format!(
+                "Funding checked for {checked} of {} early buyers ({pct} of the window's buys).",
+                funding.buyers
+            )
+        },
+    );
     facts.push(
         Fact::exact(
             Kind::FundingChecked,
@@ -1220,21 +1255,8 @@ fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Fund
             f64::from(checked),
             format!("{checked} of {}", funding.buyers),
         )
-        .saying(
-            Voice::Plain,
-            format!(
-                "Where {checked} of the {} early buyers got their money was checked; they bought \
-                 {pct} of what the launch window bought.",
-                funding.buyers
-            ),
-        )
-        .saying(
-            Voice::Blunt,
-            format!(
-                "Funding checked for {checked} of {} early buyers ({pct} of the window's buys).",
-                funding.buyers
-            ),
-        ),
+        .saying(Voice::Plain, plain_words)
+        .saying(Voice::Blunt, blunt_words),
     );
     if let Some(top) = funding.shared.first() {
         facts.push(
@@ -3578,7 +3600,7 @@ mod tests {
     /// addresses funding `funded` of them each.
     fn funding_of(buyers: u32, checked: u32, shared: &[u32], gaps: &[&str]) -> Funding {
         let candidate = |i: u32| realorrug_onchain::Candidate {
-            address: realorrug_robinhood::Address([u8::try_from(i).unwrap_or(0); 20]),
+            address: realorrug_robinhood::Address([u8::try_from(i).unwrap_or(0); 20]).to_string(),
             bought_wei: 1,
             first_purchase_block: 64,
             is_contract: Some(false),
@@ -3589,7 +3611,7 @@ mod tests {
         Funding {
             buyers,
             selected: checked,
-            coverage_bps: 7_500,
+            coverage_bps: Some(7_500),
             rule: "test",
             checked: (0..checked).map(candidate).collect(),
             shared: shared
@@ -3598,13 +3620,33 @@ mod tests {
                 .map(|(i, funded)| realorrug_onchain::SharedFunder {
                     address: realorrug_robinhood::Address(
                         [0xf0 + u8::try_from(i).unwrap_or(0); 20],
-                    ),
+                    )
+                    .to_string(),
                     funded: *funded,
                 })
                 .collect(),
             gaps: gaps.iter().map(|g| (*g).to_owned()).collect(),
             cu_spent: 0,
         }
+    }
+
+    #[test]
+    fn a_solana_funding_with_no_coverage_never_renders_a_percentage() {
+        // Solana's `coverage_bps` is `None` (no quote amount to weigh a
+        // share against); the checked-count sentence must still say who was
+        // checked without inventing a share figure.
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.coverage_bps = None;
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let checked = fact_of(&sheet, Kind::FundingChecked).expect("a checked count");
+        assert_eq!(checked.rendered, "4 of 4");
+        let words = clause_words(checked);
+        assert!(
+            !words.contains('%'),
+            "a None coverage rendered a percentage: {words}"
+        );
     }
 
     /// Words a funding sentence may never use: each names an owner behind
