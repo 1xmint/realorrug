@@ -1618,9 +1618,11 @@ pub(crate) mod tests {
         }
         let memory = Memory::open_in_memory().expect("a memory");
         let client = Rpc::new(serve(bodies));
-        // Sixty for the window's logs, two candidates' worth, and ten short
-        // of a third.
-        let mut b = Budget::with_compute_units(60, 3, Duration::from_secs(30), 60 + 2 * 160 + 10);
+        // Sixty for the window's logs, two candidates' worth, and thirty
+        // short of a third at 160 CU -- but not short of one costed at 120,
+        // which is what a candidate would cost if the nonce or code read
+        // were dropped from its price.
+        let mut b = Budget::with_compute_units(60, 3, Duration::from_secs(30), 60 + 2 * 160 + 130);
 
         let dossier =
             build_with_memory(&client, &mut b, &token(), Some(&memory)).expect("a dossier");
@@ -1632,7 +1634,7 @@ pub(crate) mod tests {
         assert_eq!(funding.checked.len(), 2);
         assert_eq!(
             funding.gaps,
-            vec!["compute-unit cap of 330 CU reached: 2 of 4 candidates checked".to_owned()]
+            vec!["compute-unit cap of 450 CU reached: 2 of 4 candidates checked".to_owned()]
         );
         // Two checked, both funded by the hub: still a shared funder, of two.
         assert_eq!(
@@ -1647,6 +1649,63 @@ pub(crate) mod tests {
             .expect("check run")
             .expect("a funding run was recorded");
         assert_eq!(run.completeness, Completeness::Truncated);
+    }
+
+    #[test]
+    fn a_funding_history_longer_than_two_pages_is_cut_and_the_next_buyer_still_read() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let mut bodies = full_bodies(&rec, "0x1");
+        // Two buyers only: the first with a history that keeps paging.
+        let logs: Vec<serde_json::Value> = BUYERS[..2]
+            .iter()
+            .map(|(who, quote)| buy_log(&rec.curve, who, *quote))
+            .collect();
+        bodies.push(answer(&serde_json::json!(logs)));
+        let paged = |page: &str| {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&transfers_into(&BUYERS[0].0, &[(HUB, 5 * ETH)]))
+                    .expect("a body");
+            value["result"]["pageKey"] = serde_json::Value::String(page.to_owned());
+            value.to_string()
+        };
+        bodies.push(answer(&serde_json::json!("0x")));
+        bodies.push(paged("page-2"));
+        bodies.push(paged("page-3"));
+        // No third page is served: the cut comes before it is asked for,
+        // so the next body is the nonce.
+        bodies.push(answer(&serde_json::json!("0x0")));
+        bodies.extend(candidate_bodies(&BUYERS[1].0, &[(HUB, 5 * ETH)]));
+        let client = Rpc::new(serve(bodies));
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        let funding = dossier.funding.expect("funding read");
+        assert_eq!(
+            funding.checked.len(),
+            2,
+            "a cut history does not stop the next buyer"
+        );
+        let first = &funding.checked[0];
+        assert_eq!(first.funders.len(), 2, "one funder per page read");
+        assert!(!first.funding_complete);
+        assert_eq!(
+            first.nonce_before_launch,
+            Some(0),
+            "the nonce is read after the cut"
+        );
+        assert_eq!(
+            funding.gaps,
+            vec![format!(
+                "funding of {}: more than 2 pages; later transfers unread",
+                BUYERS[0].0
+            )]
+        );
+        assert!(funding.checked[1].funding_complete);
+        assert_eq!(dossier.calls, 10 + 1 + 4 + 3);
     }
 
     #[test]

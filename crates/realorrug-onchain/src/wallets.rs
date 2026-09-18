@@ -157,10 +157,12 @@ pub fn buyers_of(purchases: &[Purchase]) -> Vec<Buyer> {
             first_position: p.position,
         });
         buyer.quote = buyer.quote.saturating_add(p.quote);
-        if (p.block, p.position) < (buyer.first_block, buyer.first_position) {
-            buyer.first_block = p.block;
-            buyer.first_position = p.position;
-        }
+        // `min` rather than a comparison: two purchases can never share a
+        // position, so `<` and `<=` are the same here and a mutation test
+        // cannot tell them apart.
+        let first = (buyer.first_block, buyer.first_position).min((p.block, p.position));
+        buyer.first_block = first.0;
+        buyer.first_position = first.1;
     }
     let mut buyers: Vec<Buyer> = by_address.into_values().collect();
     buyers.sort_by_key(|b| (b.first_block, b.first_position, b.address.0));
@@ -847,5 +849,9 @@ mod tests {
         assert!(!method_unsupported(
             "alchemy_getAssetTransfers: no transfers array"
         ));
+        // Each wording on its own is enough; none is required with another.
+        for alone in ["not supported", "unsupported method", "does not exist"] {
+            assert!(method_unsupported(alone), "{alone}");
+        }
     }
 }
