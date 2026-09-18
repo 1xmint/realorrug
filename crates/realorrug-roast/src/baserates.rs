@@ -585,7 +585,8 @@ mod tests {
         assert!(rates.is_stale_at("2026-09-03"));
         rates.measured_on = "2026-09-03".to_owned();
         assert!(!rates.is_stale_at("2026-09-10"));
-        assert!(rates.is_stale_at("2026-10-03"));
+        let stale_month = 9 + STALE_AFTER_DAYS / 31 + 1;
+        assert!(rates.is_stale_at(&format!("2026-{stale_month:02}-03")));
     }
 
     #[test]
@@ -652,13 +653,14 @@ mod tests {
         // A year later is stale, however early in the year it falls -- so the
         // year term dominates twelve months plus thirty-one days.
         assert!(rates.is_stale_at("2027-01-01"));
-        // A month later is stale, however early in the month -- so the month
-        // term dominates thirty-one days.
-        assert!(rates.is_stale_at("2026-02-01"));
-        // And the December-to-January step is one month, not a jump backwards.
+        // Enough whole months later is stale, however early in the month --
+        // so the month term dominates thirty-one days.
+        let stale_months = STALE_AFTER_DAYS / 31 + 1;
+        assert!(rates.is_stale_at(&format!("2026-{:02}-01", 1 + stale_months)));
+        // And stepping past December advances the date, not backwards.
         rates.measured_on = "2026-12-20".to_owned();
         assert!(!rates.is_stale_at("2026-12-30"));
-        assert!(rates.is_stale_at("2027-01-20"));
+        assert!(rates.is_stale_at(&format!("2027-{stale_months:02}-20")));
     }
 
     #[test]
