@@ -182,6 +182,15 @@ pub enum Kind {
     /// addresses, which an exchange's hot wallet also produces: never who
     /// owns or controls whom.
     SharedFunder,
+    /// A dated USD price or market-cap read from an off-chain aggregator
+    /// (design 0027 §2.2, "Market and exit"; `realorrug-onchain::market`).
+    ///
+    /// ADR 0033: a price or cap carries the moment it was read, so this
+    /// kind's clause states that moment itself rather than leaving it to the
+    /// sheet-wide read point -- the aggregator's own wall-clock read, per
+    /// `MarketSnapshot::observed_at`'s own doc comment, not the block this
+    /// dossier's chain read happened at.
+    Market,
 }
 
 /// Which register a clause is written in.

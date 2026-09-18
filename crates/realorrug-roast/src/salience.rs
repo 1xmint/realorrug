@@ -207,6 +207,44 @@ fn shared_funder(sheet: &FactSheet) -> Option<Candidate> {
     })
 }
 
+/// The market bundle: a dated USD price and/or market cap (design 0027
+/// §2.2, ADR 0033).
+///
+/// Ranked below every risk-bearing bundle above -- `launch_recipients` at 70
+/// is the lowest of those, and this sits under it at 40 -- because a price
+/// is a fact about the market's current opinion, not about anything this
+/// analyst measured for itself the way a creator record or a concentration
+/// share is. AGENTS.md §3 rule 5: price is stated with its moment, never
+/// leads a reply, and never a hint to buy, sell or hold.
+fn market(sheet: &FactSheet) -> Option<Candidate> {
+    let facts: Vec<&Fact> = sheet
+        .facts
+        .iter()
+        .filter(|f| f.kind == Kind::Market)
+        .collect();
+    if facts.is_empty() {
+        return None;
+    }
+    let sentence = facts
+        .iter()
+        .filter_map(|f| {
+            f.clauses
+                .iter()
+                .find(|c| c.voice == crate::clause::Voice::Plain)
+                .map(|c| c.text.clone())
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if sentence.is_empty() {
+        return None;
+    }
+    Some(Candidate {
+        id: CandidateId(vec![Kind::Market]),
+        priority: 40,
+        sentence,
+    })
+}
+
 /// Every candidate this sheet supports, ranked highest priority first.
 ///
 /// **The one ranking every caller shares.** [`crate::verdict::headline`],
@@ -222,6 +260,7 @@ pub fn rank(sheet: &FactSheet) -> Vec<Candidate> {
         shared_funder(sheet),
         concentration(sheet),
         launch_recipients(sheet),
+        market(sheet),
     ]
     .into_iter()
     .flatten()

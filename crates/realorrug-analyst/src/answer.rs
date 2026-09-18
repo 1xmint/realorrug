@@ -367,9 +367,11 @@ fn sheet_for(
     // than each writing its own "which chain is this" match. The budget
     // uses `realorrug-onchain`'s default: a stranger chooses when this
     // runs, so the ceiling must not drift between callers.
+    let market = realorrug_onchain::market::Http::default();
     let clients = dispatch::Clients {
         solana: ctx.client,
         robinhood: ctx.robinhood,
+        market: Some(&market),
     };
     let mut budget = realorrug_onchain::Budget::default();
     let result = dispatch::read_with_memory(mint_text, &clients, ctx.memory, &mut budget);
@@ -549,7 +551,8 @@ mod tests {
             &mut metrics,
         );
         assert!(matches!(outcome, Answered::Reply { .. }));
-        assert_eq!(metrics.calls, 2);
+        // Two dossier reads plus the token-ownership read (design 0027 slice 6a).
+        assert_eq!(metrics.calls, 3);
         drop(first);
 
         // No `record` or publisher ran. The paid read must already be durable.
@@ -582,7 +585,7 @@ mod tests {
             &mut expired,
         );
         assert!(matches!(outcome, Answered::Reply { .. }));
-        assert_eq!(expired.calls, 2);
+        assert_eq!(expired.calls, 3);
         std::fs::remove_file(path).expect("remove snapshot");
     }
 

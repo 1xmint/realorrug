@@ -46,9 +46,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // answered unreadable by the dispatcher below, never as not-an-address and
     // never against Solana.
     let robinhood = flag(args, "--robinhood-rpc").map(|url| realorrug_robinhood::Rpc::new(&url));
+    // Always configured, unlike `robinhood` above: DexScreener/GeckoTerminal
+    // have no "endpoint the operator must supply" step the way an RPC node
+    // does, so there is no missing-config case to deny by default here --
+    // only a failed read, which `dispatch::robinhood` already turns into a
+    // named "market" gap rather than a zero.
+    let market = realorrug_onchain::market::Http::default();
     let clients = dispatch::Clients {
         solana: &client,
         robinhood: robinhood.as_ref(),
+        market: Some(&market),
     };
 
     // The one dispatcher every entry point that answers about a mint goes

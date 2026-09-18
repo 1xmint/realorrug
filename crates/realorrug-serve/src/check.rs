@@ -367,6 +367,13 @@ pub(crate) async fn check(
         let clients = dispatch::Clients {
             solana: &solana,
             robinhood: robinhood.as_ref(),
+            // Out of this task's scope (design 0027 slice 4): the checker
+            // page's own no-model-call path is not one of the three
+            // production call sites this task wires a market read into.
+            // `None` here is deny-by-default, not an oversight -- it means
+            // no market fact reaches this route yet, which matches its
+            // current behaviour exactly.
+            market: None,
         };
         dispatch::read(&mint_text, &clients)
     })

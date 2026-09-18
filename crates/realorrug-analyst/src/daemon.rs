@@ -970,9 +970,11 @@ fn announce_week(
         // stored text, on whichever chain it was launched on, and matching on
         // its shape here a second time would be exactly the duplicated
         // decision this task exists to remove.
+        let market = realorrug_onchain::market::Http::default();
         let clients = realorrug_onchain::dispatch::Clients {
             solana: client,
             robinhood,
+            market: Some(&market),
         };
         match realorrug_onchain::dispatch::read(&winner.entry.mint, &clients) {
             Ok(dossier) => {

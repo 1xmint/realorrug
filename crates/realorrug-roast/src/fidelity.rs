@@ -154,7 +154,11 @@ impl Subject {
             | Kind::CapacityNone
             | Kind::CapacityAfterGraduation
             | Kind::CurveLiquidity => Self::Liquidity,
-            Kind::Graduated | Kind::Age => Self::Token,
+            // The token's own price and cap, not the pool's tradeable depth
+            // (`Subject::Liquidity` is capacity and cost, a different
+            // question `market.rs`'s own doc comment draws the same line
+            // about) and not the venue's population rate.
+            Kind::Graduated | Kind::Age | Kind::Market => Self::Token,
         }
     }
 }
