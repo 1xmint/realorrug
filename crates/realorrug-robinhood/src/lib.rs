@@ -300,6 +300,56 @@ pub struct Log {
     pub block: u64,
     /// The transaction that emitted it.
     pub transaction: Hash32,
+    /// Where in the chain it sits, when the provider said: the block's hash
+    /// and the log's place in it. `None` only for a log built by hand or by
+    /// a provider that omitted the fields; `eth_getLogs` and receipts carry
+    /// all three. Kept because a `(block number, transaction hash)` pair is
+    /// not an identity -- a reorg re-mines the same transaction into a block
+    /// with the same number and a different hash, and one transaction can
+    /// emit the same event twice -- so nothing durable can be keyed on the
+    /// fields above alone.
+    pub position: Option<LogPosition>,
+}
+
+/// A log's place in the chain, the part of its identity a block number and
+/// a transaction hash do not carry (see [`Log::position`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LogPosition {
+    /// The hash of the block the log is in.
+    pub block_hash: Hash32,
+    /// The transaction's index within that block.
+    pub transaction_index: u64,
+    /// The log's index within that block.
+    pub log_index: u64,
+}
+
+/// One event's durable identity: block number and hash, then the log's
+/// position. Two logs with the same `EventId` on the same chain are the same
+/// event; the same event re-read after a reorg has a different `block_hash`.
+/// The chain itself is not a field -- the `Rpc` a log came from is one
+/// chain, and the caller that stores events across chains keys them by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EventId {
+    /// The block number.
+    pub block: u64,
+    /// The transaction's index within the block.
+    pub transaction_index: u64,
+    /// The log's index within the block.
+    pub log_index: u64,
+    /// The block's hash. Last so the derived `Ord` is chain order.
+    pub block_hash: Hash32,
+}
+
+/// A block's number, hash and timestamp, as [`Rpc::block_header`] reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockHeader {
+    /// The block number.
+    pub number: u64,
+    /// The block's hash: the one field that says *which* block this number
+    /// named when it was read.
+    pub hash: Hash32,
+    /// The block's timestamp, in seconds.
+    pub timestamp: u64,
 }
 
 fn field<'a>(value: &'a serde_json::Value, name: &'static str) -> Result<&'a str, ReadError> {
@@ -327,12 +377,39 @@ impl Log {
                     .and_then(str::parse)
             })
             .collect::<Result<_, _>>()?;
+        // All three or none: a position with a hash but no index is not a
+        // position, and a caller keying on `Some` must be able to trust it.
+        let position = match (
+            field(value, "blockHash"),
+            field(value, "transactionIndex"),
+            field(value, "logIndex"),
+        ) {
+            (Ok(hash), Ok(tx), Ok(log)) => Some(LogPosition {
+                block_hash: hash.parse()?,
+                transaction_index: quantity(tx)?,
+                log_index: quantity(log)?,
+            }),
+            _ => None,
+        };
         Ok(Self {
             address: field(value, "address")?.parse()?,
             topics,
             data: hex_bytes(field(value, "data")?)?,
             block: quantity(field(value, "blockNumber")?)?,
             transaction: field(value, "transactionHash")?.parse()?,
+            position,
+        })
+    }
+
+    /// This log's durable identity, or `None` when the provider gave no
+    /// position (see [`Log::position`]).
+    #[must_use]
+    pub fn event_id(&self) -> Option<EventId> {
+        self.position.map(|p| EventId {
+            block: self.block,
+            transaction_index: p.transaction_index,
+            log_index: p.log_index,
+            block_hash: p.block_hash,
         })
     }
 
@@ -759,15 +836,74 @@ impl Rpc {
         Ok((read("number")?, read("timestamp")?))
     }
 
+    /// A block's number, hash and timestamp: block `number`, or the latest
+    /// block when `number` is `None`. The hash is what lets a later read
+    /// tell whether this block is still the chain's block `number`.
+    ///
+    /// # Errors
+    ///
+    /// The endpoint's error, no such block, or a field that is missing or
+    /// malformed.
+    pub fn block_header(&self, number: Option<u64>) -> Result<BlockHeader, String> {
+        let tag = number.map_or_else(|| "latest".to_owned(), |n| format!("{n:#x}"));
+        let result = self.call("eth_getBlockByNumber", &serde_json::json!([tag, false]))?;
+        if result.is_null() {
+            return Err("eth_getBlockByNumber: no such block".to_owned());
+        }
+        let read = |name: &'static str| {
+            field(&result, name)
+                .and_then(quantity)
+                .map_err(|e| format!("eth_getBlockByNumber: {e}"))
+        };
+        let hash = field(&result, "hash")
+            .and_then(str::parse)
+            .map_err(|e| format!("eth_getBlockByNumber: {e}"))?;
+        Ok(BlockHeader {
+            number: read("number")?,
+            hash,
+            timestamp: read("timestamp")?,
+        })
+    }
+
     /// A read-only contract call at the latest block.
+    ///
+    /// Prefer [`Rpc::call_contract_at`] for any read that will be reported
+    /// alongside a block number: "latest" here and a block read separately
+    /// can be two different blocks, and the report then describes a state
+    /// the chain never held.
     ///
     /// # Errors
     ///
     /// The endpoint's error, or a result that is not hex.
     pub fn call_contract(&self, to: &Address, data: &[u8]) -> Result<Vec<u8>, String> {
+        self.call_contract_tagged(to, data, "latest")
+    }
+
+    /// A read-only contract call pinned to block `block`, so every read in
+    /// one report can share one block and describe one state.
+    ///
+    /// # Errors
+    ///
+    /// The endpoint's error (including a block the provider no longer
+    /// serves state for), or a result that is not hex.
+    pub fn call_contract_at(
+        &self,
+        to: &Address,
+        data: &[u8],
+        block: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.call_contract_tagged(to, data, &format!("{block:#x}"))
+    }
+
+    fn call_contract_tagged(
+        &self,
+        to: &Address,
+        data: &[u8],
+        tag: &str,
+    ) -> Result<Vec<u8>, String> {
         let result = self.call(
             "eth_call",
-            &serde_json::json!([{ "to": to.to_string(), "data": to_hex(data) }, "latest"]),
+            &serde_json::json!([{ "to": to.to_string(), "data": to_hex(data) }, tag]),
         )?;
         let text = result.as_str().ok_or("eth_call returned no hex")?;
         hex_bytes(text).map_err(|e| e.to_string())
@@ -1262,6 +1398,42 @@ mod tests {
         assert_eq!(word(&data, 1).map(|w| w[31]), Some(63));
         assert_eq!(word(&data, 2), None, "six bytes are not a word");
         assert_eq!(word(&data, usize::MAX), None);
+    }
+
+    #[test]
+    fn a_log_keeps_its_position_when_the_provider_sends_one_and_none_otherwise() {
+        let block_hash = format!("0x{}", "ab".repeat(32));
+        let mut json = serde_json::json!({
+            "address": Address([1; 20]).to_string(), "topics": [], "data": "0x",
+            "blockNumber": "0x10",
+            "transactionHash": Hash32([0; 32]).to_string(),
+            "blockHash": block_hash,
+            "transactionIndex": "0x3",
+            "logIndex": "0x7",
+        });
+        let log = Log::from_json(&json).expect("a log");
+        assert_eq!(
+            log.position,
+            Some(LogPosition {
+                block_hash: Hash32([0xab; 32]),
+                transaction_index: 3,
+                log_index: 7,
+            })
+        );
+        assert_eq!(
+            log.event_id(),
+            Some(EventId {
+                block: 16,
+                transaction_index: 3,
+                log_index: 7,
+                block_hash: Hash32([0xab; 32]),
+            })
+        );
+        // A hash with no index is not a position: all three or none.
+        json.as_object_mut().expect("log").remove("logIndex");
+        let log = Log::from_json(&json).expect("still a log");
+        assert_eq!(log.position, None);
+        assert_eq!(log.event_id(), None);
     }
 
     #[test]

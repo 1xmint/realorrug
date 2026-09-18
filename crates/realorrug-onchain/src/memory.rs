@@ -164,6 +164,18 @@ pub enum Error {
         /// The value the new read produced.
         new: String,
     },
+    /// A transfer ledger that does not add up: a debit below zero, or a
+    /// stored amount that is not a number. Refused rather than applied,
+    /// because a balance that went negative means the events were
+    /// incomplete or out of order, and a count published from that ledger
+    /// would misreport a real balance (AGENTS.md §3 rule 8).
+    #[error("transfer ledger for {token:?}: {why}")]
+    Ledger {
+        /// The token whose ledger failed.
+        token: String,
+        /// What did not add up.
+        why: String,
+    },
 }
 
 /// Whether [`Memory::record`] added a new row or found the same fact
@@ -199,7 +211,7 @@ impl Memory {
     /// An in-memory store, for tests that do not need [`Memory::open`]'s
     /// close-and-reopen durability.
     #[cfg(test)]
-    fn open_in_memory() -> Result<Self, Error> {
+    pub(crate) fn open_in_memory() -> Result<Self, Error> {
         let conn = Connection::open_in_memory()?;
         Self::init(conn)
     }
@@ -216,6 +228,7 @@ impl Memory {
                 PRIMARY KEY (what, subject, block)
              );",
         )?;
+        Self::init_events(&conn)?;
         Ok(Self { conn })
     }
 
@@ -427,6 +440,515 @@ impl Memory {
     ) -> Result<Recorded, Error> {
         self.record(LAUNCH, creator, block, Kind::Forever, "launched", read_at)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Event memory: a token's Transfer ledger, its balances and its checkpoint
+// (design 0021 §9). The `facts` table above remembers what a read *said*;
+// these tables remember the events themselves, so the next summon reads only
+// the blocks the last one did not cover.
+// ---------------------------------------------------------------------------
+
+/// How far behind a checkpoint a block is still treated as reorganisable.
+///
+/// A checkpoint whose hash no longer matches the chain is rolled back this
+/// many blocks and re-read from there; transfers older than this behind the
+/// checkpoint are treated as final and may be pruned. **The owner's chosen
+/// number, not a measured one**: Robinhood Chain is an Arbitrum Orbit chain
+/// whose sequencer reorganises rarely and shallowly, and at its ~0.1s blocks
+/// this is under a minute of chain. A deeper reorg than this leaves the
+/// memory wrong until the token is forgotten; design 0021 §9 says so.
+pub const REORG_DEPTH: u64 = 256;
+
+/// The most transfers kept per token before the oldest final ones are
+/// pruned. Sized from the same measurement as the reader's page cap: the
+/// busiest live token walked on 2026-09-17 held 28,652 transfers, so this
+/// keeps a token like it whole and bounds a busier one. Balances survive
+/// pruning (they were applied when each row was inserted), so what is lost
+/// is only the receipt behind an old balance, which the chain can re-supply.
+pub const MAX_TRANSFERS_PER_TOKEN: u64 = 50_000;
+
+/// The most check runs kept per `(chain, token, what)`; older ones go.
+const MAX_CHECK_RUNS: u64 = 32;
+
+/// The block a token's transfer memory is complete through, with the hash
+/// that block had when it was read. The hash is what makes "complete
+/// through N" checkable later: if the chain's block N now has another hash,
+/// the suffix was built on a block that is no longer canonical.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Checkpoint {
+    /// The block number.
+    pub block: u64,
+    /// The block's hash, rendered.
+    pub hash: String,
+}
+
+/// One token `Transfer` event as the memory stores it.
+///
+/// Identity is `(chain, token, block, transaction_index, log_index)` -- the
+/// event's position, never its transaction hash alone, because one
+/// transaction can emit the same event twice. `block_hash` is kept per row
+/// so a reorg can be told apart from a retry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferEvent {
+    /// The block number.
+    pub block: u64,
+    /// The block's hash, rendered.
+    pub block_hash: String,
+    /// The transaction's index within the block.
+    pub transaction_index: u64,
+    /// The log's index within the block.
+    pub log_index: u64,
+    /// The transaction hash, rendered.
+    pub transaction: String,
+    /// Who sent, or `None` for a mint -- nothing is debited then. The
+    /// memory does not know which address a chain mints from; the reader
+    /// that decoded the event does, and says so here.
+    pub from: Option<String>,
+    /// Who received.
+    pub to: String,
+    /// How much, in the token's smallest unit.
+    pub amount: u128,
+}
+
+/// What [`Memory::extend_transfers`] did with the events it was handed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Extended {
+    /// Events not seen before, whose amounts moved balances.
+    pub inserted: u64,
+    /// Events already on file -- a retried or overlapping range. Balances
+    /// were not moved for these.
+    pub duplicates: u64,
+}
+
+/// How a check run ended. An empty complete range and a failed query are
+/// different results (design packet §2.3): the first says "nothing
+/// happened in these blocks", the second says nothing at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Completeness {
+    /// Every block in the interval was read and every event kept.
+    Complete,
+    /// The query did not finish; the interval is not covered.
+    Failed,
+    /// The read stopped early by a cap or budget; the interval is covered
+    /// only up to where it stopped.
+    Truncated,
+}
+
+impl Completeness {
+    fn as_str(self) -> &'static str {
+        match self {
+            Completeness::Complete => "complete",
+            Completeness::Failed => "failed",
+            Completeness::Truncated => "truncated",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "complete" => Some(Completeness::Complete),
+            "failed" => Some(Completeness::Failed),
+            "truncated" => Some(Completeness::Truncated),
+            _ => None,
+        }
+    }
+}
+
+/// One recorded check run: what was asked, over which blocks, how it ended
+/// and what it cost.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckRun {
+    /// The chain, e.g. `"robinhood"`.
+    pub chain: String,
+    /// The token the check was about.
+    pub token: String,
+    /// The check's name, e.g. `"transfers"`.
+    pub what: String,
+    /// The check's versioned parameters, rendered by the caller.
+    pub parameters: String,
+    /// The first block asked for.
+    pub from_block: u64,
+    /// The last block asked for.
+    pub to_block: u64,
+    /// How it ended.
+    pub completeness: Completeness,
+    /// RPC calls spent, including retries the provider still billed.
+    pub calls: u32,
+    /// The error text on failure, or the reason for truncation; empty when
+    /// complete.
+    pub note: String,
+    /// When it ran.
+    pub ran_at: SystemTime,
+}
+
+impl Memory {
+    fn init_events(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS transfers (
+                chain      TEXT    NOT NULL,
+                token      TEXT    NOT NULL,
+                block      INTEGER NOT NULL,
+                tx_index   INTEGER NOT NULL,
+                log_index  INTEGER NOT NULL,
+                block_hash TEXT    NOT NULL,
+                tx_hash    TEXT    NOT NULL,
+                sender     TEXT,
+                recipient  TEXT    NOT NULL,
+                amount     TEXT    NOT NULL,
+                PRIMARY KEY (chain, token, block, tx_index, log_index)
+             );
+             CREATE TABLE IF NOT EXISTS token_balances (
+                chain   TEXT NOT NULL,
+                token   TEXT NOT NULL,
+                holder  TEXT NOT NULL,
+                balance TEXT NOT NULL,
+                PRIMARY KEY (chain, token, holder)
+             );
+             CREATE TABLE IF NOT EXISTS token_state (
+                chain            TEXT    NOT NULL,
+                token            TEXT    NOT NULL,
+                complete_through INTEGER NOT NULL,
+                complete_hash    TEXT    NOT NULL,
+                PRIMARY KEY (chain, token)
+             );
+             CREATE TABLE IF NOT EXISTS check_runs (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                chain        TEXT    NOT NULL,
+                token        TEXT    NOT NULL,
+                what         TEXT    NOT NULL,
+                parameters   TEXT    NOT NULL,
+                from_block   INTEGER NOT NULL,
+                to_block     INTEGER NOT NULL,
+                completeness TEXT    NOT NULL,
+                calls        INTEGER NOT NULL,
+                note         TEXT    NOT NULL,
+                ran_at       INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS check_runs_by_subject
+                ON check_runs (chain, token, what, id);",
+        )?;
+        Ok(())
+    }
+
+    /// The block `token`'s transfer memory is complete through, or `None`
+    /// when nothing complete is on file (never read, or rolled back and not
+    /// yet re-read).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails.
+    pub fn token_checkpoint(&self, chain: &str, token: &str) -> Result<Option<Checkpoint>, Error> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT complete_through, complete_hash FROM token_state
+                 WHERE chain = ?1 AND token = ?2",
+                params![chain, token],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .map(|(block, hash)| Checkpoint {
+                block: u64::try_from(block).unwrap_or(0),
+                hash,
+            }))
+    }
+
+    /// Stores `events` and moves balances for the ones not already on file,
+    /// then marks the memory complete through `through` -- all in one
+    /// transaction, so a crash leaves either the old checkpoint with the old
+    /// balances or the new with the new, never a checkpoint ahead of the
+    /// ledger behind it.
+    ///
+    /// An event already on file (same position) is counted a duplicate and
+    /// moves nothing, so a retried or overlapping range is harmless. Rows
+    /// older than [`REORG_DEPTH`] behind `through` are pruned, oldest first,
+    /// once the token holds more than [`MAX_TRANSFERS_PER_TOKEN`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Ledger`] if a debit would take a balance below zero -- the
+    /// events are out of order or incomplete, and nothing is committed;
+    /// [`Error::Sqlite`] if a write fails.
+    pub fn extend_transfers(
+        &self,
+        chain: &str,
+        token: &str,
+        events: &[TransferEvent],
+        through: &Checkpoint,
+    ) -> Result<Extended, Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut extended = Extended {
+            inserted: 0,
+            duplicates: 0,
+        };
+        for event in events {
+            let changed = tx.execute(
+                "INSERT OR IGNORE INTO transfers
+                 (chain, token, block, tx_index, log_index, block_hash, tx_hash,
+                  sender, recipient, amount)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    chain,
+                    token,
+                    to_i64(event.block),
+                    to_i64(event.transaction_index),
+                    to_i64(event.log_index),
+                    event.block_hash,
+                    event.transaction,
+                    event.from,
+                    event.to,
+                    event.amount.to_string(),
+                ],
+            )?;
+            if changed == 0 {
+                extended.duplicates += 1;
+                continue;
+            }
+            extended.inserted += 1;
+            if let Some(from) = &event.from {
+                adjust_balance(&tx, chain, token, from, event.amount, Direction::Debit)?;
+            }
+            adjust_balance(
+                &tx,
+                chain,
+                token,
+                &event.to,
+                event.amount,
+                Direction::Credit,
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO token_state (chain, token, complete_through, complete_hash)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (chain, token) DO UPDATE
+             SET complete_through = excluded.complete_through,
+                 complete_hash = excluded.complete_hash",
+            params![chain, token, to_i64(through.block), through.hash],
+        )?;
+        // Bound the receipts, never the balances: the rows dropped here are
+        // final (older than a reorg can reach) and already applied.
+        let held: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM transfers WHERE chain = ?1 AND token = ?2",
+            params![chain, token],
+            |row| row.get(0),
+        )?;
+        let excess = u64::try_from(held)
+            .unwrap_or(0)
+            .saturating_sub(MAX_TRANSFERS_PER_TOKEN);
+        if excess > 0 {
+            let final_before = through.block.saturating_sub(REORG_DEPTH);
+            tx.execute(
+                "DELETE FROM transfers WHERE rowid IN (
+                    SELECT rowid FROM transfers
+                    WHERE chain = ?1 AND token = ?2 AND block < ?3
+                    ORDER BY block, tx_index, log_index LIMIT ?4)",
+                params![chain, token, to_i64(final_before), to_i64(excess)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(extended)
+    }
+
+    /// Forgets every transfer of `token` after `block`, reversing its effect
+    /// on balances, and drops the checkpoint -- the memory is then complete
+    /// through nothing until the next [`Memory::extend_transfers`]. Called
+    /// when the checkpoint's hash no longer matches the chain (a reorg).
+    /// Returns how many events were forgotten.
+    ///
+    /// Dropping the checkpoint rather than moving it to `block` is
+    /// deliberate: the hash block `block` *had* is not on file, so a
+    /// checkpoint there would claim a match nothing verified. A reader that
+    /// dies between this and the re-read leaves rows with no checkpoint,
+    /// and the next summon walks from the launch block again -- duplicates
+    /// are ignored, so that costs calls, not correctness.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Ledger`] if reversing a credit would take a balance below
+    /// zero (the ledger was already inconsistent); [`Error::Sqlite`] if a
+    /// write fails. Nothing is committed on error.
+    pub fn roll_back_transfers_after(
+        &self,
+        chain: &str,
+        token: &str,
+        block: u64,
+    ) -> Result<u64, Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        let rows: Vec<(Option<String>, String, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT sender, recipient, amount FROM transfers
+                 WHERE chain = ?1 AND token = ?2 AND block > ?3
+                 ORDER BY block DESC, tx_index DESC, log_index DESC",
+            )?;
+            let rows = stmt.query_map(params![chain, token, to_i64(block)], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+            rows.collect::<Result<_, _>>()?
+        };
+        for (sender, recipient, amount) in &rows {
+            let amount = parse_amount(amount)?;
+            adjust_balance(&tx, chain, token, recipient, amount, Direction::Debit)?;
+            if let Some(sender) = sender {
+                adjust_balance(&tx, chain, token, sender, amount, Direction::Credit)?;
+            }
+        }
+        tx.execute(
+            "DELETE FROM transfers WHERE chain = ?1 AND token = ?2 AND block > ?3",
+            params![chain, token, to_i64(block)],
+        )?;
+        tx.execute(
+            "DELETE FROM token_state WHERE chain = ?1 AND token = ?2",
+            params![chain, token],
+        )?;
+        tx.commit()?;
+        Ok(u64::try_from(rows.len()).unwrap_or(u64::MAX))
+    }
+
+    /// Every non-zero balance of `token` on file, as `(holder, balance)`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails; [`Error::Ledger`] if a stored
+    /// balance does not parse.
+    pub fn token_balances(&self, chain: &str, token: &str) -> Result<Vec<(String, u128)>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT holder, balance FROM token_balances
+             WHERE chain = ?1 AND token = ?2 AND balance != '0'
+             ORDER BY holder",
+        )?;
+        let rows = stmt.query_map(params![chain, token], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (holder, balance) = row?;
+            Ok((holder, parse_amount(&balance)?))
+        })
+        .collect()
+    }
+
+    /// Records one check run and prunes the oldest beyond [`MAX_CHECK_RUNS`]
+    /// for the same `(chain, token, what)`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn record_check_run(&self, run: &CheckRun) -> Result<(), Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO check_runs
+             (chain, token, what, parameters, from_block, to_block, completeness,
+              calls, note, ran_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                run.chain,
+                run.token,
+                run.what,
+                run.parameters,
+                to_i64(run.from_block),
+                to_i64(run.to_block),
+                run.completeness.as_str(),
+                run.calls,
+                run.note,
+                to_unix(run.ran_at),
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM check_runs WHERE chain = ?1 AND token = ?2 AND what = ?3
+             AND id NOT IN (
+                SELECT id FROM check_runs WHERE chain = ?1 AND token = ?2 AND what = ?3
+                ORDER BY id DESC LIMIT ?4)",
+            params![run.chain, run.token, run.what, to_i64(MAX_CHECK_RUNS)],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The most recent check run for `(chain, token, what)`, if any.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails.
+    pub fn latest_check_run(
+        &self,
+        chain: &str,
+        token: &str,
+        what: &str,
+    ) -> Result<Option<CheckRun>, Error> {
+        self.conn
+            .query_row(
+                "SELECT parameters, from_block, to_block, completeness, calls, note, ran_at
+                 FROM check_runs WHERE chain = ?1 AND token = ?2 AND what = ?3
+                 ORDER BY id DESC LIMIT 1",
+                params![chain, token, what],
+                |row| {
+                    Ok(CheckRun {
+                        chain: chain.to_owned(),
+                        token: token.to_owned(),
+                        what: what.to_owned(),
+                        parameters: row.get(0)?,
+                        from_block: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                        to_block: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                        completeness: Completeness::parse(&row.get::<_, String>(3)?)
+                            .unwrap_or(Completeness::Failed),
+                        calls: row.get(4)?,
+                        note: row.get(5)?,
+                        ran_at: from_unix(row.get(6)?),
+                    })
+                },
+            )
+            .optional()
+            .map_err(Error::from)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Direction {
+    Credit,
+    Debit,
+}
+
+/// Moves `holder`'s balance of `token` by `amount`. Stored as decimal text
+/// because SQLite's integer is 64 bits and a token amount is 128.
+fn adjust_balance(
+    conn: &Connection,
+    chain: &str,
+    token: &str,
+    holder: &str,
+    amount: u128,
+    direction: Direction,
+) -> Result<(), Error> {
+    let current: Option<String> = conn
+        .query_row(
+            "SELECT balance FROM token_balances WHERE chain = ?1 AND token = ?2 AND holder = ?3",
+            params![chain, token, holder],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let current = current.as_deref().map_or(Ok(0), parse_amount)?;
+    let next = match direction {
+        Direction::Credit => current.saturating_add(amount),
+        Direction::Debit => current.checked_sub(amount).ok_or_else(|| Error::Ledger {
+            token: token.to_owned(),
+            why: format!("{holder} would spend {amount} holding {current}"),
+        })?,
+    };
+    conn.execute(
+        "INSERT INTO token_balances (chain, token, holder, balance) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (chain, token, holder) DO UPDATE SET balance = excluded.balance",
+        params![chain, token, holder, next.to_string()],
+    )?;
+    Ok(())
+}
+
+fn parse_amount(text: &str) -> Result<u128, Error> {
+    text.parse::<u128>().map_err(|_| Error::Ledger {
+        token: String::new(),
+        why: format!("stored amount {text:?} is not a number"),
+    })
+}
+
+fn to_i64(n: u64) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
 }
 
 /// The `what` [`Memory::has_prior_balance`]/[`Memory::record_balance`] use.
@@ -816,6 +1338,236 @@ mod tests {
         assert!(
             !daily_fact.is_fresh(read_at + one_day + tick),
             "just past the daily shelf life must be stale"
+        );
+    }
+
+    // -- event memory (design 0021 §9) --
+
+    const CHAIN: &str = "robinhood";
+    const TOKEN: &str = "0xtoken";
+
+    fn transfer(
+        block: u64,
+        log_index: u64,
+        from: Option<&str>,
+        to: &str,
+        amount: u128,
+    ) -> TransferEvent {
+        TransferEvent {
+            block,
+            block_hash: format!("0xhash{block}"),
+            transaction_index: 0,
+            log_index,
+            transaction: format!("0xtx{block}_{log_index}"),
+            from: from.map(str::to_owned),
+            to: to.to_owned(),
+            amount,
+        }
+    }
+
+    fn checkpoint(block: u64) -> Checkpoint {
+        Checkpoint {
+            block,
+            hash: format!("0xhash{block}"),
+        }
+    }
+
+    #[test]
+    fn a_retried_range_moves_no_balance_twice() {
+        let mem = Memory::open_in_memory().expect("open");
+        let events = [
+            transfer(10, 0, None, "curve", 1_000),
+            transfer(11, 0, Some("curve"), "alice", 300),
+            transfer(11, 1, Some("alice"), "bob", 100),
+        ];
+        let first = mem
+            .extend_transfers(CHAIN, TOKEN, &events, &checkpoint(20))
+            .expect("first extend");
+        assert_eq!(
+            first,
+            Extended {
+                inserted: 3,
+                duplicates: 0
+            }
+        );
+        let before = mem.token_balances(CHAIN, TOKEN).expect("balances");
+
+        // The same range again, as a retry after a lost answer would send it.
+        let again = mem
+            .extend_transfers(CHAIN, TOKEN, &events, &checkpoint(20))
+            .expect("retried extend");
+        assert_eq!(
+            again,
+            Extended {
+                inserted: 0,
+                duplicates: 3
+            }
+        );
+        assert_eq!(mem.token_balances(CHAIN, TOKEN).expect("balances"), before);
+        assert_eq!(
+            before,
+            vec![
+                ("alice".to_owned(), 200),
+                ("bob".to_owned(), 100),
+                ("curve".to_owned(), 700),
+            ]
+        );
+        assert_eq!(
+            mem.token_checkpoint(CHAIN, TOKEN).expect("checkpoint"),
+            Some(checkpoint(20))
+        );
+    }
+
+    #[test]
+    fn a_reorged_suffix_is_rolled_back_and_the_re_read_lands_right() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.extend_transfers(
+            CHAIN,
+            TOKEN,
+            &[
+                transfer(10, 0, None, "curve", 1_000),
+                transfer(11, 0, Some("curve"), "alice", 300),
+                // Block 30 is the part that will turn out to be reorged away.
+                transfer(30, 0, Some("alice"), "bob", 250),
+            ],
+            &checkpoint(30),
+        )
+        .expect("extend");
+
+        // The chain's block 30 now has another hash: everything after the
+        // last block still trusted (20) is forgotten and its effect undone.
+        let forgotten = mem
+            .roll_back_transfers_after(CHAIN, TOKEN, 20)
+            .expect("roll back");
+        assert_eq!(forgotten, 1);
+        assert_eq!(
+            mem.token_checkpoint(CHAIN, TOKEN).expect("checkpoint"),
+            None,
+            "a rolled-back memory is complete through nothing until re-read"
+        );
+        assert_eq!(
+            mem.token_balances(CHAIN, TOKEN).expect("balances"),
+            vec![("alice".to_owned(), 300), ("curve".to_owned(), 700)]
+        );
+
+        // The re-read: in the canonical block 30 Alice sent Bob 50, not 250.
+        let reread = TransferEvent {
+            block_hash: "0xcanonical30".to_owned(),
+            ..transfer(30, 0, Some("alice"), "bob", 50)
+        };
+        mem.extend_transfers(
+            CHAIN,
+            TOKEN,
+            &[reread],
+            &Checkpoint {
+                block: 30,
+                hash: "0xcanonical30".to_owned(),
+            },
+        )
+        .expect("re-read");
+        assert_eq!(
+            mem.token_balances(CHAIN, TOKEN).expect("balances"),
+            vec![
+                ("alice".to_owned(), 250),
+                ("bob".to_owned(), 50),
+                ("curve".to_owned(), 700),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_debit_below_zero_commits_nothing() {
+        let mem = Memory::open_in_memory().expect("open");
+        let err = mem
+            .extend_transfers(
+                CHAIN,
+                TOKEN,
+                &[
+                    transfer(10, 0, None, "curve", 100),
+                    transfer(10, 1, Some("alice"), "bob", 1),
+                ],
+                &checkpoint(10),
+            )
+            .expect_err("alice never received anything");
+        assert!(matches!(err, Error::Ledger { .. }), "{err}");
+        // Atomic: the mint that preceded the bad debit was not kept either,
+        // and no checkpoint claims the range is covered.
+        assert!(
+            mem.token_balances(CHAIN, TOKEN)
+                .expect("balances")
+                .is_empty()
+        );
+        assert_eq!(
+            mem.token_checkpoint(CHAIN, TOKEN).expect("checkpoint"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_empty_complete_range_and_a_failed_query_are_different_records() {
+        let mem = Memory::open_in_memory().expect("open");
+        let run = |completeness, note: &str| CheckRun {
+            chain: CHAIN.to_owned(),
+            token: TOKEN.to_owned(),
+            what: "transfers".to_owned(),
+            parameters: "v1".to_owned(),
+            from_block: 100,
+            to_block: 200,
+            completeness,
+            calls: 1,
+            note: note.to_owned(),
+            ran_at: secs(1_000),
+        };
+        mem.record_check_run(&run(Completeness::Complete, ""))
+            .expect("record");
+        let latest = mem
+            .latest_check_run(CHAIN, TOKEN, "transfers")
+            .expect("read")
+            .expect("present");
+        assert_eq!(latest.completeness, Completeness::Complete);
+        assert_eq!((latest.from_block, latest.to_block), (100, 200));
+
+        mem.record_check_run(&run(Completeness::Failed, "eth_getLogs: timeout"))
+            .expect("record");
+        let latest = mem
+            .latest_check_run(CHAIN, TOKEN, "transfers")
+            .expect("read")
+            .expect("present");
+        assert_eq!(latest.completeness, Completeness::Failed);
+        assert_eq!(latest.note, "eth_getLogs: timeout");
+        for c in [
+            Completeness::Complete,
+            Completeness::Failed,
+            Completeness::Truncated,
+        ] {
+            assert_eq!(Completeness::parse(c.as_str()), Some(c));
+        }
+    }
+
+    #[test]
+    fn transfers_past_the_cap_are_pruned_oldest_first_and_balances_survive() {
+        let mem = Memory::open_in_memory().expect("open");
+        let count = MAX_TRANSFERS_PER_TOKEN + 10;
+        let events: Vec<TransferEvent> = (0..count)
+            .map(|i| transfer(i, 0, None, "alice", 1))
+            .collect();
+        // The checkpoint is far past every event, so all of them are final.
+        let through = checkpoint(count + REORG_DEPTH + 1);
+        mem.extend_transfers(CHAIN, TOKEN, &events, &through)
+            .expect("extend");
+        let held: i64 = mem
+            .conn
+            .query_row("SELECT COUNT(*) FROM transfers", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(u64::try_from(held).expect("fits"), MAX_TRANSFERS_PER_TOKEN);
+        let oldest: i64 = mem
+            .conn
+            .query_row("SELECT MIN(block) FROM transfers", [], |row| row.get(0))
+            .expect("min");
+        assert_eq!(oldest, 10, "the ten oldest rows went, not the newest");
+        assert_eq!(
+            mem.token_balances(CHAIN, TOKEN).expect("balances"),
+            vec![("alice".to_owned(), u128::from(count))]
         );
     }
 }

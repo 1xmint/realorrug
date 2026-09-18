@@ -30,13 +30,14 @@ use std::collections::HashMap;
 
 use realorrug_robinhood::erc20;
 use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, topic};
-use realorrug_robinhood::{Address as RobinhoodAddress, Hash32, Log, LogsError, Rpc};
+use realorrug_robinhood::{Address as RobinhoodAddress, BlockHeader, Hash32, Log, LogsError, Rpc};
 use realorrug_types::{ChainAddress, ReadAt};
 
 use crate::budget::{Budget, Exhausted};
 use crate::dossier::{
     ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, QuoteAsset, Unavailable,
 };
+use crate::memory::{CheckRun, Checkpoint, Completeness, Memory, REORG_DEPTH, TransferEvent};
 
 /// Why a Robinhood dossier could not be built at all.
 ///
@@ -58,18 +59,28 @@ pub enum Error {
     NotLaunched,
 }
 
-/// One `eth_call`, budget-checked first.
+/// One `eth_call`, budget-checked first, pinned to block `at` when the
+/// dossier's read point is known.
 ///
 /// Every read in this module takes [`take`] first, so that none of them can
 /// skip the budget -- a budget checked only at the start is not a budget.
+///
+/// `at` is `None` only for the reads that happen before the read point is
+/// learned (the factory record) or after it failed to read. Everything else
+/// in one dossier is pinned to the same block (design 0021 §9), so a curve
+/// answered at one block and a name at the next cannot describe two states.
 fn call(
     budget: &mut Budget,
     client: &Rpc,
     to: &RobinhoodAddress,
     data: &[u8],
+    at: Option<u64>,
 ) -> Result<Vec<u8>, String> {
     take(budget)?;
-    client.call_contract(to, data)
+    match at {
+        Some(block) => client.call_contract_at(to, data, block),
+        None => client.call_contract(to, data),
+    }
 }
 
 /// One call's worth of budget, or why there is none.
@@ -88,6 +99,19 @@ fn block_time(
 ) -> Result<(u64, u64), String> {
     take(budget)?;
     client.block_time(number)
+}
+
+/// A block's number, hash and timestamp (the latest when `number` is
+/// `None`), budget-checked. The hash is what makes the read point a
+/// *block* rather than a number: a checkpoint remembered by number alone
+/// cannot tell a reorg from a quiet day.
+fn block_header(
+    budget: &mut Budget,
+    client: &Rpc,
+    number: Option<u64>,
+) -> Result<BlockHeader, String> {
+    take(budget)?;
+    client.block_header(number)
 }
 
 /// An address as the 32-byte topic an indexed `address` parameter becomes.
@@ -116,8 +140,10 @@ fn launch_facts(
     client: &Rpc,
     token: &RobinhoodAddress,
     record: &LaunchedToken,
-    read_time: Option<u64>,
+    read: Option<&BlockHeader>,
 ) -> Result<ChainLaunch, String> {
+    let read_time = read.map(|r| r.timestamp);
+    let at = read.map(|r| r.number);
     take(budget)?;
     let logs = client.logs(&FACTORY, &[topic::TOKEN_LAUNCHED, address_topic(token)])?;
     let log = logs
@@ -147,8 +173,8 @@ fn launch_facts(
         block: log.block,
         age_seconds,
         dev_buy_wei,
-        name: text_field(budget, client, token, erc20::NAME),
-        symbol: text_field(budget, client, token, erc20::SYMBOL),
+        name: text_field(budget, client, token, erc20::NAME, at),
+        symbol: text_field(budget, client, token, erc20::SYMBOL, at),
     })
 }
 
@@ -166,8 +192,9 @@ fn text_field(
     client: &Rpc,
     token: &RobinhoodAddress,
     selector: [u8; 4],
+    at: Option<u64>,
 ) -> Option<String> {
-    call(budget, client, token, &selector)
+    call(budget, client, token, &selector, at)
         .ok()
         .as_deref()
         .and_then(erc20::string_from_return)
@@ -216,16 +243,20 @@ fn holders_from(logs: &[Log], record: &LaunchedToken) -> Result<Holders, String>
         let balance = balances.entry(to).or_default();
         *balance = balance.saturating_add(value);
     }
-    let held: Vec<u128> = balances
-        .iter()
-        .filter(|(who, balance)| {
-            **balance > 0
-                && **who != RobinhoodAddress::ZERO
-                && **who != record.curve
-                && **who != FACTORY
-        })
-        .map(|(_, balance)| *balance)
-        .collect();
+    let machinery = [RobinhoodAddress::ZERO, record.curve, FACTORY];
+    Ok(holders_of(
+        balances
+            .into_iter()
+            .filter(|(who, _)| !machinery.contains(who))
+            .map(|(_, balance)| balance),
+    ))
+}
+
+/// The holder count and largest share from the balances that count: the
+/// caller has already dropped the machinery (zero address, curve, factory)
+/// and `holders_of` drops the empties.
+fn holders_of(balances: impl Iterator<Item = u128>) -> Holders {
+    let held: Vec<u128> = balances.filter(|balance| *balance > 0).collect();
     let count = u32::try_from(held.len()).unwrap_or(u32::MAX);
     let total = held.iter().fold(0u128, |sum, b| sum.saturating_add(*b));
     let largest_share_bps = held.iter().max().and_then(|largest| {
@@ -237,10 +268,10 @@ fn holders_from(logs: &[Log], record: &LaunchedToken) -> Result<Holders, String>
         );
         u16::try_from(bps.min(10_000)).ok()
     });
-    Ok(Holders {
+    Holders {
         count,
         largest_share_bps,
-    })
+    }
 }
 
 /// Why [`holders_paged`] gives up rather than keep walking.
@@ -347,6 +378,20 @@ fn holders_paged(
     to_block: u64,
     record: &LaunchedToken,
 ) -> Result<Holders, String> {
+    let logs = transfer_logs_paged(budget, client, token, from_block, to_block)?;
+    holders_from(&logs, record)
+}
+
+/// The Transfer logs of `token` over `from_block..=to_block`, walked page by
+/// page: the loop [`holders_paged`] documents, split out so the memory-backed
+/// read below can walk only the blocks it has not yet seen.
+fn transfer_logs_paged(
+    budget: &mut Budget,
+    client: &Rpc,
+    token: &RobinhoodAddress,
+    from_block: u64,
+    to_block: u64,
+) -> Result<Vec<Log>, String> {
     let cap = holder_page_cap(budget);
     let mut logs: Vec<Log> = Vec::new();
     let mut start = from_block;
@@ -377,7 +422,158 @@ fn holders_paged(
             Err(LogsError::Other(e)) => return Err(e),
         }
     }
-    holders_from(&logs, record)
+    Ok(logs)
+}
+
+/// The chain name every Robinhood row in the read memory is keyed under.
+const MEMORY_CHAIN: &str = "robinhood";
+
+/// The `what` a Transfer walk is recorded as in the memory's check runs.
+const TRANSFERS_CHECK: &str = "transfers";
+
+/// Who holds the token, remembering every Transfer read so the next summon
+/// reads only the blocks after the last one (design 0021 §9).
+///
+/// The memory's checkpoint (block number and hash) says how far the stored
+/// ledger is complete. When the chain still has that hash at that number,
+/// the walk starts at the next block; when it does not, the chain reorged
+/// past the checkpoint and the last [`REORG_DEPTH`] blocks of the ledger are
+/// forgotten and re-read. Either way the balances the count is computed
+/// from are the memory's, after the new suffix is applied atomically with
+/// the new checkpoint -- so a walk that dies halfway leaves the old
+/// checkpoint and balances untouched, and a range read twice (a retry after
+/// a lost answer) inserts nothing the second time.
+///
+/// Every walk, empty or not, succeeded or not, is recorded as a check run,
+/// so "nothing happened in this range" and "the range could not be read"
+/// stay two different records (AGENTS.md §3 rule 8).
+fn holders_remembered(
+    budget: &mut Budget,
+    client: &Rpc,
+    token: &RobinhoodAddress,
+    launch_block: u64,
+    read: &BlockHeader,
+    record: &LaunchedToken,
+    memory: &Memory,
+) -> Result<Holders, String> {
+    let key = token.to_string();
+    let calls_before = budget.calls_made();
+    let from_block = resume_point(budget, client, &key, launch_block, read, memory)?;
+    let outcome = if from_block > read.number {
+        Ok(Vec::new())
+    } else {
+        transfer_logs_paged(budget, client, token, from_block, read.number).and_then(|logs| {
+            logs.iter()
+                .map(transfer_event)
+                .collect::<Result<Vec<_>, _>>()
+        })
+    };
+    let (completeness, note) = match &outcome {
+        Ok(_) => (Completeness::Complete, String::new()),
+        Err(why) if why == TOO_BUSY => (Completeness::Truncated, why.clone()),
+        Err(why) => (Completeness::Failed, why.clone()),
+    };
+    let run = CheckRun {
+        chain: MEMORY_CHAIN.to_owned(),
+        token: key.clone(),
+        what: TRANSFERS_CHECK.to_owned(),
+        parameters: "Transfer(address,address,uint256) by block range".to_owned(),
+        from_block,
+        to_block: read.number,
+        completeness,
+        calls: budget.calls_made().saturating_sub(calls_before),
+        note,
+        ran_at: std::time::SystemTime::now(),
+    };
+    // A check run that cannot be recorded is a memory problem, not a chain
+    // one; the holders read still answers from what was read.
+    let _ = memory.record_check_run(&run);
+    let events = outcome?;
+    let through = Checkpoint {
+        block: read.number,
+        hash: read.hash.to_string(),
+    };
+    memory
+        .extend_transfers(MEMORY_CHAIN, &key, &events, &through)
+        .map_err(|e| e.to_string())?;
+    let machinery = [
+        RobinhoodAddress::ZERO.to_string(),
+        record.curve.to_string(),
+        FACTORY.to_string(),
+    ];
+    let balances = memory
+        .token_balances(MEMORY_CHAIN, &key)
+        .map_err(|e| e.to_string())?;
+    Ok(holders_of(
+        balances
+            .into_iter()
+            .filter(|(who, _)| !machinery.contains(who))
+            .map(|(_, balance)| balance),
+    ))
+}
+
+/// The first block a memory-backed walk must read, after checking the
+/// remembered checkpoint against the chain.
+///
+/// Costs one call (the checkpoint block's header) when there is a
+/// checkpoint below the read point, none otherwise. A checkpoint at the read
+/// point itself is compared against the header already in hand.
+fn resume_point(
+    budget: &mut Budget,
+    client: &Rpc,
+    key: &str,
+    launch_block: u64,
+    read: &BlockHeader,
+    memory: &Memory,
+) -> Result<u64, String> {
+    let Some(checkpoint) = memory
+        .token_checkpoint(MEMORY_CHAIN, key)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(launch_block);
+    };
+    let still_canonical = match checkpoint.block.cmp(&read.number) {
+        std::cmp::Ordering::Equal => checkpoint.hash == read.hash.to_string(),
+        std::cmp::Ordering::Less => {
+            let header = block_header(budget, client, Some(checkpoint.block))?;
+            checkpoint.hash == header.hash.to_string()
+        }
+        // The provider answered from behind our checkpoint: either it is
+        // lagging or the chain reorged. Both are "do not trust the suffix".
+        std::cmp::Ordering::Greater => false,
+    };
+    if still_canonical {
+        return Ok(checkpoint.block.saturating_add(1));
+    }
+    let keep = checkpoint.block.saturating_sub(REORG_DEPTH);
+    memory
+        .roll_back_transfers_after(MEMORY_CHAIN, key, keep)
+        .map_err(|e| e.to_string())?;
+    Ok(keep.saturating_add(1).max(launch_block))
+}
+
+/// A Transfer log as the memory stores it. Needs the log's position: a
+/// provider that omits `blockHash`/`transactionIndex`/`logIndex` gives no
+/// identity to dedupe by, so its logs are refused rather than stored twice.
+fn transfer_event(log: &Log) -> Result<TransferEvent, String> {
+    let id = log.event_id().ok_or_else(|| {
+        "a Transfer log carries no position, so it cannot be remembered".to_owned()
+    })?;
+    let (Some(from), Some(to), Some(amount)) =
+        (log.topic_address(1), log.topic_address(2), log.data_u128(0))
+    else {
+        return Err("a Transfer log did not decode".to_owned());
+    };
+    Ok(TransferEvent {
+        block: id.block,
+        block_hash: id.block_hash.to_string(),
+        transaction_index: id.transaction_index,
+        log_index: id.log_index,
+        transaction: log.transaction.to_string(),
+        from: (from != RobinhoodAddress::ZERO).then(|| from.to_string()),
+        to: to.to_string(),
+        amount,
+    })
 }
 
 /// The factory's record of `token`, the one read a Robinhood dossier cannot
@@ -387,8 +583,18 @@ fn launched_token(
     client: &Rpc,
     token: &RobinhoodAddress,
 ) -> Result<LaunchedToken, Error> {
-    let data =
-        call(budget, client, &FACTORY, &LaunchedToken::call_data(token)).map_err(Error::Rpc)?;
+    // Unpinned: this is the read that learns whether there is a token at all,
+    // before the read point is chosen. The fields used from it (curve,
+    // deployer) are set once at launch and never change, so reading them a
+    // block earlier than everything else describes the same launch.
+    let data = call(
+        budget,
+        client,
+        &FACTORY,
+        &LaunchedToken::call_data(token),
+        None,
+    )
+    .map_err(Error::Rpc)?;
     LaunchedToken::from_return(&data)
         .ok_or_else(|| Error::Rpc("getLaunchedToken: malformed return".to_owned()))
 }
@@ -413,12 +619,14 @@ fn curve_facts(
     budget: &mut Budget,
     client: &Rpc,
     record: &LaunchedToken,
+    at: Option<u64>,
 ) -> Result<CurveFacts, String> {
     let graduated_data = call(
         budget,
         client,
         &record.curve,
         &curve::call_data(curve::GRADUATED),
+        at,
     )?;
     let complete = curve::bool_return(&graduated_data)
         .ok_or_else(|| "graduated(): malformed return".to_owned())?;
@@ -428,6 +636,7 @@ fn curve_facts(
         client,
         &record.curve,
         &curve::call_data(curve::REAL_QUOTE_RESERVE),
+        at,
     )?;
     // `u128`, not `u64`: a curve holding more than about 18.4 ETH in wei does
     // not fit a `u64`, and that is every token that raised real money, not an
@@ -482,6 +691,21 @@ pub fn build(
     budget: &mut Budget,
     token: &RobinhoodAddress,
 ) -> Result<Dossier, Error> {
+    build_with_memory(client, budget, token, None)
+}
+
+/// [`build`], remembering the token's Transfers in `memory` when one is
+/// given so the next summon reads only what the chain added since.
+///
+/// # Errors
+///
+/// The same as [`build`]'s.
+pub fn build_with_memory(
+    client: &Rpc,
+    budget: &mut Budget,
+    token: &RobinhoodAddress,
+    memory: Option<&Memory>,
+) -> Result<Dossier, Error> {
     let mut dossier = Dossier {
         mint: ChainAddress::Robinhood(*token),
         read_at: None,
@@ -505,27 +729,30 @@ pub fn build(
     // 2. The read point. Optional in the same sense Solana's launch-slot read
     // is: a budget spent by the time this runs is a truncated dossier, not a
     // failed one.
-    let mut read_time = None;
-    match block_time(budget, client, None) {
-        Ok((n, at)) => {
-            dossier.read_at = Some(ReadAt::Robinhood(n));
-            read_time = Some(at);
+    // Read with its hash, and every contract read below is pinned to this
+    // block (design 0021 §9): one dossier describes one state.
+    let mut read = None;
+    match block_header(budget, client, None) {
+        Ok(header) => {
+            dossier.read_at = Some(ReadAt::Robinhood(header.number));
+            read = Some(header);
         }
         Err(why) => dossier.unavailable.push(Unavailable {
             fact: "read point",
             why,
         }),
     }
+    let at = read.as_ref().map(|r| r.number);
 
     // 3. The curve: graduation and quote reserves.
-    match curve_facts(budget, client, &record) {
+    match curve_facts(budget, client, &record, at) {
         Ok(facts) => dossier.curve = Some(facts),
         Err(why) => dossier.unavailable.push(Unavailable { fact: "curve", why }),
     }
 
     // 4. The launch block, its age and the launcher's own buy. Required by
     // design 0020 §1, so a miss is named and the sheet treats it as unread.
-    match launch_facts(budget, client, token, &record, read_time) {
+    match launch_facts(budget, client, token, &record, read.as_ref()) {
         Ok(launch) => dossier.chain_launch = Some(launch),
         Err(why) => dossier.unavailable.push(Unavailable {
             fact: "launch block",
@@ -545,12 +772,18 @@ pub fn build(
     // falls back to the prior one-shot call, which fails the same way it
     // always did rather than paging against a block number that was never
     // learned.
+    //
+    // With a memory, the walk covers only the blocks after the remembered
+    // checkpoint and the count comes from the remembered balances.
     let from_block = dossier.chain_launch.as_ref().map_or(0, |l| l.block);
-    let holders = match dossier.read_at {
-        Some(ReadAt::Robinhood(to_block)) => {
-            holders_paged(budget, client, token, from_block, to_block, &record)
+    let holders = match (&read, memory) {
+        (Some(header), Some(memory)) => {
+            holders_remembered(budget, client, token, from_block, header, &record, memory)
         }
-        _ => take(budget)
+        (Some(header), None) => {
+            holders_paged(budget, client, token, from_block, header.number, &record)
+        }
+        (None, _) => take(budget)
             .and_then(|()| client.logs(token, &[topic::TRANSFER]))
             .and_then(|logs| holders_from(&logs, &record)),
     };
@@ -592,10 +825,16 @@ pub fn build(
 /// The [`ChainReader`] ADR 0028 point 2 asks a second chain to supply: one
 /// implementation, wrapping [`build`], against the same [`Dossier`] Solana's
 /// [`crate::SolanaReader`] already produces.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RobinhoodReader;
+///
+/// `memory` mirrors [`crate::SolanaReader::memory`]: `None` reads every
+/// Transfer every time, `Some` reads only what the memory has not seen.
+#[derive(Clone, Copy, Default)]
+pub struct RobinhoodReader<'a> {
+    /// The read memory to remember Transfers in, if the caller has one.
+    pub memory: Option<&'a Memory>,
+}
 
-impl ChainReader for RobinhoodReader {
+impl ChainReader for RobinhoodReader<'_> {
     type Client = Rpc;
     type Token = RobinhoodAddress;
     type Error = Error;
@@ -606,7 +845,7 @@ impl ChainReader for RobinhoodReader {
         budget: &mut Budget,
         token: &RobinhoodAddress,
     ) -> Result<Dossier, Error> {
-        build(client, budget, token)
+        build_with_memory(client, budget, token, self.memory)
     }
 }
 
@@ -785,9 +1024,10 @@ fn next_window(window: u64, held: u64) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use super::*;
@@ -797,9 +1037,17 @@ mod tests {
     /// server replaying canned JSON-RPC responses is that crate's established
     /// way to test its `Rpc` client with no network, and `Rpc` here is the
     /// same type, so the same technique tests this module's calls through it.
-    fn serve(bodies: Vec<String>) -> String {
+    pub(crate) fn serve(bodies: Vec<String>) -> String {
+        serve_recording(bodies).0
+    }
+
+    /// [`serve`], keeping every request body it answered so a test can read
+    /// what was asked, not only what was answered.
+    fn serve_recording(bodies: Vec<String>) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let url = format!("http://{}", listener.local_addr().expect("an address"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&requests);
         std::thread::spawn(move || {
             for body in bodies {
                 let Ok((stream, _)) = listener.accept() else {
@@ -818,6 +1066,9 @@ mod tests {
                 }
                 let mut request = vec![0; length];
                 let _ = reader.read_exact(&mut request);
+                if let Ok(mut seen) = seen.lock() {
+                    seen.push(String::from_utf8_lossy(&request).into_owned());
+                }
                 let mut stream = reader.into_inner();
                 let _ = write!(
                     stream,
@@ -826,18 +1077,22 @@ mod tests {
                 );
             }
         });
-        url
+        (url, requests)
     }
 
     fn answer(result: &serde_json::Value) -> String {
         serde_json::json!({ "jsonrpc": "2.0", "id": 1, "result": result }).to_string()
     }
 
-    fn token() -> RobinhoodAddress {
+    pub(crate) fn token() -> RobinhoodAddress {
         RobinhoodAddress([0x11; 20])
     }
 
-    fn record(exists: bool, curve: RobinhoodAddress, deployer: RobinhoodAddress) -> LaunchedToken {
+    pub(crate) fn record(
+        exists: bool,
+        curve: RobinhoodAddress,
+        deployer: RobinhoodAddress,
+    ) -> LaunchedToken {
         LaunchedToken {
             token: token(),
             curve,
@@ -902,10 +1157,32 @@ mod tests {
 
     /// An `eth_getBlockByNumber` answer.
     fn block(number: u64, timestamp: u64) -> String {
+        block_with_hash(number, timestamp, &block_hash(number))
+    }
+
+    fn block_with_hash(number: u64, timestamp: u64, hash: &Hash32) -> String {
         answer(&serde_json::json!({
             "number": format!("{number:#x}"),
+            "hash": hash.to_string(),
             "timestamp": format!("{timestamp:#x}"),
         }))
+    }
+
+    /// The hash every fixture gives block `number`, so a header and the logs
+    /// in it agree.
+    fn block_hash(number: u64) -> Hash32 {
+        let mut hash = [0xbb; 32];
+        hash[24..].copy_from_slice(&number.to_be_bytes());
+        Hash32(hash)
+    }
+
+    /// Each fixture log gets its own `logIndex`: the memory's event identity
+    /// is (block, transaction index, log index), and two logs in one block
+    /// sharing an index would be one event to it.
+    fn next_log_index() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        NEXT.fetch_add(1, Ordering::Relaxed)
     }
 
     fn topic_of(a: &RobinhoodAddress) -> Hash32 {
@@ -923,7 +1200,10 @@ mod tests {
             "topics": topics.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "data": realorrug_robinhood::to_hex(data),
             "blockNumber": format!("{block:#x}"),
+            "blockHash": block_hash(block).to_string(),
             "transactionHash": LAUNCH_TX,
+            "transactionIndex": "0x0",
+            "logIndex": format!("{:#x}", next_log_index()),
         })
     }
 
@@ -1029,7 +1309,7 @@ mod tests {
 
     /// Every answer a full read of `rec` takes, in order, with the launch
     /// transaction's status `status`.
-    fn full_bodies(rec: &LaunchedToken, status: &str) -> Vec<String> {
+    pub(crate) fn full_bodies(rec: &LaunchedToken, status: &str) -> Vec<String> {
         let receipt = serde_json::json!({
             "status": status,
             "transactionHash": LAUNCH_TX,
@@ -1125,6 +1405,331 @@ mod tests {
         // default budget is sixty calls and a read that quietly grows is how
         // a plan's daily quota goes without anyone choosing to spend it.
         assert_eq!(dossier.calls, 10);
+    }
+
+    #[test]
+    fn every_contract_read_after_the_read_point_is_pinned_to_it() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let (url, requests) = serve_recording(full_bodies(&rec, "0x1"));
+        let client = Rpc::new(url);
+        let mut b = budget();
+        build(&client, &mut b, &token()).expect("a dossier");
+
+        let requests = requests.lock().expect("requests");
+        let calls: Vec<serde_json::Value> = requests
+            .iter()
+            .map(|r| serde_json::from_str(r).expect("a JSON-RPC request"))
+            .filter(|r: &serde_json::Value| r["method"] == "eth_call")
+            .collect();
+        // The factory record is read before the read point exists, so it is
+        // the one unpinned call; the curve's two reads and the token's name
+        // and symbol all name the read point's block.
+        assert_eq!(calls.len(), 5, "{calls:?}");
+        assert_eq!(calls[0]["params"][1], "latest");
+        for call in &calls[1..] {
+            assert_eq!(call["params"][1], "0x64", "{call}");
+        }
+    }
+
+    #[test]
+    fn a_second_summon_reads_only_the_blocks_after_the_checkpoint() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let memory = Memory::open_in_memory().expect("a memory");
+        let reader = RobinhoodReader {
+            memory: Some(&memory),
+        };
+        let key = token().to_string();
+
+        let client = Rpc::new(serve(full_bodies(&rec, "0x1")));
+        let first = reader
+            .read(&client, &mut budget(), &token())
+            .expect("the first summon");
+        assert_eq!(
+            first.holders,
+            Some(Holders {
+                count: 3,
+                largest_share_bps: Some(5_000),
+            })
+        );
+        assert_eq!(first.calls, 10, "remembering costs no extra call");
+        assert_eq!(
+            memory
+                .token_checkpoint(MEMORY_CHAIN, &key)
+                .expect("checkpoint"),
+            Some(Checkpoint {
+                block: 0x64,
+                hash: block_hash(0x64).to_string(),
+            })
+        );
+
+        // Later the chain is at 0x70 and Bob has sent Alice his 100 in
+        // block 0x68. The transfers page served holds only that send: a
+        // reader that walked from the launch again would see Bob spend
+        // what it never saw him receive and refuse the count.
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[1] = block(0x70, 10_600);
+        bodies[9] = block(0x64, 10_000);
+        bodies.push(answer(&serde_json::json!([transfer_at(
+            &BOB, &ALICE, 100, 0x68
+        )])));
+        let client = Rpc::new(serve(bodies));
+        let second = reader
+            .read(&client, &mut budget(), &token())
+            .expect("the second summon");
+        // The launcher 100, Alice 300, Bob nothing now.
+        assert_eq!(
+            second.holders,
+            Some(Holders {
+                count: 2,
+                largest_share_bps: Some(7_500),
+            })
+        );
+        assert_eq!(
+            second.calls, 11,
+            "ten as before plus the checkpoint's header; the walk itself is one page"
+        );
+        assert_eq!(
+            memory
+                .token_checkpoint(MEMORY_CHAIN, &key)
+                .expect("checkpoint"),
+            Some(Checkpoint {
+                block: 0x70,
+                hash: block_hash(0x70).to_string(),
+            })
+        );
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!((run.from_block, run.to_block), (0x65, 0x70));
+        assert_eq!(run.completeness, Completeness::Complete);
+        assert_eq!(run.calls, 2);
+    }
+
+    #[test]
+    fn a_checkpoint_at_the_read_point_itself_walks_nothing_and_costs_nothing() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let memory = Memory::open_in_memory().expect("a memory");
+        let reader = RobinhoodReader {
+            memory: Some(&memory),
+        };
+        let key = token().to_string();
+        let client = Rpc::new(serve(full_bodies(&rec, "0x1")));
+        reader
+            .read(&client, &mut budget(), &token())
+            .expect("the first summon");
+
+        // Summoned again before the chain moved: the read point is the
+        // checkpoint, its hash is already in hand, and there is no block to
+        // walk. No transfers page is served, so a reader that walked anyway
+        // (or rolled back and re-read) would find nothing to answer it.
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies.truncate(9);
+        let client = Rpc::new(serve(bodies));
+        let again = reader
+            .read(&client, &mut budget(), &token())
+            .expect("the second summon");
+        assert_eq!(
+            again.holders,
+            Some(Holders {
+                count: 3,
+                largest_share_bps: Some(5_000),
+            })
+        );
+        assert_eq!(again.calls, 9);
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!((run.from_block, run.to_block), (0x65, 0x64));
+        assert_eq!(run.completeness, Completeness::Complete);
+        assert_eq!(run.calls, 0);
+    }
+
+    #[test]
+    fn a_checkpoint_one_block_behind_reads_exactly_that_one_block() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let memory = Memory::open_in_memory().expect("a memory");
+        let reader = RobinhoodReader {
+            memory: Some(&memory),
+        };
+        let key = token().to_string();
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[1] = block(0x63, 9_999);
+        reader
+            .read(&Rpc::new(serve(bodies)), &mut budget(), &token())
+            .expect("the first summon");
+
+        // The chain is one block on, and Alice gave Dave 100 in it. The
+        // walk must cover that single block, not skip it as already read.
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[9] = block(0x63, 9_999);
+        bodies.push(answer(&serde_json::json!([transfer_at(
+            &ALICE, &DAVE, 100, 0x64
+        )])));
+        let second = reader
+            .read(&Rpc::new(serve(bodies)), &mut budget(), &token())
+            .expect("the second summon");
+        // The launcher 100, Alice 100, Bob 100, Dave 100.
+        assert_eq!(
+            second.holders,
+            Some(Holders {
+                count: 4,
+                largest_share_bps: Some(2_500),
+            })
+        );
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!((run.from_block, run.to_block), (0x64, 0x64));
+    }
+
+    #[test]
+    fn a_walk_that_fails_is_recorded_failed_and_a_busy_one_truncated() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let key = token().to_string();
+
+        // The provider errors on the transfers page: not "nothing happened".
+        let memory = Memory::open_in_memory().expect("a memory");
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[9] =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom"}}"#.to_owned();
+        let dossier = RobinhoodReader {
+            memory: Some(&memory),
+        }
+        .read(&Rpc::new(serve(bodies)), &mut budget(), &token())
+        .expect("a dossier");
+        assert!(dossier.unavailable.iter().any(|u| u.fact == "holders"));
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!(run.completeness, Completeness::Failed);
+        assert!(run.note.contains("boom"), "{}", run.note);
+        assert_eq!(
+            memory
+                .token_checkpoint(MEMORY_CHAIN, &key)
+                .expect("checkpoint"),
+            None,
+            "a failed walk leaves no checkpoint claiming the range was read"
+        );
+
+        // Every page over the cap until the window is one block: too busy,
+        // which is a truncated read and not a failed one.
+        let memory = Memory::open_in_memory().expect("a memory");
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies.truncate(9);
+        bodies.extend((0..20).map(|_| too_many_results_error()));
+        let dossier = RobinhoodReader {
+            memory: Some(&memory),
+        }
+        .read(&Rpc::new(serve(bodies)), &mut budget(), &token())
+        .expect("a dossier");
+        assert!(
+            dossier
+                .unavailable
+                .iter()
+                .any(|u| u.fact == "holders" && u.why == TOO_BUSY)
+        );
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!(run.completeness, Completeness::Truncated);
+    }
+
+    #[test]
+    fn a_checkpoint_the_chain_no_longer_has_is_rolled_back_and_re_read() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let memory = Memory::open_in_memory().expect("a memory");
+        let key = token().to_string();
+        // A ledger remembered from a block the chain has since replaced:
+        // Dave minted 999 in it, and the checkpoint's hash is one the chain
+        // no longer has at 0x64.
+        memory
+            .extend_transfers(
+                MEMORY_CHAIN,
+                &key,
+                &[TransferEvent {
+                    block: 0x60,
+                    block_hash: "0xstale60".to_owned(),
+                    transaction_index: 0,
+                    log_index: 0,
+                    transaction: "0xstale".to_owned(),
+                    from: None,
+                    to: DAVE.to_string(),
+                    amount: 999,
+                }],
+                &Checkpoint {
+                    block: 0x64,
+                    hash: "0xstale64".to_owned(),
+                },
+            )
+            .expect("a remembered ledger");
+
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[1] = block(0x70, 10_600);
+        let transfers = bodies.remove(9);
+        bodies.push(block(0x64, 10_000)); // the canonical 0x64: another hash
+        bodies.push(transfers);
+        let client = Rpc::new(serve(bodies));
+        let dossier = RobinhoodReader {
+            memory: Some(&memory),
+        }
+        .read(&client, &mut budget(), &token())
+        .expect("a dossier");
+
+        // Dave's phantom 999 is gone; the re-read ledger is the real one.
+        assert_eq!(
+            dossier.holders,
+            Some(Holders {
+                count: 3,
+                largest_share_bps: Some(5_000),
+            })
+        );
+        assert_eq!(dossier.calls, 11);
+        assert_eq!(
+            memory
+                .token_checkpoint(MEMORY_CHAIN, &key)
+                .expect("checkpoint"),
+            Some(Checkpoint {
+                block: 0x70,
+                hash: block_hash(0x70).to_string(),
+            })
+        );
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!(
+            run.from_block, LAUNCH_BLOCK,
+            "the roll-back reaches REORG_DEPTH blocks, which is before the launch here"
+        );
     }
 
     #[test]
@@ -1484,7 +2089,7 @@ mod tests {
 
         let client_b = Rpc::new(serve(bodies()));
         let mut budget_b = budget();
-        let via_reader = RobinhoodReader.read(&client_b, &mut budget_b, &token());
+        let via_reader = RobinhoodReader::default().read(&client_b, &mut budget_b, &token());
 
         match (direct, via_reader) {
             (Ok(d), Ok(r)) => {
@@ -1567,7 +2172,7 @@ mod tests {
         // is that a *real* implementation -- not only a fake one -- compiles
         // against `ChainReader` with Robinhood's own client and token types.
         fn accepts_any_reader<R: ChainReader>(_reader: &R) {}
-        accepts_any_reader(&RobinhoodReader);
+        accepts_any_reader(&RobinhoodReader::default());
     }
 
     /// A `TokenLaunched` log from the factory, at `block`, by `deployer`.
@@ -1591,6 +2196,7 @@ mod tests {
             data,
             block,
             transaction: Hash32::from_hex(LAUNCH_TX),
+            position: None,
         }
     }
 

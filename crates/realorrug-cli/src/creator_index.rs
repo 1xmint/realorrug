@@ -1259,6 +1259,7 @@ mod tests {
             data: u128_word(10).to_vec(),
             block: 100,
             transaction: Hash32([0; 32]),
+            position: None,
         };
         // The mint to the curve is a recipient too; repeated receipts do not
         // make a second recipient, and activity in another block is irrelevant.
@@ -1756,6 +1757,7 @@ mod tests {
             data,
             block,
             transaction: Hash32([0u8; 32]),
+            position: None,
         }
     }
 
@@ -1775,6 +1777,7 @@ mod tests {
             data,
             block,
             transaction: Hash32([0u8; 32]),
+            position: None,
         }
     }
 
@@ -1863,6 +1866,7 @@ mod tests {
             data: Vec::new(),
             block: 1,
             transaction: Hash32([0; 32]),
+            position: None,
         };
         assert!(is_curve_buy(&log));
         log.topics[0] = topic::CURVE_SELL;
