@@ -1130,10 +1130,11 @@ fn bio_to_write(
     record: Option<&realorrug_contest::Record>,
     vault: Option<&realorrug_contest::Vault>,
     hunters: usize,
+    leaders: &[crate::bio::Leader],
     marker: Option<&BioMarker>,
     now: u64,
 ) -> Option<String> {
-    let state = crate::bio::choose(record, vault, hunters, now)?;
+    let state = crate::bio::choose(record, vault, hunters, leaders, now)?;
     let text = bio.render(&state)?;
     if !bio_write_due(now, marker, &text) {
         return None;
@@ -1230,11 +1231,19 @@ fn write_bio_if_changed(x: Option<&X>, bio: &crate::bio::Bio, spend: &mut Spend,
         .and_then(|text| realorrug_contest::Vault::from_json(&text).ok());
     let replies = crate::log::latest(&paths.log).unwrap_or_default();
     let hunters = hunters_in_week(&replies, at);
+    // No leaders yet: the mid-week leaderboard is raw platform engagement
+    // (reposts, quotes), and nothing this daemon reads today carries that --
+    // the reply log has who summoned, not what the post earned. Empty, not
+    // fabricated: rule 8 says absent is not zero, so this stays an honest
+    // "none known" until a live-engagement read is wired in, at which point
+    // this is the one line that changes.
+    let leaders: Vec<crate::bio::Leader> = Vec::new();
     let Some(text) = bio_to_write(
         bio,
         record.as_ref(),
         vault.as_ref(),
         hunters,
+        &leaders,
         marker.as_ref(),
         at,
     ) else {
@@ -1985,7 +1994,8 @@ mod tests {
         let closed = realorrug_contest::Week(2958).closes_at();
 
         // Nothing written yet: write it, and it says what the record says.
-        let first = bio_to_write(&bio, Some(&record), None, 0, None, closed + 60).expect("a bio");
+        let first =
+            bio_to_write(&bio, Some(&record), None, 0, &[], None, closed + 60).expect("a bio");
         assert!(first.starts_with("Automated."), "{first}");
         assert!(first.contains("@somebody"), "{first}");
         assert!(first.contains("2026-09-21"), "{first}");
@@ -2001,6 +2011,7 @@ mod tests {
                 Some(&record),
                 None,
                 0,
+                &[],
                 Some(&marker),
                 closed + 60 + 7_200
             ),
@@ -2014,7 +2025,7 @@ mod tests {
             text: "something else".to_owned(),
         };
         assert_eq!(
-            bio_to_write(&bio, Some(&record), None, 0, Some(&stale), closed + 60 + 60),
+            bio_to_write(&bio, Some(&record), None, 0, &[], Some(&stale), closed + 60 + 60),
             None,
             "59 minutes"
         );
@@ -2024,6 +2035,7 @@ mod tests {
                 Some(&record),
                 None,
                 0,
+                &[],
                 Some(&stale),
                 closed + 60 + 3_600
             )
@@ -2038,7 +2050,7 @@ mod tests {
             reason: "bought".to_owned(),
         });
         assert_eq!(
-            bio_to_write(&bio, Some(&voided), None, 0, None, closed + 60),
+            bio_to_write(&bio, Some(&voided), None, 0, &[], None, closed + 60),
             None
         );
 
@@ -2048,7 +2060,7 @@ mod tests {
             lead: "x".repeat(crate::bio::MAX - 10),
         };
         assert_eq!(
-            bio_to_write(&long, Some(&record), None, 0, None, closed + 60),
+            bio_to_write(&long, Some(&record), None, 0, &[], None, closed + 60),
             None
         );
     }
