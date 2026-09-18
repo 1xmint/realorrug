@@ -1,6 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Design 0026 — the trader dossier
 
+**Superseded in part by [ADR 0032](../adr/0032-the-verdict-is-a-score-with-its-coverage.md)
+(2026-09-17).** §4's "Five levels stay. A sixth would be a safety score, and
+this project does not publish one" is no longer the decision: the levels
+become bands of a score and a coverage figure. §4's point about what counts
+as two signals is unaffected.
+
 **Status:** draft, written from Josh's instruction of 2026-09-17 and not yet
 reviewed with him. **Amends:** nothing yet; §4 and §7 name the changes to
 [design 0020](0020-robinhood-fact-sheet-and-voice.md) that shipping this
