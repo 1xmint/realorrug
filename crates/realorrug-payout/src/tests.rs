@@ -247,6 +247,7 @@ impl Chain for Fake {
                     data: word(paid),
                     block: 1,
                     transaction: hash,
+                    position: None,
                 });
             }
             ok

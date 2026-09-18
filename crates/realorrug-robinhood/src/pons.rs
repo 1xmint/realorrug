@@ -866,6 +866,7 @@ mod curve_read_tests {
             data,
             block: 1,
             transaction: Hash32([0; 32]),
+            position: None,
         }
     }
 

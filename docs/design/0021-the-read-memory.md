@@ -10,7 +10,9 @@ X and Telegram mention paths now open `memory.sqlite3` under
 `REALORRUG_ANALYST_DIR` once per poll and pass it through the dispatcher and
 `SolanaReader`. An unavailable memory is logged and that poll reads the chain;
 the next poll can retry opening it. Curve and creator-activity reads remain
-live, and Robinhood memory is not wired by this change.
+live. Robinhood's reader now remembers every `Transfer` it reads and pins every
+contract read in one dossier to one block (§9); the daemon's memory reaches it
+through the same dispatcher.
 
 **Daemon restart handling (2026-09-17):** the Gate also saves complete fact
 sheets to `sheets.json` (X) and `telegram-sheets.json` (Telegram) under the
@@ -379,3 +381,77 @@ same rule, applied to a missing endpoint instead of a missing chain fact.
   that would add it to `realorrug-onchain` — this document recommends the
   engine and the crate (§4), not the table layout, which is implementation,
   not design.
+
+## 9. Event memory and pinned reads (Robinhood)
+
+Built 2026-09-18 in `crates/realorrug-onchain/src/memory.rs` (the store) and
+`crates/realorrug-onchain/src/robinhood.rs` (the reader). Recording, not
+recommending: the owner chose the two bounds named below.
+
+### What is stored
+
+A token's `Transfer` events, once each. The identity of an event is its
+position on the chain — `(chain, block hash, transaction index, log index)`,
+carried by `realorrug_robinhood::LogPosition` and `EventId` — not its block
+number and transaction hash: two `Transfer`s in one transaction share both of
+those, and a reorg keeps the number while changing the hash. A provider that
+omits the position fields gives no identity to dedupe by, so its logs are
+refused rather than stored twice.
+
+Beside the events, per-token **balance state**: one row per holder, applied
+incrementally as events are inserted, and a **checkpoint** (block number *and*
+hash) saying the ledger is complete through that block. Balances, events and
+the checkpoint are committed in one transaction (`Memory::extend_transfers`),
+so a walk that dies halfway leaves the previous checkpoint and balances
+untouched. A range read twice — a retry after a lost answer — inserts nothing
+the second time and moves no balance (`Extended::duplicates` counts it).
+
+### How the next summon reads
+
+`RobinhoodReader { memory: Some(_) }` reads the checkpoint, asks the chain for
+that block's header (one call; none when the checkpoint is the read point
+itself), and:
+
+- hash matches — walks `checkpoint + 1 ..= read point` only;
+- hash differs (reorg, or a provider lagging behind the checkpoint) — rolls
+  the ledger back to `checkpoint − REORG_DEPTH` (`roll_back_transfers_after`
+  reverse-applies the forgotten events and deletes the checkpoint), then walks
+  from there.
+
+Every walk is recorded as a `CheckRun` — parameters, covered interval,
+completeness (`Complete` / `Failed` / `Truncated`), calls spent — so "nothing
+happened in this range" and "the range could not be read" are two different
+records (AGENTS.md §3 rule 8), and a later slice can decide from the record
+whether a token's ledger is trustworthy without re-reading it.
+
+### Pinned reads
+
+Every `eth_call` after the read point's header is pinned to that block
+(`Rpc::call_contract_at`), so the curve's graduation flag, its reserves and the
+token's name describe one state, not whichever block each answer happened to
+land on. The factory record is the one unpinned read: it is what learns
+whether a token exists before a read point is chosen, and the fields used
+from it (curve, deployer) are set at launch and never change.
+
+### Bounds (§2.3 of the golden brief: nothing invented per wallet)
+
+- `REORG_DEPTH = 256` blocks — the owner's chosen number. Events older than
+  that below the checkpoint are treated as final.
+- `MAX_TRANSFERS_PER_TOKEN = 50,000` event rows per token — from the 28,652
+  transfers measured on the busiest token read live 2026-09-17 (research
+  0050 §0), with room. Past it, the oldest *final* rows are evicted first:
+  they are recomputable from the chain and their effect already lives in the
+  balance rows, so the count stays right after eviction. Unfinalised rows
+  (inside `REORG_DEPTH`) are never evicted, because a rollback needs them.
+- `MAX_CHECK_RUNS = 32` per `(chain, token, what)`, oldest first.
+
+No bytes-per-wallet figure is claimed here; the size on disk is whatever
+those three caps and SQLite's own row overhead come to, and is measured, not
+asserted, when a real memory has run for a while.
+
+### Cost
+
+Within the existing sixty-call budget (`budget.rs`): a first summon costs what
+it did (ten calls on the fixture), a second costs one header more plus only
+the pages the suffix needs. The fixture tests in `robinhood.rs` pin both
+numbers.

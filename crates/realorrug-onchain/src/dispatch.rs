@@ -98,7 +98,7 @@ pub fn read_with_memory(
     let address: ChainAddress = mint_text.parse().map_err(|_| Error::NotAnAddress)?;
     match address {
         ChainAddress::Solana(mint) => solana(clients.solana, budget, &mint, memory),
-        ChainAddress::Robinhood(token) => robinhood(clients.robinhood, budget, &token),
+        ChainAddress::Robinhood(token) => robinhood(clients.robinhood, budget, &token, memory),
     }
 }
 
@@ -122,13 +122,14 @@ fn robinhood(
     client: Option<&realorrug_robinhood::Rpc>,
     budget: &mut Budget,
     token: &realorrug_robinhood::Address,
+    memory: Option<&crate::memory::Memory>,
 ) -> Result<Dossier, Error> {
     let Some(client) = client else {
         return Err(Error::Unreadable(
             "no Robinhood endpoint is configured, so this token's chain cannot be read".to_owned(),
         ));
     };
-    RobinhoodReader
+    RobinhoodReader { memory }
         .read(client, budget, token)
         .map_err(|e| Error::Unreadable(e.to_string()))
 }
@@ -201,6 +202,36 @@ mod tests {
                 "{text:?} should be refused as not-an-address, got {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_robinhood_read_through_dispatch_reaches_the_memory() {
+        // The reader remembers what it read only if dispatch hands it the
+        // memory; a `RobinhoodReader::default()` here would read fine and
+        // remember nothing, which this checkpoint would show.
+        use crate::memory::Memory;
+        use crate::robinhood::tests::{full_bodies, record, serve, token};
+
+        let rec = record(
+            true,
+            realorrug_robinhood::Address([0x23; 20]),
+            realorrug_robinhood::Address([0x34; 20]),
+        );
+        let robinhood = realorrug_robinhood::Rpc::new(serve(full_bodies(&rec, "0x1")));
+        let solana = unreachable_solana();
+        let clients = Clients {
+            solana: &solana,
+            robinhood: Some(&robinhood),
+        };
+        let memory = Memory::open_in_memory().expect("a memory");
+        let mut budget = Budget::default();
+        let dossier = read_with_memory(&token().to_string(), &clients, Some(&memory), &mut budget)
+            .expect("a dossier");
+        assert!(dossier.holders.is_some());
+        let checkpoint = memory
+            .token_checkpoint("robinhood", &token().to_string())
+            .expect("read");
+        assert_eq!(checkpoint.map(|c| c.block), Some(0x64));
     }
 
     #[test]
