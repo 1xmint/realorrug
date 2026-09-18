@@ -28,8 +28,8 @@ safe'"*), and its test at `forbidden.rs:1322` exercises it. `docs/design/0020`
 line 53 and `docs/research/0042` line 36 both cite the identical `theradar:GOAL.md`
 sentence to justify "no composite risk score, in either repo, on purpose."
 
-All four citations trace to one place: `theradar`'s `theradar:GOAL.md`, Radar's own
-goal document, not this repository's. There is no `theradar:GOAL.md` in `realorrug`.
+All four citations trace to one place: `theradar:GOAL.md`, Radar's own
+goal document, not this repository's. This repository has no goal file of its own.
 The no-score rule was inherited wholesale from the sister project rather than
 decided here, and nobody has re-asked whether Radar's reason for refusing a
 score still holds once the analyst discloses how much of the evidence it
