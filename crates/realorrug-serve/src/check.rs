@@ -446,7 +446,7 @@ fn stash_signals(stored: &mut Value, signals: &[realorrug_roast::sheet::Signal])
 /// reached, so `level`, `reasons`, `twins`, `measured_at` and `price` are all
 /// empty or null (never a guess standing in for a fact the route never read).
 /// `verdict_doc` is the only doc shape with something to put in those fields.
-fn empty_doc(state: &str, chain: Value, raw_address: &str, level: Value, message: &str) -> Value {
+fn empty_doc(state: &str, chain: &Value, raw_address: &str, level: &Value, message: &str) -> Value {
     json!({
         "state": state,
         "chain": chain,
@@ -479,9 +479,9 @@ fn unreadable_doc(raw_address: &str, chain: &str, why: &str) -> (StatusCode, Val
             StatusCode::OK,
             empty_doc(
                 "not_a_token",
-                json!(chain),
+                &json!(chain),
                 raw_address,
-                Value::Null,
+                &Value::Null,
                 "We looked for this address on Robinhood Chain and found \
                  nothing there. If this is a token on a chain we don't \
                  read yet, we can't tell you anything about it -- not \
@@ -496,9 +496,9 @@ fn unreadable_doc(raw_address: &str, chain: &str, why: &str) -> (StatusCode, Val
 fn cant_read_doc(raw_address: &str, chain: &str, why: &str) -> Value {
     let mut doc = empty_doc(
         "cant_read",
-        json!(chain),
+        &json!(chain),
         raw_address,
-        json!("CantTell"),
+        &json!("CantTell"),
         "We couldn't read something we needed to give this a real \
          verdict. That is not the same as clean -- it means we don't \
          know, and a token we don't know about is not a token we're \
@@ -511,9 +511,9 @@ fn cant_read_doc(raw_address: &str, chain: &str, why: &str) -> Value {
 fn busy_doc(raw_address: &str) -> Value {
     empty_doc(
         "busy",
-        Value::Null,
+        &Value::Null,
         raw_address,
-        Value::Null,
+        &Value::Null,
         "You're checking addresses faster than we can read them. \
          Wait a minute and try again.",
     )
@@ -522,9 +522,9 @@ fn busy_doc(raw_address: &str) -> Value {
 fn bad_address_doc(raw_address: &str) -> Value {
     empty_doc(
         "bad_address",
-        Value::Null,
+        &Value::Null,
         raw_address,
-        Value::Null,
+        &Value::Null,
         "That's not shaped like a Robinhood Chain or a Solana address. \
          Robinhood Chain: 0x + 40 hex characters. Solana: a base58 \
          string, 32-44 characters, no 0, O, I or l. Paste the address \
@@ -535,9 +535,9 @@ fn bad_address_doc(raw_address: &str) -> Value {
 fn budget_doc(raw_address: &str) -> Value {
     empty_doc(
         "budget",
-        Value::Null,
+        &Value::Null,
         raw_address,
-        Value::Null,
+        &Value::Null,
         "New checks are switched off right now. Cached verdicts still \
          work.",
     )
