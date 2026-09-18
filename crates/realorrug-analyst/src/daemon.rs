@@ -2055,7 +2055,7 @@ mod tests {
             ("REALORRUG_MODEL_OPENAI_KEY", "private-key-sentinel"),
             ("REALORRUG_MODEL_ENDPOINT", "private-endpoint-sentinel"),
         ]));
-        let notice = provider_notice(&selected.err().expect("incomplete configuration"));
+        let notice = provider_notice(&selected.expect_err("incomplete configuration"));
         assert!(notice.contains("REALORRUG_MODEL_NAME"));
         assert!(notice.contains("REALORRUG_MODEL_PRICE_IN"));
         assert!(notice.contains("REALORRUG_MODEL_PRICE_OUT"));
