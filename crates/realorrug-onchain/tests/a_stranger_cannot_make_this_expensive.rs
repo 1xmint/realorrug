@@ -25,6 +25,8 @@ fn tx(accounts: &[&str]) -> Transaction {
         instructions: Vec::new(),
         pre_token_balances: Vec::new(),
         post_token_balances: Vec::new(),
+        pre_balances: Vec::new(),
+        post_balances: Vec::new(),
         failed: false,
     }
 }

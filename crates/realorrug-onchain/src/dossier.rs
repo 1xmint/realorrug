@@ -34,6 +34,7 @@ use crate::budget::{Budget, Count};
 use crate::launch::{LaunchBlock, Metadata, NotALaunch};
 use crate::memory::{Kind, Memory};
 use crate::rpc::{RpcClient, RpcError, Transaction};
+use crate::wallets::investigate_solana;
 
 /// The impact budget capacity is measured at.
 ///
@@ -476,6 +477,16 @@ pub fn build(
     match token_ownership(client, budget, mint) {
         Ok(facts) => dossier.token_ownership = Some(facts),
         Err(why) => dossier.miss("token ownership", why),
+    }
+
+    // 5. Who funded the mint's own early buyers (design 0027 row 6, slice
+    // 6b). Independent of step 4: candidates come from the mint's own
+    // signature history, not from the current holder sample. A transport
+    // failure here names "funding" in `unavailable` rather than a silent
+    // empty result, per `investigate_solana`'s own doc.
+    match investigate_solana(client, budget, mint) {
+        Ok(funding) => dossier.funding = Some(funding),
+        Err(why) => dossier.miss("funding", why),
     }
 
     dossier.calls = budget.calls_made();

@@ -37,14 +37,40 @@
 //! the per-candidate part at 640 so the enrichment can never eat the
 //! dossier's whole 2,000-CU allowance. Core reads run before this one, so
 //! the cap here is what is left after them, never more.
+//!
+//! # Slice 6b: the same investigation on Solana
+//!
+//! [`Funding`], [`Candidate`], [`Funder`] and [`SharedFunder`] are shared by
+//! both chains -- design 0027 row 6 asks for identical finding types across
+//! chains so the roast side never needs chain-specific wording. Every
+//! address field is a `String` in the chain's own canonical text form
+//! (0x-lowercase hex for Robinhood, base58 for Solana) rather than the
+//! 20-byte EVM [`realorrug_robinhood::Address`], which cannot hold a Solana
+//! key at all.
+//!
+//! [`investigate_solana`] is the Solana half. It has no `CurveBuy` log to
+//! read purchases from, so it does not build [`Purchase`], [`Buyer`] or
+//! [`Selection`] -- those three stay Robinhood-only, EVM-`Address`-typed
+//! helpers that feed [`investigate`]. Its candidates are early buyers in the
+//! same sense Robinhood's are: it pages the mint's own earliest signatures
+//! ([`RpcClient::signatures_back_to_oldest`]), walks the transactions oldest
+//! first, and takes the first distinct wallets whose balance of this mint
+//! rose (`post_token_balances` against `pre_token_balances`, keyed by
+//! [`crate::rpc::TokenBalance::owner`]) -- excluding the proven bonding-curve
+//! PDA ([`realorrug_pumpfun::pda::bonding_curve`]), which is the pool side of
+//! every trade and never a beneficiary. A wallet's first observed rise is its
+//! `first_purchase_block`; a separate read of that wallet's own oldest
+//! signature finds the native transfer that funded it before that point, the
+//! same way [`investigate`] does not need a `CurveBuy` for that half either.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use realorrug_robinhood::pons::{Side, Trade, topic};
 use realorrug_robinhood::{Address, Hash32, Log, LogsError, Rpc, quantity, quantity_u128};
 
 use crate::budget::Budget;
 use crate::memory::{CheckRun, Completeness, FundingEdge, Memory};
+use crate::rpc::{RpcClient, Transaction};
 
 /// `alchemy_getAssetTransfers`, per the CU table (2026-09-18).
 pub const CU_GET_ASSET_TRANSFERS: u32 = 120;
@@ -80,6 +106,11 @@ pub const MAX_FUNDING_PAGES: u32 = 2;
 /// Gas a purchase is assumed to have needed, added to the quote before the
 /// materiality test: 0.0001 ETH, generous for an L2.
 pub const GAS_ALLOWANCE_WEI: u128 = 100_000_000_000_000;
+
+/// Gas a Solana buy is assumed to have needed: 0.00005 SOL, ten times a
+/// single-signature transaction's ~5,000-lamport base fee (measured
+/// 2026-09-18), generous the same way [`GAS_ALLOWANCE_WEI`] is for an L2.
+pub const GAS_ALLOWANCE_LAMPORTS: u128 = 50_000;
 
 /// A transfer is material when it covers at least this share of the
 /// purchase plus gas, in basis points. Half: a top-up that paid for less than
@@ -229,20 +260,26 @@ pub fn select(buyers: &[Buyer]) -> Selection {
 }
 
 /// Whether `amount` financed a purchase of `quote`, rather than dusting it.
+///
+/// `gas_allowance` is the chain's own [`GAS_ALLOWANCE_WEI`] or
+/// [`GAS_ALLOWANCE_LAMPORTS`] -- kept a parameter rather than hard-coded so
+/// this one materiality test serves both chains without guessing a unit.
 #[must_use]
-pub fn is_material(amount: u128, quote: u128) -> bool {
-    let needed = quote.saturating_add(GAS_ALLOWANCE_WEI);
+pub fn is_material(amount: u128, quote: u128, gas_allowance: u128) -> bool {
+    let needed = quote.saturating_add(gas_allowance);
     amount.saturating_mul(10_000) >= needed.saturating_mul(MATERIAL_SHARE_BPS)
 }
 
 /// One native transfer into a candidate before its first purchase.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Funder {
-    /// Who sent it.
-    pub address: Address,
-    /// Wei sent.
+    /// Who sent it, in the chain's own canonical text form (0x-lowercase
+    /// hex for Robinhood, base58 for Solana).
+    pub address: String,
+    /// The amount sent, in the chain's smallest unit (wei for Robinhood,
+    /// lamports for Solana).
     pub amount_wei: u128,
-    /// The block it landed in.
+    /// The block (or slot) it landed in.
     pub block: u64,
     /// The transaction that carried it.
     pub transaction: String,
@@ -255,9 +292,9 @@ pub struct Funder {
 /// One checked buyer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
-    /// The buyer.
-    pub address: Address,
-    /// Quote it bought with in the window, in wei.
+    /// The buyer, in the chain's own canonical text form.
+    pub address: String,
+    /// Quote it bought with in the window, in the chain's smallest unit.
     pub bought_wei: u128,
     /// The block of its first purchase.
     pub first_purchase_block: u64,
@@ -279,8 +316,8 @@ pub struct Candidate {
 /// the wallets share an owner, and the sheet never says so either.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SharedFunder {
-    /// The funder.
-    pub address: Address,
+    /// The funder, in the chain's own canonical text form.
+    pub address: String,
     /// How many distinct checked candidates it materially funded.
     pub funded: u32,
 }
@@ -310,28 +347,29 @@ pub struct Funding {
 }
 
 /// Funders that materially funded two or more of `checked`.
+///
+/// Chain-agnostic: it works from `Funder::address`'s canonical text form and
+/// never parses or compares raw address bytes, so the same function serves
+/// Robinhood's 0x-hex and Solana's base58 without a per-chain branch.
 #[must_use]
 pub fn shared_funders(checked: &[Candidate]) -> Vec<SharedFunder> {
-    let mut counts: BTreeMap<[u8; 20], u32> = BTreeMap::new();
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
     for candidate in checked {
-        let mut seen: Vec<[u8; 20]> = Vec::new();
+        let mut seen: Vec<&str> = Vec::new();
         for funder in candidate.funders.iter().filter(|f| f.material) {
             // One candidate counts once per funder however many top-ups it got.
-            if !seen.contains(&funder.address.0) {
-                seen.push(funder.address.0);
-                *counts.entry(funder.address.0).or_default() += 1;
+            if !seen.contains(&funder.address.as_str()) {
+                seen.push(&funder.address);
+                *counts.entry(funder.address.clone()).or_default() += 1;
             }
         }
     }
     let mut shared: Vec<SharedFunder> = counts
         .into_iter()
         .filter(|(_, n)| *n >= 2)
-        .map(|(a, funded)| SharedFunder {
-            address: Address(a),
-            funded,
-        })
+        .map(|(address, funded)| SharedFunder { address, funded })
         .collect();
-    shared.sort_by(|a, b| b.funded.cmp(&a.funded).then(a.address.0.cmp(&b.address.0)));
+    shared.sort_by(|a, b| b.funded.cmp(&a.funded).then(a.address.cmp(&b.address)));
     shared
 }
 
@@ -423,7 +461,7 @@ fn check_candidate(
     gaps: &mut Vec<String>,
 ) -> Candidate {
     let mut candidate = Candidate {
-        address: buyer.address,
+        address: buyer.address.to_string(),
         bought_wei: buyer.quote,
         first_purchase_block: buyer.first_block,
         is_contract: None,
@@ -466,12 +504,12 @@ fn check_candidate(
             Ok((page, next)) => {
                 for (from, amount, block, hash, unique_id) in page {
                     candidate.funders.push(Funder {
-                        address: from,
+                        address: from.to_string(),
                         amount_wei: amount,
                         block,
                         transaction: hash,
                         unique_id,
-                        material: is_material(amount, buyer.quote),
+                        material: is_material(amount, buyer.quote, GAS_ALLOWANCE_WEI),
                     });
                 }
                 if let Some(key) = next {
@@ -614,8 +652,8 @@ pub fn investigate(
             .iter()
             .flat_map(|c| {
                 c.funders.iter().map(move |f| FundingEdge {
-                    recipient: c.address.to_string(),
-                    funder: f.address.to_string(),
+                    recipient: c.address.clone(),
+                    funder: f.address.clone(),
                     block: f.block,
                     transaction: f.transaction.clone(),
                     unique_id: f.unique_id.clone(),
@@ -662,6 +700,254 @@ pub fn investigate(
     Ok(funding)
 }
 
+/// The Solana selection rule, recorded on every [`investigate_solana`]
+/// result on the same terms [`SELECTION_RULE`] is for Robinhood.
+pub const SOLANA_SELECTION_RULE: &str = "the first distinct wallets, up to the same limit as \
+                                          Robinhood, whose balance of this mint rose in the \
+                                          mint's own earliest transactions, excluding the \
+                                          proven bonding curve";
+
+/// The funder of one candidate's earliest lamport balance increase, read
+/// from a single transaction's `pre_balances`/`post_balances`.
+///
+/// The account whose own balance rose is the candidate; the account whose
+/// balance fell the most is taken as the source, because a transaction can
+/// move lamports through several accounts (fees, rent) and the largest drop
+/// is the one that plausibly funded the candidate's gain rather than a fee
+/// payer's small deduction.
+fn funder_of(tx: &Transaction, candidate: &str) -> Option<(String, u128)> {
+    if tx.accounts.len() != tx.pre_balances.len() || tx.accounts.len() != tx.post_balances.len() {
+        // A shape this reader cannot trust an index into; see `rpc.rs`'s
+        // `lamport_balances` doc on why a real node does not do this.
+        return None;
+    }
+    let candidate_index = tx.accounts.iter().position(|a| a == candidate)?;
+    let gain = tx.post_balances[candidate_index].checked_sub(tx.pre_balances[candidate_index])?;
+    if gain == 0 {
+        return None;
+    }
+    let (from_index, drop) = tx
+        .accounts
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != candidate_index)
+        .filter_map(|(i, _)| {
+            tx.pre_balances[i]
+                .checked_sub(tx.post_balances[i])
+                .filter(|d| *d > 0)
+                .map(|d| (i, d))
+        })
+        .max_by_key(|&(_, d)| d)?;
+    Some((tx.accounts[from_index].clone(), u128::from(drop.min(gain))))
+}
+
+/// Distinct wallets whose balance of `mint` rose in `tx`, read from its
+/// token balances -- the Solana stand-in for a `CurveBuy` log entry. `curve`,
+/// when known, is never a buyer: its own token account is the pool side of
+/// every trade in and out of it, not a beneficiary of one.
+fn buyers_in(tx: &Transaction, mint: &str, curve: Option<&str>) -> Vec<String> {
+    let mut before_by_index: BTreeMap<usize, u64> = BTreeMap::new();
+    for balance in &tx.pre_token_balances {
+        if balance.mint == mint {
+            before_by_index.insert(balance.account_index, balance.amount);
+        }
+    }
+    let mut buyers = Vec::new();
+    for balance in &tx.post_token_balances {
+        if balance.mint != mint {
+            continue;
+        }
+        let before = before_by_index
+            .get(&balance.account_index)
+            .copied()
+            .unwrap_or(0);
+        if balance.amount <= before {
+            continue;
+        }
+        let Some(owner) = balance.owner.as_deref() else {
+            continue;
+        };
+        if Some(owner) == curve {
+            continue;
+        }
+        buyers.push(owner.to_owned());
+    }
+    buyers
+}
+
+/// One early buyer found while walking the mint's own earliest transactions.
+struct EarlyBuyer {
+    address: String,
+    first_purchase_slot: u64,
+}
+
+/// Checks funding for a Solana mint's early buyers.
+///
+/// Candidates come from the mint's own signature history
+/// ([`RpcClient::signatures_back_to_oldest`]), read oldest first, taking the
+/// first [`MAX_CANDIDATES`] distinct wallets whose balance of this mint rose
+/// ([`buyers_in`]) and excluding the verified bonding-curve PDA
+/// ([`realorrug_pumpfun::pda::bonding_curve`]). Each candidate's own oldest
+/// signature is then read separately for the native lamport transfer that
+/// funded it before its first purchase, on the same terms [`funder_of`]
+/// already reads for Robinhood: the account whose balance fell the most,
+/// subject to [`is_material`] against [`GAS_ALLOWANCE_LAMPORTS`] (quote 0 --
+/// no SOL cost of the buy itself is read here, so materiality falls back to
+/// "more than dust").
+///
+/// **If the mint's own history was truncated by the budget before its oldest
+/// signature was reached, or a candidate's own signature history was, that is
+/// recorded in [`Funding::gaps`] / the candidate's `funding_complete` --
+/// never as "no funder"** (AGENTS.md rule 8).
+///
+/// # Errors
+///
+/// A string naming why the mint's own signature history could not be read at
+/// all. A single candidate or transaction read failure lands in
+/// [`Funding::gaps`] instead, on a result that is still returned.
+pub fn investigate_solana(
+    client: &RpcClient,
+    budget: &mut Budget,
+    mint: &realorrug_types::Address,
+) -> Result<Funding, String> {
+    let curve = realorrug_pumpfun::pda::bonding_curve(mint).map(|c| c.to_string());
+    let mint_key = mint.to_string();
+    let (signatures, truncated) = client
+        .signatures_back_to_oldest(budget, mint)
+        .map_err(|e| format!("funding: {e}"))?;
+
+    let mut gaps = Vec::new();
+    if truncated {
+        gaps.push(
+            "the mint's signature history is longer than the page budget allows; earlier \
+             buyers than the ones checked may exist"
+                .to_owned(),
+        );
+    }
+
+    // `signatures` is newest-first, the same order every other reader in
+    // this crate gets from `getSignaturesForAddress`; walk it in reverse to
+    // see buys in the order they happened.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut early_buyers: Vec<EarlyBuyer> = Vec::new();
+    for sig in signatures.iter().rev() {
+        if early_buyers.len() >= MAX_CANDIDATES {
+            break;
+        }
+        if sig.err.is_some() {
+            continue;
+        }
+        match client.transaction(budget, &sig.signature) {
+            Ok(Some(tx)) => {
+                for buyer in buyers_in(&tx, &mint_key, curve.as_deref()) {
+                    if early_buyers.len() >= MAX_CANDIDATES {
+                        break;
+                    }
+                    if seen.insert(buyer.clone()) {
+                        early_buyers.push(EarlyBuyer {
+                            address: buyer,
+                            first_purchase_slot: sig.slot,
+                        });
+                    }
+                }
+            }
+            Ok(None) => gaps.push(format!(
+                "transaction {} could not be fetched",
+                sig.signature
+            )),
+            Err(why) => gaps.push(format!("transaction {}: {why}", sig.signature)),
+        }
+    }
+
+    let mut checked = Vec::new();
+    for buyer in &early_buyers {
+        checked.push(check_solana_candidate(client, budget, buyer, &mut gaps));
+    }
+
+    let shared = shared_funders(&checked);
+    Ok(Funding {
+        buyers: u32::try_from(early_buyers.len()).unwrap_or(u32::MAX),
+        selected: u32::try_from(checked.len()).unwrap_or(u32::MAX),
+        coverage_bps: 0,
+        rule: SOLANA_SELECTION_RULE,
+        checked,
+        shared,
+        gaps,
+        cu_spent: 0,
+    })
+}
+
+/// Reads one early buyer's own oldest signature for the native transfer that
+/// funded it before its first purchase. Split out of [`investigate_solana`]
+/// so a failure on one candidate is a gap on the overall result, not a
+/// reason to abandon the others.
+fn check_solana_candidate(
+    client: &RpcClient,
+    budget: &mut Budget,
+    buyer: &EarlyBuyer,
+    gaps: &mut Vec<String>,
+) -> Candidate {
+    let address = buyer.address.clone();
+    let mut candidate = Candidate {
+        address: address.clone(),
+        bought_wei: 0,
+        first_purchase_block: buyer.first_purchase_slot,
+        is_contract: None,
+        nonce_before_launch: None,
+        funders: Vec::new(),
+        funding_complete: true,
+    };
+
+    let Ok(address_key) = address.parse::<realorrug_types::Address>() else {
+        gaps.push(format!("funding of {address}: not a parseable address"));
+        candidate.funding_complete = false;
+        return candidate;
+    };
+
+    match client.signatures_back_to_oldest(budget, &address_key) {
+        Ok((signatures, truncated)) => {
+            candidate.funding_complete = !truncated;
+            if truncated {
+                gaps.push(format!(
+                    "funding of {address}: signature history truncated before its oldest \
+                     transaction; an earlier funder may exist"
+                ));
+            }
+            if let Some(oldest) = signatures.last() {
+                match client.transaction(budget, &oldest.signature) {
+                    Ok(Some(tx)) => {
+                        if let Some((from, amount)) = funder_of(&tx, &address) {
+                            candidate.funders.push(Funder {
+                                address: from,
+                                amount_wei: amount,
+                                block: tx.slot.0,
+                                transaction: oldest.signature.clone(),
+                                unique_id: oldest.signature.clone(),
+                                material: is_material(amount, 0, GAS_ALLOWANCE_LAMPORTS),
+                            });
+                        }
+                    }
+                    Ok(None) => {
+                        gaps.push(format!(
+                            "funding of {address}: oldest transaction not found"
+                        ));
+                        candidate.funding_complete = false;
+                    }
+                    Err(why) => {
+                        gaps.push(format!("funding of {address}: {why}"));
+                        candidate.funding_complete = false;
+                    }
+                }
+            }
+        }
+        Err(why) => {
+            gaps.push(format!("funding of {address}: {why}"));
+            candidate.funding_complete = false;
+        }
+    }
+    candidate
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,7 +967,7 @@ mod tests {
 
     fn candidate(b: u8, quote: u128, funders: &[(u8, u128)]) -> Candidate {
         Candidate {
-            address: addr(b),
+            address: addr(b).to_string(),
             bought_wei: quote,
             first_purchase_block: 10,
             is_contract: Some(false),
@@ -690,12 +976,12 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(i, (f, amount))| Funder {
-                    address: addr(*f),
+                    address: addr(*f).to_string(),
                     amount_wei: *amount,
                     block: 5,
                     transaction: format!("0x{i}"),
                     unique_id: format!("0x{i}:external:0"),
-                    material: is_material(*amount, quote),
+                    material: is_material(*amount, quote, GAS_ALLOWANCE_WEI),
                 })
                 .collect(),
             funding_complete: true,
@@ -793,12 +1079,24 @@ mod tests {
     fn materiality_is_half_the_purchase_plus_gas() {
         let quote = 1_000_000_000_000_000_000; // 1 ETH
         let needed = quote + GAS_ALLOWANCE_WEI;
-        assert!(is_material(needed / 2, quote));
-        assert!(!is_material(needed / 2 - 1, quote));
+        assert!(is_material(needed / 2, quote, GAS_ALLOWANCE_WEI));
+        assert!(!is_material(needed / 2 - 1, quote, GAS_ALLOWANCE_WEI));
         // Dust against a real buy is never material.
-        assert!(!is_material(1_000, quote));
+        assert!(!is_material(1_000, quote, GAS_ALLOWANCE_WEI));
         // A wallet that bought nothing is only "funded" by the gas allowance.
-        assert!(is_material(GAS_ALLOWANCE_WEI / 2, 0));
+        assert!(is_material(GAS_ALLOWANCE_WEI / 2, 0, GAS_ALLOWANCE_WEI));
+        // The same rule, on Solana's own gas allowance and unit.
+        let lamports_needed = quote + GAS_ALLOWANCE_LAMPORTS;
+        assert!(is_material(
+            lamports_needed / 2,
+            quote,
+            GAS_ALLOWANCE_LAMPORTS
+        ));
+        assert!(!is_material(
+            lamports_needed / 2 - 1,
+            quote,
+            GAS_ALLOWANCE_LAMPORTS
+        ));
     }
 
     #[test]
@@ -815,11 +1113,11 @@ mod tests {
             shared,
             vec![
                 SharedFunder {
-                    address: addr(0xf0),
+                    address: addr(0xf0).to_string(),
                     funded: 3
                 },
                 SharedFunder {
-                    address: addr(0xf1),
+                    address: addr(0xf1).to_string(),
                     funded: 2
                 },
             ]
@@ -836,6 +1134,144 @@ mod tests {
             .collect();
         assert!(checked.iter().all(|c| !c.funders[0].material));
         assert!(shared_funders(&checked).is_empty());
+    }
+
+    // -- Slice 6b: investigate_solana ---------------------------------
+
+    fn solana_addr(b: u8) -> realorrug_types::Address {
+        realorrug_types::Address::new([b; 32])
+    }
+
+    /// A queue-based transport, mirroring `rpc.rs`'s own `Canned` test
+    /// fixture (private to that module, so this crate's other test modules
+    /// each keep a small copy rather than share one across a test boundary
+    /// Rust does not have).
+    struct Canned(std::sync::Mutex<Vec<String>>);
+
+    impl Canned {
+        fn boxed(responses: &[&str]) -> Box<dyn crate::rpc::Transport> {
+            Box::new(Self(std::sync::Mutex::new(
+                responses.iter().rev().map(|s| (*s).to_owned()).collect(),
+            )))
+        }
+    }
+
+    impl crate::rpc::Transport for Canned {
+        fn post(&self, _: &str, _: String) -> Result<String, String> {
+            self.0
+                .lock()
+                .map_err(|_| "poisoned".to_owned())?
+                .pop()
+                .ok_or_else(|| "the client asked for more than the test supplied".to_owned())
+        }
+    }
+
+    /// A single-page `getSignaturesForAddress` answer: one signature, which
+    /// is also the oldest -- a page shorter than 1,000 ends the walk.
+    fn signatures_page(signature: &str) -> String {
+        format!(r#"{{"result":[{{"signature":"{signature}","slot":1}}],"error":null}}"#)
+    }
+
+    /// A `getTransaction` answer whose only lamport move is `from` funding
+    /// `to` by `amount`.
+    fn funding_tx(from: &str, to: &str, amount: u64) -> String {
+        format!(
+            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{from}","{to}"],"instructions":[]}}}}}},"error":null}}"#,
+            pre_left = 1_000_000u64.saturating_sub(amount),
+        )
+    }
+
+    /// A `getTransaction` answer for the mint's own history: each `buyers`
+    /// entry's balance of `mint` rose from 0 to `amount`, at a distinct
+    /// `accountIndex` -- the shape `buyers_in` reads a decoded buy from.
+    fn buy_tx(mint: &str, buyers: &[(&str, u64)]) -> String {
+        let entries: Vec<String> = buyers
+            .iter()
+            .enumerate()
+            .map(|(i, (owner, amount))| {
+                format!(
+                    r#"{{"accountIndex":{i},"mint":"{mint}","owner":"{owner}","uiTokenAmount":{{"amount":"{amount}"}}}}"#
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[],"postBalances":[],"preTokenBalances":[],"postTokenBalances":[{}]}},"transaction":{{"message":{{"accountKeys":[],"instructions":[]}}}}}},"error":null}}"#,
+            entries.join(",")
+        )
+    }
+
+    fn solana_budget() -> Budget {
+        Budget::new(60, 60, std::time::Duration::from_secs(30))
+    }
+
+    #[test]
+    fn two_buyers_funded_by_one_address_are_a_shared_funder() {
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer1 = solana_addr(1).to_string();
+        let buyer2 = solana_addr(2).to_string();
+        let funder = solana_addr(0xf0).to_string();
+
+        let responses = vec![
+            // The mint's own signature history: one transaction, both
+            // buyers' balances rise in it.
+            signatures_page("mint-sig"),
+            buy_tx(&mint_key, &[(&buyer1, 500), (&buyer2, 500)]),
+            // Each candidate's own oldest signature, funded by the same
+            // address.
+            signatures_page("buyer1-sig"),
+            funding_tx(&funder, &buyer1, 500_000),
+            signatures_page("buyer2-sig"),
+            funding_tx(&funder, &buyer2, 500_000),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+
+        assert_eq!(funding.checked.len(), 2);
+        assert!(funding.checked.iter().all(|c| c.funding_complete));
+        assert_eq!(
+            funding.shared,
+            vec![SharedFunder {
+                address: funder,
+                funded: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn a_capped_page_is_incomplete_never_absent() {
+        // A page budget of zero means `take_page` fails before any call is
+        // made: the mint's history is unread, not empty, so this must never
+        // report "no early buyers" as if the check had actually run.
+        let mint = solana_addr(9);
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&[]));
+        let mut budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+
+        assert!(funding.checked.is_empty());
+        assert!(
+            funding.gaps.iter().any(|g| g.contains("budget")),
+            "{:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_failed_read_is_a_named_gap_not_a_silent_empty_result() {
+        struct AlwaysFails;
+        impl crate::rpc::Transport for AlwaysFails {
+            fn post(&self, _: &str, _: String) -> Result<String, String> {
+                Err("connection refused".to_owned())
+            }
+        }
+        let mint = solana_addr(9);
+        let client = RpcClient::with_transport("http://test.invalid", Box::new(AlwaysFails));
+        let mut budget = solana_budget();
+        let err = investigate_solana(&client, &mut budget, &mint)
+            .expect_err("a transport failure must surface, not disappear");
+        assert!(err.contains("funding"), "{err}");
     }
 
     #[test]

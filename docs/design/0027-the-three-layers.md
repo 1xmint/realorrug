@@ -248,7 +248,7 @@ tests already run.
 | 3. Bounded funding investigation — **built 2026-09-18**, see below | onchain `wallets.rs`, `budget.rs`, `robinhood.rs`, `memory.rs`; roast `sheet.rs`, `clause.rs`, `fidelity.rs` | Four selected buyers produce evidenced funding paths and sample coverage; dust/shared-service fixtures cannot become ownership claims; CU cap enforced | 2 |
 | 4. Roles, market and venue mechanics | onchain roles.rs (new), `market.rs` (new), `robinhood.rs`; robinhood `pons.rs`; roast `sheet.rs` | Pool/locker excluded only with proof; dated market snapshot, role-correct concentration, custody and verified admin facts available; liquidity dollars never become capacity | 2 |
 | 5. Creator cash-flow ledger | onchain wallets.rs, `memory.rs`; robinhood `pons.rs`; roast `sheet.rs` | Fee recipient differs from deployer in fixture; transfers cannot masquerade as sales; incomplete basis cannot print profit | 3, 4 |
-| 6. Solana owner/funding adapter — **owner half built 2026-09-18 (slice 6a), see below**; funding half pending | onchain `rpc.rs`, `dossier.rs`, wallets.rs | Largest accounts aggregated by owner; paged funding preserves incomplete history; identical finding types across chains | 2, 3 |
+| 6. Solana owner/funding adapter — **built 2026-09-18 (slice 6a owner half, slice 6b funding half), see below** | onchain `rpc.rs`, `dossier.rs`, `wallets.rs` | Largest accounts aggregated by owner; paged funding preserves incomplete history; identical finding types across chains | 2, 3 |
 | 7. Assessment and judgement boundary | roast assessment.rs (new), `verdict.rs`, `voice.rs`; analyst `answer.rs`; serve `check.rs` | Correlated flags count once; critical gaps survive coverage; analyst/site share packet; model band choice shadowed pending approval | 3–6 |
 | 8. Outcome calibration | cli `creator_index.rs`; roast `baserates.rs`; `docs/research/data/` versioned outputs | Mature/censored outcomes separated; time/family-held-out evaluation; curve peaks never advertised as executable returns; scoped rates reach sheet only when eligible | 7 |
 | 9. Observation jobs and callbacks | cli observe.rs (new), `main.rs`; analyst `followup.rs`, `daemon.rs`; onchain `memory.rs`; deployment timer | Standalone outcome refresh; published claim links; no "called it" from a neutral old post; unchanged token produces no automatic callback | 2, 5, 8 |
@@ -388,9 +388,67 @@ producing that named gap rather than an empty or zeroed `TokenOwnership`.
 `salience.rs`, both outside this slice's file scope (onchain `rpc.rs`,
 `dossier.rs`; roast `sheet.rs` only for wording an existing fact already
 needs) — left for the slice that adds the fact to the sheet. The funding
-half of row 6 (Solana buyer investigation, the `wallets.rs`/`robinhood.rs`
-`Address`-to-`String` work a separate investigation proposed) is also not
-part of this slice.
+half of row 6 is built in slice 6b below.
+
+### Slice 6b as built (2026-09-18)
+
+Recording, not recommending. The funding half of row 6, and the
+chain-agnostic finding types row 6 asked for.
+
+`crates/realorrug-onchain/src/wallets.rs`'s `Funding`, `Candidate`, `Funder`
+and `SharedFunder` had their address fields changed from the 20-byte
+`realorrug_robinhood::Address` to `String`, holding each chain's own
+canonical text (0x-lowercase hex for Robinhood, base58 for Solana) — the
+type that cannot fail to hold either chain's key, so the roast layer needs no
+chain-specific wording (row 6's own requirement). `is_material` gained a
+`gas_allowance: u128` parameter so a Solana read is not compared against an
+EVM gas floor; `GAS_ALLOWANCE_LAMPORTS` (0.00005 SOL) is Solana's. Callers in
+`robinhood.rs` and the `sheet.rs` test fixture were updated for the type
+change; no other crate builds these three types.
+
+`investigate_solana` (`wallets.rs`) is the Solana funding read. It has no
+`CurveBuy` log to read purchases from, so early buyers are found by walking
+the mint's own signature history, oldest first
+(`RpcClient::signatures_back_to_oldest` on the mint), and reading each
+transaction's `post_token_balances` against `pre_token_balances`: a distinct
+wallet whose balance of the mint rose is a buy, keyed by
+`TokenBalance::owner`. The bonding-curve PDA
+(`realorrug_pumpfun::pda::bonding_curve`, the same proven check slice 6a uses
+to exclude the curve as an owner) is never counted as a buyer — it is the
+pool side of every trade. At most `MAX_CANDIDATES` (4, matching Robinhood)
+distinct buyers are kept, in the order their balance first rose; that
+transaction's slot is the candidate's `first_purchase_block`. Each
+candidate's own oldest signature is then read separately for the native
+lamport transfer that funded it, the same largest-lamport-drop-in-one-
+transaction reader (`funder_of`) already used before this slice, reused
+unchanged.
+
+**If the mint's own signature history is longer than the page budget
+allows, that is recorded in `Funding::gaps` as an incomplete read — never as
+"no early buyers were found" — and the same applies per candidate whose own
+signature history is truncated before its oldest transaction**
+(AGENTS.md rule 8). A transport failure reading the mint's own history fails
+the whole call, which `dossier.rs::build` records as "funding" in
+`Dossier::unavailable`; a failure reading one candidate's history, or one
+transaction, is a named gap on a result that is still returned.
+
+`dossier.rs::build` calls `investigate_solana` as an independent step, not
+gated on the owner-sample step 4: funding candidates come from the mint's
+own history, not from `TokenOwnership`. Fixture tests in `wallets.rs` cover
+two buyers found in the mint's history and funded by the same address (a
+shared funder), a page-budget cap producing an incomplete result rather than
+an absent one, and a transport failure surfacing as a named "funding" error
+rather than an empty result. The Robinhood path (`investigate`,
+`purchases_from`, `SELECTION_RULE`) is untouched by this slice.
+
+**Not done in this slice**: the SOL cost of the observed buy itself is not
+read, so `is_material` is applied with `quote = 0` for a Solana candidate,
+the same "more than dust" fallback it already applies to an unpriced
+transfer — a materiality figure weighted against the actual buy price is
+left for a slice that reads the buy's own lamport cost. Nothing in
+`realorrug-roast` reads `Dossier::funding` for the Solana path differently
+than for Robinhood's; both already share `push_funding`'s wording since the
+finding types are chain-agnostic.
 
 ## 4. Decisions pending the owner
 

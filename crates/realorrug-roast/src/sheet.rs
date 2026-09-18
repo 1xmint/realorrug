@@ -3346,7 +3346,7 @@ mod tests {
     /// addresses funding `funded` of them each.
     fn funding_of(buyers: u32, checked: u32, shared: &[u32], gaps: &[&str]) -> Funding {
         let candidate = |i: u32| realorrug_onchain::Candidate {
-            address: realorrug_robinhood::Address([u8::try_from(i).unwrap_or(0); 20]),
+            address: realorrug_robinhood::Address([u8::try_from(i).unwrap_or(0); 20]).to_string(),
             bought_wei: 1,
             first_purchase_block: 64,
             is_contract: Some(false),
@@ -3366,7 +3366,8 @@ mod tests {
                 .map(|(i, funded)| realorrug_onchain::SharedFunder {
                     address: realorrug_robinhood::Address(
                         [0xf0 + u8::try_from(i).unwrap_or(0); 20],
-                    ),
+                    )
+                    .to_string(),
                     funded: *funded,
                 })
                 .collect(),
