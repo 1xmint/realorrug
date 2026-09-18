@@ -2119,11 +2119,13 @@ mod tests {
         // phrase into `hedged`: mutated to `&&`, `hedged` requires all
         // three hedge phrases at once and is never true, so the hint is
         // wrongly refused.
-        assert!(hint_violations(
-            "it might double if the trend holds, because launches like this one continue.",
-            true
-        )
-        .is_empty());
+        assert!(
+            hint_violations(
+                "it might double if the trend holds, because launches like this one continue.",
+                true
+            )
+            .is_empty()
+        );
     }
 
     #[test]
