@@ -1,3 +1,19 @@
-done: CI-fix commit pushed (7881d32) — fmt (2 reflows in forbidden.rs/sheet.rs), clippy match_same_arms (fidelity.rs OutcomeRate merged into Launch arm), clippy 100-line cap (sheet.rs push_curve split into push_graduation), two stale/wrong tests fixed in sheet.rs (a_solana_curve_renders_byte_for_byte's 6.1862->6.1861 truncation typo; the_rule_applies_to_the_configured_mint_and_to_no_other replaced with the_self_mint_gets_no_special_treatment per ADR 0033 rule 5). Added 3 missing tests for forbidden.rs's uncompiled check_hint (price_and_market_cap_words_pass, bare_predictions_and_advice_always_fail_even_with_a_rate, a_hedged_hint_is_refused_without_the_outcome_rate_fact_and_allowed_with_it).
-next: read `gh pr checks 101 --watch --interval 60` on this push before doing anything else (do not push again until it settles). If green: unit 3 (voice.rs system prompt: state price-with-its-moment, hedged-hint-needs-outcome-rate, never buy/sell/hold, own token treated like any other -- keep short) then unit 4 (realorrug-serve card.rs/check.rs show price+market cap with their moment; update any contract tests asserting price is absent). One commit per unit, Co-Authored-By Claude Opus 5. Then `gh pr ready 101` once CI is green and units 3-4 land.
-watch out for: check_hint (forbidden.rs) is NOT wired into the production reply pipeline yet (verdict.rs only calls forbidden::check, never check_hint) -- that wiring is not in this packet's units 1-4 list, so leave it and mention it as a finding, don't scope-creep it in. mutants/mutants-shards jobs were failing only because the unmutated baseline didn't compile/pass -- should self-resolve once tests+lint are green, no separate fix needed. Kind::OutcomeRate exists in clause.rs but nothing produces it in production sheets yet (expected -- ADR 0033 says empty until a later creator-index pass).
+# PROGRESS: the-bio-shows-the-whole-week
+
+Done: Rewrote `State::render_parts` in `crates/realorrug-analyst/src/bio.rs`
+to the compact "Pool <n> ETH · Leads @a @b @c · Last won @h" format (was
+verbose sentences that busted the ~76-char live-lead budget and failed
+`fmt`/`lint`/`tests` in CI). Fixed the fmt/clippy issues CI flagged in the
+same three files. Added a new test with the live lead + 3 ten-char handles.
+Confirmed render_sol/last_winner_of already convert SOL lamports correctly
+(no unit bug). Confirmed no live leaderboard source feeds daemon.rs yet
+(`realorrug_contest::score::rank` has no callers outside its own tests) --
+daemon.rs's empty leaders vec is left as-is per the packet's fallback.
+Committed bdad9fa and pushed. Next: `gh pr checks 103` once (do not
+--watch/block), read the failing job's log if red, fix and push again.
+If green, done -- do not merge, just report.
+
+Watch out for: do not run cargo/tests locally per this packet (stricter
+than AGENTS.md's usual scoped-cargo allowance). Do not push again while a
+CI run is in flight. PR body still needs the 3 hand-computed sample bios
+added via `gh pr edit 103 --body`.
