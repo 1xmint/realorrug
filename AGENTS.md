@@ -46,8 +46,12 @@ the failure. Say whether you are recommending or recording.
    named person, account or company a scammer or a thief.
    `realorrug-roast/src/forbidden.rs` enforces the old blanket word ban
    today; design 0020 changes it to enforce this rule instead (ADR 0027).
-5. **The analyst never states the token's price or market cap** (ADR 0013
-   constraint 5), enforced by dropping those facts before the model sees them.
+5. **Price is stated with its moment; a hint needs a measured rate** (ADR
+   0033). Every price or market cap carries the block or time it was read at.
+   A hint at a future move is hedged, never "will" and never an instruction to
+   buy, sell or hold, and passes only when the fact sheet carries a measured
+   outcome rate for launches like this one. The project's own token is
+   treated exactly like any other.
 6. **Holdings are public, and nothing trades.** A small dev buy and the bot's
    own holding are disclosed with their addresses; nothing buys, sells or
    swaps the token automatically (ADR 0029, superseding ADR 0013's "holds
