@@ -15,7 +15,7 @@ capitalisation"), and the restatement of it in
 **Rewrites:** `AGENTS.md` §3 rule 5.
 **Consequence lands in:** `crates/realorrug-roast/src/sheet.rs`
 (`withhold_price` stops dropping price facts), `forbidden.rs`, `voice.rs`,
-and `crates/realorrug-serve/src/{card,check}.rs`.
+`crates/realorrug-serve/src/card.rs`, and `crates/realorrug-serve/src/check.rs`.
 
 ## Context
 
