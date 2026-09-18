@@ -969,6 +969,45 @@ fn fees_for(config: &realorrug_pumpfun::FeeConfig, curve: &BondingCurve) -> Opti
 mod tests {
     use super::*;
 
+    /// A mint's base layout, exactly 82 bytes: the mint authority option at
+    /// 0 (address at 4) and the freeze authority option at 46 (address at 50).
+    fn mint_bytes(mint: Option<u8>, freeze: Option<u8>) -> Vec<u8> {
+        let mut data = vec![0u8; 82];
+        if let Some(fill) = mint {
+            data[0] = 1;
+            data[4..36].fill(fill);
+        }
+        if let Some(fill) = freeze {
+            data[46] = 1;
+            data[50..82].fill(fill);
+        }
+        data
+    }
+
+    #[test]
+    fn a_mint_of_exactly_the_base_size_yields_both_authorities() {
+        let (mint, freeze) = mint_authorities(&mint_bytes(Some(7), Some(9))).expect("82 bytes");
+        assert_eq!(mint, Some(Address::new([7u8; 32])));
+        assert_eq!(freeze, Some(Address::new([9u8; 32])));
+        let (mint, freeze) = mint_authorities(&mint_bytes(None, None)).expect("82 bytes");
+        assert_eq!((mint, freeze), (None, None));
+    }
+
+    #[test]
+    fn a_short_mint_or_a_bad_option_tag_is_malformed() {
+        let short = &mint_bytes(Some(7), Some(9))[..81];
+        assert!(matches!(
+            mint_authorities(short),
+            Err(RpcError::Malformed(_))
+        ));
+        let mut bad = mint_bytes(None, None);
+        bad[46] = 2;
+        assert!(matches!(
+            mint_authorities(&bad),
+            Err(RpcError::Malformed(_))
+        ));
+    }
+
     #[test]
     fn a_dossier_names_what_it_could_not_read() {
         let mut dossier = Dossier {
