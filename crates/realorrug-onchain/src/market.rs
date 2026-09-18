@@ -269,6 +269,7 @@ mod tests {
             funding: None,
             market: None,
             token_ownership: None,
+            creator_cash_flow: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
