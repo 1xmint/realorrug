@@ -1421,6 +1421,75 @@ mod tests {
         assert_eq!(funding.checked.len(), MAX_CANDIDATES);
     }
 
+    /// A bare transaction for the pure readers below, with only the fields
+    /// they look at filled in.
+    fn bare_tx(accounts: &[&str], pre: &[u64], post: &[u64]) -> crate::rpc::Transaction {
+        crate::rpc::Transaction {
+            slot: realorrug_types::Slot(1),
+            accounts: accounts.iter().map(|a| (*a).to_owned()).collect(),
+            instructions: Vec::new(),
+            pre_token_balances: Vec::new(),
+            post_token_balances: Vec::new(),
+            pre_balances: pre.to_vec(),
+            post_balances: post.to_vec(),
+            failed: false,
+        }
+    }
+
+    #[test]
+    fn a_transaction_missing_post_balances_names_no_funder() {
+        // Accounts and pre-balances agree but post-balances are short: an
+        // index into them cannot be trusted, so there is no funder, not a
+        // guess (and not a panic).
+        let tx = bare_tx(&["candidate", "funder"], &[0, 1_000], &[500]);
+        assert_eq!(funder_of(&tx, "candidate"), None);
+    }
+
+    #[test]
+    fn a_holder_whose_balance_fell_is_not_a_buyer() {
+        // The account held 100 before and 50 after: a sale. Reading its
+        // before-balance is what keeps it from looking like a buy of 50.
+        let mut tx = bare_tx(&[], &[], &[]);
+        let balance = |amount| crate::rpc::TokenBalance {
+            account_index: 0,
+            mint: "mint".to_owned(),
+            amount,
+            owner: Some("seller".to_owned()),
+        };
+        tx.pre_token_balances.push(balance(100));
+        tx.post_token_balances.push(balance(50));
+        assert!(buyers_in(&tx, "mint", None).is_empty());
+    }
+
+    #[test]
+    fn the_launch_window_stops_after_its_transactions_are_read() {
+        // One more successful transaction than the window holds, each with
+        // its own buyer: the last one is past the window and never read.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let total = SOLANA_WINDOW_TRANSACTIONS + 1;
+        let entries: Vec<String> = (0..total)
+            .map(|i| format!(r#"{{"signature":"w{i}","slot":1}}"#))
+            .collect();
+        let mut responses = vec![format!(
+            r#"{{"result":[{}],"error":null}}"#,
+            entries.join(",")
+        )];
+        let owners: Vec<String> = (0..total).map(|i| format!("buyer{i}")).collect();
+        for owner in &owners {
+            responses.push(buy_tx(&mint_key, &[(owner.as_str(), 500)]));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(200, 200, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+
+        assert_eq!(
+            funding.buyers,
+            u32::try_from(SOLANA_WINDOW_TRANSACTIONS).unwrap()
+        );
+    }
+
     #[test]
     fn two_buyers_funded_by_one_address_are_a_shared_funder() {
         let mint = solana_addr(9);
