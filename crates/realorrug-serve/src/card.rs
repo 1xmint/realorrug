@@ -240,6 +240,24 @@ pub(crate) const MAX_SYMBOL_CHARS: usize = 12;
 /// width before truncation is needed.
 pub(crate) const MAX_FLAG_CHARS: usize = 60;
 
+/// The flag lines' vertical layout, named because it has to fit between two
+/// lines that were already there: the name line's baseline at 320 above, and
+/// the chain label's at [`CHAIN_LABEL_Y`] below. Three lines at 56px apart
+/// starting at 400 put the last baseline at 512, which is *below* the chain
+/// label's cap height -- two strings drawn over each other at x=100 on the
+/// one image that gets shared. The test below pins the arithmetic rather
+/// than the picture, because nothing renders an SVG in CI and a human
+/// reading these four numbers will not do this subtraction.
+const FLAG_FIRST_Y: usize = 360;
+const FLAG_STEP_Y: usize = 46;
+const FLAG_FONT: usize = 34;
+const MAX_FLAG_LINES: usize = 3;
+/// Baseline of the chain label, the first thing under the flag lines.
+const CHAIN_LABEL_Y: usize = HEIGHT as usize - 140;
+/// Its font size, used with [`CHAIN_LABEL_Y`] to find where its tallest
+/// glyph starts. Cap height is about 0.72 em in the fonts this draws with.
+const CHAIN_LABEL_FONT: usize = 30;
+
 pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_owned();
@@ -334,20 +352,19 @@ fn build_svg(
     let lines: Vec<String> = if flags.is_empty() {
         vec![no_signal_line(word).to_owned()]
     } else {
-        flags.iter().take(3).cloned().collect()
+        flags.iter().take(MAX_FLAG_LINES).cloned().collect()
     };
     for (i, line) in lines.iter().enumerate() {
         let text = escape_xml(&truncate(line, MAX_FLAG_CHARS));
-        let y = 400 + i * 56;
+        let y = FLAG_FIRST_Y + i * FLAG_STEP_Y;
         let _ = write!(
             body,
-            r#"<text x="100" y="{y}" font-family="{FONT_SANS}" font-size="34" fill="{COLOR_PAPER_INK}">{text}</text>"#,
+            r#"<text x="100" y="{y}" font-family="{FONT_SANS}" font-size="{FLAG_FONT}" fill="{COLOR_PAPER_INK}">{text}</text>"#,
         );
     }
     let _ = write!(
         body,
-        r#"<text x="100" y="{y}" font-family="{FONT_MONO}" font-size="30" fill="{COLOR_PAPER_INK}">{chain_label}</text>"#,
-        y = HEIGHT - 140,
+        r#"<text x="100" y="{CHAIN_LABEL_Y}" font-family="{FONT_MONO}" font-size="{CHAIN_LABEL_FONT}" fill="{COLOR_PAPER_INK}">{chain_label}</text>"#,
     );
     let _ = write!(
         body,
@@ -539,6 +556,38 @@ mod tests {
         assert!(
             svg.contains("not enough of it could be read"),
             "the no-signal fallback line for this word must be drawn: {svg}"
+        );
+    }
+
+    #[test]
+    fn a_full_three_flag_card_leaves_the_chain_label_its_own_space() {
+        // The first version of this feature drew flags at 400, 456 and 512
+        // while the chain label sat at 490, so a three-flag card -- the loud
+        // one, the one worth sharing -- printed two strings over each other
+        // at x=100. Nothing in CI renders an SVG, so this is the only place
+        // that catches it. Re-apply the bug by setting FLAG_FIRST_Y to 400
+        // and FLAG_STEP_Y to 56.
+        //
+        // A baseline is where the letters sit; descenders (the tail of a
+        // "g") hang about 0.22 em below it, and capitals rise about 0.72 em
+        // above. So the lowest ink of the last flag line must stay above the
+        // highest ink of the chain label.
+        let last_flag_baseline = FLAG_FIRST_Y + (MAX_FLAG_LINES - 1) * FLAG_STEP_Y;
+        let flag_ink_bottom = last_flag_baseline + FLAG_FONT * 22 / 100;
+        let label_ink_top = CHAIN_LABEL_Y - CHAIN_LABEL_FONT * 72 / 100;
+        assert!(
+            flag_ink_bottom < label_ink_top,
+            "flag line {MAX_FLAG_LINES} ends at y={flag_ink_bottom} but the chain \
+             label starts at y={label_ink_top}: they would overlap on the card"
+        );
+
+        // And the first flag line must clear the name line's own descenders.
+        let name_ink_bottom = 320 + 48 * 22 / 100;
+        let first_flag_ink_top = FLAG_FIRST_Y - FLAG_FONT * 72 / 100;
+        assert!(
+            first_flag_ink_top > name_ink_bottom,
+            "the first flag line starts at y={first_flag_ink_top}, into the name \
+             line's descenders at y={name_ink_bottom}"
         );
     }
 
