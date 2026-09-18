@@ -82,7 +82,8 @@ the failure. Say whether you are recommending or recording.
   matching and the model's request all draw from the same ranking, so
   renaming a fact's `label` cannot change what a reply leads with. An
   unresolved role (a large balance with no identified holder) gets
-  unresolved-role wording, never a role the sheet did not establish (golden-r3-astra §1).
+  unresolved-role wording, never a role the sheet did not establish
+  ([design 0027](docs/design/0027-the-three-layers.md)).
 
 ## 5. The machine and the repository
 
