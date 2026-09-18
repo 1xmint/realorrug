@@ -18,6 +18,7 @@
     "CORRECTED 2026-09-03, same day: the first emission counted failed launch transactions as launches -- 8.4% of them -- because the query did not filter on transaction status. Every conclusion held; the figures moved by a few tenths of a point. The correction was found by `radar dossier` disagreeing with the query about one mint."
   ],
   "schema": 1,
+  "chain": "solana",
   "measured_on": "2026-09-03",
   "supersedes": "0008",
   "store": {

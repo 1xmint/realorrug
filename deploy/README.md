@@ -74,8 +74,13 @@ settings from `/etc/realorrug`. Radar reads nothing of realorrug's either.
 
 Three files are read at paths relative to that working directory:
 
-- `docs/research/data/0024-base-rates.json`, a dated snapshot. A copy is
-  committed here too.
+- `docs/research/data/0024-base-rates.json`, a dated snapshot, with its `chain`
+  field saying which chain it was measured on (Radar's Solana/pump.fun
+  measurement, today). A consumer refuses a wrong-chain snapshot the same way
+  it refuses a wrong-chain creator index. It is kept and quoted, dated "as of"
+  its `measured_on`, until `STALE_AFTER_DAYS` (sixty, `realorrug-roast`'s
+  `baserates.rs`) -- a backstop against a rebuild job nobody noticed had
+  stopped, not a routine fourteen-day expiry. A copy is committed here too.
 - `docs/research/data/population.json`, the population summary behind
   `/v1/public/stats`. Written by the `creator-index` job, beside the index and
   from the same walk, so the two can never disagree. It held the last one Radar

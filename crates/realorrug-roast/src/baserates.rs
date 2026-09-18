@@ -26,15 +26,25 @@
 
 use serde::Deserialize;
 
+use crate::firstparty::Chain;
+
 /// Where the snapshot lives, relative to the repository root.
 pub const DEFAULT_PATH: &str = "docs/research/data/0024-base-rates.json";
 
-/// How old a snapshot may be before it should not be quoted.
+/// How old a snapshot may be before it is dropped rather than quoted.
 ///
-/// Fourteen days. `0008`'s figures were wrong by 2.7× after nine, so this is
-/// already generous — it is a backstop against quoting something ancient, not a
-/// substitute for the scheduled re-run `0024` asks for.
-pub const STALE_AFTER_DAYS: i64 = 14;
+/// Sixty days. This used to be fourteen -- `0008`'s figures were wrong by
+/// 2.7× after nine days, so a two-week backstop looked generous -- but a
+/// snapshot's own date already carries the caveat: every fact line built from
+/// it says "as of `measured_on`" (`sheet.rs`'s `push_band` and
+/// `push_base_rates`), so a reader is never told a stale number is fresh.
+/// What a hard fourteen-day drop bought instead was silence: population
+/// context vanished from every reply for however long a rebuild job was
+/// broken, with nothing louder than a startup log line to say why. Sixty days
+/// is long enough that only a genuinely broken rebuild trips it, which is what
+/// this constant is for -- not a substitute for the scheduled re-run `0024`
+/// asks for, a backstop against a job nobody noticed had stopped running.
+pub const STALE_AFTER_DAYS: i64 = 60;
 
 /// Why the snapshot could not be used.
 #[derive(Debug, thiserror::Error)]
@@ -88,6 +98,23 @@ pub struct CostBand {
     pub round_trip: f64,
 }
 
+/// The measured round-trip cost, when the snapshot's chain has one.
+///
+/// `Option` on [`BaseRates::round_trip`], not a zero-filled struct, because
+/// Robinhood Chain has no round-trip measurement yet (research 0024 measured
+/// Solana/pump.fun fills). AGENTS.md rule 8: absent is not zero, and a
+/// Robinhood snapshot that filled this with zeros would print "0 bps round
+/// trip" as a fact rather than saying nothing.
+#[derive(Clone, Debug)]
+pub struct RoundTrip {
+    /// The measured all-in round trip the kernel assumes.
+    pub kernel: f64,
+    /// The bar a strategy must clear.
+    pub bar: f64,
+    /// Round trip by notional.
+    pub cost_bands: Vec<CostBand>,
+}
+
 /// What happens after graduation, from research 0011.
 ///
 /// Carried in the snapshot with its own date rather than remembered in code,
@@ -103,9 +130,32 @@ pub struct Aftermath {
     pub organic_median_bps: f64,
 }
 
+/// The chain a snapshot written before [`BaseRates::chain`] existed describes.
+///
+/// Every snapshot in the repository before 2026-09-17 is `0024`, a
+/// Solana/pump.fun measurement -- so a file with no `chain` field is a Solana
+/// one, not an unknown one. The alternative default (refuse to parse) would
+/// break every existing consumer's fixture over a field none of them wrote
+/// wrong; the alternative default `Robinhood` would misattribute the one
+/// snapshot in the tree that predates the field.
+const fn chain_before_the_field_existed() -> Chain {
+    Chain::Solana
+}
+
 /// The published snapshot.
 #[derive(Clone, Debug)]
 pub struct BaseRates {
+    /// Which chain this snapshot was measured on.
+    ///
+    /// Radar's Solana/pump.fun measurement and a Robinhood Chain one are two
+    /// different populations that happen to share a schema. A consumer that
+    /// read either snapshot without checking this field would eventually
+    /// print the wrong chain's numbers as fact -- exactly what happened when
+    /// `push_population` and `Signal::LaunchBlockInStrongestBand` ran for any
+    /// chain whenever a snapshot was loaded at all. `sheet.rs`'s `build` reads
+    /// this the same way it already reads `CreatorIndex::chain`: filtered
+    /// against the token's own chain before anything downstream sees it.
+    pub chain: Chain,
     /// When it was measured, as `YYYY-MM-DD`.
     pub measured_on: String,
     /// Research 0011's aftermath figure, when the snapshot carries it.
@@ -118,19 +168,22 @@ pub struct BaseRates {
     pub base_rate_instant: f64,
     /// The recipient bands.
     pub bands: Vec<Band>,
-    /// The measured all-in round trip the kernel assumes.
-    pub round_trip_kernel: f64,
-    /// The bar a strategy must clear.
-    pub round_trip_bar: f64,
-    /// Round trip by notional.
-    pub cost_bands: Vec<CostBand>,
+    /// The measured round-trip cost, absent when this chain has none measured
+    /// yet (Robinhood Chain, as of this snapshot's writing).
+    pub round_trip: Option<RoundTrip>,
 }
 
 #[derive(Deserialize)]
 struct Raw {
+    #[serde(default = "chain_before_the_field_existed")]
+    chain: Chain,
     measured_on: String,
     launch_block: RawLaunchBlock,
-    round_trip_bps: RawCost,
+    /// Optional: a chain with no round-trip measurement yet (Robinhood Chain)
+    /// omits this block entirely rather than filling it with zeros. Absent is
+    /// not zero (AGENTS.md rule 8).
+    #[serde(default)]
+    round_trip_bps: Option<RawCost>,
     /// Optional, because a snapshot written before 2026-09-05 has none, and
     /// that snapshot is still valid for everything else.
     #[serde(default)]
@@ -245,6 +298,7 @@ impl BaseRates {
             .collect();
 
         Ok(Self {
+            chain: raw.chain,
             measured_on: raw.measured_on,
             aftermath: raw.aftermath.map(|a| Aftermath {
                 measured_on: a.measured_on,
@@ -254,17 +308,18 @@ impl BaseRates {
             base_rate_graduates: lb.base_rate_graduates,
             base_rate_instant: lb.base_rate_instant,
             bands,
-            round_trip_kernel: raw.round_trip_bps.kernel_assumed,
-            round_trip_bar: raw.round_trip_bps.bar,
-            cost_bands: raw
-                .round_trip_bps
-                .by_notional
-                .iter()
-                .map(|c| CostBand {
-                    band: c.band.clone(),
-                    round_trip: c.round_trip,
-                })
-                .collect(),
+            round_trip: raw.round_trip_bps.map(|rt| RoundTrip {
+                kernel: rt.kernel_assumed,
+                bar: rt.bar,
+                cost_bands: rt
+                    .by_notional
+                    .iter()
+                    .map(|c| CostBand {
+                        band: c.band.clone(),
+                        round_trip: c.round_trip,
+                    })
+                    .collect(),
+            }),
         })
     }
 
@@ -392,8 +447,13 @@ mod tests {
         // The three reconciled round-trip numbers, as docs/STATE.md carries
         // them. If the snapshot and that table ever disagree, the analyst and
         // the research notes publish different costs for the same trade.
-        assert!((rates.round_trip_kernel - 850.0).abs() < 1e-9);
-        assert!((rates.round_trip_bar - 456.0).abs() < 1e-9);
+        let round_trip = rates
+            .round_trip
+            .as_ref()
+            .expect("Solana snapshot measures round trip");
+        assert!((round_trip.kernel - 850.0).abs() < 1e-9);
+        assert!((round_trip.bar - 456.0).abs() < 1e-9);
+        assert_eq!(rates.chain, Chain::Solana);
         assert!(!rates.bands.is_empty());
     }
 
@@ -470,6 +530,7 @@ mod tests {
             x_base_instant: 0.0,
         };
         BaseRates {
+            chain: Chain::Solana,
             measured_on: "2026-09-03".to_owned(),
             aftermath: None,
             launches: 1,
@@ -479,9 +540,7 @@ mod tests {
                 band("wide", lo_wide, hi_wide),
                 band("narrow", lo_narrow, hi_narrow),
             ],
-            round_trip_kernel: 0.0,
-            round_trip_bar: 0.0,
-            cost_bands: Vec::new(),
+            round_trip: None,
         }
     }
 
@@ -533,15 +592,32 @@ mod tests {
     fn the_staleness_boundary_is_where_the_constant_says_it_is() {
         // `> STALE_AFTER_DAYS` rather than `>=`, and the day either side of it.
         // Without both, the comparison can move by one and nothing notices --
-        // which is a fortnight rule that is quietly a fortnight and a day.
+        // which is a sixty-day rule that is quietly sixty-one.
         let mut rates = BaseRates::parse(SNAPSHOT).expect("the published snapshot");
-        rates.measured_on = "2026-09-01".to_owned();
-        assert_eq!(STALE_AFTER_DAYS, 14, "the dates below are chosen for this");
+        rates.measured_on = "2026-07-01".to_owned();
+        assert_eq!(STALE_AFTER_DAYS, 60, "the dates below are chosen for this");
 
-        // Exactly fourteen days on: still fresh.
-        assert!(!rates.is_stale_at("2026-09-15"));
-        // Fifteen: stale.
-        assert!(rates.is_stale_at("2026-09-16"));
+        // Exactly sixty days on: still usable.
+        assert!(!rates.is_stale_at("2026-08-30"));
+        // Sixty-one: past the backstop.
+        assert!(rates.is_stale_at("2026-08-31"));
+    }
+
+    #[test]
+    fn a_snapshot_older_than_fourteen_days_is_still_usable_with_its_own_date() {
+        // The old behaviour (`STALE_AFTER_DAYS == 14`) dropped a snapshot this
+        // old outright. The new rule keeps using it -- a caller states its
+        // own measurement date rather than a live figure, so an older-but-
+        // still-under-backstop snapshot is not stale, and its date still
+        // reaches the reply (`sheet.rs`'s "as of" lines read `measured_on`
+        // straight off this struct, not off `is_stale_at`).
+        let mut rates = BaseRates::parse(SNAPSHOT).expect("the published snapshot");
+        rates.measured_on = "2026-08-01".to_owned();
+        assert!(
+            !rates.is_stale_at("2026-08-20"),
+            "nineteen days old must not be stale under the sixty-day backstop"
+        );
+        assert_eq!(rates.measured_on, "2026-08-01");
     }
 
     #[test]
@@ -589,5 +665,48 @@ mod tests {
     fn a_malformed_snapshot_is_refused_rather_than_defaulted() {
         assert!(BaseRates::parse("{}").is_err());
         assert!(BaseRates::parse("not json").is_err());
+    }
+
+    #[test]
+    fn a_snapshot_with_no_chain_field_is_read_as_the_solana_measurement_it_is() {
+        // The published snapshot now states its chain explicitly ("solana"),
+        // but every snapshot written before 2026-09-17 predates the field, and
+        // this repository's own history is one of them. A missing field must
+        // default to `Solana` -- the chain every pre-existing snapshot is --
+        // not fail to parse and not default to `Robinhood`, which would
+        // misattribute the one kind of file that predates this default.
+        let mut value: serde_json::Value = serde_json::from_str(SNAPSHOT).expect("json");
+        assert_eq!(
+            value["chain"], "solana",
+            "the published snapshot should say its own chain"
+        );
+        value.as_object_mut().expect("object").remove("chain");
+        let rates = BaseRates::parse(&value.to_string()).expect("still a snapshot");
+        assert_eq!(rates.chain, Chain::Solana);
+
+        // And an explicit field is read, not ignored.
+        value
+            .as_object_mut()
+            .expect("object")
+            .insert("chain".to_owned(), serde_json::json!("robinhood"));
+        let rates = BaseRates::parse(&value.to_string()).expect("still a snapshot");
+        assert_eq!(rates.chain, Chain::Robinhood);
+    }
+
+    #[test]
+    fn a_snapshot_with_no_round_trip_block_carries_no_cost_figures() {
+        // Robinhood Chain has no round-trip measurement yet. A snapshot for it
+        // omits `round_trip_bps` entirely rather than filling it with zeros --
+        // absent is not zero (AGENTS.md rule 8), and `sheet.rs`'s `push_cost`
+        // is only reachable when this is `Some`.
+        let mut value: serde_json::Value = serde_json::from_str(SNAPSHOT).expect("json");
+        value
+            .as_object_mut()
+            .expect("object")
+            .remove("round_trip_bps");
+        let rates = BaseRates::parse(&value.to_string()).expect("still a snapshot");
+        assert!(rates.round_trip.is_none());
+        // Everything else the snapshot carries is unaffected.
+        assert!(!rates.bands.is_empty());
     }
 }
