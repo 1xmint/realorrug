@@ -52,21 +52,24 @@ publishes its misses, is not.
    hints, verdict: same rules, same code path, no special handling.
 6. **Disclosures live in the X bio and on the website, never in replies.**
    The bio always ends "Not financial advice." (`bio.rs` `DISCLAIMER`). The
-   site states the dev buy and the bot's holding, with addresses.
+   site states the dev buy, with its size, wallet and transaction.
 
 ## What this costs, stated plainly
 
-- **The touting objection is now fully open.** ADR 0029 limited it with
-  "the bot never states the price". That limit is gone: the bot states the
-  price of, and may hint at upside for, a token its own wallet holds. What
-  remains is that the holding is public, nothing trades automatically, and a
-  hint needs a measured rate behind it.
+- **The touting objection, if the bot ever holds.** Today the bot's wallet
+  holds none of the token: the prize pool is the vault contract, and nothing
+  trades (Josh, 2026-09-17). ADR 0029 still permits a small disclosed holding.
+  If that happens, the bot will be stating the price of, and hinting about, a
+  token it holds. ADR 0029 limited that with "the bot never states the
+  price", and that limit is gone. What would remain: the holding is public,
+  nothing trades automatically, and a hint needs a measured rate.
 - **A hint is only as good as its rate.** Until the outcome rate is measured
   (a later pass over the creator index, which will read each launch's peak
   multiple within 24 hours), no hint can pass the check. The code for the
   check lands first and is inert until then.
 - **ADR 0013's legal precondition is unchanged and more pressing.** An
   automated account that comments on the price of a token its operator holds
+  (the dev buy)
   is exactly the case that note asked to have read before the first post.
 
 ## Order of work
