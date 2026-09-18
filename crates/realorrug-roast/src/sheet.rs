@@ -585,6 +585,16 @@ impl FactSheet {
             push_market(&mut facts, market);
         }
 
+        // Design 0027 row 6/7 slice 6a's "not done" note, closed here:
+        // `dossier.token_ownership` is `None` both when no read was
+        // configured (every chain but Solana today) and when one was
+        // attempted and failed (named "token ownership" on
+        // `dossier.unavailable`, skipped from `unknown` below the same way
+        // `market` is) -- nothing further to do here in either case.
+        if let Some(ownership) = &dossier.token_ownership {
+            push_token_ownership(&mut facts, ownership);
+        }
+
         if let Some(count) = dossier.creator_transactions {
             let rendered = format!("{count}");
             facts.push(
@@ -660,9 +670,15 @@ impl FactSheet {
             // curve does. The raw reason still lands on `Dossier::unavailable`
             // named `"market"` -- see `dispatch::robinhood` -- for the
             // operator; only the public verdict severity is unaffected.
+            // `token ownership` (design 0027 row 6/7 slice 6a) joins the same
+            // list: Solana's dossier never sets `holders` today (see the
+            // comment above `push_holders`), so no verdict currently depends
+            // on a holder-concentration read for that chain, and a failed
+            // sample of the largest accounts must not be the read that
+            // starts requiring one.
             if matches!(
                 miss.fact,
-                "capacity" | "fees" | "creator transactions" | "market"
+                "capacity" | "fees" | "creator transactions" | "market" | "token ownership"
             ) {
                 continue;
             }
@@ -2005,17 +2021,65 @@ fn push_market(facts: &mut Vec<Fact>, snapshot: &MarketSnapshot) {
     }
 }
 
-/// Formats a market snapshot's wall-clock read point as Unix seconds --
-/// `MarketSnapshot::observed_at`'s own clock, not a chain's block or slot, so
-/// this is the one place that turns it into words rather than reusing
-/// `ReadAt`'s `Display` (which only knows how to say a slot or a block).
+/// Formats a market snapshot's wall-clock read point as a UTC calendar
+/// moment -- `MarketSnapshot::observed_at`'s own clock, not a chain's block
+/// or slot, so this is the one place that turns it into words rather than
+/// reusing `ReadAt`'s `Display` (which only knows how to say a slot or a
+/// block).
+///
+/// Renders `"2025-09-16 05:20 UTC"`. `FactSheet::authorised` scans every
+/// fact's label with `fidelity::literals` and authorises what it finds under
+/// the fact's `Subject` (`Subject::Token` here, shared with `Kind::Age`). A
+/// scanner that split the moment into 2025, 09, 16, 05 and 20 would let the
+/// day-of-month back "it launched 16 hours ago"; `fidelity::literals`
+/// instead reads this exact shape as the single value `20250916.0520`, so
+/// only the same moment written again can match it.
 fn render_observed_at(observed_at: std::time::SystemTime) -> String {
     observed_at
         .duration_since(std::time::UNIX_EPOCH)
         .map_or_else(
             |_| "an unread point".to_owned(),
-            |d| format!("unix time {}", d.as_secs()),
+            |d| {
+                let secs = d.as_secs();
+                let days = secs / 86_400;
+                let time_of_day = secs % 86_400;
+                let (year, month, day) = civil_from_days(days);
+                let hour = time_of_day / 3_600;
+                let minute = (time_of_day % 3_600) / 60;
+                format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
+            },
         )
+}
+
+/// Days since the Unix epoch (1970-01-01) to a proleptic Gregorian calendar
+/// date. Howard Hinnant's `civil_from_days`
+/// (<http://howardhinnant.github.io/date_algorithms.html>, public domain),
+/// ported to Rust -- correct for any `i64` day count, including every leap
+/// day the Gregorian rule recognises, without pulling in a date-and-time
+/// crate for one read-only conversion.
+fn civil_from_days(days_since_epoch: u64) -> (u64, u32, u32) {
+    // Unsigned on purpose: `render_observed_at` only ever has a moment after
+    // the epoch, so the algorithm's branch for eras before year 0 would be
+    // code no input can reach.
+    let z = days_since_epoch + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "doy - (153*mp+2)/5 + 1 is always in [1, 31] by the algorithm's own invariant"
+    )]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "mp is always in [0, 11] by the algorithm's own invariant, so month is in [1, 12]"
+    )]
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let year = if month <= 2 { y + 1 } else { y };
+    (year, month, day)
 }
 
 /// Renders a USD figure with two decimal places from a dollar up, and in full
@@ -2027,6 +2091,57 @@ fn render_usd(value: f64) -> String {
     } else {
         format!("{value:.2}")
     }
+}
+
+/// The largest owner among the sampled top token accounts (design 0027 row
+/// 6/7 slice 6a: `realorrug_onchain::TokenOwnership`, Solana only).
+///
+/// **Excludes any owner proven to be the token's own bonding curve**, the
+/// one exclusion `dossier.rs`'s `token_ownership` reader can make without
+/// guessing (recomputing the pump.fun bonding curve's program-derived
+/// address and matching it). Every other owner stays
+/// `OwnerRole::Unresolved` regardless of its balance's size or shape, so
+/// this always writes the unresolved-role sentence -- "one unidentified
+/// wallet" -- and never a role the sheet did not establish (AGENTS.md §4's
+/// last bullet). If every sampled account belongs to the curve, or the
+/// sample is empty, there is no non-curve owner to report and this writes
+/// nothing rather than a fact about zero owners.
+fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::TokenOwnership) {
+    let Some(largest) = ownership
+        .owners
+        .iter()
+        .find(|o| o.role != realorrug_onchain::OwnerRole::BondingCurve)
+    else {
+        return;
+    };
+    // `share_bps` is `None` only when `getTokenSupply` reported zero (rule 9:
+    // never a share against nothing), which makes this owner's stake
+    // unmeasurable rather than zero -- so the fact is skipped entirely
+    // rather than printed as "0%".
+    let Some(bps) = largest.share_bps else {
+        return;
+    };
+    let share = Fact::share(
+        Kind::TokenOwnership,
+        "share of the total token supply held by the largest owner among the sampled \
+         largest accounts, excluding any address proven to be the bonding curve",
+        f64::from(bps) / 10_000.0,
+    );
+    let pct = share.rendered.clone();
+    facts.push(
+        share
+            .saying(
+                Voice::Plain,
+                format!(
+                    "Among the largest sampled token accounts, one unidentified wallet holds \
+                     {pct} of the total supply."
+                ),
+            )
+            .saying(
+                Voice::Blunt,
+                format!("One unidentified wallet: {pct} of supply."),
+            ),
+    );
 }
 
 /// The venue's own fee, which is not the cost of trading and says so.
@@ -3066,9 +3181,9 @@ mod tests {
     fn a_market_snapshot_produces_a_fact_carrying_its_read_time() {
         // ADR 0033: a price carries the moment it was read. `observed_at` is
         // `MarketSnapshot`'s own wall clock, not `dossier.read_at` -- so the
-        // rendered sentence must carry the snapshot's own Unix seconds, and
+        // rendered sentence must carry the snapshot's own UTC moment, and
         // this pins that against a future edit that reaches for the wrong
-        // clock.
+        // clock. 1_758_000_000 is 2025-09-16 05:20:00 UTC.
         let mut dossier = dossier_for([3u8; 32]);
         dossier.market = Some(realorrug_onchain::market::MarketSnapshot {
             price_usd: Some(0.0421),
@@ -3082,7 +3197,7 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         let rendered = sheet.render();
         assert!(
-            rendered.contains("unix time 1758000000"),
+            rendered.contains("2025-09-16 05:20 UTC"),
             "the rendered sheet must carry the snapshot's own read time: {rendered}"
         );
         assert!(rendered.contains("$0.0421"), "{rendered}");
@@ -3169,7 +3284,7 @@ mod tests {
         // not another fact's words, and not the blunt voice.
         assert_eq!(
             ranked[market_rank].sentence,
-            "An aggregator priced it at $1.00 as of unix time 1758000000."
+            "An aggregator priced it at $1.00 as of 2025-09-16 05:20 UTC."
         );
     }
 
@@ -3180,6 +3295,208 @@ mod tests {
         assert_eq!(render_usd(1.0), "1.00");
         assert_eq!(render_usd(0.0), "0.00");
         assert_eq!(render_usd(420_000.0), "420000.00");
+    }
+
+    /// `civil_from_days` against dates independently computed with `date -u
+    /// -d <date> +%s`, divided by 86400: the epoch itself, a leap day both
+    /// on and off a century boundary (2024 and 2000 are leap; 2100 is not,
+    /// despite also dividing by 4, so its 28 February is followed by
+    /// 1 March), the first March after the epoch, and a date well past the
+    /// range any real market snapshot will ever carry.
+    #[test]
+    fn civil_from_days_matches_known_calendar_dates_including_leap_days() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(civil_from_days(20_347), (2025, 9, 16));
+        assert_eq!(civil_from_days(59), (1970, 3, 1));
+        assert_eq!(civil_from_days(47_541), (2100, 3, 1));
+    }
+
+    #[test]
+    fn render_observed_at_reads_as_a_date_that_scans_as_one_number() {
+        // 1_758_000_000 is 2025-09-16 05:20:00 UTC. The exact string is
+        // pinned because `fidelity::literals` reads only this shape as one
+        // number; see `render_observed_at` for why five would be a hole.
+        let observed_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_758_000_000);
+        let rendered = render_observed_at(observed_at);
+        assert_eq!(rendered, "2025-09-16 05:20 UTC");
+        let literals = crate::fidelity::literals(&rendered);
+        assert_eq!(
+            literals.len(),
+            1,
+            "the moment must scan as one literal, not several small ones: {literals:?}"
+        );
+    }
+
+    /// Builds a `TokenOwner` for the token-ownership tests below.
+    fn token_owner(
+        owner: [u8; 32],
+        amount: u128,
+        share_bps: Option<u16>,
+        role: realorrug_onchain::OwnerRole,
+    ) -> realorrug_onchain::TokenOwner {
+        realorrug_onchain::TokenOwner {
+            owner: realorrug_types::Address::new(owner),
+            accounts: 1,
+            amount,
+            share_bps,
+            role,
+        }
+    }
+
+    #[test]
+    fn an_unresolved_owner_gets_unidentified_wording_never_a_role() {
+        // The only proof this reader can make is "this address is the
+        // bonding curve"; every other owner, however large, must render as
+        // "unidentified" -- never a role the sheet did not establish
+        // (AGENTS.md §4's last bullet).
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![token_owner(
+                [40u8; 32],
+                6_000,
+                Some(6_000),
+                realorrug_onchain::OwnerRole::Unresolved,
+            )],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::TokenOwnership).expect("a token-ownership fact");
+        assert_eq!(fact.rendered, "60.0%");
+        let plain = fact
+            .clauses
+            .iter()
+            .find(|c| c.voice == crate::clause::Voice::Plain)
+            .expect("a plain clause");
+        assert!(
+            plain.text.contains("one unidentified wallet holds 60.0%"),
+            "{}",
+            plain.text
+        );
+        let authorised: Vec<f64> = sheet.authorised().into_iter().map(|a| a.value).collect();
+        assert!(authorised.contains(&0.6));
+    }
+
+    #[test]
+    fn a_proven_curve_owner_is_skipped_for_the_next_largest_unresolved_one() {
+        // Requirement from design 0027 slice 6a: the bonding curve is the
+        // one owner this reader can exclude by proof. Excluding it must fall
+        // through to the next owner in the (already amount-sorted) list, not
+        // suppress the fact entirely.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![
+                token_owner(
+                    [41u8; 32],
+                    7_000,
+                    Some(7_000),
+                    realorrug_onchain::OwnerRole::BondingCurve,
+                ),
+                token_owner(
+                    [42u8; 32],
+                    2_000,
+                    Some(2_000),
+                    realorrug_onchain::OwnerRole::Unresolved,
+                ),
+            ],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::TokenOwnership).expect("a token-ownership fact");
+        assert_eq!(fact.rendered, "20.0%");
+    }
+
+    #[test]
+    fn every_sampled_owner_being_the_curve_writes_no_fact() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![token_owner(
+                [43u8; 32],
+                10_000,
+                Some(10_000),
+                realorrug_onchain::OwnerRole::BondingCurve,
+            )],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.facts.iter().any(|f| f.kind == Kind::TokenOwnership));
+    }
+
+    #[test]
+    fn no_token_ownership_read_means_no_fact_and_no_unknown_line() {
+        let dossier = dossier_for([3u8; 32]);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.facts.iter().any(|f| f.kind == Kind::TokenOwnership));
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("ownership")),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_failed_token_ownership_read_is_an_optional_gap_not_an_unknown_line() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "token ownership",
+            why: "rpc transport: http status: 429".to_owned(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("ownership")),
+            "a failed token-ownership read must not degrade verdict severity: {:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_token_ownership_candidate_never_outranks_concentration() {
+        // `concentration`'s `Holders` is Robinhood-only and `TokenOwnership`
+        // is Solana-only, so the two never fire on the same dossier today --
+        // but the priorities are still pinned so that if a future dossier
+        // ever carries both, `concentration` -- the fuller, non-sampled
+        // count -- wins the tie rather than whichever was considered first.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.holders = Some(realorrug_onchain::Holders {
+            count: 529,
+            largest_share_bps: Some(5020),
+        });
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![token_owner(
+                [44u8; 32],
+                6_000,
+                Some(6_000),
+                realorrug_onchain::OwnerRole::Unresolved,
+            )],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let ranked = crate::salience::rank(&sheet);
+        let ownership_rank = ranked
+            .iter()
+            .position(|c| c.id == crate::salience::CandidateId(vec![Kind::TokenOwnership]))
+            .expect("token-ownership candidate present");
+        let concentration_rank = ranked
+            .iter()
+            .position(|c| c.id.0.contains(&Kind::Holders))
+            .expect("concentration candidate present");
+        assert!(
+            ownership_rank > concentration_rank,
+            "token ownership must rank below concentration: {ranked:?}"
+        );
     }
 
     #[test]
