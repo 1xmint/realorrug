@@ -297,7 +297,10 @@ facts: `FundingChecked` ("4 of 4", with the coverage) and `SharedFunder`
 denominator is always the checked count, "checked" is in the words, and
 the sentence names the innocent reading (an exchange paying out
 withdrawals). It never says "one person", "insiders", "the same owner" or
-"common control", and its tests fail if it does. Slices 5 and 6 build on
+"common control", and its tests fail if it does. salience.rs ranks the
+two as one bundle: when one address funded more than half of the checked
+buyers it leads over concentration (below only a creator record); fewer,
+or no checked count, ranks it below concentration. Slices 5 and 6 build on
 `wallets::investigate`, `Funding`, `Candidate`, `Funder` and
 `Memory::funding_edges`.
 

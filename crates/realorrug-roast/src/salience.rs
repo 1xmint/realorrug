@@ -170,6 +170,43 @@ fn launch_recipients(sheet: &FactSheet) -> Option<Candidate> {
     })
 }
 
+/// The shared-funder bundle: one address sent value to several of the early
+/// buyers that were checked, before their first purchase (design 0027 slice 3).
+///
+/// When that address funded a majority of the checked buyers it ranks just
+/// below a creator record and above concentration: a coordinated-looking
+/// launch is what a reader most wants to know and cannot see on a chart. A
+/// minority stays below concentration, because two of nine is a pattern an
+/// exchange's withdrawals produce every day. Without the checked count there
+/// is no majority to establish, so it ranks as a minority -- absent is not
+/// "all of them" (rule 8). The sentence says flow, never who is behind it: an
+/// exchange hot wallet produces exactly this shape.
+fn shared_funder(sheet: &FactSheet) -> Option<Candidate> {
+    let shared = fact(sheet, Kind::SharedFunder)?;
+    let checked = fact(sheet, Kind::FundingChecked);
+    let majority = match (
+        shared.values.first(),
+        checked.and_then(|c| c.values.first()),
+    ) {
+        (Some(funded), Some(checked)) => funded * 2.0 > *checked,
+        _ => false,
+    };
+    let mut id = vec![Kind::SharedFunder];
+    if checked.is_some() {
+        id.push(Kind::FundingChecked);
+    }
+    Some(Candidate {
+        id: CandidateId(id),
+        priority: if majority { 95 } else { 80 },
+        sentence: format!(
+            "One address sent value to {} of the early buyers checked, before their first \
+             buy -- a flow between addresses, which an exchange also produces, not proof \
+             of who is behind them.",
+            shared.rendered
+        ),
+    })
+}
+
 /// Every candidate this sheet supports, ranked highest priority first.
 ///
 /// **The one ranking every caller shares.** [`crate::verdict::headline`],
@@ -182,6 +219,7 @@ fn launch_recipients(sheet: &FactSheet) -> Option<Candidate> {
 pub fn rank(sheet: &FactSheet) -> Vec<Candidate> {
     let mut candidates: Vec<Candidate> = [
         creator_record(sheet),
+        shared_funder(sheet),
         concentration(sheet),
         launch_recipients(sheet),
     ]
@@ -327,6 +365,74 @@ mod tests {
             ranked[1].id,
             CandidateId(vec![Kind::Holders, Kind::LargestHolderShare])
         );
+    }
+
+    fn funding_sheet(funded: u32, checked: Option<u32>) -> FactSheet {
+        let mut facts = vec![
+            holders_fact("addresses holding the token now"),
+            share_fact("held by the single largest address"),
+            Fact::exact(
+                Kind::SharedFunder,
+                "checked early buyers one address funded",
+                f64::from(funded),
+                format!("{funded} of {}", checked.unwrap_or(0)),
+            ),
+        ];
+        if let Some(checked) = checked {
+            facts.push(Fact::exact(
+                Kind::FundingChecked,
+                "early buyers whose funding was checked",
+                f64::from(checked),
+                format!("{checked} of {checked}"),
+            ));
+        }
+        sheet_with(facts)
+    }
+
+    /// The fact slice 3 measured and nothing surfaced: one address funding
+    /// most checked buyers now leads over concentration, bundled with the
+    /// checked count, in flow wording that never names who is behind it.
+    #[test]
+    fn a_majority_shared_funder_leads_over_concentration() {
+        let top = lead(&funding_sheet(3, Some(4))).expect("a candidate exists");
+        assert_eq!(
+            top.id,
+            CandidateId(vec![Kind::SharedFunder, Kind::FundingChecked])
+        );
+        assert_eq!(top.priority, 95);
+        assert!(top.sentence.contains("3 of 4"), "{}", top.sentence);
+        assert!(top.sentence.contains("exchange"), "{}", top.sentence);
+        for word in ["one person", "insider", "team", "controlled", "sybil"] {
+            assert!(!top.sentence.to_lowercase().contains(word), "{word}");
+        }
+    }
+
+    /// Two of four (exactly half) and four of nine are not majorities and
+    /// stay below concentration; five of nine is one and leads.
+    #[test]
+    fn a_minority_shared_funder_ranks_below_concentration() {
+        for (funded, checked) in [(2, 4), (4, 9)] {
+            let ranked = rank(&funding_sheet(funded, Some(checked)));
+            assert_eq!(ranked[0].id.0[0], Kind::Holders, "{funded} of {checked}");
+            assert_eq!(ranked[1].id.0[0], Kind::SharedFunder);
+            assert_eq!(ranked[1].priority, 80);
+        }
+        let ranked = rank(&funding_sheet(5, Some(9)));
+        assert_eq!(ranked[0].priority, 95, "five of nine is a majority");
+    }
+
+    /// Without the checked count there is no majority to establish: the
+    /// shared funder still ranks, as a minority, and claims no denominator
+    /// in its id.
+    #[test]
+    fn a_shared_funder_without_a_checked_count_is_not_a_majority() {
+        let ranked = rank(&funding_sheet(3, None));
+        let shared = ranked
+            .iter()
+            .find(|c| c.id.0[0] == Kind::SharedFunder)
+            .expect("still ranked");
+        assert_eq!(shared.id, CandidateId(vec![Kind::SharedFunder]));
+        assert_eq!(shared.priority, 80);
     }
 
     /// Silences an unused-import warning for `About`/`Voice` if a future edit
