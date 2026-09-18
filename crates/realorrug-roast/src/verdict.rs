@@ -181,7 +181,7 @@ impl Verdict {
             // waiting to be replaced by scoring: the product is "here is what
             // was measured", and a rule that weighted these into a conclusion
             // would be the single safety score GOAL.md refuses.
-            reasons.push(format!("{}: {}", fact.label, fact.rendered));
+            reasons.push(public_reason(fact));
         }
         for miss in &sheet.unknown {
             reasons.push(format!("not known -- {miss}"));
@@ -192,6 +192,34 @@ impl Verdict {
             twins: sheet.twins.clone(),
         }
     }
+}
+
+/// One fact as a stranger on the website should read it.
+///
+/// **The plain clause, not `label: rendered`.** A fact carries both, and they
+/// are written for different readers. `rendered` and `label` are written for
+/// the model and for the fidelity check that reads its output: they carry the
+/// argument that keeps a later engineer from getting the fact backwards, in
+/// the engineer's own shouting -- "NOT zero, and NOT 'cannot size into this'",
+/// "this is REAL OR RUG.S OWN impact budget, NOT a ceiling the venue imposes
+/// (research 0022)". Every word of that is true and none of it is for a
+/// reader. `/v1/check/` published it verbatim, so the public page argued with
+/// itself in capitals about a document nobody outside this repository can
+/// read.
+///
+/// The plain clause is the same measurement written as one sentence by the
+/// code that read it, which is what [`crate::sheet::Fact::saying`] exists for.
+/// A fact with no clause falls back to the old form rather than vanishing:
+/// unreadable beats absent, because a missing reason is a fact the reader
+/// never learns was measured (AGENTS.md rule 8).
+fn public_reason(fact: &crate::sheet::Fact) -> String {
+    fact.clauses
+        .iter()
+        .find(|clause| clause.voice == crate::clause::Voice::Plain)
+        .map_or_else(
+            || format!("{}: {}", fact.label, fact.rendered),
+            |clause| clause.text.clone(),
+        )
 }
 
 /// Facts the template leads with, in order, matched by a fragment of their
@@ -1315,6 +1343,68 @@ mod tests {
         assert!(
             reply.contains("tokens this creator has launched"),
             "the Solana lead was displaced: {reply}"
+        );
+    }
+
+    /// What a stranger on the website reads, and what they must never read.
+    ///
+    /// `rendered` and `label` are written for the model and for the fidelity
+    /// check: they argue with a future engineer, in capitals, about documents
+    /// nobody outside this repository can open. `/v1/check/` published them
+    /// verbatim. Re-apply the bug by putting `format!("{}: {}", fact.label,
+    /// fact.rendered)` back into `Verdict::from` and both the first and the
+    /// last assertion fail.
+    #[test]
+    fn a_public_reason_is_the_plain_sentence_not_the_engineers_argument() {
+        // The real graduated-capacity fact, copied from `sheet.rs` because
+        // that is the one that reached a reader's screen.
+        let graduated = Fact::exact(
+            Kind::CapacityAfterGraduation,
+            "quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN \
+             impact budget, NOT a ceiling the venue imposes (research 0022)",
+            0.0,
+            "graduated off the curve; it trades on the AMM, which Real or Rug does not price. \
+             NOT zero, and NOT 'cannot size into this'.",
+        )
+        .saying(
+            crate::clause::Voice::Plain,
+            "Real or Rug does not price the AMM it moved to, so it has no exit size for this one.",
+        )
+        .saying(
+            crate::clause::Voice::Blunt,
+            "Real or Rug cannot size the AMM it moved to.",
+        );
+        assert_eq!(
+            public_reason(&graduated),
+            "Real or Rug does not price the AMM it moved to, so it has no exit size for this one."
+        );
+
+        // A fact nobody wrote a sentence for is still published, in whatever
+        // form there is: unreadable beats absent, because a reason that
+        // vanishes is a measurement the reader never learns was taken
+        // (AGENTS.md rule 8). Re-apply that half by making the fallback
+        // return an empty string and this fails.
+        let unwritten = Fact::exact(
+            Kind::CreatorLaunches,
+            "tokens this creator has launched",
+            150.0,
+            "150",
+        );
+        assert_eq!(
+            public_reason(&unwritten),
+            "tokens this creator has launched: 150"
+        );
+
+        // Through the real construction, which is the path `/v1/check/`
+        // actually takes.
+        let mut sheet = a_real_shaped_sheet();
+        sheet.facts = vec![graduated];
+        let reasons = Verdict::from(&sheet).reasons;
+        assert!(
+            !reasons
+                .iter()
+                .any(|reason| reason.contains("NOT") || reason.contains("research 0022")),
+            "the engineer's own argument reached the website: {reasons:?}"
         );
     }
 }
