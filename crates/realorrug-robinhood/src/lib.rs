@@ -640,17 +640,53 @@ impl Rpc {
         from_block: u64,
         to_block: u64,
     ) -> Result<Vec<Log>, LogsError> {
+        self.logs_range_impl(Some(address), topics, from_block, to_block)
+    }
+
+    /// Every log matching `topics` from *any* address, between `from_block`
+    /// and `to_block` inclusive.
+    ///
+    /// [`Rpc::logs_range`] scopes to one contract because the caller already
+    /// knows which one emitted the event it wants (the factory, a single
+    /// token). A `CurveBuy` is not like that: it is emitted by each launch's
+    /// own curve contract, a different address per token, so there is no one
+    /// address to scope to and the filter can only be the topic. This is the
+    /// same window-and-retry contract as [`Rpc::logs_range`] -- the same
+    /// [`LogsError::TooManyResults`] recovery applies -- just without the
+    /// `address` field in the request.
+    ///
+    /// # Errors
+    ///
+    /// [`LogsError`], the same as [`Rpc::logs_range`].
+    pub fn logs_range_any_address(
+        &self,
+        topics: &[Hash32],
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>, LogsError> {
+        self.logs_range_impl(None, topics, from_block, to_block)
+    }
+
+    /// Shared body of [`Rpc::logs_range`] and [`Rpc::logs_range_any_address`]:
+    /// the same request with or without an `address` field.
+    fn logs_range_impl(
+        &self,
+        address: Option<&Address>,
+        topics: &[Hash32],
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>, LogsError> {
         let topics: Vec<String> = topics.iter().map(ToString::to_string).collect();
+        let mut params = serde_json::json!({
+            "fromBlock": format!("{from_block:#x}"),
+            "toBlock": format!("{to_block:#x}"),
+            "topics": topics,
+        });
+        if let Some(address) = address {
+            params["address"] = serde_json::Value::String(address.to_string());
+        }
         let result = self
-            .call(
-                "eth_getLogs",
-                &serde_json::json!([{
-                    "address": address.to_string(),
-                    "fromBlock": format!("{from_block:#x}"),
-                    "toBlock": format!("{to_block:#x}"),
-                    "topics": topics,
-                }]),
-            )
+            .call("eth_getLogs", &serde_json::json!([params]))
             .map_err(|e| {
                 if is_log_limit_error(&e) {
                     LogsError::TooManyResults

@@ -635,26 +635,61 @@ const LOGS_PER_WINDOW: u64 = 8_000;
 pub fn walk_launches<F, S>(
     from_block: u64,
     to_block: u64,
-    mut fetch: F,
+    fetch: F,
     mut sink: S,
 ) -> Result<u64, String>
 where
     F: FnMut(u64, u64) -> Result<Vec<Log>, LogsError>,
     S: FnMut(Launched),
 {
+    let mut launches = 0_u64;
+    walk_logs(from_block, to_block, fetch, |log| {
+        if let Some(launch) = Launched::from_log(log) {
+            sink(launch);
+            launches = launches.saturating_add(1);
+        }
+    })?;
+    Ok(launches)
+}
+
+/// Every log between two blocks matching whatever filter `fetch` already
+/// carries (an address, a topic list, or both), in order, handed to `sink`
+/// one at a time, undecoded.
+///
+/// [`walk_launches`] is this with a `TokenLaunched` decode wired in; it is
+/// pulled out on its own because the `creator-index` command runs the same
+/// windowed walk two more times over the same block range for `Graduated`
+/// (still scoped to the factory) and `CurveBuy` (scoped to no address at
+/// all, since a curve's own address is not known until its `TokenLaunched`
+/// is seen) -- the resizing logic that survives the provider's result cap is
+/// the part worth sharing, not the decode.
+///
+/// # Errors
+///
+/// The provider's error, or a window of a single block that still answers
+/// "too many results" -- which cannot be halved further, and is reported
+/// rather than skipped, because skipping it would drop every log in that
+/// block while the walk went on looking complete.
+pub fn walk_logs<F>(
+    from_block: u64,
+    to_block: u64,
+    mut fetch: F,
+    mut sink: impl FnMut(&Log),
+) -> Result<u64, String>
+where
+    F: FnMut(u64, u64) -> Result<Vec<Log>, LogsError>,
+{
     let mut at = from_block;
     let mut window: u64 = 1;
-    let mut launches = 0_u64;
+    let mut seen = 0_u64;
     while at <= to_block {
         let end = at.saturating_add(window - 1).min(to_block);
         match fetch(at, end) {
             Ok(logs) => {
                 let held = u64::try_from(logs.len()).unwrap_or(u64::MAX);
                 for log in &logs {
-                    if let Some(launch) = Launched::from_log(log) {
-                        sink(launch);
-                        launches += 1;
-                    }
+                    sink(log);
+                    seen = seen.saturating_add(1);
                 }
                 at = end.saturating_add(1);
                 window = next_window(window, held);
@@ -671,7 +706,7 @@ where
             Err(LogsError::Other(e)) => return Err(e),
         }
     }
-    Ok(launches)
+    Ok(seen)
 }
 
 /// The next window, scaled from what the last one actually held.
