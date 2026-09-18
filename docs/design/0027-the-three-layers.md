@@ -682,4 +682,6 @@ exact shape as the single value `20250916.0520`, not five small numbers. A
 near miss (another separator, a letter, a longer digit run) scans as plain
 numbers as before. Tested against known dates including
 both a leap day that falls on a `/4` century boundary (2000) and one that
-does not (1900), plus the epoch itself and a date either side of it.
+does not (2100), plus the epoch itself. The day count is unsigned: a
+market moment is always after 1970, so the calendar has no branch for
+earlier dates.

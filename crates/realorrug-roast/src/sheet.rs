@@ -2041,12 +2041,7 @@ fn render_observed_at(observed_at: std::time::SystemTime) -> String {
             |_| "an unread point".to_owned(),
             |d| {
                 let secs = d.as_secs();
-                #[expect(
-                    clippy::cast_possible_wrap,
-                    reason = "a Unix second count reaching i64::MAX is centuries past this \
-                              project's lifetime; wrapping here is not a real risk"
-                )]
-                let days = (secs / 86_400) as i64;
+                let days = secs / 86_400;
                 let time_of_day = secs % 86_400;
                 let (year, month, day) = civil_from_days(days);
                 let hour = time_of_day / 3_600;
@@ -2062,22 +2057,23 @@ fn render_observed_at(observed_at: std::time::SystemTime) -> String {
 /// ported to Rust -- correct for any `i64` day count, including every leap
 /// day the Gregorian rule recognises, without pulling in a date-and-time
 /// crate for one read-only conversion.
-fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+fn civil_from_days(days_since_epoch: u64) -> (u64, u32, u32) {
+    // Unsigned on purpose: `render_observed_at` only ever has a moment after
+    // the epoch, so the algorithm's branch for eras before year 0 would be
+    // code no input can reach.
     let z = days_since_epoch + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let era = z / 146_097;
     let doe = z - era * 146_097; // [0, 146096]
     let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
     let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
     let mp = (5 * doy + 2) / 153; // [0, 11]
     #[expect(
-        clippy::cast_sign_loss,
         clippy::cast_possible_truncation,
         reason = "doy - (153*mp+2)/5 + 1 is always in [1, 31] by the algorithm's own invariant"
     )]
     let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
     #[expect(
-        clippy::cast_sign_loss,
         clippy::cast_possible_truncation,
         reason = "mp is always in [0, 11] by the algorithm's own invariant, so month is in [1, 12]"
     )]
@@ -3303,17 +3299,17 @@ mod tests {
 
     /// `civil_from_days` against dates independently computed with `date -u
     /// -d <date> +%s`, divided by 86400: the epoch itself, a leap day both
-    /// on and off a century boundary (2024 and 2000 are leap; 1900 is not,
-    /// despite also dividing by 4), a date before the epoch, and one after
-    /// the range any real market snapshot will ever carry.
+    /// on and off a century boundary (2024 and 2000 are leap; 2100 is not,
+    /// despite also dividing by 4, so its 28 February is followed by
+    /// 1 March), the first March after the epoch, and a date well past the
+    /// range any real market snapshot will ever carry.
     #[test]
     fn civil_from_days_matches_known_calendar_dates_including_leap_days() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(19_782), (2024, 2, 29));
         assert_eq!(civil_from_days(11_016), (2000, 2, 29));
-        assert_eq!(civil_from_days(-25_509), (1900, 2, 28));
         assert_eq!(civil_from_days(20_347), (2025, 9, 16));
-        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(civil_from_days(59), (1970, 3, 1));
         assert_eq!(civil_from_days(47_541), (2100, 3, 1));
     }
 
