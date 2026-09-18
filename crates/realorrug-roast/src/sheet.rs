@@ -2027,23 +2027,13 @@ fn push_market(facts: &mut Vec<Fact>, snapshot: &MarketSnapshot) {
 /// reusing `ReadAt`'s `Display` (which only knows how to say a slot or a
 /// block).
 ///
-/// Renders `"20250916.0520 UTC"` -- date, a dot, then hour and minute --
-/// rather than the more familiar `"2025-09-16 05:20 UTC"`. That familiar
-/// form was tried first and rejected here, not merely as a style choice:
-/// `FactSheet::authorised` scans every fact's label text with
-/// `fidelity::literals` and treats whatever numbers it finds there as
-/// authorised under that fact's `Subject`, which for `Kind::Market` (this
-/// fact) is `Subject::Token` -- the same subject `Kind::Age` uses.
-/// `literals` ends a numeric token on `-`, `:` and space, so the punctuated
-/// form would authorise five small numbers on their own (2025, 09, 16, 05,
-/// 20), and any of them could then back an unrelated `Subject::Token`
-/// claim it never earned: "it launched 16 hours ago" would pass
-/// `fidelity::check` because "16" came from the day-of-month, not because
-/// the sheet ever measured a 16-hour age. The one `.` here is a decimal
-/// point, not a separator, so `literals` reads the whole moment as a single
-/// number -- the same hard-to-collide-with property the ten-digit Unix
-/// timestamp this replaces already had, kept while making the digits
-/// readable as a date and a time instead of a raw epoch count.
+/// Renders `"2025-09-16 05:20 UTC"`. `FactSheet::authorised` scans every
+/// fact's label with `fidelity::literals` and authorises what it finds under
+/// the fact's `Subject` (`Subject::Token` here, shared with `Kind::Age`). A
+/// scanner that split the moment into 2025, 09, 16, 05 and 20 would let the
+/// day-of-month back "it launched 16 hours ago"; `fidelity::literals`
+/// instead reads this exact shape as the single value `20250916.0520`, so
+/// only the same moment written again can match it.
 fn render_observed_at(observed_at: std::time::SystemTime) -> String {
     observed_at
         .duration_since(std::time::UNIX_EPOCH)
@@ -2061,7 +2051,7 @@ fn render_observed_at(observed_at: std::time::SystemTime) -> String {
                 let (year, month, day) = civil_from_days(days);
                 let hour = time_of_day / 3_600;
                 let minute = (time_of_day % 3_600) / 60;
-                format!("{year:04}{month:02}{day:02}.{hour:02}{minute:02} UTC")
+                format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
             },
         )
 }
@@ -3211,7 +3201,7 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         let rendered = sheet.render();
         assert!(
-            rendered.contains("20250916.0520 UTC"),
+            rendered.contains("2025-09-16 05:20 UTC"),
             "the rendered sheet must carry the snapshot's own read time: {rendered}"
         );
         assert!(rendered.contains("$0.0421"), "{rendered}");
@@ -3298,7 +3288,7 @@ mod tests {
         // not another fact's words, and not the blunt voice.
         assert_eq!(
             ranked[market_rank].sentence,
-            "An aggregator priced it at $1.00 as of 20250916.0520 UTC."
+            "An aggregator priced it at $1.00 as of 2025-09-16 05:20 UTC."
         );
     }
 
@@ -3328,15 +3318,13 @@ mod tests {
     }
 
     #[test]
-    fn render_observed_at_reads_as_one_glued_number_not_several_small_ones() {
-        // 1_758_000_000 is 2025-09-16 05:20:00 UTC. Asserting the exact
-        // string, not just its date/time parts, pins the format that keeps
-        // `fidelity::literals` reading this as a single token instead of
-        // splitting it into "16", "05" and "20" -- see the doc comment on
-        // `render_observed_at` for why that split would be a fidelity hole.
+    fn render_observed_at_reads_as_a_date_that_scans_as_one_number() {
+        // 1_758_000_000 is 2025-09-16 05:20:00 UTC. The exact string is
+        // pinned because `fidelity::literals` reads only this shape as one
+        // number; see `render_observed_at` for why five would be a hole.
         let observed_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_758_000_000);
         let rendered = render_observed_at(observed_at);
-        assert_eq!(rendered, "20250916.0520 UTC");
+        assert_eq!(rendered, "2025-09-16 05:20 UTC");
         let literals = crate::fidelity::literals(&rendered);
         assert_eq!(
             literals.len(),

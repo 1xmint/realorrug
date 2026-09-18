@@ -674,11 +674,12 @@ from the day-of-month, not because the sheet ever measured a 16-hour age.
 The original ten-digit Unix timestamp never had this problem because it
 scanned as one large, hard-to-collide-with number.
 
-The fix keeps that property while making the digits readable: a small
+The fix keeps that property while keeping the date readable: a small
 `civil_from_days` (Howard Hinnant's public-domain algorithm, ported with no
 new dependency) turns the Unix seconds into a proleptic-Gregorian calendar
-date, and `render_observed_at` glues date and time with a single decimal
-point -- `20250916.0520 UTC` -- so `fidelity::literals` still reads the
-whole moment as one token, not five. Tested against known dates including
+date, rendered `2025-09-16 05:20 UTC`, and `fidelity::literals` reads that
+exact shape as the single value `20250916.0520`, not five small numbers. A
+near miss (another separator, a letter, a longer digit run) scans as plain
+numbers as before. Tested against known dates including
 both a leap day that falls on a `/4` century boundary (2000) and one that
 does not (1900), plus the epoch itself and a date either side of it.
