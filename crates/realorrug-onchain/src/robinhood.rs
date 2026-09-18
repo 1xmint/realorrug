@@ -28,6 +28,7 @@
 
 use std::collections::HashMap;
 
+use realorrug_robinhood::erc20;
 use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, topic};
 use realorrug_robinhood::{Address as RobinhoodAddress, Hash32, Log, LogsError, Rpc};
 use realorrug_types::{ChainAddress, ReadAt};
@@ -146,7 +147,30 @@ fn launch_facts(
         block: log.block,
         age_seconds,
         dev_buy_wei,
+        name: text_field(budget, client, token, erc20::NAME),
+        symbol: text_field(budget, client, token, erc20::SYMBOL),
     })
+}
+
+/// One ERC-20 string field of `token`, or `None` for every way that can fail.
+///
+/// Two calls out of the budget's sixty, spent on the only fact that says which
+/// token this is. Both are allowed to fail quietly, unlike the reads
+/// [`launch_facts`] makes before them: a launch whose event and receipt read is
+/// still worth returning without a name, while refusing the whole dossier
+/// because a name did not read would report less than was known (rule 8 cuts
+/// both ways -- an unread name is not a reason to drop the age and the dev buy
+/// that did read).
+fn text_field(
+    budget: &mut Budget,
+    client: &Rpc,
+    token: &RobinhoodAddress,
+    selector: [u8; 4],
+) -> Option<String> {
+    call(budget, client, token, &selector)
+        .ok()
+        .as_deref()
+        .and_then(erc20::string_from_return)
 }
 
 /// Wei the launcher spent on curve buys among `logs`: buys against this
@@ -1039,8 +1063,21 @@ mod tests {
             answer(&serde_json::json!([launch_log(rec)])),
             block(LAUNCH_BLOCK, 6_400),
             answer(&receipt),
+            answer(&hex(&abi_string(b"Pepe Token"))),
+            answer(&hex(&abi_string(b"PEPE"))),
             answer(&transfers),
         ]
+    }
+
+    /// One string, ABI-encoded as a token's `name()` returns it.
+    fn abi_string(text: &[u8]) -> Vec<u8> {
+        let mut out = vec![0u8; 64];
+        out[31] = 32;
+        let length = u64::try_from(text.len()).expect("a test string fits in u64");
+        out[56..64].copy_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(text);
+        out.resize(64 + text.len().div_ceil(32) * 32, 0);
+        out
     }
 
     #[test]
@@ -1060,6 +1097,11 @@ mod tests {
                 block: LAUNCH_BLOCK,
                 age_seconds: Some(3_600),
                 dev_buy_wei: Some(DEV_BUY),
+                // Two `eth_call`s the reader did not make before 2026-09-17.
+                // No Pons event or factory record carries a name, so without
+                // these the share card drew its verdict over a blank.
+                name: Some("Pepe Token".to_owned()),
+                symbol: Some("PEPE".to_owned()),
             })
         );
         // The launcher 100, Alice 200, Bob 100. The curve and the factory are
@@ -1077,7 +1119,12 @@ mod tests {
                 "{fact} read but was named unavailable"
             );
         }
-        assert_eq!(dossier.calls, 8);
+        // Ten, not the eight this read cost before 2026-09-17: `name()` and
+        // `symbol()` are two calls the reader now makes so the share card can
+        // say which token it is. Pinned rather than left loose because the
+        // default budget is sixty calls and a read that quietly grows is how
+        // a plan's daily quota goes without anyone choosing to spend it.
+        assert_eq!(dossier.calls, 10);
     }
 
     #[test]
@@ -1124,9 +1171,12 @@ mod tests {
         );
         let mut bodies = full_bodies(&rec, "0x1");
         bodies[4] = answer(&serde_json::json!([]));
-        // With no launch there is no timestamp or receipt read: the transfers
-        // come next.
-        let transfers = bodies.remove(7);
+        // With no launch there is no timestamp, receipt, name or symbol read:
+        // the transfers come next. Taken from the end rather than by index,
+        // because an index here is a second copy of `full_bodies`'s order that
+        // goes quietly wrong the next time a read is added -- as it did when
+        // `name()` and `symbol()` were.
+        let transfers = bodies.pop().expect("the transfers are the last body");
         bodies.truncate(5);
         bodies.push(transfers);
         let client = Rpc::new(serve(bodies));

@@ -25,8 +25,15 @@
 //! captures; a general EVM library would be tens of thousands of lines, most of
 //! them for signing, which this crate must not do. Event topics and selectors
 //! are constants, checked against the captured transactions that use them, so
-//! no Keccak implementation is needed either.
+//! the shipped crate needs no Keccak implementation.
+//!
+//! The one exception is a test dependency. [`erc20`]'s two selectors have no
+//! captured transaction to check them against -- nothing in the repository's
+//! captures calls `name()` -- so its test computes the hashes with `sha3`
+//! instead. That is a dev-dependency: the library a caller links still carries
+//! no Keccak.
 
+pub mod erc20;
 pub mod escrow;
 pub mod pons;
 

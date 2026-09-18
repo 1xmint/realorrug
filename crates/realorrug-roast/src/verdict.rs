@@ -1211,6 +1211,8 @@ mod tests {
                 block: 2_998_000,
                 age_seconds: Some(86_400),
                 dev_buy_wei: Some(50_000_000_000_000_000),
+                name: None,
+                symbol: None,
             }),
             holders: Some(realorrug_onchain::Holders {
                 count: 529,

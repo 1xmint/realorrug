@@ -18,3 +18,8 @@ thiserror.workspace = true
 # The one HTTP client the workspace already carries (`realorrug-onchain`,
 # `realorrug-payout`). Read-only here: this crate holds no key and signs nothing.
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+# Only to compute the two ERC-20 selectors in `erc20`'s own test, which has no
+# captured transaction to check them against. The shipped library has no Keccak.
+sha3.workspace = true

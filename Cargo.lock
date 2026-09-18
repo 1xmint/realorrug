@@ -1474,6 +1474,7 @@ name = "realorrug-robinhood"
 version = "0.0.1"
 dependencies = [
  "serde_json",
+ "sha3",
  "thiserror",
  "ureq",
 ]
