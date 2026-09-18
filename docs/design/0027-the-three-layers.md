@@ -336,3 +336,58 @@ Everything else AGENTS §3 already settles — model judgement never moves
 money, untrusted content is never an instruction, holdings stay public and
 nothing trades — is unaffected by any of the above and does not need
 re-approval.
+
+## 5. The scam catalog — approved 2026-09-18
+
+A second golden round (Fable's plan, then a review started by Astra and
+completed by Sonnet when Astra's quota ran out; packet `golden-r5-final.md`
+in the gitignored run folder) answered two questions from Josh: can a model
+judge real-vs-scam more accurately than code, and should the bot keep a
+growing catalog of scam methods and multi-step schemes (fee-bait and the
+like) that counts every sighting in context.
+
+**The answers, as recorded.** Whether a model beats code here is unknown,
+so it earns a trial, not a role: code keeps choosing the published band,
+and a model runs in shadow against a hand-labelled set of about 500 cases,
+compared with strong rules rather than a weak checklist, on held-out time
+and held-out wallet families. The catalog is worth building on one
+condition — every eligible check is recorded, including absent and unread
+results, with the evidence available at that moment. Without the negatives
+there is no denominator and no way to tell whether the catalog improved.
+One operator's repeated launches count once per wallet family, and every
+occurrence is tagged by how the token was seen (summoned, unsummoned
+sample, outcome refresh) so a count never claims more than its sample.
+
+**Approved by Josh on 2026-09-18** ("yes to those 5 things"):
+
+1. Failed and truncated check runs are kept past `MAX_CHECK_RUNS` (design
+   [0021](0021-the-read-memory.md) §9); complete runs keep the existing cap.
+2. The seed catalog of methods and playbooks is accepted, and a playbook
+   match — full or partial — never raises a band on its own; it can only
+   explain findings code already scored.
+3. A shadow adviser on the hard minority of cases, budgeted at about $2 a
+   day, never publishing a band.
+4. A weekly catalog-review job, about $3–10 a week, that proposes
+   candidates only; a candidate's PR must show its back-test on both
+   held-out splits before a human merges it.
+5. The rule against naming a person as a scammer is enforced structurally
+   in `crates/realorrug-roast/src/forbidden.rs` (a claim about a person is
+   rejected by construction), not by a word list.
+
+**What it adds to §3.** Three slices, inserted without reordering the
+twelve: **7b** catalog, matcher and packet log (roast `catalog.rs`,
+`playbook.rs`; onchain `memory.rs` gains `packets`, `method_occurrences`,
+`playbook_occurrences` and `wallet_families`; seeds under
+`docs/research/catalog/`), after 7; **7c** shadow adviser (analyst
+`answer.rs`), after 7b; **9b** weekly catalog review writing only to
+`docs/research/catalog/candidates/`, after 9 and 7b. Slice 7 gains a
+`causal_episode_id` so correlated findings count once; slice 8's
+calibration becomes the evaluation harness comparing code, model and a
+non-model learned baseline; slice 10 carries item 5; slice 12 may publish a
+"playbook of the week" whose every count states its sample. The
+per-reply model ceiling of $0.002 is recommended to rise to about $0.02 so
+the reply is not forced onto the cheapest model; that is a recommendation,
+not yet a decision.
+
+Still pending from §4: model band choice stays shadow-only, contest
+weights, the honeypot and wallet-language gates, and age prose.
