@@ -71,7 +71,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use realorrug_robinhood::pons::{Side, Trade, topic};
+use realorrug_robinhood::pons::{self, CreatorRole, LaunchedToken, Side, Trade, Transfer, topic};
 use realorrug_robinhood::{Address, Hash32, Log, LogsError, Rpc, quantity, quantity_u128};
 
 use crate::budget::Budget;
@@ -708,6 +708,222 @@ pub fn investigate(
     }
 
     Ok(funding)
+}
+
+/// One `CurveBuy`/`CurveSell` whose beneficiary was the deployer or the fee
+/// recipient -- design 0027 slice 5.
+///
+/// A plain ERC-20 `Transfer` out of either account is never turned into one
+/// of these: only a decoded curve execution proves a sale (rule (b)), so
+/// [`classify_creator_trades`] builds this list from [`Trade::from_log`]
+/// alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatorTrade {
+    /// Which of the two paid accounts was the beneficiary.
+    pub role: CreatorRole,
+    /// Buy or sell.
+    pub side: Side,
+    /// Quote paid in (a buy) or received (a sell), in wei.
+    pub quote: u128,
+    /// Tokens received (a buy) or given up (a sell).
+    pub tokens: u128,
+    /// The block it landed in.
+    pub block: u64,
+    /// The transaction that carried it.
+    pub transaction: Hash32,
+    /// A stable per-log id for memory's `(chain, unique_id)` key.
+    pub unique_id: String,
+}
+
+/// A per-log identity built from the log's own transaction and position, the
+/// same shape [`FundingEdge::unique_id`] uses a provider-supplied id for:
+/// two logs in the same transaction still differ by index, so replaying the
+/// same read can never collide two distinct events into one row.
+#[must_use]
+fn log_unique_id(log: &Log) -> String {
+    let (transaction_index, log_index) = log
+        .position
+        .map_or((0, 0), |p| (p.transaction_index, p.log_index));
+    format!("{}-{transaction_index}-{log_index}", log.transaction)
+}
+
+/// Every `CurveBuy`/`CurveSell` among `logs` whose beneficiary is `record`'s
+/// deployer or fee recipient.
+///
+/// Only the recipient is compared, the same choice [`dev_buys`] makes and for
+/// the same reason: the trader can be a router, but the wallet the tokens or
+/// quote land with is the one whose cash flow this is.
+#[must_use]
+pub fn classify_creator_trades(logs: &[Log], record: &LaunchedToken) -> Vec<CreatorTrade> {
+    logs.iter()
+        .filter_map(|log| Trade::from_log(log).map(|t| (log, t)))
+        .filter(|(_, t)| t.curve == record.curve)
+        .filter_map(|(log, t)| {
+            let role = pons::creator_role(&t.recipient, record)?;
+            Some(CreatorTrade {
+                role,
+                side: t.side,
+                quote: t.quote,
+                tokens: t.tokens,
+                block: log.block,
+                transaction: log.transaction,
+                unique_id: log_unique_id(log),
+            })
+        })
+        .collect()
+}
+
+/// How many ERC-20 transfers moved tokens out of the deployer or fee
+/// recipient to somewhere other than `curve`.
+///
+/// A transfer landing on the curve is the token leg of a decoded sale
+/// already counted by [`classify_creator_trades`]; counting it again here
+/// would report the same movement once as a sale and once as an unexplained
+/// transfer. Every other outgoing transfer -- to an exchange, another
+/// wallet, anywhere else -- is real movement this reader cannot resolve to a
+/// sale, so it is counted, never priced: rule (b) again, from the other
+/// direction, since a transfer must never be *treated* as a sale even when it
+/// is the only observed thing that happened to the tokens.
+#[must_use]
+pub fn count_transfers_out(logs: &[Log], record: &LaunchedToken, curve: &Address) -> u32 {
+    u32::try_from(
+        logs.iter()
+            .filter_map(Transfer::from_log)
+            .filter(|t| pons::creator_role(&t.from, record).is_some() && t.to != *curve)
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+/// The creator's observed cash flow on Pons v2, design 0027 slice 5.
+///
+/// `trades_complete` is the gate rule (c) needs: it is `true` only when both
+/// the curve-trade read and the token-transfer read each returned a complete
+/// result for their block range ([`Rpc::logs_range`] either does that or
+/// fails explicitly, never truncates silently). When it is `false`,
+/// [`Self::proceeds_wei`], [`Self::cost_basis_wei`] and [`Self::net_wei`]
+/// all return `None` rather than a number computed from a partial trade
+/// list -- absent is not zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatorCashFlow {
+    /// Every decoded buy and sell attributed to the deployer or fee
+    /// recipient.
+    pub trades: Vec<CreatorTrade>,
+    /// Outgoing ERC-20 transfers from either account that were not a
+    /// decoded sale (never priced; see [`count_transfers_out`]).
+    pub transfers_out: u32,
+    /// Whether both reads behind `trades` and `transfers_out` were complete.
+    pub trades_complete: bool,
+    /// Why a read fell short, when it did.
+    pub gaps: Vec<String>,
+}
+
+impl CreatorCashFlow {
+    /// Total quote received across every decoded sell, or `None` when the
+    /// trade history is incomplete.
+    #[must_use]
+    pub fn proceeds_wei(&self) -> Option<u128> {
+        if !self.trades_complete {
+            return None;
+        }
+        Some(
+            self.trades
+                .iter()
+                .filter(|t| t.side == Side::Sell)
+                .fold(0u128, |sum, t| sum.saturating_add(t.quote)),
+        )
+    }
+
+    /// Total quote paid across every decoded buy, or `None` when the trade
+    /// history is incomplete.
+    #[must_use]
+    pub fn cost_basis_wei(&self) -> Option<u128> {
+        if !self.trades_complete {
+            return None;
+        }
+        Some(
+            self.trades
+                .iter()
+                .filter(|t| t.side == Side::Buy)
+                .fold(0u128, |sum, t| sum.saturating_add(t.quote)),
+        )
+    }
+
+    /// Proceeds minus cost basis, or `None` when either half is unknown.
+    #[must_use]
+    pub fn net_wei(&self) -> Option<i128> {
+        let proceeds = i128::try_from(self.proceeds_wei()?).unwrap_or(i128::MAX);
+        let cost = i128::try_from(self.cost_basis_wei()?).unwrap_or(i128::MAX);
+        Some(proceeds - cost)
+    }
+}
+
+/// Reads the deployer's and fee recipient's on-chain cash flow for one
+/// launch: every decoded buy/sell against its own curve, and every other
+/// outgoing token transfer.
+///
+/// Two independent `eth_getLogs` reads, matching the CU table in this
+/// module's doc comment: `record.curve`'s own logs (`CU_GET_LOGS`) decode
+/// into [`CreatorTrade`]s, and `record.token`'s `Transfer` logs
+/// (`CU_GET_LOGS`) count outgoing transfers. Never returns `Err`: a read
+/// that fails or that the budget cannot afford degrades to a named gap and
+/// `trades_complete = false`, per rule (c) -- a caller here has no total
+/// failure to propagate, only a cash flow that may or may not be provably
+/// whole.
+#[must_use]
+pub fn creator_cash_flow(
+    client: &Rpc,
+    budget: &mut Budget,
+    record: &LaunchedToken,
+    launch_block: u64,
+    read_block: u64,
+) -> CreatorCashFlow {
+    let mut gaps = Vec::new();
+
+    let trades = match take(budget, CU_GET_LOGS).and_then(|()| {
+        client
+            .logs_range(&record.curve, &[], launch_block, read_block)
+            .map_err(|e| match e {
+                LogsError::TooManyResults => {
+                    "the token's lifetime curve activity held more trades than one read returns"
+                        .to_owned()
+                }
+                LogsError::Other(why) => why,
+            })
+    }) {
+        Ok(logs) => Some(classify_creator_trades(&logs, record)),
+        Err(gap) => {
+            gaps.push(format!("creator trade history: {gap}"));
+            None
+        }
+    };
+
+    let transfers_out = match take(budget, CU_GET_LOGS).and_then(|()| {
+        client
+            .logs_range(&record.token, &[topic::TRANSFER], launch_block, read_block)
+            .map_err(|e| match e {
+                LogsError::TooManyResults => {
+                    "the token's lifetime transfer history held more transfers than one read \
+                     returns"
+                        .to_owned()
+                }
+                LogsError::Other(why) => why,
+            })
+    }) {
+        Ok(logs) => Some(count_transfers_out(&logs, record, &record.curve)),
+        Err(gap) => {
+            gaps.push(format!("creator transfer history: {gap}"));
+            None
+        }
+    };
+
+    let trades_complete = trades.is_some() && transfers_out.is_some();
+    CreatorCashFlow {
+        trades: trades.unwrap_or_default(),
+        transfers_out: transfers_out.unwrap_or(0),
+        trades_complete,
+        gaps,
+    }
 }
 
 /// How many of the mint's own earliest successful transactions define the
@@ -1575,5 +1791,163 @@ mod tests {
         for alone in ["not supported", "unsupported method", "does not exist"] {
             assert!(method_unsupported(alone), "{alone}");
         }
+    }
+}
+
+#[cfg(test)]
+mod creator_cash_flow_tests {
+    use realorrug_robinhood::pons::CreatorRole;
+
+    use super::*;
+
+    fn addr(b: u8) -> Address {
+        Address([b; 20])
+    }
+
+    fn record(deployer: u8, fee_recipient: u8, curve: u8) -> LaunchedToken {
+        LaunchedToken {
+            token: addr(0xee),
+            curve: addr(curve),
+            deployer: addr(deployer),
+            creator_fee_recipient: addr(fee_recipient),
+            pair: None,
+            graduation_threshold: 0,
+            creator_tax_bps: 0,
+            buyback: false,
+            phase: 0,
+            exists: true,
+        }
+    }
+
+    fn word_addr(b: u8) -> Hash32 {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&[b; 20]);
+        Hash32(w)
+    }
+
+    fn word_u128(v: u128) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        w[16..].copy_from_slice(&v.to_be_bytes());
+        w
+    }
+
+    /// A `CurveBuy`/`CurveSell` log, curve as emitter, `trader`/`recipient`
+    /// as topics 1/2, `(quote, tokens, fee, tax)` as the data words in the
+    /// order [`Trade::from_log`] reads them for the given side.
+    fn trade_log(
+        sell: bool,
+        curve: u8,
+        trader: u8,
+        recipient: u8,
+        quote: u128,
+        tokens: u128,
+    ) -> Log {
+        let mut data = Vec::new();
+        let (first, second) = if sell {
+            (tokens, quote)
+        } else {
+            (quote, tokens)
+        };
+        for v in [first, second, 0, 0] {
+            data.extend(word_u128(v));
+        }
+        Log {
+            address: addr(curve),
+            topics: vec![
+                if sell {
+                    topic::CURVE_SELL
+                } else {
+                    topic::CURVE_BUY
+                },
+                word_addr(trader),
+                word_addr(recipient),
+            ],
+            data,
+            block: 1,
+            transaction: Hash32([1; 32]),
+            position: None,
+        }
+    }
+
+    fn transfer_log(token: u8, from: u8, to: u8, amount: u128) -> Log {
+        Log {
+            address: addr(token),
+            topics: vec![topic::TRANSFER, word_addr(from), word_addr(to)],
+            data: word_u128(amount).to_vec(),
+            block: 1,
+            transaction: Hash32([2; 32]),
+            position: None,
+        }
+    }
+
+    /// Done criterion (a): a fixture where the fee recipient differs from
+    /// the deployer shows both, each recognised on its own log.
+    #[test]
+    fn a_sale_by_either_the_deployer_or_the_fee_recipient_is_classified_by_its_own_role() {
+        let record = record(0xaa, 0xbb, 0xcc);
+        let logs = vec![
+            trade_log(true, 0xcc, 0x22, 0xaa, 100, 40), // deployer sells
+            trade_log(true, 0xcc, 0x22, 0xbb, 50, 20),  // fee recipient sells
+            trade_log(true, 0xcc, 0x22, 0xdd, 10, 5),   // a stranger sells: not creator cash flow
+        ];
+        let trades = classify_creator_trades(&logs, &record);
+        assert_eq!(trades.len(), 2, "the stranger's sale is not the creator's");
+        assert_eq!(trades[0].role, CreatorRole::Deployer);
+        assert_eq!(trades[0].quote, 100);
+        assert_eq!(trades[1].role, CreatorRole::FeeRecipient);
+        assert_eq!(trades[1].quote, 50);
+    }
+
+    /// Done criterion (b): a plain token transfer out of the creator is
+    /// never counted among the sales, and the reverse -- a transfer landing
+    /// on the curve, the token leg of an already-decoded sale -- is not
+    /// double-counted as an extra unexplained transfer.
+    #[test]
+    fn a_plain_transfer_out_is_counted_separately_from_a_decoded_sale_and_never_as_one() {
+        let record = record(0xaa, 0xbb, 0xcc);
+        let sale = trade_log(true, 0xcc, 0x22, 0xaa, 100, 40);
+        let trades = classify_creator_trades(&[sale], &record);
+        assert_eq!(trades.len(), 1);
+
+        let logs = vec![
+            transfer_log(0xee, 0xaa, 0xcc, 40), // the sale's own token leg, to the curve
+            transfer_log(0xee, 0xaa, 0xff, 15), // a real transfer out, not a sale
+            transfer_log(0xee, 0xff, 0xaa, 5),  // inbound: not an outgoing count
+        ];
+        let out = count_transfers_out(&logs, &record, &record.curve);
+        assert_eq!(
+            out, 1,
+            "the curve-bound leg of the sale must not also count as a transfer"
+        );
+    }
+
+    /// Done criterion (c): when either read behind a cash flow is
+    /// incomplete, `trades_complete` is false and every priced accessor
+    /// answers `None` rather than a number built from a partial history.
+    #[test]
+    fn an_incomplete_history_prints_no_profit_number() {
+        let complete = CreatorCashFlow {
+            trades: vec![CreatorTrade {
+                role: CreatorRole::Deployer,
+                side: Side::Sell,
+                quote: 100,
+                tokens: 40,
+                block: 1,
+                transaction: Hash32([1; 32]),
+                unique_id: "0x01-0-0".to_owned(),
+            }],
+            transfers_out: 0,
+            trades_complete: true,
+            gaps: Vec::new(),
+        };
+        assert_eq!(complete.proceeds_wei(), Some(100));
+        assert_eq!(complete.cost_basis_wei(), Some(0));
+        assert_eq!(complete.net_wei(), Some(100));
+
+        let mut incomplete = complete.clone();
+        incomplete.trades_complete = false;
+        assert_eq!(incomplete.proceeds_wei(), None);
+        assert_eq!(incomplete.cost_basis_wei(), None);
+        assert_eq!(incomplete.net_wei(), None);
     }
 }
