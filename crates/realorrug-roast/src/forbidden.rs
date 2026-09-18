@@ -1896,6 +1896,19 @@ mod tests {
     }
 
     #[test]
+    fn a_plural_suffix_is_stripped_only_when_three_bytes_remain() {
+        // Pin the length boundary: "box" has three bytes, "ax" only two.
+        assert_eq!(stem("boxes"), "box");
+        assert_eq!(stem("axes"), "axes");
+    }
+
+    #[test]
+    fn unread_names_the_read_topic_without_sharing_its_stem() {
+        // Pin the synonym-only boundary: "unread" cannot match "read" by stem.
+        assert!(names_topic_word("unread", "read"));
+    }
+
+    #[test]
     fn a_canttell_reply_naming_the_topic_without_the_article_passes() {
         // The live failure of 2026-09-17. `sheet::phrase_for` writes every
         // unknown as "the X could not be read", and the check used to ask
