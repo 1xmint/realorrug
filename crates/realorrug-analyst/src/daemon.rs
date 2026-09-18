@@ -2025,7 +2025,15 @@ mod tests {
             text: "something else".to_owned(),
         };
         assert_eq!(
-            bio_to_write(&bio, Some(&record), None, 0, &[], Some(&stale), closed + 60 + 60),
+            bio_to_write(
+                &bio,
+                Some(&record),
+                None,
+                0,
+                &[],
+                Some(&stale),
+                closed + 60 + 60
+            ),
             None,
             "59 minutes"
         );

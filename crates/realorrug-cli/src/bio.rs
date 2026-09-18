@@ -11,7 +11,7 @@
 //! same [`realorrug_analyst::bio::Bio::render`] the daemon would produce, from
 //! a sample the caller names on the command line, and touches nothing.
 
-use realorrug_analyst::bio::{Bio, Leader, LastWinner, Pool, State};
+use realorrug_analyst::bio::{Bio, LastWinner, Leader, Pool, State};
 use realorrug_contest::Week;
 use realorrug_types::civil::date_from_days;
 
@@ -107,8 +107,8 @@ fn preview_text(
     now: u64,
     get: &impl Fn(&str) -> Option<String>,
 ) -> Result<String, String> {
-    let bio =
-        Bio::from_vars(get).ok_or_else(|| "no lead: pass --lead or set REALORRUG_BIO_LEAD".to_owned())?;
+    let bio = Bio::from_vars(get)
+        .ok_or_else(|| "no lead: pass --lead or set REALORRUG_BIO_LEAD".to_owned())?;
     let Some(state) = sample_state(args, now) else {
         return Err("nothing to preview: pass --pool, --leader or --last-winner".to_owned());
     };
@@ -135,8 +135,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let text = preview_text(args, now, &get)?;
     println!("{text}");
     println!("{} chars", text.chars().count());
@@ -185,13 +184,27 @@ mod tests {
     #[test]
     fn hunters_defaults_to_the_leader_count_but_a_flag_overrides_it() {
         let a = args(&[
-            "bio", "--preview", "--pool", "0.1", "--leader", "alice", "--leader", "bob",
+            "bio",
+            "--preview",
+            "--pool",
+            "0.1",
+            "--leader",
+            "alice",
+            "--leader",
+            "bob",
         ]);
         let state = sample_state(&a, 1_800_000_000).expect("a state");
         assert_eq!(state.pool.expect("a pool").hunters, 2);
 
         let with_flag = args(&[
-            "bio", "--preview", "--pool", "0.1", "--leader", "alice", "--hunters", "9",
+            "bio",
+            "--preview",
+            "--pool",
+            "0.1",
+            "--leader",
+            "alice",
+            "--hunters",
+            "9",
         ]);
         let state = sample_state(&with_flag, 1_800_000_000).expect("a state");
         assert_eq!(state.pool.expect("a pool").hunters, 9);
@@ -246,7 +259,10 @@ mod tests {
         // the command's output to `Bio::render` rather than to
         // `preview_text`'s own arithmetic being self-consistent.
         let state = sample_state(&a, now).expect("a state");
-        let want = Bio::from_vars(&get).expect("a lead").render(&state).expect("fits");
+        let want = Bio::from_vars(&get)
+            .expect("a lead")
+            .render(&state)
+            .expect("fits");
         assert_eq!(got, want);
     }
 

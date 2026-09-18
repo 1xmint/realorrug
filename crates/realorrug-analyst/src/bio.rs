@@ -254,49 +254,42 @@ impl State {
     /// One candidate render: the pool sentence when there is one, the first
     /// `leaders` entries, and the last winner when `last` is set -- joined in
     /// that order, each part a full sentence.
+    ///
+    /// Compact by design: Josh asked (2026-09-17) for the pool, the leaders
+    /// and the last winner to fit *together* rather than take turns, and a
+    /// live lead already spends over half of `MAX`. Each part is `Pool <n>
+    /// ETH`, `Leads @a @b @c` (handles only -- see the module's "leads, never
+    /// wins" note for why points do not belong in a public bio: an
+    /// unverified score published as a fact is a claim this account cannot
+    /// back), or `Last won @handle` / `Last paid <n> <unit>`, joined with the
+    /// same middle dot that separates the lead from the status.
     fn render_parts(&self, leaders: usize, last: bool) -> String {
-        let mut sentences: Vec<String> = Vec::new();
+        let mut parts: Vec<String> = Vec::new();
         if let Some(pool) = &self.pool {
-            let noun = if pool.hunters == 1 { "hunter" } else { "hunters" };
-            sentences.push(format!(
-                "Week of {}: {} ETH prize pool, {} {noun} in",
-                self.week, pool.pool, pool.hunters
-            ));
+            parts.push(format!("Pool {} ETH", pool.pool));
         }
         if leaders > 0 {
             let names = self
                 .leaders
                 .iter()
                 .take(leaders)
-                .map(|l| format!("@{} {} pts", l.handle, l.points))
+                .map(|l| format!("@{}", l.handle))
                 .collect::<Vec<_>>()
-                .join(", ");
-            // With no pool sentence to carry the week, the leaders line names
-            // it itself -- the same wording this line has always used.
-            sentences.push(if self.pool.is_some() {
-                format!("Leads: {names}")
-            } else {
-                format!("Week of {} leads: {names}", self.week)
-            });
+                .join(" ");
+            parts.push(format!("Leads {names}"));
         }
         if last {
             match &self.last_winner {
-                Some(LastWinner::Won {
-                    week,
-                    handle,
-                    until,
-                }) => {
-                    sentences.push(format!(
-                        "Won week of {week}: @{handle}, claim by {until}"
-                    ));
+                Some(LastWinner::Won { handle, .. }) => {
+                    parts.push(format!("Last won @{handle}"));
                 }
                 Some(LastWinner::Paid { amount, unit }) => {
-                    sentences.push(format!("Last paid {amount} {unit}"));
+                    parts.push(format!("Last paid {amount} {unit}"));
                 }
                 None => {}
             }
         }
-        sentences.join(". ")
+        parts.join(JOIN)
     }
 
     /// Every figure this status could state, for the fidelity check.
@@ -664,7 +657,7 @@ mod tests {
             }),
         };
         let text = bio().render(&s).expect("a bio");
-        assert!(text.contains("0.1 ETH prize pool"), "{text}");
+        assert!(text.contains("Pool 0.1 ETH"), "{text}");
         assert!(text.contains("@ab"), "{text}");
         assert!(text.contains("@cd"), "{text}");
         assert!(text.contains("Last paid 0.5 ETH"), "{text}");
@@ -689,31 +682,85 @@ mod tests {
         let full = s.render_parts(MAX_LEADERS, true).chars().count();
         let text = lead_for(full).render(&s).expect("a bio");
         assert!(text.contains("@alice") && text.contains("@carol"), "{text}");
-        assert!(text.contains("Won week"), "{text}");
+        assert!(text.contains("Last won"), "{text}");
 
         // One character less: the third leader goes, the last winner stays.
         let two_leaders = s.render_parts(2, true).chars().count();
         let text = lead_for(two_leaders).render(&s).expect("a bio");
         assert!(text.contains("@bob"), "{text}");
         assert!(!text.contains("@carol"), "{text}");
-        assert!(text.contains("Won week"), "{text}");
+        assert!(text.contains("Last won"), "{text}");
 
         // Down to no leaders: the last winner still stands alone with the
         // pool.
         let no_leaders = s.render_parts(0, true).chars().count();
         let text = lead_for(no_leaders).render(&s).expect("a bio");
-        assert!(text.contains("Won week"), "{text}");
-        assert!(!text.contains("Leads:"), "{text}");
+        assert!(text.contains("Last won"), "{text}");
+        assert!(!text.contains("Leads "), "{text}");
 
         // Tighter again: the last winner goes too, only the pool is left.
         let pool_only = s.render_parts(0, false).chars().count();
         let text = lead_for(pool_only).render(&s).expect("a bio");
-        assert!(text.contains("0.129 ETH prize pool"), "{text}");
+        assert!(text.contains("Pool 0.129 ETH"), "{text}");
         assert!(!text.contains('@'), "{text}");
-        assert!(!text.contains("Won week"), "{text}");
+        assert!(!text.contains("Last won"), "{text}");
 
         // And a lead that leaves no room even for the pool alone: nothing.
         assert_eq!(lead_for(pool_only - 1).render(&s), None);
+    }
+
+    #[test]
+    fn the_live_lead_keeps_the_pool_two_leaders_and_the_last_winner() {
+        // The case this task was opened for: Josh's actual lead ("Hunting
+        // cabals. Exposing tokens. No mercy. Truth for you.", 57 chars) with
+        // realistic ten-character handles, not the short ones the other
+        // fixtures use. The verbose wording this replaced dropped the
+        // leaders and the last winner here and left only the pool; the
+        // compact format keeps at least the pool, two leaders and the last
+        // winner together, worked out by hand in the PR body.
+        let b = Bio {
+            lead: "Hunting cabals. Exposing tokens. No mercy. Truth for you.".to_owned(),
+        };
+        let s = State {
+            week: "2026-09-14".to_owned(),
+            pool: Some(Pool {
+                pool: "0.42".to_owned(),
+                hunters: 23,
+            }),
+            leaders: vec![
+                Leader {
+                    handle: "aaaaaaaaaa".to_owned(),
+                    points: 40,
+                },
+                Leader {
+                    handle: "bbbbbbbbbb".to_owned(),
+                    points: 31,
+                },
+                Leader {
+                    handle: "cccccccccc".to_owned(),
+                    points: 12,
+                },
+            ],
+            last_winner: Some(LastWinner::Won {
+                week: "2026-09-07".to_owned(),
+                handle: "dddddddddd".to_owned(),
+                until: "2026-09-21".to_owned(),
+            }),
+        };
+        let text = b.render(&s).expect("a bio");
+        assert!(
+            text.chars().count() <= MAX,
+            "{} chars: {text}",
+            text.chars().count()
+        );
+        assert!(text.contains("Pool 0.42 ETH"), "{text}");
+        assert!(text.contains("@aaaaaaaaaa"), "{text}");
+        assert!(text.contains("@bbbbbbbbbb"), "{text}");
+        assert!(text.contains("Last won @dddddddddd"), "{text}");
+        // The third leader is a bonus, not a requirement -- the packet asks
+        // for pool + 2 leaders + last winner at minimum.
+        assert!(text.contains("@cccccccccc"), "{text}");
+        assert_eq!(check(&text, &s.authorised()), Ok(()), "{text}");
     }
 
     #[test]
@@ -879,7 +926,13 @@ mod tests {
         assert_eq!(POOL_FRESH_SECONDS, 21_600);
         assert!(choose(None, Some(&vault(1, now - POOL_FRESH_SECONDS)), 0, &[], now).is_some());
         assert_eq!(
-            choose(None, Some(&vault(1, now - POOL_FRESH_SECONDS - 1)), 0, &[], now),
+            choose(
+                None,
+                Some(&vault(1, now - POOL_FRESH_SECONDS - 1)),
+                0,
+                &[],
+                now
+            ),
             None
         );
         // A reading from the future is a clock fault, not a fresh reading.
