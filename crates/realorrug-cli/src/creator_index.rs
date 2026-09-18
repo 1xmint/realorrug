@@ -224,7 +224,10 @@ impl BlockTimeModel {
         let ((b0, t0), (b1, t1)) = if idx == 0 {
             (self.anchors[0], self.anchors[1])
         } else if idx >= self.anchors.len() {
-            (self.anchors[self.anchors.len() - 2], self.anchors[self.anchors.len() - 1])
+            (
+                self.anchors[self.anchors.len() - 2],
+                self.anchors[self.anchors.len() - 1],
+            )
         } else {
             (self.anchors[idx - 1], self.anchors[idx])
         };
@@ -796,6 +799,7 @@ fn note_curve_buy(
 /// A missing flag, an endpoint that cannot be read, a block range that runs
 /// backwards, one of the three walks failing to finish the range, a
 /// disagreement in `--verify` sampling, or a file that cannot be written.
+#[allow(clippy::too_many_lines)]
 pub fn run(args: &[String]) -> Result<(), String> {
     // No default endpoint (rule 7): the public one is rate-limited, and
     // choosing it silently would be choosing for the operator.
@@ -846,7 +850,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let head_calls: u64 = 1;
     let (to, watermark_time) = match explicit_to {
         Some(block) => {
-            let (returned, time) = rpc.block_time(Some(block)).map_err(|e| format!("--to: {e}"))?;
+            let (returned, time) = rpc
+                .block_time(Some(block))
+                .map_err(|e| format!("--to: {e}"))?;
             if returned != block {
                 return Err("--to: timestamp response names another block".to_owned());
             }
@@ -875,9 +881,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     // A handful of anchor reads, not one read per launch or trade block: see
     // `BlockTimeModel`'s doc comment for why a per-block read does not scale.
-    let times = BlockTimeModel::build(from, to, (to, watermark_time), |b| {
-        rpc.block_time(Some(b))
-    })?;
+    let times = BlockTimeModel::build(from, to, (to, watermark_time), |b| rpc.block_time(Some(b)))?;
     let mut measurements = BTreeMap::new();
     let mut curve_to_token = BTreeMap::new();
     for (token, info) in &launch_map {
@@ -1154,8 +1158,8 @@ mod tests {
     use super::{
         BlockTimeModel, DAY, LaunchInfo, LaunchMeasurement, Summary, TIME_SAMPLES, base_rates_json,
         count_stillborn, credit_graduation, disagreement, invalid_graduation, is_curve_buy,
-        note_curve_buy, note_recipient, number, repeats_a_token_or_curve, run, sample, summary,
-        trade_precedes_launch,
+        note_curve_buy, note_recipient, now, number, repeats_a_token_or_curve, run, sample,
+        summary, trade_precedes_launch,
     };
 
     fn args(v: &[&str]) -> Vec<String> {
@@ -1262,6 +1266,9 @@ mod tests {
             token,
             curve,
             deployer: addr(9),
+            pair: None,
+            config: 0,
+            graduation_threshold: 0,
         };
         let launch_map = BTreeMap::from([(
             addr(1),
@@ -1328,7 +1335,12 @@ mod tests {
         ));
         // ...but a second graduation for the same token is not.
         let graduation_blocks = BTreeMap::from([(token, 101_u64)]);
-        assert!(invalid_graduation(&launch_map, &graduation_blocks, token, 200));
+        assert!(invalid_graduation(
+            &launch_map,
+            &graduation_blocks,
+            token,
+            200
+        ));
     }
 
     #[test]
@@ -1406,7 +1418,16 @@ mod tests {
         // Both empty at once, not just an empty `launches`: a `&&` in place of
         // this `||` would let a nonsensical zero-length-but-matching pair
         // through and misreport an empty rebuild as a valid one.
-        assert!(base_rates_json(&BTreeMap::new(), &graduations, &BTreeMap::new(), 0, (200, DAY)).is_err());
+        assert!(
+            base_rates_json(
+                &BTreeMap::new(),
+                &graduations,
+                &BTreeMap::new(),
+                0,
+                (200, DAY)
+            )
+            .is_err()
+        );
         // `measured_on` is `now() / DAY`: a day-boundary case that `/`-in-place-
         // of-`%`-or-`*` would not silently pass, unlike a mid-day timestamp.
         assert_eq!(
@@ -1469,8 +1490,8 @@ mod tests {
 
     #[test]
     fn a_block_time_model_interpolates_linearly_between_anchors_and_extrapolates_at_the_ends() {
-        let model = BlockTimeModel::build(0, 1_000, (1_000, 10_000), |b| Ok((b, b * 10)))
-            .expect("build");
+        let model =
+            BlockTimeModel::build(0, 1_000, (1_000, 10_000), |b| Ok((b, b * 10))).expect("build");
         // Every sampled block sits on the same line, so linear interpolation
         // between any two of them reproduces it exactly, not approximately.
         assert_eq!(model.estimate(0), 0);
