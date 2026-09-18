@@ -382,6 +382,20 @@ pub struct FactSheet {
     /// read, phrased so the account could say it in public -- the model must
     /// not learn `Signal` exists, only that another explanation does.
     pub twins: Vec<String>,
+    /// Optional facts that could not be read, kept out of [`Self::unknown`]
+    /// so they never force `CantTell` (`verdict::level`'s own rule; the
+    /// exclusion list this mirrors lives at the `continue` in
+    /// [`Self::build`]).
+    ///
+    /// **A separate list, not folded into `unknown`.** `unknown` is read as
+    /// "a required fact is unread"; a `capacity`/`fees`/`creator
+    /// transactions`/`market`/`token ownership` miss is not required, so
+    /// mixing the two would either soften `unknown`'s meaning or silently
+    /// re-introduce the severity these misses were excluded from. This is
+    /// the accessor `assessment.rs`'s coverage figure reads instead of
+    /// reaching into `Dossier::unavailable` (which does not survive past
+    /// [`Self::build`]).
+    pub skipped: Vec<String>,
 }
 
 impl FactSheet {
@@ -433,6 +447,7 @@ impl FactSheet {
         let mut untrusted = Vec::new();
         let mut unknown = Vec::new();
         let mut signals = Vec::new();
+        let mut skipped = Vec::new();
 
         // An index describes one chain's launches, and says which
         // (`creator::CreatorIndex::chain`). Dropping a wrong-chain one here,
@@ -680,6 +695,12 @@ impl FactSheet {
                 miss.fact,
                 "capacity" | "fees" | "creator transactions" | "market" | "token ownership"
             ) {
+                // Recorded here, not dropped: `assessment.rs`'s coverage
+                // figure needs to know this gap exists even though
+                // `verdict::level` must not. `miss.fact` (not `miss.why`) --
+                // same injection reasoning as the `unknown` push below, and
+                // this list is never rendered to a reader either.
+                skipped.push(miss.fact.to_owned());
                 continue;
             }
             // **Radar's own phrase, never the raw reason.** `miss.why` is
@@ -737,6 +758,7 @@ impl FactSheet {
             unknown,
             signals,
             twins,
+            skipped,
         }
     }
 
@@ -2368,6 +2390,7 @@ mod tests {
             unknown: vec!["the bonding curve could not be read".to_owned()],
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 
@@ -2477,6 +2500,7 @@ mod tests {
             unknown: Vec::new(),
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         };
         assert!(sheet.authorised().is_empty());
         assert!(!sheet.render().contains("99999"));
@@ -2516,6 +2540,7 @@ mod tests {
             unknown: Vec::new(),
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         };
 
         let authorised = sheet.authorised();
@@ -2554,6 +2579,7 @@ mod tests {
             unknown: Vec::new(),
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         };
 
         assert!(
@@ -3244,6 +3270,25 @@ mod tests {
             "a failed market read must not degrade verdict severity: {:?}",
             sheet.unknown
         );
+    }
+
+    #[test]
+    fn a_skipped_optional_fact_lands_in_skipped_and_not_in_unknown() {
+        // `assessment.rs`'s coverage figure (slice 7, ADR 0032) needs to see
+        // this gap even though `verdict::level` must not: the same failed
+        // market read as the test above, checked from the other side. If the
+        // `skipped.push` at the `continue` in `build` were ever deleted, this
+        // fails while the test above still passes -- proving the two lists
+        // are genuinely independent, not one gap counted twice.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "market",
+            why: "dexscreener: timed out; fallback also failed: geckoterminal: timed out"
+                .to_owned(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(sheet.skipped, vec!["market".to_owned()]);
+        assert!(!sheet.unknown.iter().any(|u| u.contains("market")));
     }
 
     #[test]

@@ -1,33 +1,55 @@
-# Progress — M-D-0001 (assessment.rs, episode-counted level)
+# M-D-0001 progress (branch assessment-packet)
 
-DONE: Set up worktree/branch `assessment-packet` off `origin/main`. Read the
-plan (plan-slice-7 packet M-D-0001), ADR 0032, and design 0027's Judgement
-section. Read `verdict.rs` (full ladder, `Level`, `LIVE_RISK_SIGNALS`,
-`level()`, existing `sheet_with`/`the_live_robinhood_sheet` test fixtures)
-and `sheet.rs`'s `FactSheet` struct and `FactSheet::build` (the
-capacity/fees/creator-transactions/market/token-ownership skip list at
-sheet.rs:679-684). No code changes made yet — verified the stop condition
-below before writing anything, per the packet's own instruction not to work
-around it.
+## DONE
+- Coordinator's `skipped: Vec<String>` amendment fully wired: field on
+  `FactSheet` (sheet.rs), filled in `build()` at the non-degrading-miss
+  `continue`, `Self` literal updated, pinning test
+  `a_skipped_optional_fact_lands_in_skipped_and_not_in_unknown` added, and
+  every other `FactSheet { .. }` literal the compiler would flag fixed
+  (clause.rs, forbidden.rs x2, salience.rs, verdict.rs x3, voice.rs base
+  `sheet()`).
+- New `crates/realorrug-roast/src/assessment.rs`: `Group`, `Episode`,
+  `episode()`, `group()`, `Finding`, `Coverage`, `Assessment` (+ `from`,
+  weights, `milder`/`admissible`), and all 9 named tests from the plan.
+  Wired into `lib.rs` (`pub mod assessment; pub use assessment::Assessment;`).
+- `verdict.rs` `level()` rewritten to count distinct episodes (not raw
+  signal count) for the `RugMechanicsLive` `>= 2` threshold; module doc
+  rewritten per ADR 0032 (drops the old theradar:GOAL.md citation).
+  `mod tests` and `the_live_robinhood_sheet()` made `pub(crate)` so
+  assessment.rs's tests can reuse the fixture.
+- All of the above staged (not yet committed) on `assessment-packet`.
 
-NEXT: Blocked — see the question below. Whoever picks this up next should
-get an owner answer on the accessor shape, then: add the agreed accessor to
-`sheet.rs` (out of scope for M-D-0001 itself; needs its own unit or an
-amendment), then write `assessment.rs` per the plan (Finding/Group/Episode,
-`episode()` total match, `risk_index` summed over distinct episodes,
-`Coverage`, `critical_gaps`, `level`/`admissible`), re-point the two named
-`verdict.rs` tests at the episode-counted `level`, and rewrite the
-`verdict.rs` module doc (lines 11-24, drop the `theradar:GOAL.md` citation).
+## NEXT (blocked, stop-and-ask triggered)
+Found that `verdict.rs`'s existing test
+`the_template_states_a_twin_at_rug_mechanics_live_and_none_at_rugged` builds
+its `RugMechanicsLive` fixture from `CreatorBoughtOwnLaunch` +
+`LaunchBlockInStrongestBand` -- both map to `Episode::LaunchBlock` under the
+new `episode()` function, i.e. the exact same pair the plan names as the
+positive example of the new behaviour (one episode -> `Sketchy`, not
+`RugMechanicsLive`). This test is not one of the plan's two named tests
+(`two_live_signals_in_one_episode_stay_sketchy`,
+`two_live_risk_signals_reach_rug_mechanics_live`), so its flip trips the
+plan's own stop condition ("if any existing verdict test other than the two
+named flips"). Reported to the coordinator; awaiting an answer on whether to
+re-point this test's fixture to a genuine cross-episode `RugMechanicsLive`
+pair (e.g. `CreatorBoughtOwnLaunch` + `HolderConcentration`) as part of this
+same unit, or something else.
 
-WATCH OUT: `FactSheet` (sheet.rs:347-385) has no field that survives the
-capacity/fees/creator-transactions/market/token-ownership skip -- those
-misses are matched and `continue`d inside `FactSheet::build` (sheet.rs:679-
-684) before ever reaching `unknown`, `facts`, or any other field, and
-`Dossier::unavailable` itself is not carried on `FactSheet`. So
-`coverage.applicable`'s "non-degrading gaps" term cannot be computed from a
-`&FactSheet` alone today -- this is the plan's own named stop condition
-("if the non-degrading gaps are not recoverable from FactSheet without
-touching sheet.rs") and its own "Not verified" item. `sheet.rs` is forbidden
-for M-D-0001. Do not add a workaround inside the roast crate that
-re-derives these from something else; get the owner's answer on the
-`pub fn gaps(&self)`-shaped accessor first.
+Once answered: add the two named verdict.rs tests, resolve this third test,
+audit the remaining verdict.rs tests (`a_single_signal_never_reaches...`,
+`two_live_risk_signals_reach_rug_mechanics_live` -- already cross-episode as
+written: `CreatorBoughtOwnLaunch`+`LaunchBlockInStrongestBand`+
+`HolderConcentration` = 2 distinct episodes {LaunchBlock, Holders}, likely
+fine as-is or trivially re-pointed, `a_missing_required_fact_forces_cant_tell...`,
+`an_observed_rugged_pair_beats_an_unrelated_missing_fact`,
+`nothing_ugly_yet_is_unreachable_when_anything_is_unknown`,
+`no_signal_and_nothing_unknown_is_nothing_ugly_yet`) for other flips, add the
+design-0027 as-built note, run cargo check/clippy/fmt and the named tests
+individually, commit, push, open the PR.
+
+## WATCH OUT
+- Do not silently re-point the flipping test without an answer -- that is
+  exactly the behaviour the plan's stop condition exists to catch.
+- sheet.rs diff must stay minimal; another worker (push_creator_cash_flow)
+  is also editing sheet.rs on another branch.
+- Never whole-crate `cargo test`; only single named tests.

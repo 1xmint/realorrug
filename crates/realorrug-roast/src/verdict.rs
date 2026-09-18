@@ -8,11 +8,15 @@
 //! function: a verdict computed by a rule is replayable, and a refusal that can
 //! be reproduced from a recording is one you can argue about with evidence.
 //!
-//! It is deliberately not a score. `GOAL.md` refuses a single safety score --
-//! *"Radar has fourteen reason codes and a structural split. A green shield is
-//! 'unknown rendered as safe'"* -- and a one-bit verdict word is a score with
-//! one bit. So [`Verdict`] carries **reasons**, and a reply renders the reasons
-//! rather than the label.
+//! [`Verdict`] carries **reasons** alongside the level, and a reply renders
+//! the reasons rather than the label alone. ADR 0032 (superseding the
+//! no-score reading of ADR 0027 this module used to cite) adds a 0-100 risk
+//! index and a coverage fraction beside the five-level ladder --
+//! [`crate::assessment::Assessment`] is where that packet lives, built from
+//! the same sheet [`level`] reads. Both stay code-computed: the model can
+//! propose a band from [`crate::assessment::Assessment::admissible`] in
+//! shadow, but never moves the level, the index or the coverage (ADR 0032
+//! decision 4, `AGENTS.md` §3 rule 4).
 //!
 //! # The template is not a fallback, it is the floor
 //!
@@ -107,9 +111,12 @@ const LIVE_RISK_SIGNALS: &[Signal] = &[
 ///    of what could not be read (`FactSheet::build`'s `unknown` list), so a
 ///    nonempty list here is "a required fact is unread" by construction --
 ///    there is no separate "optional-miss" list to consult.
-/// 3. **`RugMechanicsLive`** needs two or more of [`LIVE_RISK_SIGNALS`]. A
+/// 3. **`RugMechanicsLive`** needs two or more *distinct episodes* among
+///    [`LIVE_RISK_SIGNALS`] (ADR 0032, `crate::assessment::episode`). A
 ///    single signal cannot reach it, satisfying §3 rule 4 by construction:
-///    the count has to clear two before this arm returns.
+///    the count has to clear two before this arm returns -- and two signals
+///    that are the same observation (one launch-block read, seen through
+///    both its signals) count as one episode, not two.
 /// 4. **`Sketchy`** is any signal at all, once the stronger levels above have
 ///    already been ruled out.
 /// 5. **`NothingUglyYet`** is what is left: every required fact read (step 2
@@ -129,10 +136,21 @@ pub fn level(sheet: &FactSheet) -> Level {
         return Level::CantTell;
     }
 
-    let live_risk_count = LIVE_RISK_SIGNALS
+    // ADR 0032, slice 7's one published behaviour change: this counts
+    // distinct *episodes* among the live-risk signals that fired, not
+    // signals. Two live signals that are the same observation seen twice
+    // (`LaunchBlockInStrongestBand` + `CreatorBoughtOwnLaunch`, one
+    // launch-block read -- `crate::assessment::episode`'s own doc comment)
+    // must not double-count toward "two or more" any more than they
+    // double-count toward `risk_index`.
+    let mut live_episodes: Vec<crate::assessment::Episode> = LIVE_RISK_SIGNALS
         .iter()
         .filter(|signal| sheet.signals.contains(signal))
-        .count();
+        .map(|&signal| crate::assessment::episode(signal))
+        .collect();
+    live_episodes.sort_by_key(|episode| *episode as u8);
+    live_episodes.dedup();
+    let live_risk_count = live_episodes.len();
     if live_risk_count >= 2 {
         return Level::RugMechanicsLive;
     }
@@ -573,7 +591,7 @@ fn short(label: &str) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::clause::Kind;
     use crate::sheet::{About, Fact};
@@ -650,6 +668,7 @@ mod tests {
             unknown: Vec::new(),
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 
@@ -844,6 +863,7 @@ mod tests {
             unknown: vec!["the creator's launch count".to_owned()],
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 
@@ -973,6 +993,7 @@ mod tests {
             unknown: vec!["the launch block could not be read".to_owned()],
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         };
         let text = template(&empty);
         assert!(text.contains("not known"));
@@ -1000,6 +1021,7 @@ mod tests {
             unknown,
             signals,
             twins,
+            skipped: Vec::new(),
         }
     }
 
@@ -1214,7 +1236,7 @@ mod tests {
     /// this test green -- which is the exact failure being fixed here, one
     /// layer up. Going through the real builder means the labels in the test
     /// are the labels the bot sees.
-    fn the_live_robinhood_sheet() -> FactSheet {
+    pub(crate) fn the_live_robinhood_sheet() -> FactSheet {
         let dossier = realorrug_onchain::Dossier {
             mint: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
                 [0x13u8; 20],

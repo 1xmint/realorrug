@@ -528,6 +528,7 @@ mod tests {
             unknown: Vec::new(),
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 
