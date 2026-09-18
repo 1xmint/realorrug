@@ -115,8 +115,13 @@ stay attached to the thing it was measured about. The share one address \
 holds is not the share the creator sold; a count of launches is not a count \
 of buyers. Moving a figure onto a different subject builds a false sentence \
 out of true digits, and it is the one mistake that gets a whole reply thrown \
-away. Add no figures of your own, and never state a price or a market \
-capitalisation -- this account never does, for any token.
+away. Add no figures of your own. You may state the price or the market \
+capitalisation, but only together with the moment the sheet read it at -- \
+never one without the other. A hint at where it could go next is allowed \
+only when the sheet carries a measured outcome rate for launches shaped \
+like this one, and even then it must be hedged, never certain, and carry \
+its own reasoning. Never write an instruction to buy, sell or hold -- for \
+this token or for the account's own, which earns no different treatment.
 two. Lead with the sentence that is about THIS coin: whichever measurement \
 most changes what somebody would do next. That is usually a share one \
 address controls, a mechanism still live, or something this launcher has \
@@ -337,6 +342,13 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
     let mut violations = forbidden::check_target(&text);
     violations.extend(forbidden::check_level(&text, level));
     violations.extend(forbidden::check_unconditional(&text));
+    // ADR 0033 §3: a hint at a future move is authorised only when the sheet
+    // itself carries a measured outcome rate for launches shaped like this
+    // one -- `check_unconditional` has no sheet to ask, so an unbacked hint
+    // would otherwise reach publication unrefused. `check_hint` is the one
+    // caller of the three design-0020 checks above that needs `sheet`, which
+    // this function already has.
+    violations.extend(forbidden::check_hint(&text, sheet));
     // Design 0020 §4's required lines: a `CantTell` reply that never says
     // what could not be read, or a `NothingUglyYet` reply that never states
     // the age, is the one shape none of the three checks above catches --
@@ -708,6 +720,26 @@ mod tests {
     }
 
     #[test]
+    fn an_unbacked_hint_ships_the_template_through_the_real_pipeline() {
+        // ADR 0033 §3, tested through `write` itself rather than
+        // `forbidden::check_hint` directly: `sheet()` carries no
+        // `Kind::OutcomeRate` fact (production sheets do not yet), so a
+        // hedged, reasoned hint at a future move must still be refused here
+        // -- proof that `write`'s gate actually calls `check_hint`, not just
+        // that `check_hint` itself works in isolation.
+        let reply = write(
+            &sheet(),
+            Some(&Says(
+                "11 accounts at birth. This could 10x, because launches like this one \
+                 graduate fast.",
+            )),
+        );
+        assert!(reply.is_template(), "{:?}", reply.text);
+        assert!(matches!(reply.fellback, Some(Fellback::Forbidden(_))));
+        assert!(!reply.text.contains("10x"));
+    }
+
+    #[test]
     fn advice_ships_the_template() {
         let reply = write(
             &sheet(),
@@ -1076,7 +1108,8 @@ mod tests {
             "your own words",
             "about THIS coin",
             "not known",
-            "never state a price",
+            "only together with the moment the sheet read it at",
+            "Never write an instruction to buy, sell or hold",
             "Never call a dev, team, founder, creator, handle or company",
         ] {
             assert!(SYSTEM.contains(phrase), "the prompt dropped {phrase:?}");

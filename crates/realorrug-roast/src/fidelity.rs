@@ -117,7 +117,11 @@ impl Subject {
             | Kind::DevBuy
             | Kind::DevBuyUnseen => Self::Creator,
             Kind::Holders | Kind::LargestHolderShare => Self::Holders,
-            Kind::LaunchRecipients | Kind::LaunchTransactions => Self::Launch,
+            // `OutcomeRate` (ADR 0033) measures launches shaped like this one,
+            // not this launch alone, but it is still a claim about the launch
+            // population rather than the creator, holders or venue -- the
+            // same subject as the other two, so one arm, not three.
+            Kind::LaunchRecipients | Kind::LaunchTransactions | Kind::OutcomeRate => Self::Launch,
             Kind::VenueUnmeasured
             | Kind::VenueMeasured
             | Kind::VenueGraduated
@@ -140,10 +144,11 @@ impl Subject {
             | Kind::RoundTripKernel
             | Kind::RoundTripBar
             | Kind::CostBand => Self::Venue,
-            Kind::Capacity | Kind::CapacityNone | Kind::CapacityAfterGraduation => {
-                Self::Liquidity
-            }
-            Kind::Graduated | Kind::Age | Kind::SelfMintWithheld => Self::Token,
+            Kind::Capacity
+            | Kind::CapacityNone
+            | Kind::CapacityAfterGraduation
+            | Kind::CurveLiquidity => Self::Liquidity,
+            Kind::Graduated | Kind::Age => Self::Token,
         }
     }
 }

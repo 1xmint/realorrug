@@ -33,22 +33,20 @@ use crate::clause::{Clause, Kind, Voice};
 use crate::fidelity::{Authorised, Subject};
 use std::fmt::Write as _;
 
-/// What a fact is a claim about, because one kind is withheld for one mint.
+/// What a fact is a claim about, because one kind carries an extra
+/// obligation: it must state the moment it was read at.
 ///
-/// ADR 0013 constraint 5: the analyst never states its own token's price or
-/// market capitalisation. That is enforced here rather than requested of the
-/// model — a fact tagged [`About::Price`] is dropped from the sheet for the
-/// configured mint **before the model sees it**, so the number is never in the
-/// set the fidelity check would authorise.
+/// ADR 0033 supersedes ADR 0013 constraint 5: the analyst may state price,
+/// market capitalisation and liquidity for every token, including its own
+/// (ADR 0013 constraint 6, now literal). What constraint 5 asked for instead
+/// -- "a price without its moment is a stale price that looks current" -- is
+/// enforced through this tag: a fact built with [`About::Price`] carries the
+/// block or time it was read at in its label or its rendering, so the model
+/// cannot repeat the number without repeating when it was true.
 ///
-/// **Nothing on the sheet is a price fact today.** Every figure the builder
-/// emits is structure, history, depth, cost or population, so the rule has
-/// nothing to drop yet. The variant exists so that the first price or
-/// market-cap fact anyone adds is withheld for the analyst's own token by
-/// construction, rather than by a reviewer remembering the ADR. The residual
-/// is stated plainly: [`Fact::exact`] and [`Fact::share`] tag a measurement, so
-/// an author adding a market-cap line through them and not through a literal
-/// still has to choose the tag. There is no way to make the compiler ask.
+/// [`Fact::exact`] and [`Fact::share`] tag a measurement, so an author adding
+/// a price or market-cap line through them and not through a literal still
+/// has to choose the tag. There is no way to make the compiler ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum About {
     /// Structure, history, depth, cost or population -- what the analyst
@@ -394,11 +392,13 @@ impl FactSheet {
     /// missing input is a refusal to claim, not a default.
     ///
     /// `self_mint` is the analyst's own token, from `REALORRUG_SELF_MINT`, or
-    /// `None` when no token is special. When the dossier is about that mint,
-    /// every [`About::Price`] fact is dropped and the sheet says so
-    /// ([`withhold_price`]). Everything else about the token is stated on the
-    /// same rule as any other coin — ADR 0013 constraint 6 — which is why this
-    /// is one filter and not a separate path.
+    /// `None` when no token is special. ADR 0033 (superseding ADR 0013
+    /// constraint 5): the analyst's own token is now judged on the same rule
+    /// as any other coin, price included, per ADR 0013 constraint 6. This
+    /// parameter is no longer read for that decision -- it stays on the
+    /// signature rather than being torn out of every call site in this
+    /// packet, in case a later one (the hint log, ADR 0033 §4) needs to know
+    /// which mint is the analyst's own.
     ///
     /// `first_party` is the named-address list `Signal::RepeatLauncher` must
     /// exclude before it measures a floor (`creator.rs::repeat_launcher_floor`,
@@ -415,6 +415,11 @@ impl FactSheet {
                   optional misses skipped) is a few short, well-commented branches added to an \
                   already-long assembly function; splitting it out for a line count would move \
                   the comments away from the code they explain for no behaviour change"
+    )]
+    #[expect(
+        unused_variables,
+        reason = "ADR 0033 stops self_mint driving price withholding; kept on the signature per \
+                  the doc comment above rather than removed from every call site in this packet"
     )]
     pub fn build(
         dossier: &Dossier,
@@ -556,7 +561,7 @@ impl FactSheet {
         }
 
         if let Some(curve) = &dossier.curve {
-            push_curve(&mut facts, &mut unknown, curve);
+            push_curve(&mut facts, &mut unknown, curve, dossier.read_at);
         } else {
             unknown.push("the bonding curve could not be read".to_owned());
         }
@@ -666,13 +671,9 @@ impl FactSheet {
         let mut seen = std::collections::BTreeSet::new();
         unknown.retain(|miss| seen.insert(miss.clone()));
 
-        // Last, after every push, so a price fact added anywhere above is
-        // caught. Compared on the parsed address, not on text: the mint a
-        // stranger typed has already been parsed by the time a dossier exists,
-        // and two spellings of one address must not be two tokens here.
-        if self_mint.is_some_and(|m| dossier.mint == realorrug_types::ChainAddress::Solana(*m)) {
-            withhold_price(&mut facts);
-        }
+        // ADR 0033: no filter runs here any more. The analyst's own token is
+        // judged, and priced, on the same rule as any other coin (ADR 0013
+        // constraint 6, now literal) -- see the `self_mint` doc comment above.
 
         // One string per fired signal, in the same order the signal fired --
         // computed from `signals` itself so the two can never drift apart,
@@ -813,37 +814,6 @@ impl FactSheet {
         }
         out
     }
-}
-
-/// ADR 0013 constraint 5, applied to one sheet.
-///
-/// Drops every [`About::Price`] fact and says so in the trusted block, so the
-/// model is told *why* the figure is absent rather than left to supply one --
-/// which it could not do anyway, because a number that is not on the sheet is
-/// one the fidelity check refuses. The note carries no digit for that reason:
-/// [`FactSheet::authorised`] reads numerals out of the rendered block, and a
-/// note citing the ADR by number would authorise that number.
-///
-/// A function of the facts alone, and separate from [`FactSheet::build`], so
-/// it can be tested against a sheet that carries a price fact -- which no
-/// dossier produces today.
-fn withhold_price(facts: &mut Vec<Fact>) {
-    facts.retain(|f| f.about != About::Price);
-    facts.push(Fact {
-        about: About::Measurement,
-        kind: Kind::SelfMintWithheld,
-        label: "this token".to_owned(),
-        rendered: "the analyst's own. Its price and market capitalisation are never stated, \
-                   whoever asks and whatever they are. Say so if it comes up; say nothing \
-                   about what it is worth."
-            .to_owned(),
-        values: Vec::new(),
-        // No clause, and this is the strongest case for the empty list being a
-        // real mechanism rather than an omission: the note tells the model why
-        // a figure is missing, and there is no arrangement of selections that
-        // publishes a sentence about the analyst's own price.
-        clauses: Vec::new(),
-    });
 }
 
 /// Radar's own words for a fact it could not read.
@@ -1668,11 +1638,19 @@ fn push_base_rates(facts: &mut Vec<Fact>, rates: &BaseRates) {
     );
 }
 
-fn push_curve(
-    facts: &mut Vec<Fact>,
-    unknown: &mut Vec<String>,
-    curve: &realorrug_onchain::CurveFacts,
-) {
+/// Pushes the "has this token graduated" fact and, when it has, the AMM
+/// exit-capacity note, returning `true` so `push_curve` skips the curve-only
+/// facts that follow.
+///
+/// Split out of `push_curve` to keep that function under the line-count
+/// lint, not for reuse. A graduated coin has an empty curve *because it
+/// left*, and the two remaining curve facts are both false about it: the
+/// capacity is not zero, it is elsewhere, and the curve's fee schedule is not
+/// the fee the coin pays. "cannot size into this at all" about a coin trading
+/// on an AMM is rule 9 read backwards -- absent taken for zero -- and it is
+/// the worst line the sheet could carry, because a graduated coin is exactly
+/// the kind of coin people ask the bot about.
+fn push_graduation(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) -> bool {
     facts.push(
         Fact {
             about: About::Measurement,
@@ -1699,13 +1677,6 @@ fn push_curve(
             },
         ),
     );
-    // A graduated coin has an empty curve *because it left*, and the two
-    // remaining curve facts are both false about it: the capacity is not zero,
-    // it is elsewhere, and the curve's fee schedule is not the fee the coin
-    // pays. "cannot size into this at all" about a coin trading on an AMM is
-    // rule 9 read backwards -- absent taken for zero -- and it is the worst
-    // line the sheet could carry, because a graduated coin is exactly the kind
-    // of coin people ask the bot about.
     if curve.complete {
         facts.push(
             Fact {
@@ -1725,8 +1696,53 @@ fn push_curve(
             )
             .saying(Voice::Blunt, "Real or Rug cannot size the AMM it moved to."),
         );
+        return true;
+    }
+    false
+}
+
+fn push_curve(
+    facts: &mut Vec<Fact>,
+    unknown: &mut Vec<String>,
+    curve: &realorrug_onchain::CurveFacts,
+    read_at: Option<ReadAt>,
+) {
+    if push_graduation(facts, curve) {
         return;
     }
+
+    // ADR 0033: liquidity is one of the figures the analyst may now state for
+    // every token, and it carries the moment it was read at -- a reserve
+    // figure with no read point is a stale figure that looks current. Read
+    // from `curve.quote_reserves`, already fetched by `curve_facts` for the
+    // capacity calculation below; no new RPC call.
+    if let Some(asset) = &curve.quote_asset {
+        let amount = format!(
+            "{} {}",
+            render_quote(curve.quote_reserves, asset.decimals),
+            asset.symbol
+        );
+        let moment = read_at.map_or_else(|| "an unread point".to_owned(), |r| r.to_string());
+        facts.push(
+            Fact {
+                about: About::Price,
+                kind: Kind::CurveLiquidity,
+                label: format!("quote asset held in the bonding curve now, read at {moment}"),
+                rendered: amount.clone(),
+                values: vec![quote_as_f64(curve.quote_reserves, asset.decimals)],
+                clauses: Vec::new(),
+            }
+            .saying(
+                Voice::Plain,
+                format!("The curve holds {amount} right now, as of {moment}."),
+            )
+            .saying(
+                Voice::Blunt,
+                format!("{amount} in the curve, as of {moment}."),
+            ),
+        );
+    }
+
     match (curve.quote_capacity, &curve.quote_asset) {
         (Some(l), Some(asset)) => {
             let amount = format!("{} {}", render_quote(l, asset.decimals), asset.symbol);
@@ -2122,14 +2138,14 @@ mod tests {
         assert!(!sheet.render().contains("99999"));
     }
 
-    /// A market-cap fact, which nothing builds today and which is exactly what
-    /// the rule exists to catch when something does.
+    /// A market-cap fact, naming the moment it was read at as ADR 0033
+    /// requires.
     fn a_price_fact() -> Fact {
         Fact {
             about: About::Price,
-            kind: Kind::SelfMintWithheld,
+            kind: Kind::CurveLiquidity,
             clauses: Vec::new(),
-            label: "market capitalisation when read".to_owned(),
+            label: "market capitalisation, read at slot 1".to_owned(),
             rendered: "69000 USD".to_owned(),
             values: vec![69_000.0, 69.0],
         }
@@ -2176,18 +2192,16 @@ mod tests {
     }
 
     #[test]
-    fn a_price_fact_is_withheld_and_the_sheet_says_why() {
-        // ADR 0013 constraint 5. The figure must leave the authorised set, not
-        // merely the rendering: a price the model may not see but may still
-        // cite is a price the fidelity check would let through.
-        //
-        // Re-apply the bug by deleting the `retain` in `withhold_price`: the
-        // 69000 stays authorised and this fails on the first assertion.
-        let mut facts = vec![
+    fn a_price_fact_is_kept_and_stays_authorised() {
+        // ADR 0033 supersedes ADR 0013 constraint 5: `FactSheet::build` no
+        // longer drops `About::Price` facts for the self mint. Re-apply the
+        // withholding this replaces by filtering `facts` on `About::Price`
+        // before the sheet is built: the 69000 leaves the authorised set and
+        // the second assertion fails.
+        let facts = vec![
             Fact::exact(Kind::LaunchRecipients, "recipients", 6.0, "6"),
             a_price_fact(),
         ];
-        withhold_price(&mut facts);
         let sheet = FactSheet {
             mint: "M".to_owned(),
             read_at: None,
@@ -2198,37 +2212,34 @@ mod tests {
             twins: Vec::new(),
         };
 
-        let authorised = sheet.authorised();
         assert!(
-            !authorised.iter().any(|a| (a.value - 69_000.0).abs() < 1e-9),
-            "the market cap survived withholding: {authorised:?}"
-        );
-        assert!(
-            !authorised.iter().any(|a| (a.value - 69.0).abs() < 1e-9),
-            "a rendering of the market cap survived: {authorised:?}"
-        );
-        assert!(
-            sheet.facts.iter().all(|f| f.about != About::Price),
-            "a price fact is still on the sheet: {:?}",
+            sheet.facts.iter().any(|f| f.about == About::Price),
+            "the price fact was dropped: {:?}",
             sheet.facts
         );
-
-        // Withholding must not become silence, and must not cost the answer.
-        // Rule 9: an absence that goes unmentioned reads as reassurance, or
-        // here as coyness -- the model is told why the figure is not there.
-        let rendered = sheet.render();
-        assert!(rendered.contains("never stated"), "{rendered}");
+        let authorised = sheet.authorised();
+        assert!(
+            authorised.iter().any(|a| (a.value - 69_000.0).abs() < 1e-9),
+            "the market cap did not stay authorised: {authorised:?}"
+        );
         assert!(
             authorised.iter().any(|a| (a.value - 6.0).abs() < 1e-9),
-            "the measured fact was lost with the price: {authorised:?}"
+            "an unrelated measured fact was lost: {authorised:?}"
         );
+    }
 
-        // And the note itself authorises nothing. `authorised` reads numerals
-        // out of the rendered block, so a note that cited the ADR by number
-        // would licence that number. Only the recipient count remains.
+    #[test]
+    fn a_price_facts_label_names_its_read_point() {
+        // ADR 0033: "every price or market cap carries the block or time it
+        // was read at" -- a price without its moment is a stale price that
+        // looks current. Checked on the fact's own label rather than the
+        // sheet-wide read line, because a reply may select and quote one
+        // fact without the rest of the sheet.
+        let fact = a_price_fact();
+        assert_eq!(fact.about, About::Price);
         assert!(
-            authorised.iter().all(|a| (a.value - 6.0).abs() < 1e-9),
-            "the note put a number into the authorised set: {authorised:?}"
+            fact.label.contains("slot") || fact.rendered.contains("slot"),
+            "a price fact must name the block or time it was read at: {fact:?}"
         );
     }
 
@@ -2876,7 +2887,12 @@ mod tests {
             quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
             fees: None,
         };
-        push_curve(&mut facts, &mut unknown, &curve);
+        push_curve(
+            &mut facts,
+            &mut unknown,
+            &curve,
+            Some(ReadAt::Solana(Slot(444_007_820))),
+        );
         let mut rendered = String::new();
         for fact in &facts {
             let _ = writeln!(rendered, "{}: {}", fact.label, fact.rendered);
@@ -2884,6 +2900,7 @@ mod tests {
         assert_eq!(
             rendered,
             "has the token graduated off the bonding curve: no\n\
+             quote asset held in the bonding curve now, read at slot 444007820: 6.1861 SOL\n\
              quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN \
              impact budget, NOT a ceiling the venue imposes (research 0022): 0.3030 SOL\n"
         );
@@ -3465,39 +3482,33 @@ mod tests {
     }
 
     #[test]
-    fn the_rule_applies_to_the_configured_mint_and_to_no_other() {
-        // Three sheets, one dossier. The comparison in `build` is the whole of
-        // "is this the analyst's own token", and it is one character from
-        // applying to every coin or to none.
+    fn the_self_mint_gets_no_special_treatment() {
+        // ADR 0033 rule 5 supersedes ADR 0013 constraint 5, which this test
+        // used to pin: the analyst's own token is now treated exactly like
+        // any other, hints included -- no special handling, no disclosure
+        // line. `self_mint` used to make `build` drop every `About::Price`
+        // fact and append a "never stated" note for that one address; that
+        // filter is gone (`sheet.rs` commit 4d3d1ff). Passing `self_mint`
+        // must not change what the sheet says about a dossier at all.
         let own = realorrug_types::Address::new([3u8; 32]);
         let other = realorrug_types::Address::new([4u8; 32]);
         let dossier = dossier_for([3u8; 32]);
 
-        let withheld = FactSheet::build(&dossier, None, None, Some(&own), None);
-        assert!(
-            withheld.render().contains("never stated"),
-            "the configured mint must be told apart: {}",
-            withheld.render()
-        );
+        let own_token = FactSheet::build(&dossier, None, None, Some(&own), None).render();
+        let stranger = FactSheet::build(&dossier, None, None, Some(&other), None).render();
+        let unconfigured = FactSheet::build(&dossier, None, None, None, None).render();
 
-        // Another coin is answered like any other, with no mention of the rule.
-        // A note on every sheet would make every reply about the analyst's own
-        // token, which is the opposite of constraint 6.
-        let stranger = FactSheet::build(&dossier, None, None, Some(&other), None);
-        assert!(
-            !stranger.render().contains("never stated"),
-            "{}",
-            stranger.render()
+        assert_eq!(
+            own_token, stranger,
+            "the analyst's own token must be judged on the same rule as any other coin"
         );
-
-        // No token configured: no token is special. Rule 8 is not touched --
-        // absence means the rule has nothing to apply to, not that a default
-        // mint is assumed.
-        let unconfigured = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            own_token, unconfigured,
+            "the analyst's own token must be judged on the same rule as any other coin"
+        );
         assert!(
-            !unconfigured.render().contains("never stated"),
-            "{}",
-            unconfigured.render()
+            !own_token.contains("never stated"),
+            "a disclosure line leaked back onto the analyst's own token: {own_token}"
         );
     }
 }
