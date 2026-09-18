@@ -248,7 +248,7 @@ tests already run.
 | 3. Bounded funding investigation — **built 2026-09-18**, see below | onchain `wallets.rs`, `budget.rs`, `robinhood.rs`, `memory.rs`; roast `sheet.rs`, `clause.rs`, `fidelity.rs` | Four selected buyers produce evidenced funding paths and sample coverage; dust/shared-service fixtures cannot become ownership claims; CU cap enforced | 2 |
 | 4. Roles, market and venue mechanics | onchain roles.rs (new), `market.rs` (new), `robinhood.rs`; robinhood `pons.rs`; roast `sheet.rs` | Pool/locker excluded only with proof; dated market snapshot, role-correct concentration, custody and verified admin facts available; liquidity dollars never become capacity | 2 |
 | 5. Creator cash-flow ledger | onchain wallets.rs, `memory.rs`; robinhood `pons.rs`; roast `sheet.rs` | Fee recipient differs from deployer in fixture; transfers cannot masquerade as sales; incomplete basis cannot print profit | 3, 4 |
-| 6. Solana owner/funding adapter | onchain `rpc.rs`, `dossier.rs`, wallets.rs | Largest accounts aggregated by owner; paged funding preserves incomplete history; identical finding types across chains | 2, 3 |
+| 6. Solana owner/funding adapter — **owner half built 2026-09-18 (slice 6a), see below**; funding half pending | onchain `rpc.rs`, `dossier.rs`, wallets.rs | Largest accounts aggregated by owner; paged funding preserves incomplete history; identical finding types across chains | 2, 3 |
 | 7. Assessment and judgement boundary | roast assessment.rs (new), `verdict.rs`, `voice.rs`; analyst `answer.rs`; serve `check.rs` | Correlated flags count once; critical gaps survive coverage; analyst/site share packet; model band choice shadowed pending approval | 3–6 |
 | 8. Outcome calibration | cli `creator_index.rs`; roast `baserates.rs`; `docs/research/data/` versioned outputs | Mature/censored outcomes separated; time/family-held-out evaluation; curve peaks never advertised as executable returns; scoped rates reach sheet only when eligible | 7 |
 | 9. Observation jobs and callbacks | cli observe.rs (new), `main.rs`; analyst `followup.rs`, `daemon.rs`; onchain `memory.rs`; deployment timer | Standalone outcome refresh; published claim links; no "called it" from a neutral old post; unchanged token produces no automatic callback | 2, 5, 8 |
@@ -300,6 +300,48 @@ withdrawals). It never says "one person", "insiders", "the same owner" or
 "common control", and its tests fail if it does. Slices 5 and 6 build on
 `wallets::investigate`, `Funding`, `Candidate`, `Funder` and
 `Memory::funding_edges`.
+
+### Slice 6a as built (2026-09-18)
+
+Recording, not recommending. The owner half of row 6:
+`crates/realorrug-onchain/src/rpc.rs` gained `token_largest_accounts`
+(`getTokenLargestAccounts`) and `token_supply` (`getTokenSupply`);
+`crates/realorrug-onchain/src/dossier.rs`'s `build` reads both plus one
+batched `RpcClient::accounts` call (`getMultipleAccounts`) covering every
+sampled account and the mint itself, and aggregates the sampled accounts by
+their decoded `owner` field into `TokenOwnership`/`TokenOwner`. Each owner
+carries its combined balance, how many of the sampled accounts fell under
+it, and its `share_bps` of the supply `getTokenSupply` reported — never the
+largest-accounts total, which is only a sample capped at 20 accounts. The
+mint's own account supplies `mint_authority` and `freeze_authority`
+(`dossier::mint_authorities`, reading the shared SPL/Token-2022
+`COption<Pubkey>` layout directly rather than widening
+`realorrug_pumpfun::token::MintAccount`, which discards the mint-authority
+address and refuses an unmodelled extension it does not need to reject to
+answer this).
+
+An owner is excluded from "largest holder" only with proof: its address is
+recomputed as the pump.fun bonding curve's program-derived address from the
+mint itself (`realorrug_pumpfun::pda::bonding_curve`), a check a reader can
+rerun. Every other owner keeps `OwnerRole::Unresolved` — never upgraded to a
+person or a named role — regardless of its balance's size or shape. A
+transport, node or shape failure on any of the three reads fails the whole
+owner read rather than reporting a partial list as complete; `build` records
+it as "token ownership" in `Dossier::unavailable` and still returns the rest
+of the dossier (rule 8/9). Fixture tests in `dossier.rs` cover two sampled
+accounts under one owner aggregating to one holder, a proven curve owner
+kept alongside an unproven one left unresolved, and a failed batched read
+producing that named gap rather than an empty or zeroed `TokenOwnership`.
+
+**Not done in this slice**: nothing in `realorrug-roast` reads
+`Dossier::token_ownership` yet. Wiring it into the sheet needs a new
+`Kind` in `realorrug-roast/src/clause.rs` and a ranking entry in
+`salience.rs`, both outside this slice's file scope (onchain `rpc.rs`,
+`dossier.rs`; roast `sheet.rs` only for wording an existing fact already
+needs) — left for the slice that adds the fact to the sheet. The funding
+half of row 6 (Solana buyer investigation, the `wallets.rs`/`robinhood.rs`
+`Address`-to-`String` work a separate investigation proposed) is also not
+part of this slice.
 
 ## 4. Decisions pending the owner
 

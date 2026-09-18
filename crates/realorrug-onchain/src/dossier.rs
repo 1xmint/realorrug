@@ -25,6 +25,7 @@
 use std::time::SystemTime;
 
 use realorrug_pumpfun::curve::BondingCurve;
+use realorrug_pumpfun::token::{TokenAccount, TokenProgram};
 use realorrug_pumpfun::{Fees, pda};
 use realorrug_types::{Address, ChainAddress, ReadAt, Slot};
 use serde::{Deserialize, Serialize};
@@ -211,6 +212,70 @@ pub struct Holders {
     pub largest_share_bps: Option<u16>,
 }
 
+/// Whether a large owner's role could be proven, or must stay unresolved.
+///
+/// **`Unresolved` is the default and the safe one.** Excluding an owner from
+/// "largest holder" on the strength of a balance's size or shape alone would
+/// be exactly the guess AGENTS.md rule 9 forbids. The only accepted proof
+/// today is recomputing the pump.fun bonding curve's program-derived address
+/// from the mint itself and finding an owner's address matches it -- math a
+/// reader can rerun, not an inference from what the balance looks like.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnerRole {
+    /// This owner is the verified pump.fun bonding curve for this exact
+    /// mint, proven by recomputing its program-derived address.
+    BondingCurve,
+    /// No program identity could be established for this owner. Never
+    /// upgraded to a person, or to a role this reader did not establish.
+    Unresolved,
+}
+
+/// One address's aggregated stake among the largest token accounts sampled.
+///
+/// **An address, never a person**, same rule as [`Holders`]: a token account
+/// belongs to whatever its `owner` field names, and that may be a wallet, a
+/// pool vault or a program, none of which this reader can tell apart from a
+/// balance alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenOwner {
+    /// The wallet or program that owns the aggregated balance.
+    pub owner: Address,
+    /// How many of the sampled largest accounts aggregate under this owner.
+    pub accounts: u32,
+    /// The combined balance, in the mint's smallest unit.
+    pub amount: u128,
+    /// This owner's share of [`TokenOwnership::supply`], in basis points.
+    /// `None` when the supply was zero -- never a share against nothing.
+    pub share_bps: Option<u16>,
+    /// Whether this owner's role could be proven.
+    pub role: OwnerRole,
+}
+
+/// The largest token accounts for a mint, aggregated by owner, with the
+/// supply their shares are measured against and the mint's own authorities.
+///
+/// Design 0027 §3 row 6 names this read (`getTokenLargestAccounts` +
+/// `getMultipleAccounts` + `getTokenSupply`) as the owner half of what row 7
+/// also depends on; built here as slice 6a.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenOwnership {
+    /// Owners, most-held first. **A sample, not every holder** --
+    /// `getTokenLargestAccounts` caps at 20 accounts.
+    pub owners: Vec<TokenOwner>,
+    /// The denominator every `share_bps` above is a share of -- read fresh
+    /// from `getTokenSupply`, never assumed from the largest-accounts total.
+    pub supply: u128,
+    /// The supply's decimal places.
+    pub decimals: u8,
+    /// Who may mint more of this token, when anyone may. `None` means
+    /// minting is permanently disabled for this mint -- proof supply cannot
+    /// be inflated further from here, not proof it never was.
+    pub mint_authority: Option<Address>,
+    /// Who may freeze an account of this mint, when anyone may. Proof an
+    /// account *can* be frozen shut, not proof one has been.
+    pub freeze_authority: Option<Address>,
+}
+
 /// Everything the analyst may assert about one token.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dossier {
@@ -251,6 +316,11 @@ pub struct Dossier {
     /// investigated"; a reader that tried and failed names "funding" in
     /// `unavailable`.
     pub funding: Option<crate::wallets::Funding>,
+    /// The largest token accounts, aggregated by owner, and the mint's own
+    /// authorities (design 0027 row 6/7, Solana only today). `None` is "not
+    /// investigated"; a reader that tried and failed names "token ownership"
+    /// in `unavailable`.
+    pub token_ownership: Option<TokenOwnership>,
     /// Facts that could not be read, and why.
     pub unavailable: Vec<Unavailable>,
     /// RPC calls this dossier cost.
@@ -312,6 +382,7 @@ pub fn build(
         chain_launch: None,
         holders: None,
         funding: None,
+        token_ownership: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -387,9 +458,171 @@ pub fn build(
         }
     }
 
+    // 4. Largest token accounts, aggregated by owner, and the mint's own
+    // authorities (design 0027 row 6/7). Three calls: `getTokenLargestAccounts`,
+    // `getTokenSupply`, and one batched `getMultipleAccounts` covering every
+    // sampled account plus the mint itself -- each already drawn from `budget`
+    // by `RpcClient::call`, so nothing here needs a separate ceiling. A
+    // transport or shape failure on any of the three fails the whole read
+    // rather than reporting a partial owner list as complete.
+    match token_ownership(client, budget, mint) {
+        Ok(facts) => dossier.token_ownership = Some(facts),
+        Err(why) => dossier.miss("token ownership", why),
+    }
+
     dossier.calls = budget.calls_made();
     dossier.elapsed_ms = budget.elapsed().as_millis();
     Ok(dossier)
+}
+
+/// Builds [`TokenOwnership`]: the largest token accounts for `mint`,
+/// aggregated by their decoded `owner` field, plus the mint's own
+/// authorities.
+///
+/// # Errors
+///
+/// [`RpcError`] on transport, node or shape failures from any of the three
+/// reads, or when the budget is spent. Never returns a partial owner list
+/// silently -- a caller that could not resolve the mint's own account, for
+/// instance, has not established the authorities and must not print `None`
+/// for them as if minting were proven disabled (rule 9).
+fn token_ownership(
+    client: &RpcClient,
+    budget: &mut Budget,
+    mint: &Address,
+) -> Result<TokenOwnership, RpcError> {
+    let largest = client.token_largest_accounts(budget, mint)?;
+    let supply = client.token_supply(budget, mint)?;
+
+    // One batched read for every sampled account's owner plus the mint's own
+    // account, so the whole aggregation shares one slot and costs one call
+    // rather than one per address (see `MultiAccountRead`'s own doc on why a
+    // shared slot matters).
+    let mut addresses: Vec<Address> = largest.iter().map(|a| a.address).collect();
+    addresses.push(*mint);
+    let multi = client.accounts(budget, &addresses)?;
+
+    let mint_account = multi.accounts.last().ok_or_else(|| {
+        RpcError::Malformed("getMultipleAccounts returned an empty list".to_owned())
+    })?;
+    let Some(mint_account) = mint_account else {
+        return Err(RpcError::Malformed(
+            "mint has no account, so its authorities cannot be read".to_owned(),
+        ));
+    };
+    let (mint_authority, freeze_authority) = mint_authorities(&mint_account.data)?;
+
+    let curve = pda::bonding_curve(mint);
+    let mut owners: Vec<TokenOwner> = Vec::new();
+    for account in &multi.accounts[..largest.len()] {
+        // A largest-accounts entry the batched read came back empty for is a
+        // race between the two calls, not a zero balance (rule 9) -- skipped
+        // rather than counted as an owner with nothing in it. Likewise an
+        // account whose owning program is neither token program, or whose
+        // bytes this reader cannot parse as a token account (an unmodelled
+        // Token-2022 extension, say): the balance is real but this reader
+        // cannot say who holds it, so it is left out rather than guessed.
+        let Some(account) = account else { continue };
+        let Some(program) = account
+            .owner
+            .as_deref()
+            .and_then(|o| o.parse::<Address>().ok())
+            .and_then(|o| TokenProgram::of(&o))
+        else {
+            continue;
+        };
+        let Ok(parsed) = TokenAccount::parse(&account.data, &program.id()) else {
+            continue;
+        };
+
+        if let Some(existing) = owners.iter_mut().find(|o| o.owner == parsed.owner) {
+            existing.accounts += 1;
+            existing.amount += u128::from(parsed.amount);
+        } else {
+            let role = if curve == Some(parsed.owner) {
+                OwnerRole::BondingCurve
+            } else {
+                OwnerRole::Unresolved
+            };
+            owners.push(TokenOwner {
+                owner: parsed.owner,
+                accounts: 1,
+                amount: u128::from(parsed.amount),
+                share_bps: None,
+                role,
+            });
+        }
+    }
+
+    let supply_amount = u128::from(supply.amount);
+    for owner in &mut owners {
+        owner.share_bps = share_bps(owner.amount, supply_amount);
+    }
+    owners.sort_by_key(|o| std::cmp::Reverse(o.amount));
+
+    Ok(TokenOwnership {
+        owners,
+        supply: supply_amount,
+        decimals: supply.decimals,
+        mint_authority,
+        freeze_authority,
+    })
+}
+
+/// `amount`'s basis points of `supply`, or `None` when the supply is zero --
+/// never a share against nothing (rule 9).
+fn share_bps(amount: u128, supply: u128) -> Option<u16> {
+    if supply == 0 {
+        return None;
+    }
+    u16::try_from(amount.saturating_mul(10_000) / supply).ok()
+}
+
+/// Reads a mint's two authorities directly from its raw account bytes.
+///
+/// The SPL Token and Token-2022 layouts share these two `COption<Pubkey>`
+/// fields at the same offsets (mint authority's tag at byte 0, its address at
+/// byte 4; freeze authority's tag at byte 46, its address at byte 50), so this
+/// needs no program identity and no extension walk -- unlike
+/// `realorrug_pumpfun::token::MintAccount::parse`, which refuses an
+/// unmodelled extension entirely. Refusing an authority fact because of an
+/// unrelated extension this reader has never seen would be the wrong trade:
+/// the extension might change what a balance is worth, but it cannot move
+/// where these two fields sit.
+///
+/// `MintAccount::parse` already reads `freeze_authority`, but discards
+/// `mint_authority`'s address -- it only needs to know minting is possible,
+/// not by whom. Repeating the two reads here is smaller than widening that
+/// type for the one caller that needs the address.
+///
+/// # Errors
+///
+/// [`RpcError::Malformed`] when the account is shorter than a mint's base
+/// layout, or an option tag is neither zero nor one.
+fn mint_authorities(data: &[u8]) -> Result<(Option<Address>, Option<Address>), RpcError> {
+    if data.len() < 82 {
+        return Err(RpcError::Malformed(format!(
+            "{} bytes, and a mint needs at least 82",
+            data.len()
+        )));
+    }
+    let option = |tag_at: usize, addr_at: usize| -> Result<Option<Address>, RpcError> {
+        let tag = u32::from_le_bytes(data[tag_at..tag_at + 4].try_into().expect("checked above"));
+        match tag {
+            0 => Ok(None),
+            1 => Ok(Some(Address::new(
+                data[addr_at..addr_at + 32]
+                    .try_into()
+                    .expect("checked above"),
+            ))),
+            found => Err(RpcError::Malformed(format!(
+                "mint authority option tag is {found}, which is neither none nor some"
+            ))),
+        }
+    };
+    let mint_authority = option(0, 4)?;
+    let freeze_authority = option(46, 50)?;
+    Ok((mint_authority, freeze_authority))
 }
 
 /// The seam ADR 0028 point 2 names: one chain's reads in, one [`Dossier`] out.
@@ -739,6 +972,7 @@ mod tests {
             chain_launch: None,
             holders: None,
             funding: None,
+            token_ownership: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -1017,6 +1251,7 @@ mod tests {
                 chain_launch: None,
                 holders: None,
                 funding: None,
+                token_ownership: None,
                 unavailable: vec![Unavailable {
                     fact: "robinhood reads",
                     why: format!("fake reader, token {:?}", token.0),
@@ -1131,13 +1366,17 @@ mod tests {
         // Truncated paging refuses to guess a launch (rule 9), so the miss
         // path never learns a creator to read step 3 from.
         assert!(miss.launch.is_none());
-        assert_eq!(miss_budget.calls_made(), 3); // 2 paging + 1 curve miss.
+        // 2 paging + 1 curve miss + 1 token-ownership miss (getTokenLargestAccounts
+        // fails immediately on this transport's `value: null`, so step 4 never
+        // reaches getTokenSupply or getMultipleAccounts).
+        assert_eq!(miss_budget.calls_made(), 4);
 
         let mut hit_budget = Budget::new(60, 2, std::time::Duration::from_secs(30));
         let hit = build(&client, &mut hit_budget, &mint, Some(&mem)).expect("no transport error");
         assert_eq!(hit.launch.as_ref(), Some(&cached));
-        // 0 paging (the hit) + 1 curve miss + 1 creator history (empty page).
-        assert_eq!(hit_budget.calls_made(), 2);
+        // 0 paging (the hit) + 1 curve miss + 1 creator history (empty page)
+        // + 1 token-ownership miss.
+        assert_eq!(hit_budget.calls_made(), 3);
         assert!(hit_budget.calls_made() < miss_budget.calls_made());
     }
 
@@ -1184,8 +1423,11 @@ mod tests {
             crate::dispatch::read_with_memory(&mint_key, &clients, Some(&memory), &mut budget)
                 .expect("read");
         assert_eq!(dossier.launch, Some(launch));
-        assert_eq!(dossier.calls, 2);
-        assert_eq!(budget.calls_made(), 2);
+        // 1 curve miss + 1 creator history (empty page) + 1 token-ownership
+        // miss (this transport answers `getTokenLargestAccounts` with
+        // `value: null`, so step 4 fails after its first call).
+        assert_eq!(dossier.calls, 3);
+        assert_eq!(budget.calls_made(), 3);
     }
 
     impl crate::rpc::Transport for SuccessfulLaunch {
@@ -1382,6 +1624,272 @@ mod tests {
         assert!(dossier.curve.is_none());
         assert!(dossier.unavailable.iter().any(|u| u.fact == "curve"));
         assert_ne!(dossier.read_at, Some(ReadAt::Solana(Slot(999))));
+    }
+
+    /// Encodes bytes as base64, the same alphabet `account_response` above
+    /// inlines, factored out so the token-ownership tests below can build a
+    /// `getMultipleAccounts`-shaped body (several accounts, not one).
+    fn base64_encode(data: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut encoded = String::new();
+        for chunk in data.chunks(3) {
+            let b = [
+                chunk[0],
+                *chunk.get(1).unwrap_or(&0),
+                *chunk.get(2).unwrap_or(&0),
+            ];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    encoded.push(ALPHABET[((n >> (18 - i * 6)) & 0x3F) as usize] as char);
+                } else {
+                    encoded.push('=');
+                }
+            }
+        }
+        encoded
+    }
+
+    /// A minimal SPL token account: `mint` at bytes 0..32, `owner` at 32..64,
+    /// `amount` at 64..72, every other field zeroed to mean "none" -- no
+    /// delegate, initialized, not native, no close authority. Exactly
+    /// [`realorrug_pumpfun::token::TOKEN_ACCOUNT_LEN`] bytes, the length
+    /// `TokenAccount::parse` requires for the un-extended (classic SPL)
+    /// shape.
+    fn token_account_bytes(mint: Address, owner: Address, amount: u64) -> Vec<u8> {
+        let mut data = vec![0u8; 165];
+        data[0..32].copy_from_slice(mint.as_bytes());
+        data[32..64].copy_from_slice(owner.as_bytes());
+        data[64..72].copy_from_slice(&amount.to_le_bytes());
+        data[108] = 1; // AccountState::Initialized
+        data
+    }
+
+    /// A minimal SPL mint account: the mint-authority `COption<Pubkey>` at
+    /// byte 0 (tag) / byte 4 (address), the freeze-authority one at byte 46 /
+    /// byte 50, matching `mint_authorities`'s own doc on the shared layout.
+    fn mint_account_bytes(
+        mint_authority: Option<Address>,
+        freeze_authority: Option<Address>,
+    ) -> Vec<u8> {
+        let mut data = vec![0u8; 82];
+        if let Some(a) = mint_authority {
+            data[0..4].copy_from_slice(&1u32.to_le_bytes());
+            data[4..36].copy_from_slice(a.as_bytes());
+        }
+        data[45] = 1; // is_initialized
+        if let Some(a) = freeze_authority {
+            data[46..50].copy_from_slice(&1u32.to_le_bytes());
+            data[50..82].copy_from_slice(a.as_bytes());
+        }
+        data
+    }
+
+    /// A `getMultipleAccounts`-shaped body naming each account's owning
+    /// program as the classic SPL token program, in the order given.
+    fn multi_accounts_body(accounts: &[Option<&[u8]>]) -> String {
+        let values: Vec<String> = accounts
+            .iter()
+            .map(|a| match a {
+                Some(bytes) => format!(
+                    r#"{{"data":["{}","base64"],"owner":"{}"}}"#,
+                    base64_encode(bytes),
+                    realorrug_pumpfun::token::SPL_TOKEN_PROGRAM
+                ),
+                None => "null".to_owned(),
+            })
+            .collect();
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"value":[{}],"context":{{"slot":1}}}}}}"#,
+            values.join(",")
+        )
+    }
+
+    fn largest_accounts_body(entries: &[(Address, u64)]) -> String {
+        let values: Vec<String> = entries
+            .iter()
+            .map(|(addr, amount)| format!(r#"{{"address":"{addr}","amount":"{amount}"}}"#))
+            .collect();
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"value":[{}]}}}}"#,
+            values.join(",")
+        )
+    }
+
+    fn supply_body(amount: u64, decimals: u8) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"value":{{"amount":"{amount}","decimals":{decimals}}}}}}}"#
+        )
+    }
+
+    /// A transport that routes to canned bodies for the three
+    /// `token_ownership` reads by method name, and errors on anything else --
+    /// nothing else should ever be called from a bare `token_ownership` test.
+    struct TokenOwnershipMock {
+        largest: String,
+        supply: String,
+        multi: String,
+    }
+
+    impl crate::rpc::Transport for TokenOwnershipMock {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            if body.contains("getTokenLargestAccounts") {
+                Ok(self.largest.clone())
+            } else if body.contains("getTokenSupply") {
+                Ok(self.supply.clone())
+            } else if body.contains("getMultipleAccounts") {
+                Ok(self.multi.clone())
+            } else {
+                Err(format!("unexpected call: {body}"))
+            }
+        }
+    }
+
+    /// A transport whose `getMultipleAccounts` answer is a transport-level
+    /// error, so `token_ownership` fails on the batched read specifically
+    /// rather than on the two calls ahead of it.
+    struct FailingMultiAccounts {
+        largest: String,
+        supply: String,
+    }
+
+    impl crate::rpc::Transport for FailingMultiAccounts {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            if body.contains("getTokenLargestAccounts") {
+                Ok(self.largest.clone())
+            } else if body.contains("getTokenSupply") {
+                Ok(self.supply.clone())
+            } else if body.contains("getMultipleAccounts") {
+                Err("connection reset".to_owned())
+            } else {
+                Err(format!("unexpected call: {body}"))
+            }
+        }
+    }
+
+    #[test]
+    fn two_accounts_under_one_owner_aggregate_to_one_holder() {
+        // Requirement (a): two of the sampled largest accounts share a
+        // decoded `owner`, so they must land as one `TokenOwner` with
+        // `accounts: 2` and a summed `amount`, not two separate entries.
+        let mint = Address::new([20u8; 32]);
+        let owner = Address::new([21u8; 32]);
+        let account_a = Address::new([22u8; 32]);
+        let account_b = Address::new([23u8; 32]);
+
+        let largest = largest_accounts_body(&[(account_a, 600), (account_b, 400)]);
+        let supply = supply_body(1_000, 6);
+        let multi = multi_accounts_body(&[
+            Some(&token_account_bytes(mint, owner, 600)),
+            Some(&token_account_bytes(mint, owner, 400)),
+            Some(&mint_account_bytes(None, None)),
+        ]);
+
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(TokenOwnershipMock {
+                largest,
+                supply,
+                multi,
+            }),
+        );
+        let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
+        let facts = token_ownership(&client, &mut budget, &mint).expect("a token ownership read");
+
+        assert_eq!(facts.owners.len(), 1);
+        let only = &facts.owners[0];
+        assert_eq!(only.owner, owner);
+        assert_eq!(only.accounts, 2);
+        assert_eq!(only.amount, 1_000);
+        // 1,000 of 1,000 is the whole supply: 10,000 bps, not a rounded 9,999
+        // or a truncated-to-zero mutant.
+        assert_eq!(only.share_bps, Some(10_000));
+    }
+
+    #[test]
+    fn a_curve_owned_account_is_excluded_with_proof_and_an_unproven_one_is_kept_unresolved() {
+        // Requirement (b): the bonding curve's owner is proven by recomputing
+        // its own PDA from the mint, never by inference from balance size --
+        // a second, equally large owner with no such proof must stay
+        // unresolved rather than being guessed at from its balance alone.
+        let mint = Address::new([30u8; 32]);
+        let curve = pda::bonding_curve(&mint).expect("a bonding curve PDA for this mint");
+        let unproven_owner = Address::new([31u8; 32]);
+        let curve_account = Address::new([32u8; 32]);
+        let other_account = Address::new([33u8; 32]);
+
+        let largest = largest_accounts_body(&[(curve_account, 500), (other_account, 500)]);
+        let supply = supply_body(1_000, 6);
+        let multi = multi_accounts_body(&[
+            Some(&token_account_bytes(mint, curve, 500)),
+            Some(&token_account_bytes(mint, unproven_owner, 500)),
+            Some(&mint_account_bytes(None, None)),
+        ]);
+
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(TokenOwnershipMock {
+                largest,
+                supply,
+                multi,
+            }),
+        );
+        let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
+        let facts = token_ownership(&client, &mut budget, &mint).expect("a token ownership read");
+
+        assert_eq!(facts.owners.len(), 2);
+        let curve_owner = facts
+            .owners
+            .iter()
+            .find(|o| o.owner == curve)
+            .expect("the curve owner is still in the list, just proven");
+        assert_eq!(curve_owner.role, OwnerRole::BondingCurve);
+        let other = facts
+            .owners
+            .iter()
+            .find(|o| o.owner == unproven_owner)
+            .expect("the unproven owner is kept, not dropped");
+        assert_eq!(other.role, OwnerRole::Unresolved);
+    }
+
+    #[test]
+    fn a_failed_batched_account_read_is_a_gap_not_a_zero() {
+        // Requirement (c): a `getMultipleAccounts` transport failure must
+        // surface as an `Err` from `token_ownership` -- which `build` records
+        // in `Dossier::unavailable` under "token ownership" and leaves
+        // `dossier.token_ownership` as `None` -- never an empty or
+        // zero-valued `TokenOwnership`.
+        let mint = Address::new([40u8; 32]);
+        let largest = largest_accounts_body(&[(Address::new([41u8; 32]), 100)]);
+        let supply = supply_body(1_000, 6);
+
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(FailingMultiAccounts { largest, supply }),
+        );
+        let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
+        let err = token_ownership(&client, &mut budget, &mint)
+            .expect_err("a transport failure on the batched read must not become a value");
+        assert!(matches!(err, RpcError::Transport(_)));
+
+        // The same failure, exercised through `build`, must land as a named
+        // gap rather than aborting the whole dossier (AGENTS.md rule 8/9).
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(FailingMultiAccounts {
+                largest: largest_accounts_body(&[(Address::new([41u8; 32]), 100)]),
+                supply: supply_body(1_000, 6),
+            }),
+        );
+        let mut budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
+        let dossier = build(&client, &mut budget, &mint, None).expect("a partial dossier, not Err");
+        assert!(dossier.token_ownership.is_none());
+        assert!(
+            dossier
+                .unavailable
+                .iter()
+                .any(|u| u.fact == "token ownership")
+        );
     }
 
     /// Encodes bytes as base58, mirroring `rpc::decode_base58`'s own alphabet

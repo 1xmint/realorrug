@@ -124,6 +124,52 @@ pub struct TokenBalance {
     pub owner: Option<String>,
 }
 
+/// One entry from `getTokenLargestAccounts`.
+///
+/// **Not who holds the balance.** This is a token account's own address and
+/// its raw amount; the account that actually owns those units is a separate
+/// field inside the account's data, only visible after reading it with
+/// [`RpcClient::accounts`] (see `crate::dossier`'s aggregation of this list
+/// by owner, and its module doc on why an account is not a person).
+#[derive(Clone, Debug)]
+pub struct LargestTokenAccount {
+    /// The token account's own address.
+    pub address: Address,
+    /// The raw balance, in the mint's smallest unit.
+    pub amount: u64,
+}
+
+/// `getTokenSupply`'s answer.
+#[derive(Clone, Copy, Debug)]
+pub struct TokenSupply {
+    /// The raw total, in the mint's smallest unit.
+    pub amount: u64,
+    /// The mint's decimal places.
+    pub decimals: u8,
+}
+
+#[derive(Deserialize)]
+struct LargestAccountsEnvelope {
+    value: Option<Vec<LargestAccountValue>>,
+}
+
+#[derive(Deserialize)]
+struct LargestAccountValue {
+    address: String,
+    amount: String,
+}
+
+#[derive(Deserialize)]
+struct TokenSupplyEnvelope {
+    value: Option<TokenSupplyValue>,
+}
+
+#[derive(Deserialize)]
+struct TokenSupplyValue {
+    amount: String,
+    decimals: u8,
+}
+
 #[derive(Deserialize)]
 struct Envelope<T> {
     result: Option<T>,
@@ -578,6 +624,74 @@ impl RpcClient {
             ]),
         )?;
         Ok(parse_transaction(&raw))
+    }
+
+    /// The token accounts holding the most of a mint, as the node ranks them.
+    ///
+    /// Solana caps this at 20 accounts. **This is a sample, not every
+    /// holder**, and it names token accounts, not owners -- resolving who
+    /// actually holds each balance needs [`RpcClient::accounts`] on the
+    /// addresses this returns.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] on transport, node or shape failures, or when the budget
+    /// is spent. An address or amount the node's own list cannot parse is
+    /// [`Malformed`](RpcError::Malformed).
+    pub fn token_largest_accounts(
+        &self,
+        budget: &mut Budget,
+        mint: &Address,
+    ) -> Result<Vec<LargestTokenAccount>, RpcError> {
+        let result: LargestAccountsEnvelope = self.call(
+            budget,
+            "getTokenLargestAccounts",
+            &serde_json::json!([mint.to_string()]),
+        )?;
+        let values = result.value.ok_or_else(|| {
+            RpcError::Malformed("getTokenLargestAccounts returned no list".to_owned())
+        })?;
+        values
+            .into_iter()
+            .map(|v| {
+                let address = v.address.parse().map_err(|_| {
+                    RpcError::Malformed(format!("{} is not a base58 address", v.address))
+                })?;
+                let amount = v.amount.parse().map_err(|_| {
+                    RpcError::Malformed(format!("{} is not an integer amount", v.amount))
+                })?;
+                Ok(LargestTokenAccount { address, amount })
+            })
+            .collect()
+    }
+
+    /// The mint's total supply, read from the chain rather than assumed from
+    /// the largest-accounts list, which is only a sample.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] on transport, node or shape failures, or when the budget
+    /// is spent.
+    pub fn token_supply(
+        &self,
+        budget: &mut Budget,
+        mint: &Address,
+    ) -> Result<TokenSupply, RpcError> {
+        let result: TokenSupplyEnvelope = self.call(
+            budget,
+            "getTokenSupply",
+            &serde_json::json!([mint.to_string()]),
+        )?;
+        let value = result
+            .value
+            .ok_or_else(|| RpcError::Malformed("getTokenSupply returned no value".to_owned()))?;
+        let amount = value.amount.parse().map_err(|_| {
+            RpcError::Malformed(format!("{} is not an integer amount", value.amount))
+        })?;
+        Ok(TokenSupply {
+            amount,
+            decimals: value.decimals,
+        })
     }
 }
 

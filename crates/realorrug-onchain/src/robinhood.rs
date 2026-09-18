@@ -719,6 +719,7 @@ pub fn build_with_memory(
         chain_launch: None,
         holders: None,
         funding: None,
+        token_ownership: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
