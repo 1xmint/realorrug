@@ -180,19 +180,16 @@ impl Bio {
         // is not exercising `from_vars` itself) carries no such suffix, so it
         // renders exactly as before: `<lead> · <status>`.
         let with_disclaimer = format!("{JOIN}{DISCLAIMER}");
-        match self.lead.strip_suffix(with_disclaimer.as_str()) {
-            Some(core) => {
-                out.push_str(core);
-                out.push_str(JOIN);
-                out.push_str(&status);
-                out.push_str(JOIN);
-                out.push_str(DISCLAIMER);
-            }
-            None => {
-                out.push_str(&self.lead);
-                out.push_str(JOIN);
-                out.push_str(&status);
-            }
+        if let Some(core) = self.lead.strip_suffix(with_disclaimer.as_str()) {
+            out.push_str(core);
+            out.push_str(JOIN);
+            out.push_str(&status);
+            out.push_str(JOIN);
+            out.push_str(DISCLAIMER);
+        } else {
+            out.push_str(&self.lead);
+            out.push_str(JOIN);
+            out.push_str(&status);
         }
         // The budget arithmetic in `status_text` already guarantees this
         // (moving the same-length pieces around does not change the total),
@@ -848,6 +845,33 @@ mod tests {
         // here, proving a write goes through with the account's real lead.
         let status = b.status_text(&s).expect("a status");
         assert_eq!(check(&status, &s.authorised()), Ok(()), "{text}");
+    }
+
+    #[test]
+    fn status_text_budget_subtracts_lead_and_join_not_the_difference() {
+        // `status_text`'s budget is `MAX - (lead.len() + JOIN.len())`. A
+        // mutant that subtracts instead of adds those two lengths hands
+        // `state.status` a budget six characters too generous (twice
+        // `JOIN`'s length), which is enough room here for a leader that the
+        // real budget cannot fit. Pin the boundary exactly rather than just
+        // asserting a length, so the mutant's wrong answer -- the fuller
+        // render -- is what fails, not merely a `<=` check both would pass.
+        let lead = "x".repeat(141);
+        let b = Bio { lead };
+        let s = State {
+            week: "2026-09-14".to_owned(),
+            pool: Some(Pool {
+                pool: "1".to_owned(),
+                hunters: 1,
+            }),
+            leaders: vec![Leader {
+                handle: "a".to_owned(),
+                points: 1,
+            }],
+            last_winner: None,
+        };
+        let status = b.status_text(&s).expect("a status");
+        assert_eq!(status, "Pool 1 ETH", "{status}");
     }
 
     #[test]

@@ -116,9 +116,35 @@ fn preview_text(
         .ok_or_else(|| "the lead and this sample together do not fit".to_owned())
 }
 
+/// Whether `args` name `--preview`, the one flag that turns this command into
+/// a report rather than a read of [`USAGE`].
+///
+/// Pulled out of [`run`] so the decision is testable on its own: a mutant
+/// that flips this comparison or drops the negation around its call site is
+/// otherwise invisible to a test that only inspects `run`'s combined effect.
+fn wants_preview(args: &[String]) -> bool {
+    args.iter().any(|a| a == "--preview")
+}
+
+/// The value `REALORRUG_BIO_LEAD` should read as: `cli_lead` when that is the
+/// key asked for, the process environment for every other key.
+///
+/// Pulled out of [`run`]'s closure for the same reason as [`wants_preview`]:
+/// a mutant that flips `==` to `!=` here would otherwise only show up as a
+/// different bio, several calls away from the line that broke.
+fn lead_or_env(key: &str, cli_lead: Option<&str>) -> Option<String> {
+    if key == "REALORRUG_BIO_LEAD" {
+        cli_lead
+            .map(str::to_owned)
+            .or_else(|| std::env::var(key).ok())
+    } else {
+        std::env::var(key).ok()
+    }
+}
+
 /// `realorrug bio --preview ...`
 pub fn run(args: &[String]) -> Result<(), String> {
-    if !args.iter().any(|a| a == "--preview") {
+    if !wants_preview(args) {
         return Err(USAGE.to_owned());
     }
 
@@ -126,13 +152,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // preview run with no `--lead` shows exactly what an unconfigured bot
     // would (or, since `from_vars` refuses a blank lead, what it would not).
     let cli_lead = crate::flag(args, "--lead");
-    let get = |key: &str| {
-        if key == "REALORRUG_BIO_LEAD" {
-            cli_lead.clone().or_else(|| std::env::var(key).ok())
-        } else {
-            std::env::var(key).ok()
-        }
-    };
+    let get = |key: &str| lead_or_env(key, cli_lead.as_deref());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -182,6 +202,44 @@ mod tests {
     }
 
     #[test]
+    fn leader_points_are_ten_times_rank_not_ten_plus_rank() {
+        // Three leaders so `leader_count - i` takes three distinct values
+        // (3, 2, 1) and a mutant that adds instead of multiplying would still
+        // -- coincidentally -- keep them descending, which is why the
+        // previous test alone did not catch it. Pinning the exact figures
+        // does.
+        let a = args(&[
+            "bio", "--preview", "--leader", "alice", "--leader", "bob", "--leader", "carol",
+        ]);
+        let state = sample_state(&a, 1_800_000_000).expect("a state");
+        assert_eq!(state.leaders[0].points, 30);
+        assert_eq!(state.leaders[1].points, 20);
+        assert_eq!(state.leaders[2].points, 10);
+    }
+
+    #[test]
+    fn the_week_and_last_winner_dates_come_from_dividing_seconds_by_a_day_not_the_remainder_or_the_product(
+    ) {
+        // `now` here (2027-01-15) falls inside the contest week that opens
+        // 2027-01-11 and closes 2027-01-18. `opens_at()`/`closes_at()` are
+        // always exact multiples of a day, so a mutant that swaps `/` for
+        // `%` collapses both to the Unix epoch (1970-01-01), and a mutant
+        // that swaps it for `*` sends them centuries into the future --
+        // either way, nothing close enough to this week to pass by accident.
+        let a = args(&["bio", "--preview", "--last-winner", "carol"]);
+        let now = 1_800_000_000;
+        let state = sample_state(&a, now).expect("a state");
+        assert_eq!(state.week, "2027-01-11", "{}", state.week);
+        match state.last_winner.expect("a last winner") {
+            LastWinner::Won { week, until, .. } => {
+                assert_eq!(week, "2027-01-11", "{week}");
+                assert_eq!(until, "2027-01-18", "{until}");
+            }
+            LastWinner::Paid { .. } => panic!("expected an unclaimed win"),
+        }
+    }
+
+    #[test]
     fn hunters_defaults_to_the_leader_count_but_a_flag_overrides_it() {
         let a = args(&[
             "bio",
@@ -221,8 +279,42 @@ mod tests {
     }
 
     #[test]
-    fn without_preview_the_command_refuses() {
-        assert!(run(&args(&["bio", "--pool", "0.1"])).is_err());
+    fn wants_preview_is_true_only_when_the_flag_is_present() {
+        assert!(wants_preview(&args(&["bio", "--preview"])));
+        assert!(!wants_preview(&args(&["bio", "--pool", "0.1"])));
+    }
+
+    #[test]
+    fn lead_or_env_reads_cli_lead_only_for_the_lead_key() {
+        assert_eq!(
+            lead_or_env("REALORRUG_BIO_LEAD", Some("cli value")),
+            Some("cli value".to_owned())
+        );
+        // An unrelated key ignores `cli_lead` even though one was given --
+        // a mutant flipping `==` to `!=` would hand it back here instead.
+        assert_eq!(
+            lead_or_env("REALORRUG_SOME_OTHER_KEY_NEVER_SET", Some("cli value")),
+            None
+        );
+    }
+
+    #[test]
+    fn without_preview_the_command_refuses_with_exactly_usage() {
+        // Exact-message rather than `is_err()`: a mutant that drops the `!`
+        // or flips the `--preview` comparison in `run` still returns *some*
+        // `Err` here (from deeper in `preview_text`), just not this one.
+        assert_eq!(
+            run(&args(&["bio", "--pool", "0.1"])),
+            Err(USAGE.to_owned())
+        );
+    }
+
+    #[test]
+    fn with_preview_and_a_fitting_sample_the_command_succeeds() {
+        // The mirror of the test above: a mutant that drops the `!` in
+        // `run`'s guard would refuse this call with `USAGE` even though
+        // `--preview` is right there.
+        assert!(run(&args(&["bio", "--preview", "--lead", "hi", "--pool", "0.1"])).is_ok());
     }
 
     #[test]
