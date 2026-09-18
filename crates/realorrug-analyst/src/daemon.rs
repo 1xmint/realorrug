@@ -64,6 +64,12 @@ pub struct Paths {
     /// before the effect left the process, which is the property that stops an
     /// unattended restart publishing twice. ADR 0017.
     pub journal: String,
+    /// Fresh X fact sheets, separate from the sent-reply log.
+    pub sheets: String,
+    /// Telegram's sheets use its own freshness window.
+    pub telegram_sheets: String,
+    /// Immutable launch reads shared by both lanes across restarts.
+    pub memory: String,
 }
 
 impl Paths {
@@ -89,6 +95,9 @@ impl Paths {
             contest_dir,
             daily_dir: format!("{dir}/daily"),
             journal: format!("{dir}/journal.jsonl"),
+            sheets: format!("{dir}/sheets.json"),
+            telegram_sheets: format!("{dir}/telegram-sheets.json"),
+            memory: format!("{dir}/memory.sqlite3"),
         }
     }
 }
@@ -493,9 +502,9 @@ pub fn contest_writable_notice(contest_dir: &str) -> Option<String> {
 
 /// What to say when no model provider was built.
 ///
-/// Rule 8's other half. An **unconfigured** provider is a resting state; a
-/// **mis**-configured one is a mistake; and `realorrug_model::from_vars(&env).ok()`
-/// made the two look identical. A key set with a price missing produced an
+/// Both absence and misconfiguration must be visible at startup.
+/// `realorrug_model::from_vars(&env).ok()` hid the reason. A key set with a
+/// price missing produced an
 /// account that answered exactly as it had the day before -- `fellback:
 /// NoProvider` on every reply -- with nothing anywhere saying the key had been
 /// read and rejected. `Selection` names every missing variable precisely so
@@ -509,11 +518,10 @@ pub fn contest_writable_notice(contest_dir: &str) -> Option<String> {
 #[must_use]
 pub fn provider_notice(why: &realorrug_model::Selection) -> String {
     match why {
-        // Not a fault, and it must not read as one. This is the state the
-        // account has shipped in since it went live, and the template is a
-        // working product rather than a degraded one.
         realorrug_model::Selection::None => {
-            "realorrug-analyst: no model provider, so every reply is the deterministic template."
+            "realorrug-analyst: WARNING -- no model provider; missing provider selectors: \
+             REALORRUG_MODEL_CODEX, REALORRUG_MODEL_API_KEY, REALORRUG_MODEL_OPENAI_KEY \
+             (configure one); every reply is the deterministic template."
                 .to_owned()
         }
         _ => format!(
@@ -529,12 +537,22 @@ pub fn provider_notice(why: &realorrug_model::Selection) -> String {
     reason = "the daemon's start-up, read once top to bottom"
 )]
 pub fn run() -> ! {
+    // Before any startup path can idle: missing spending config must not hide
+    // the independent reason every model-backed reply would fall back.
+    let provider = match realorrug_model::from_vars(&env) {
+        Ok(provider) => Some(provider),
+        Err(why) => {
+            eprintln!("{}", provider_notice(&why));
+            None
+        }
+    };
     let dir = env_legacy("REALORRUG_ANALYST_DIR", "RADAR_ANALYST_DIR")
         .unwrap_or_else(|| "data/analyst".to_owned());
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("realorrug-analyst: cannot use {dir}: {e}");
-        std::process::exit(1);
-    }
+    // A transient mount or permission failure must not turn Restart=always
+    // into a crash loop. Nothing is read or posted until storage is ready.
+    wait_for_data_dir(std::path::Path::new(&dir), || {
+        std::thread::sleep(Duration::from_secs(30));
+    });
     let paths = Paths::under(&dir);
 
     // The credential is the **source**. Speaking is a separate decision, and
@@ -578,6 +596,7 @@ pub fn run() -> ! {
         crate::telegram::posture(telegram.is_some(), telegram_publishing)
     );
     let mut telegram_gate = Gate::new(crate::telegram::limits_from(&env), Vec::new());
+    telegram_gate.load_sheets(std::path::Path::new(&paths.telegram_sheets), now());
     // One store, shared by both platforms: `answer` only ever records against
     // a mention's own `conversation`, which is `None` for every Telegram
     // mention today (`telegram.rs` sets it so), so the two platforms cannot
@@ -614,6 +633,7 @@ pub fn run() -> ! {
 
     let limits = limits_from(&env);
     let mut gate = Gate::new(limits, ignored(x.as_ref()));
+    gate.load_sheets(std::path::Path::new(&paths.sheets), now());
     // **Rebuilt from disk, not started empty.** Every count in the gate lived
     // only in memory, and this daemon runs under `Restart=always`: it restarted
     // three times on the night of 2026-09-06, and each restart handed every
@@ -664,14 +684,6 @@ pub fn run() -> ! {
              the token; realorrug builds none yet (ADR 0026)."
         );
     }
-    let provider = match realorrug_model::from_vars(&env) {
-        Ok(provider) => Some(provider),
-        Err(why) => {
-            eprintln!("{}", provider_notice(&why));
-            None
-        }
-    };
-
     // ADR 0013 constraint 5. A value that will not parse idles the instance
     // rather than running with the rule off: `self_mint_from` says why.
     let self_mint = match self_mint_from(&env) {
@@ -1457,6 +1469,32 @@ fn operator_ids_from(own: &str, listed: Option<&str>) -> Vec<String> {
     ids
 }
 
+/// Retries storage without letting a recoverable error exit the daemon.
+fn wait_for_data_dir(path: &std::path::Path, mut wait: impl FnMut()) {
+    while let Err(error) = std::fs::create_dir_all(path) {
+        eprintln!(
+            "realorrug-analyst: data directory unavailable ({:?}); \
+             nothing will be read or posted; retrying",
+            error.kind()
+        );
+        wait();
+    }
+}
+
+/// One connection per poll, shared by every answer in that poll. Opening it
+/// here keeps ownership out of the model and lets a later poll recover from
+/// an unavailable file without restarting the daemon.
+pub(crate) fn open_memory(path: &str) -> Option<realorrug_onchain::memory::Memory> {
+    if let Ok(memory) = realorrug_onchain::memory::Memory::open(std::path::Path::new(path)) {
+        Some(memory)
+    } else {
+        eprintln!(
+            "realorrug-analyst: read memory unavailable; launch records will be read from chain"
+        );
+        None
+    }
+}
+
 /// Sleeps rather than exiting, so a misconfigured unit is visible as a running
 /// service that says what is missing rather than as a restart loop.
 fn idle_forever() -> ! {
@@ -1488,6 +1526,7 @@ pub fn tick(
     let Some(x) = x else {
         return 0;
     };
+    let memory = open_memory(&paths.memory);
     let at = now();
     let today = day_of(at);
 
@@ -1590,6 +1629,7 @@ pub fn tick(
         });
         let ctx = Answering {
             client,
+            memory: memory.as_ref(),
             robinhood,
             rates,
             creators,
@@ -1618,7 +1658,7 @@ pub fn tick(
         }
 
         match outcome {
-            Answered::Reply { entry, sheet, .. } => {
+            Answered::Reply { entry, .. } => {
                 let mint = entry.mint.clone().unwrap_or_default();
                 let Ok(reply_cost) = spend.authorize(Cost::Reply, today) else {
                     // `break`, not `continue`. The day's reply budget is spent,
@@ -1669,7 +1709,9 @@ pub fn tick(
                                 &mint,
                                 id,
                                 mention.conversation.as_deref(),
-                                Some(*sheet),
+                                // `answer` saved the read already. Publishing
+                                // a cached sheet must not renew its freshness.
+                                None,
                                 at,
                             );
                             answered += 1;
@@ -1973,6 +2015,53 @@ pub fn tick(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_unavailable_data_directory_is_retried_until_it_can_be_used() {
+        let path = std::env::temp_dir().join(format!("realorrug-dir-{}", rand::random::<u64>()));
+        std::fs::write(&path, "a file blocks the directory").expect("block storage");
+        let mut retries = 0;
+        wait_for_data_dir(&path, || {
+            retries += 1;
+            // A mount or permission repair can happen while the process is
+            // alive; it must try again rather than requiring another restart.
+            std::fs::remove_file(&path).expect("repair storage");
+        });
+        assert_eq!(retries, 1);
+        assert!(path.is_dir());
+        std::fs::remove_dir(path).expect("remove directory");
+    }
+
+    #[test]
+    fn an_unavailable_read_memory_is_optional_and_can_recover_on_the_next_poll() {
+        let path = std::env::temp_dir().join(format!(
+            "realorrug-memory-{}.sqlite3",
+            rand::random::<u64>()
+        ));
+        std::fs::write(&path, "not sqlite").expect("corrupt memory");
+        let name = path.to_str().expect("test path");
+        assert!(open_memory(name).is_none());
+        std::fs::remove_file(&path).expect("remove corrupt memory");
+        let memory = open_memory(name).expect("a later poll can open the repaired memory");
+        drop(memory);
+        std::fs::remove_file(path).expect("remove memory");
+    }
+
+    #[test]
+    fn a_partial_provider_configuration_reports_names_without_values() {
+        // Real selection errors reach the notice, so echoing even one
+        // configured key or endpoint would fail this sentinel check.
+        let selected = realorrug_model::from_vars(&vars(&[
+            ("REALORRUG_MODEL_OPENAI_KEY", "private-key-sentinel"),
+            ("REALORRUG_MODEL_ENDPOINT", "private-endpoint-sentinel"),
+        ]));
+        let notice = provider_notice(&selected.expect_err("incomplete configuration"));
+        assert!(notice.contains("REALORRUG_MODEL_NAME"));
+        assert!(notice.contains("REALORRUG_MODEL_PRICE_IN"));
+        assert!(notice.contains("REALORRUG_MODEL_PRICE_OUT"));
+        assert!(!notice.contains("sentinel"));
+        assert_eq!(notice.lines().count(), 1);
+    }
 
     /// A closed week with a winner who has a handle, for the bio planner.
     fn bio_record() -> realorrug_contest::Record {
@@ -2690,7 +2779,14 @@ mod tests {
         // path. A file that escaped this directory would be a file the service
         // is not permitted to write.
         let paths = Paths::under("/var/lib/radar/analyst");
-        for path in [&paths.log, &paths.cursor, &paths.ledger] {
+        for path in [
+            &paths.log,
+            &paths.cursor,
+            &paths.ledger,
+            &paths.sheets,
+            &paths.telegram_sheets,
+            &paths.memory,
+        ] {
             assert!(
                 path.starts_with("/var/lib/radar/analyst/"),
                 "{path} escapes the directory"
@@ -2700,6 +2796,8 @@ mod tests {
         assert_ne!(paths.log, paths.cursor);
         assert_ne!(paths.cursor, paths.ledger);
         assert_ne!(paths.log, paths.ledger);
+        assert_ne!(paths.sheets, paths.telegram_sheets);
+        assert_ne!(paths.sheets, paths.memory);
     }
 
     /// A getter over a fixed list, so nothing touches the process environment.
@@ -2811,7 +2909,7 @@ mod tests {
     }
 
     #[test]
-    fn a_misconfigured_provider_says_so_and_an_absent_one_does_not_alarm() {
+    fn absent_and_misconfigured_providers_name_the_missing_configuration() {
         // `realorrug_model::from_vars(&env).ok()` threw the reason away, so a key
         // set with a price missing produced an account that answered exactly
         // as it had the day before -- and nothing said the key had been read
@@ -2822,10 +2920,14 @@ mod tests {
         // assertion passes and every other one fails.
         let resting = provider_notice(&realorrug_model::Selection::None);
         assert!(resting.contains("template"), "{resting}");
-        assert!(
-            !resting.to_lowercase().contains("unusable"),
-            "the resting state must not read as a fault: {resting}"
-        );
+        assert!(resting.contains("WARNING"), "{resting}");
+        for name in [
+            "REALORRUG_MODEL_CODEX",
+            "REALORRUG_MODEL_API_KEY",
+            "REALORRUG_MODEL_OPENAI_KEY",
+        ] {
+            assert!(resting.contains(name), "{resting}");
+        }
 
         // The one an operator setting up a key actually hits, and it has to
         // carry the variable name through: "incomplete" on its own tells them

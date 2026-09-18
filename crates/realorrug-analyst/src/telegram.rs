@@ -490,6 +490,7 @@ pub fn tick(
     let Some(bot) = telegram else {
         return 0;
     };
+    let memory = crate::daemon::open_memory(&paths.memory);
     let at = crate::daemon::now();
     let today = crate::daemon::day_of(at);
     // Opened once per tick, and a journal that cannot be opened stops the tick.
@@ -531,6 +532,7 @@ pub fn tick(
         });
         let ctx = Answering {
             client,
+            memory: memory.as_ref(),
             robinhood,
             rates,
             creators,
@@ -553,7 +555,7 @@ pub fn tick(
         }
 
         match outcome {
-            Answered::Reply { entry, sheet, .. } => {
+            Answered::Reply { entry, .. } => {
                 let mint = entry.mint.clone().unwrap_or_default();
                 match crate::publish::publish(publisher, &paths.telegram_log, &mut journal, *entry)
                 {
@@ -566,7 +568,9 @@ pub fn tick(
                             // still cached: a burst of asks about the same
                             // mint within `dedupe_seconds` still reuses the
                             // read even though no pointer is ever possible.
-                            gate.record(&mention.author, &mint, id, None, Some(*sheet), at);
+                            // The read was saved before the model call; a
+                            // successful post must not renew its freshness.
+                            gate.record(&mention.author, &mint, id, None, None, at);
                             answered += 1;
                         }
                     }

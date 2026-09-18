@@ -216,7 +216,7 @@ impl Voice {
 /// Subject, verb, number, unit, window and limitation are all in `text`. There
 /// is no hole in it for a model to fill, which is the entire point: a sentence
 /// with a hole is a sentence whose claim was decided somewhere other than here.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Clause {
     /// The register this variant speaks in.
     pub voice: Voice,
