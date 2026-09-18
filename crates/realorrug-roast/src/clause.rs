@@ -150,6 +150,15 @@ pub enum Kind {
     /// read at, so this kind's clause states the read point rather than
     /// leaving it to the sheet-wide line alone.
     CurveLiquidity,
+    /// Of N launches shaped like this one, how many hit a stated multiple
+    /// within a stated window.
+    ///
+    /// ADR 0033 §3: a hedged upside/downside hint is allowed only when this
+    /// fact is on the sheet. No dossier produces it yet -- the creator-index
+    /// rebuild that measures it is later work -- so this variant exists as
+    /// the hook `forbidden::check_hint` gates on, empty in production until
+    /// then.
+    OutcomeRate,
     /// How long ago the token launched, on the reading chain's own clock.
     ///
     /// Design 0020 §4: the age is a different fact from the read point --

@@ -145,6 +145,7 @@ impl Subject {
             | Kind::CapacityAfterGraduation
             | Kind::CurveLiquidity => Self::Liquidity,
             Kind::Graduated | Kind::Age => Self::Token,
+            Kind::OutcomeRate => Self::Launch,
         }
     }
 }

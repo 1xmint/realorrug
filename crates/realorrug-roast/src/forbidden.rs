@@ -40,6 +40,7 @@
 //! to read negation would be a checker arguing about meaning, and the point of
 //! this one is that it does not argue.
 
+use crate::clause::Kind;
 use crate::fidelity;
 use crate::verdict::Level;
 
@@ -230,16 +231,12 @@ pub const RULES: &[Rule] = &[
         phrase: "dumping on",
         because: "a verdict about an identifiable project",
     },
-    Rule {
-        // The most-quoted number-shaped claim in the market, and it is a price
-        // prediction wearing a multiple.
-        phrase: "100x",
-        because: "a price prediction",
-    },
-    Rule {
-        phrase: "10x",
-        because: "a price prediction",
-    },
+    // "100x"/"10x" (and every other Nx multiple) used to live here as two
+    // fixed literals. ADR 0033 §3: a hedged, reasoned upside/downside hint is
+    // now allowed when the sheet carries a measured outcome rate for launches
+    // shaped like this one, so a magnitude claim can no longer be an
+    // unconditional ban -- it is [`check_hint`]'s job, which sees the sheet
+    // this list does not.
     Rule {
         phrase: "bullish",
         because: "a price prediction",
@@ -1421,7 +1418,6 @@ mod tests {
             "classic honeypot",
             "you are the exit liquidity here",
             "the creator dumped on buyers",
-            "this is a 100x",
             "looks bullish to me",
             "bearish, obviously",
             "don\u{2019}t buy this one",
@@ -1710,8 +1706,9 @@ mod tests {
         // prediction at all -- neither function's vocabulary includes them.
         // Re-apply the gap by deleting this function's call in `voice.rs`
         // (or gutting `MIGRATED_TO_TARGET_OR_LEVEL` to exclude nothing): a
-        // reply saying "100x" or "should buy" would then publish.
-        for said in ["this is a 100x", "you should buy this one"] {
+        // reply saying "should buy" would then publish. "100x" moved to
+        // `check_hint`, which has its own coverage below.
+        for said in ["will pump", "you should buy this one"] {
             assert!(
                 !check_unconditional(said).is_empty(),
                 "{said:?} must be refused"
