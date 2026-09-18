@@ -1245,6 +1245,7 @@ mod tests {
             }),
             funding: None,
             market: None,
+            token_ownership: None,
             unavailable: Vec::new(),
             calls: 10,
             elapsed_ms: 7_577,

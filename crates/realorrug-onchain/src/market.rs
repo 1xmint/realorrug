@@ -268,6 +268,7 @@ mod tests {
             holders: None,
             funding: None,
             market: None,
+            token_ownership: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,

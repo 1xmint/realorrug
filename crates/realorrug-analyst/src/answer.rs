@@ -549,7 +549,8 @@ mod tests {
             &mut metrics,
         );
         assert!(matches!(outcome, Answered::Reply { .. }));
-        assert_eq!(metrics.calls, 2);
+        // Two dossier reads plus the token-ownership read (design 0027 slice 6a).
+        assert_eq!(metrics.calls, 3);
         drop(first);
 
         // No `record` or publisher ran. The paid read must already be durable.
@@ -582,7 +583,7 @@ mod tests {
             &mut expired,
         );
         assert!(matches!(outcome, Answered::Reply { .. }));
-        assert_eq!(expired.calls, 2);
+        assert_eq!(expired.calls, 3);
         std::fs::remove_file(path).expect("remove snapshot");
     }
 
