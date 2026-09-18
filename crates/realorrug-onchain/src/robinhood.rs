@@ -38,6 +38,7 @@ use crate::dossier::{
     ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, QuoteAsset, Unavailable,
 };
 use crate::memory::{CheckRun, Checkpoint, Completeness, Memory, REORG_DEPTH, TransferEvent};
+use crate::wallets;
 
 /// Why a Robinhood dossier could not be built at all.
 ///
@@ -700,6 +701,9 @@ pub fn build(
 /// # Errors
 ///
 /// The same as [`build`]'s.
+// The read order is the point of this function; three lines over the limit
+// after the funding step is not worth a split that hides it.
+#[allow(clippy::too_many_lines)]
 pub fn build_with_memory(
     client: &Rpc,
     budget: &mut Budget,
@@ -714,6 +718,7 @@ pub fn build_with_memory(
         creator_transactions: None,
         chain_launch: None,
         holders: None,
+        funding: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -792,6 +797,35 @@ pub fn build_with_memory(
         Err(why) => dossier.unavailable.push(Unavailable {
             fact: "holders",
             why,
+        }),
+    }
+
+    // 5b. Who funded the first buyers (design 0027 §2.1, slice 3). Runs
+    // after every core read so the enrichment spends only what those left,
+    // and needs both ends of the launch window: the launch block and the
+    // read point. Its own failures land in its `gaps`; only an unreadable
+    // window is a miss named here.
+    match (dossier.chain_launch.as_ref(), read.as_ref()) {
+        (Some(launch), Some(header)) => {
+            match wallets::investigate(
+                client,
+                budget,
+                token,
+                &record.curve,
+                launch.block,
+                header.number,
+                memory,
+            ) {
+                Ok(funding) => dossier.funding = Some(funding),
+                Err(why) => dossier.unavailable.push(Unavailable {
+                    fact: "funding",
+                    why,
+                }),
+            }
+        }
+        _ => dossier.unavailable.push(Unavailable {
+            fact: "funding",
+            why: "the launch window needs both the launch block and the read point".to_owned(),
         }),
     }
 
@@ -1404,7 +1438,315 @@ pub(crate) mod tests {
         // say which token it is. Pinned rather than left loose because the
         // default budget is sixty calls and a read that quietly grows is how
         // a plan's daily quota goes without anyone choosing to spend it.
-        assert_eq!(dossier.calls, 10);
+        assert_eq!(dossier.calls, 11);
+    }
+
+    // ---- slice 3: who funded the first buyers -------------------------
+
+    const ETH: u128 = 1_000_000_000_000_000_000;
+    /// Four launch-window buyers, largest first; distinct quotes so the
+    /// selection order is not a tie.
+    const BUYERS: [(RobinhoodAddress, u128); 4] = [
+        (RobinhoodAddress([0x41; 20]), 4 * ETH),
+        (RobinhoodAddress([0x42; 20]), 3 * ETH),
+        (RobinhoodAddress([0x43; 20]), 2 * ETH),
+        (RobinhoodAddress([0x44; 20]), ETH),
+    ];
+    const HUB: RobinhoodAddress = RobinhoodAddress([0xf0; 20]);
+    const OTHER_FUNDER: RobinhoodAddress = RobinhoodAddress([0xf4; 20]);
+
+    /// The launch window's `CurveBuy` logs for [`BUYERS`].
+    fn window_logs(rec: &LaunchedToken) -> String {
+        let logs: Vec<serde_json::Value> = BUYERS
+            .iter()
+            .map(|(who, quote)| buy_log(&rec.curve, who, *quote))
+            .collect();
+        answer(&serde_json::json!(logs))
+    }
+
+    /// One `alchemy_getAssetTransfers` page: `funders` each sent `to` the
+    /// given wei before its first purchase.
+    fn transfers_into(to: &RobinhoodAddress, funders: &[(RobinhoodAddress, u128)]) -> String {
+        let transfers: Vec<serde_json::Value> = funders
+            .iter()
+            .enumerate()
+            .map(|(i, (from, wei))| {
+                serde_json::json!({
+                    "blockNum": "0x20",
+                    "uniqueId": format!("0x{}{i:02x}:external", to),
+                    "hash": format!("0x{:0>64}", format!("{}{i:02x}", &to.to_string()[2..])),
+                    "from": from.to_string(),
+                    "to": to.to_string(),
+                    "rawContract": { "value": format!("{wei:#x}"), "address": null, "decimal": "0x12" },
+                })
+            })
+            .collect();
+        answer(&serde_json::json!({ "transfers": transfers }))
+    }
+
+    /// The bodies one candidate's check reads: code, one transfers page,
+    /// pre-launch nonce.
+    fn candidate_bodies(
+        to: &RobinhoodAddress,
+        funders: &[(RobinhoodAddress, u128)],
+    ) -> Vec<String> {
+        vec![
+            answer(&serde_json::json!("0x")),
+            transfers_into(to, funders),
+            answer(&serde_json::json!("0x0")),
+        ]
+    }
+
+    #[test]
+    fn three_of_four_early_buyers_funded_by_one_wallet_is_said_with_its_denominator() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies.push(window_logs(&rec));
+        bodies.extend(candidate_bodies(&BUYERS[0].0, &[(HUB, 5 * ETH)]));
+        bodies.extend(candidate_bodies(&BUYERS[1].0, &[(HUB, 5 * ETH)]));
+        bodies.extend(candidate_bodies(&BUYERS[2].0, &[(HUB, 5 * ETH)]));
+        bodies.extend(candidate_bodies(&BUYERS[3].0, &[(OTHER_FUNDER, 2 * ETH)]));
+        let memory = Memory::open_in_memory().expect("a memory");
+        let client = Rpc::new(serve(bodies));
+        let mut b = budget();
+
+        let dossier =
+            build_with_memory(&client, &mut b, &token(), Some(&memory)).expect("a dossier");
+        let funding = dossier.funding.expect("funding read");
+        // Bob received a Transfer in the holders fixture but never bought on
+        // the curve: a transfer-only recipient is not a buyer.
+        assert_eq!(funding.buyers, 4);
+        assert!(
+            !funding.checked.iter().any(|c| c.address == BOB),
+            "a transfer-only recipient was checked as a buyer"
+        );
+        assert_eq!(funding.selected, 4);
+        assert_eq!(funding.coverage_bps, 10_000);
+        assert_eq!(
+            funding
+                .checked
+                .iter()
+                .map(|c| c.address)
+                .collect::<Vec<_>>(),
+            BUYERS.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+            "largest buyers first"
+        );
+        assert_eq!(
+            funding.shared,
+            vec![wallets::SharedFunder {
+                address: HUB,
+                funded: 3
+            }]
+        );
+        assert!(funding.gaps.is_empty(), "gaps: {:?}", funding.gaps);
+        assert_eq!(funding.cu_spent, 60 + 4 * 160);
+        assert!(funding.checked.iter().all(|c| c.is_contract == Some(false)));
+        assert!(
+            funding
+                .checked
+                .iter()
+                .all(|c| c.nonce_before_launch == Some(0))
+        );
+        assert_eq!(
+            dossier.calls,
+            10 + 1 + 4 * 3,
+            "the core reads, the window, three per candidate"
+        );
+
+        let key = token().to_string();
+        let edges = memory
+            .funding_edges(MEMORY_CHAIN, &key)
+            .expect("funding edges");
+        assert_eq!(edges.len(), 4);
+        assert!(edges.iter().all(|e| e.material));
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, "funding")
+            .expect("check run")
+            .expect("a funding run was recorded");
+        assert_eq!(run.completeness, Completeness::Complete);
+        assert_eq!((run.from_block, run.to_block), (LAUNCH_BLOCK, 0x64));
+    }
+
+    #[test]
+    fn a_dust_sender_to_every_buyer_is_an_observation_not_a_shared_funder() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies.push(window_logs(&rec));
+        for (who, _) in &BUYERS {
+            bodies.extend(candidate_bodies(who, &[(HUB, 1_000_000_000_000)]));
+        }
+        let memory = Memory::open_in_memory().expect("a memory");
+        let client = Rpc::new(serve(bodies));
+        let mut b = budget();
+
+        let dossier =
+            build_with_memory(&client, &mut b, &token(), Some(&memory)).expect("a dossier");
+        let funding = dossier.funding.expect("funding read");
+        assert_eq!(funding.checked.len(), 4);
+        assert!(funding.shared.is_empty(), "dust made a shared funder");
+        // The dust is kept as an observation, marked as one.
+        let edges = memory
+            .funding_edges(MEMORY_CHAIN, &token().to_string())
+            .expect("funding edges");
+        assert_eq!(edges.len(), 4);
+        assert!(
+            edges
+                .iter()
+                .all(|e| !e.material && e.funder == HUB.to_string())
+        );
+    }
+
+    #[test]
+    fn the_compute_unit_cap_stops_the_investigation_and_records_the_gap() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies.push(window_logs(&rec));
+        for (who, _) in &BUYERS {
+            bodies.extend(candidate_bodies(who, &[(HUB, 5 * ETH)]));
+        }
+        let memory = Memory::open_in_memory().expect("a memory");
+        let client = Rpc::new(serve(bodies));
+        // Sixty for the window's logs, two candidates' worth, and thirty
+        // short of a third at 160 CU -- but not short of one costed at 120,
+        // which is what a candidate would cost if the nonce or code read
+        // were dropped from its price.
+        let mut b = Budget::with_compute_units(60, 3, Duration::from_secs(30), 60 + 2 * 160 + 130);
+
+        let dossier =
+            build_with_memory(&client, &mut b, &token(), Some(&memory)).expect("a dossier");
+        assert!(dossier.holders.is_some(), "the core reads came first");
+        let funding = dossier
+            .funding
+            .expect("a partial investigation is still a result");
+        assert_eq!(funding.selected, 4);
+        assert_eq!(funding.checked.len(), 2);
+        assert_eq!(
+            funding.gaps,
+            vec!["compute-unit cap of 450 CU reached: 2 of 4 candidates checked".to_owned()]
+        );
+        // Two checked, both funded by the hub: still a shared funder, of two.
+        assert_eq!(
+            funding.shared,
+            vec![wallets::SharedFunder {
+                address: HUB,
+                funded: 2
+            }]
+        );
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &token().to_string(), "funding")
+            .expect("check run")
+            .expect("a funding run was recorded");
+        assert_eq!(run.completeness, Completeness::Truncated);
+    }
+
+    #[test]
+    fn a_funding_history_longer_than_two_pages_is_cut_and_the_next_buyer_still_read() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let mut bodies = full_bodies(&rec, "0x1");
+        // Two buyers only: the first with a history that keeps paging.
+        let logs: Vec<serde_json::Value> = BUYERS[..2]
+            .iter()
+            .map(|(who, quote)| buy_log(&rec.curve, who, *quote))
+            .collect();
+        bodies.push(answer(&serde_json::json!(logs)));
+        let paged = |page: &str| {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&transfers_into(&BUYERS[0].0, &[(HUB, 5 * ETH)]))
+                    .expect("a body");
+            value["result"]["pageKey"] = serde_json::Value::String(page.to_owned());
+            value.to_string()
+        };
+        bodies.push(answer(&serde_json::json!("0x")));
+        bodies.push(paged("page-2"));
+        bodies.push(paged("page-3"));
+        // No third page is served: the cut comes before it is asked for,
+        // so the next body is the nonce.
+        bodies.push(answer(&serde_json::json!("0x0")));
+        bodies.extend(candidate_bodies(&BUYERS[1].0, &[(HUB, 5 * ETH)]));
+        let client = Rpc::new(serve(bodies));
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        let funding = dossier.funding.expect("funding read");
+        assert_eq!(
+            funding.checked.len(),
+            2,
+            "a cut history does not stop the next buyer"
+        );
+        let first = &funding.checked[0];
+        assert_eq!(first.funders.len(), 2, "one funder per page read");
+        assert!(!first.funding_complete);
+        assert_eq!(
+            first.nonce_before_launch,
+            Some(0),
+            "the nonce is read after the cut"
+        );
+        assert_eq!(
+            funding.gaps,
+            vec![format!(
+                "funding of {}: more than 2 pages; later transfers unread",
+                BUYERS[0].0
+            )]
+        );
+        assert!(funding.checked[1].funding_complete);
+        assert_eq!(dossier.calls, 10 + 1 + 4 + 3);
+    }
+
+    #[test]
+    fn a_provider_without_asset_transfers_degrades_the_funding_read() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies.push(window_logs(&rec));
+        bodies.push(answer(&serde_json::json!("0x")));
+        bodies.push(
+            serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "error": { "code": -32601, "message": "Method not found" }
+            })
+            .to_string(),
+        );
+        bodies.push(answer(&serde_json::json!("0x0")));
+        let client = Rpc::new(serve(bodies));
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        let funding = dossier.funding.expect("the window still read");
+        assert_eq!(
+            funding.checked.len(),
+            1,
+            "the investigation stopped at the first refusal"
+        );
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(!funding.checked[0].funding_complete);
+        assert!(funding.shared.is_empty());
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("does not serve alchemy_getAssetTransfers")),
+            "gaps: {:?}",
+            funding.gaps
+        );
     }
 
     #[test]
@@ -1459,7 +1801,7 @@ pub(crate) mod tests {
                 largest_share_bps: Some(5_000),
             })
         );
-        assert_eq!(first.calls, 10, "remembering costs no extra call");
+        assert_eq!(first.calls, 11, "remembering costs no extra call");
         assert_eq!(
             memory
                 .token_checkpoint(MEMORY_CHAIN, &key)
@@ -1493,8 +1835,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            second.calls, 11,
-            "ten as before plus the checkpoint's header; the walk itself is one page"
+            second.calls, 12,
+            "eleven as before plus the checkpoint's header; the walk itself is one page"
         );
         assert_eq!(
             memory
@@ -1548,7 +1890,7 @@ pub(crate) mod tests {
                 largest_share_bps: Some(5_000),
             })
         );
-        assert_eq!(again.calls, 9);
+        assert_eq!(again.calls, 10);
         let run = memory
             .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
             .expect("read")
@@ -1712,7 +2054,7 @@ pub(crate) mod tests {
                 largest_share_bps: Some(5_000),
             })
         );
-        assert_eq!(dossier.calls, 11);
+        assert_eq!(dossier.calls, 12);
         assert_eq!(
             memory
                 .token_checkpoint(MEMORY_CHAIN, &key)

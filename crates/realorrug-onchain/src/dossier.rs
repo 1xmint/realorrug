@@ -246,6 +246,11 @@ pub struct Dossier {
     pub chain_launch: Option<ChainLaunch>,
     /// Who holds the token, where it was read.
     pub holders: Option<Holders>,
+    /// Who funded the first buyers, where it was investigated
+    /// (`crate::wallets`, Robinhood only today). `None` is "not
+    /// investigated"; a reader that tried and failed names "funding" in
+    /// `unavailable`.
+    pub funding: Option<crate::wallets::Funding>,
     /// Facts that could not be read, and why.
     pub unavailable: Vec<Unavailable>,
     /// RPC calls this dossier cost.
@@ -306,6 +311,7 @@ pub fn build(
         creator_transactions: None,
         chain_launch: None,
         holders: None,
+        funding: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -732,6 +738,7 @@ mod tests {
             creator_transactions: None,
             chain_launch: None,
             holders: None,
+            funding: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -1009,6 +1016,7 @@ mod tests {
                 creator_transactions: None,
                 chain_launch: None,
                 holders: None,
+                funding: None,
                 unavailable: vec![Unavailable {
                     fact: "robinhood reads",
                     why: format!("fake reader, token {:?}", token.0),

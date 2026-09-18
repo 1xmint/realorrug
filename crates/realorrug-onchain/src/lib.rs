@@ -60,6 +60,7 @@ pub mod memory;
 pub mod reserves;
 pub mod robinhood;
 pub mod rpc;
+pub mod wallets;
 
 pub use budget::{Budget, Count, Exhausted};
 pub use dispatch::{Clients as DispatchClients, Error as DispatchError, read as dispatch};
@@ -72,3 +73,4 @@ pub use memory::{Error as MemoryError, Fact, Kind, Memory, Recorded};
 pub use reserves::{PoolReserves, Role, Unreadable};
 pub use robinhood::{Error as RobinhoodError, RobinhoodReader};
 pub use rpc::{AccountRead, MultiAccountRead, OwnedAccount, RpcClient, RpcError};
+pub use wallets::{Candidate, Funder, Funding, SharedFunder};

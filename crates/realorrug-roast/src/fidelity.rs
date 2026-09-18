@@ -116,7 +116,13 @@ impl Subject {
             // cite it and a sentence about holders may not.
             | Kind::DevBuy
             | Kind::DevBuyUnseen => Self::Creator,
-            Kind::Holders | Kind::LargestHolderShare => Self::Holders,
+            // Who funded the early buyers is about the wallets holding the
+            // token, not about the creator: a sentence about the creator
+            // may not cite it as their doing.
+            Kind::Holders
+            | Kind::LargestHolderShare
+            | Kind::FundingChecked
+            | Kind::SharedFunder => Self::Holders,
             // `OutcomeRate` (ADR 0033) measures launches shaped like this one,
             // not this launch alone, but it is still a claim about the launch
             // population rather than the creator, holders or venue -- the

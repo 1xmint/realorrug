@@ -23,7 +23,7 @@
 //! that can be argued into accepting a number nobody measured.
 
 use realorrug_onchain::budget::Count;
-use realorrug_onchain::{ChainLaunch, Dossier, Holders, LaunchBlock};
+use realorrug_onchain::{ChainLaunch, Dossier, Funding, Holders, LaunchBlock};
 #[cfg(test)]
 use realorrug_types::Slot;
 use realorrug_types::{ReadAt, SlotDelta};
@@ -500,6 +500,13 @@ impl FactSheet {
             push_holders(&mut facts, holders);
         }
 
+        // Slice 3 (design 0027): who funded the first buyers. Only the
+        // Robinhood reader fills this; a read that stopped short names its
+        // gap in `unknown` beside the facts it did get.
+        if let Some(funding) = &dossier.funding {
+            push_funding(&mut facts, &mut unknown, funding);
+        }
+
         // **The fact that makes one reply differ from another.** The launch
         // block is about the block; three coins launched in the same minute
         // produce the same sentences from it, because the cost line is a
@@ -826,6 +833,7 @@ fn phrase_for(fact: &str) -> String {
     match fact {
         "launch block" => "the launch block could not be read",
         "holders" => "the holders could not be read",
+        "funding" => "who funded the early buyers could not be read",
         "curve" => "the bonding curve could not be read",
         "creator history" => "the creator's history could not be read",
         _ => "part of this could not be read",
@@ -1151,6 +1159,93 @@ fn push_holders(facts: &mut Vec<Fact>, holders: &Holders) {
                 )
                 .saying(Voice::Blunt, format!("Top address: {pct} of what's out.")),
         );
+    }
+}
+
+/// Who funded the early buyers that were checked.
+///
+/// # A count with its denominator, never an owner
+///
+/// "The same address funded 3 of the 4 early buyers checked" is a chain
+/// fact: three transfers, one sender, before three purchases. An exchange's
+/// hot wallet produces exactly that pattern for three strangers who withdrew
+/// to fresh wallets, so the sentence stops at the flow. It never says "one
+/// person", "insiders", "the same owner" or "controlled": those are claims
+/// about identity the chain cannot settle, and `forbidden.rs` refuses the
+/// first two outright. The denominator is always the checked count, never
+/// the buyer count, and "checked" is in the words so a reader cannot take
+/// four wallets for all of them.
+///
+/// Dust never reaches here: `wallets.rs` marks a funder material only
+/// against the purchase, and `Funding::shared` counts material funders only.
+fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Funding) {
+    let checked = u32::try_from(funding.checked.len()).unwrap_or(u32::MAX);
+    if checked == 0 {
+        // No candidate checked is not "nobody funded anybody"; the gap
+        // below says why, and a sheet with no funding fact says nothing.
+        if !funding.gaps.is_empty() {
+            unknown.push("who funded the early buyers could not be read".to_owned());
+        }
+        return;
+    }
+    let pct = format!("{:.0}%", f64::from(funding.coverage_bps) / 100.0);
+    facts.push(
+        Fact::exact(
+            Kind::FundingChecked,
+            "early buyers whose funding before their first purchase was checked, of the buyers \
+             in the launch window",
+            f64::from(checked),
+            format!("{checked} of {}", funding.buyers),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "Where {checked} of the {} early buyers got their money was checked; they bought \
+                 {pct} of what the launch window bought.",
+                funding.buyers
+            ),
+        )
+        .saying(
+            Voice::Blunt,
+            format!(
+                "Funding checked for {checked} of {} early buyers ({pct} of the window's buys).",
+                funding.buyers
+            ),
+        ),
+    );
+    if let Some(top) = funding.shared.first() {
+        facts.push(
+            Fact::exact(
+                Kind::SharedFunder,
+                "checked early buyers that one address sent material value to before their first \
+                 purchase; a flow between addresses, which an exchange also produces, not \
+                 ownership",
+                f64::from(top.funded),
+                format!("{} of {checked}", top.funded),
+            )
+            .saying(
+                Voice::Plain,
+                format!(
+                    "The same address funded {} of the {checked} early buyers checked before they \
+                     bought. That is a flow on chain; an exchange paying out withdrawals looks \
+                     the same.",
+                    top.funded
+                ),
+            )
+            .saying(
+                Voice::Blunt,
+                format!(
+                    "One address funded {} of the {checked} early buyers checked.",
+                    top.funded
+                ),
+            ),
+        );
+    }
+    if !funding.gaps.is_empty() {
+        unknown.push(format!(
+            "the funding check did not finish: {checked} of {} chosen early buyers were read",
+            funding.selected
+        ));
     }
 }
 
@@ -2305,6 +2400,7 @@ mod tests {
             creator_transactions: None,
             chain_launch: None,
             holders: None,
+            funding: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -3044,6 +3140,7 @@ mod tests {
             creator_transactions: None,
             chain_launch: None,
             holders: None,
+            funding: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -3239,6 +3336,186 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert!(fact_of(&sheet, Kind::Holders).is_some());
         assert!(fact_of(&sheet, Kind::LargestHolderShare).is_none());
+    }
+
+    /// A funding result: `checked` candidates, of `buyers`, with `shared`
+    /// addresses funding `funded` of them each.
+    fn funding_of(buyers: u32, checked: u32, shared: &[u32], gaps: &[&str]) -> Funding {
+        let candidate = |i: u32| realorrug_onchain::Candidate {
+            address: realorrug_robinhood::Address([u8::try_from(i).unwrap_or(0); 20]),
+            bought_wei: 1,
+            first_purchase_block: 64,
+            is_contract: Some(false),
+            nonce_before_launch: Some(0),
+            funders: Vec::new(),
+            funding_complete: true,
+        };
+        Funding {
+            buyers,
+            selected: checked,
+            coverage_bps: 7_500,
+            rule: "test",
+            checked: (0..checked).map(candidate).collect(),
+            shared: shared
+                .iter()
+                .enumerate()
+                .map(|(i, funded)| realorrug_onchain::SharedFunder {
+                    address: realorrug_robinhood::Address(
+                        [0xf0 + u8::try_from(i).unwrap_or(0); 20],
+                    ),
+                    funded: *funded,
+                })
+                .collect(),
+            gaps: gaps.iter().map(|g| (*g).to_owned()).collect(),
+            cu_spent: 0,
+        }
+    }
+
+    /// Words a funding sentence may never use: each names an owner behind
+    /// the addresses, which the chain cannot show.
+    const OWNERSHIP_WORDS: [&str; 7] = [
+        "one person",
+        "insiders",
+        "same owner",
+        "common control",
+        "controlled",
+        "same group",
+        "sybil",
+    ];
+
+    fn clause_words(fact: &Fact) -> String {
+        fact.clauses
+            .iter()
+            .map(|c| c.text.to_ascii_lowercase())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn a_shared_funder_is_a_count_of_the_checked_never_an_owner() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_of(4, 4, &[3], &[]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let checked = fact_of(&sheet, Kind::FundingChecked).expect("a checked count");
+        assert_eq!(checked.values, [4.0]);
+        assert_eq!(checked.rendered, "4 of 4");
+        assert!(
+            clause_words(checked).contains("75%"),
+            "{}",
+            clause_words(checked)
+        );
+
+        let shared = fact_of(&sheet, Kind::SharedFunder).expect("a shared funder");
+        assert_eq!(shared.values, [3.0]);
+        assert_eq!(shared.rendered, "3 of 4");
+        let words = clause_words(shared);
+        assert!(
+            words.contains("3 of the 4 early buyers checked"),
+            "the denominator and 'checked' are in the words: {words}"
+        );
+        for word in OWNERSHIP_WORDS {
+            assert!(!words.contains(word), "{word:?} in {words}");
+        }
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("funding")),
+            "a finished check named a gap: {:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn an_exchange_like_hub_funding_every_buyer_is_still_only_a_flow() {
+        // Four fresh wallets each withdrew from the same hot wallet before
+        // buying: the strongest-looking pattern, and still only a flow.
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_of(9, 4, &[4], &[]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let shared = fact_of(&sheet, Kind::SharedFunder).expect("a shared funder");
+        assert_eq!(shared.rendered, "4 of 4");
+        let words = clause_words(shared);
+        assert!(words.contains("4 of the 4 early buyers checked"), "{words}");
+        assert!(
+            words.contains("exchange"),
+            "the innocent reading is in the words: {words}"
+        );
+        for word in OWNERSHIP_WORDS {
+            assert!(!words.contains(word), "{word:?} in {words}");
+        }
+        let checked = fact_of(&sheet, Kind::FundingChecked).expect("a checked count");
+        assert_eq!(checked.rendered, "4 of 9", "four checked is not nine");
+    }
+
+    #[test]
+    fn no_shared_funder_means_no_shared_funder_fact() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_of(4, 4, &[], &[]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::FundingChecked).is_some());
+        assert!(fact_of(&sheet, Kind::SharedFunder).is_none());
+    }
+
+    #[test]
+    fn a_funding_check_that_stopped_short_names_its_gap() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(
+            4,
+            2,
+            &[2],
+            &["compute-unit cap of 330 CU reached: 2 of 4 candidates checked"],
+        );
+        funding.selected = 4;
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let shared = fact_of(&sheet, Kind::SharedFunder).expect("a shared funder");
+        assert_eq!(
+            shared.rendered, "2 of 2",
+            "the denominator is the checked, not the chosen"
+        );
+        assert!(
+            sheet.unknown.iter().any(|u| {
+                u == "the funding check did not finish: 2 of 4 chosen early buyers were read"
+            }),
+            "{:?}",
+            sheet.unknown
+        );
+
+        // Nothing checked at all: no funding fact, and the gap is named.
+        dossier.funding = Some(funding_of(4, 0, &[], &["budget exhausted"]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::FundingChecked).is_none());
+        assert!(
+            sheet
+                .unknown
+                .iter()
+                .any(|u| u == "who funded the early buyers could not be read"),
+            "{:?}",
+            sheet.unknown
+        );
+
+        // Nothing checked and no gap: an empty launch window, nothing to say.
+        dossier.funding = Some(funding_of(0, 0, &[], &[]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::FundingChecked).is_none());
+        assert!(!sheet.unknown.iter().any(|u| u.contains("funded")));
+    }
+
+    #[test]
+    fn unreadable_funding_is_named_in_plain_words() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "funding",
+            why: "budget exhausted".to_owned(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet
+                .unknown
+                .iter()
+                .any(|u| u == "who funded the early buyers could not be read"),
+            "{:?}",
+            sheet.unknown
+        );
     }
 
     #[test]
