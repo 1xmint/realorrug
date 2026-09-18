@@ -293,6 +293,13 @@ const LEAD: &[&str] = &[
     "addresses holding the token now",
     "has the token graduated off the bonding curve",
     "ETH the launcher spent",
+    // The venue's own fee, read from its on-chain schedule -- and until
+    // 2026-09-17 present on every sheet and printed on none, because this
+    // array is the only gate a fact has to clear to reach a reader and this
+    // one was never on it. It is the sharpest comparison the sheet carries:
+    // the venue publishes a fee a fraction of the measured all-in cost, and
+    // the gap between the two is most of what a trader pays.
+    "venue fee, round trip, read from the on-chain schedule",
     // **The round trip is deliberately NOT here.** It led every reply until
     // 2026-09-05, and it is the same 456 bps every time, so every reply opened
     // with the same sentence -- an account that reads as a bot repeating itself
@@ -409,10 +416,17 @@ pub fn headline(sheet: &FactSheet) -> Option<String> {
 /// [`crate::fidelity::check`] against its own source by construction — and a
 /// test asserts that rather than assuming it, because if the floor were itself
 /// unpublishable there would be nothing left to fall back to.
+///
+/// **No name-and-address header.** Until 2026-09-17 every reply opened "Real
+/// or Rug on <mint>:" -- a line that named the account and repeated the
+/// mint, when the reply is already threaded under the mention that named
+/// both. It was also the one line every reply shared regardless of the coin,
+/// which is the same defect the LEAD ordering below exists to avoid one line
+/// later. The reply now leads on [`headline`], the sentence that is actually
+/// about this coin.
 #[must_use]
 pub fn template(sheet: &FactSheet) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "Real or Rug on {}:", sheet.mint);
     // The headline, when there is one, so the floor leads on the fact that is
     // about this coin rather than on whichever fact happened to sort first.
     if let Some(headline) = headline(sheet) {
@@ -569,6 +583,9 @@ fn short(label: &str) -> &str {
         }
         l if l.contains("ETH the launcher spent") => {
             "the launcher's own buy in the launch transaction"
+        }
+        l if l.contains("venue fee, round trip, read from the on-chain schedule") => {
+            "the venue's own fee, not the cost of trading"
         }
         other => other,
     }
@@ -730,12 +747,11 @@ mod tests {
         // The defect this ordering fixes. Until 2026-09-05 the round trip led
         // every reply, and it is 456 bps in all of them -- so three different
         // coins opened with the same sentence, which reads as a bot repeating
-        // itself rather than as something that looked at the coin.
+        // itself rather than as something that looked at the coin. As of
+        // 2026-09-17 there is no name-and-address header either (`template`'s
+        // own doc comment), so line 0 is the headline itself.
         let out = template(&a_real_shaped_sheet());
-        let first = out.lines().nth(1).expect("a first line after the header");
-        // Line 1 is now the headline rather than the first bullet, and it is
-        // still about the creator's record -- which is the property this test
-        // was always about. The shape changed; the claim did not.
+        let first = out.lines().next().expect("a first line");
         assert!(
             first.contains("launches by this creator"),
             "the first line must be about this coin, got: {first}"
@@ -1305,10 +1321,10 @@ mod tests {
             Some("529 addresses hold it. The biggest one holds 50.2%.")
         );
         let reply = template(&sheet);
-        let second = reply.lines().nth(1).unwrap_or_default();
+        let first = reply.lines().next().unwrap_or_default();
         assert!(
-            second.contains("529") && second.contains("50.2%"),
-            "the headline is not the line under the title: {reply}"
+            first.contains("529") && first.contains("50.2%"),
+            "the headline is not the first line: {reply}"
         );
     }
 
