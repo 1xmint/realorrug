@@ -392,5 +392,29 @@ per-reply model ceiling of $0.002 is recommended to rise to about $0.02 so
 the reply is not forced onto the cheapest model; that is a recommendation,
 not yet a decision.
 
+**The good side, approved by Josh on 2026-09-18** ("yes"). The catalog
+also holds patterns of healthy launches, not only scams. Each entry is
+tagged as either a *warning* or a *reassurance*, and both live in the same
+catalog, matcher and packet log (slice 7b), so nothing extra is built.
+
+- **Why.** Without it the bot can only say "nothing ugly yet". With it a
+  reply can name what went right with the same specificity as a warning
+  (a creator whose last launches filled their curve, early buyers funded
+  from unrelated sources). That is fairer to honest launches, gives
+  holders a reply worth sharing, and explains an odd-looking launch that
+  has an innocent reason.
+- **A reassurance must separate.** Scammers copy good signs on purpose (a
+  locked pool, a renounced mint). An entry is measured on the labelled set
+  against rugs as well as survivors; one that is common among rugs stays
+  in the catalog as a checked fact but carries no weight.
+- **What a reassurance may do:** support `NothingUglyYet` and give the
+  reply a specific reason for it.
+- **What it may never do:** say "safe"; lower a live rug mechanic, which
+  code scored and a match cannot cancel; or fill in for a check that was
+  never read (absent is not zero, and unknown is not safe). The mirror of
+  item 2: a match never lowers a band on its own either.
+- **The weekly review (9b)** proposes both kinds, and a reassurance
+  candidate's PR shows the same back-test on both held-out splits.
+
 Still pending from §4: model band choice stays shadow-only, contest
 weights, the honeypot and wallet-language gates, and age prose.
