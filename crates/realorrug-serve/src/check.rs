@@ -441,6 +441,7 @@ pub(crate) async fn check(
     if let Some(symbol) = untrusted_field(&sheet.untrusted, "token symbol") {
         stored["_symbol"] = json!(symbol);
     }
+    stash_signals(&mut stored, &sheet.signals);
     let _ = write_cache(&cache_path, &stored, now_secs());
     (StatusCode::OK, doc)
 }
@@ -451,6 +452,21 @@ fn untrusted_field<'a>(untrusted: &'a [(String, String)], label: &str) -> Option
         .iter()
         .find(|(l, _)| l == label)
         .map(|(_, v)| v.as_str())
+}
+
+/// Same trick as `_name`/`_symbol` for the card's "why" lines. `signals` is
+/// what `verdict::level` itself reads to pick the ladder level (verdict.rs),
+/// so stashing `Signal::plain()` for each fired one — not
+/// `verdict.reasons`, which is separately ordered and can lead with a fact
+/// that never moved the level — means the card can never draw a line that
+/// disagrees with its own headline word. A no-signal sheet stashes nothing,
+/// leaving the card route to fall back to its own no-signal line.
+fn stash_signals(stored: &mut Value, signals: &[realorrug_roast::sheet::Signal]) {
+    if signals.is_empty() {
+        return;
+    }
+    let plain: Vec<&str> = signals.iter().map(|s| s.plain()).collect();
+    stored["_signals"] = json!(plain);
 }
 
 /// Whether `dispatch::Error::Unreadable`'s message names the one case design

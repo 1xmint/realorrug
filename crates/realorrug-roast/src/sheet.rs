@@ -307,6 +307,42 @@ pub(crate) fn twin_for(signal: Signal) -> &'static str {
     }
 }
 
+/// A short, digit-free phrase naming what this signal read, for a surface
+/// that cannot show numbers.
+///
+/// **Signals, not [`crate::verdict::Verdict::reasons`], are the source for
+/// any UI that must never contradict the verdict word.** `verdict::level`
+/// picks the ladder level from `sheet.signals` alone (verdict.rs), so the
+/// signals *are* the reason for the stamp; `reasons` is a separately ordered
+/// list ("the order they are worth reading", not "the order that decided
+/// the level") and can lead with something that did not move the verdict at
+/// all. Reading signals instead keeps a card's wording and its headline
+/// word from ever being able to disagree.
+///
+impl Signal {
+    /// One `match`, exhaustive, no `_ =>` arm, same discipline as
+    /// [`twin_for`]: a new variant that is not given a phrase here fails to
+    /// compile rather than rendering as a blank line on a public card.
+    #[must_use]
+    pub fn plain(self) -> &'static str {
+        match self {
+            Signal::LaunchBlockInStrongestBand => "the launch drew a burst of buyers instantly",
+            Signal::CreatorNeverGraduatedOrganically => {
+                "this launcher has never had one fill over time"
+            }
+            Signal::CreatorBoughtOwnLaunch => "the launcher bought their own token at launch",
+            Signal::LiquidityGone => "the pool emptied before this token could graduate",
+            Signal::CreatorSoldOut => "the launcher's wallet went from holding to empty",
+            Signal::BuyersCannotSell => "a test sell into this token failed",
+            Signal::RepeatLauncher => "this launcher keeps coming back with new tokens",
+            Signal::HolderConcentration => "one address holds most of the supply",
+            Signal::OwnerCanStillMintOrPause => {
+                "the contract can still be minted or paused at will"
+            }
+        }
+    }
+}
+
 /// Everything the analyst may assert about one token.
 #[derive(Clone, Debug)]
 pub struct FactSheet {
@@ -2399,6 +2435,38 @@ mod tests {
             assert!(
                 !twin.chars().any(|c| c.is_ascii_digit()),
                 "{signal:?}'s twin carries a digit, which `forbidden.rs` cannot source: {twin}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_signal_variant_has_a_short_nonempty_digit_free_plain_phrase() {
+        // Same discipline as the twin test above, for `Signal::plain`: the
+        // exhaustive match with no `_ =>` arm means a new variant fails to
+        // compile without a phrase here; this test catches an empty, too
+        // long, or digit-smuggling one, which exhaustiveness alone cannot.
+        for signal in [
+            Signal::LaunchBlockInStrongestBand,
+            Signal::CreatorNeverGraduatedOrganically,
+            Signal::CreatorBoughtOwnLaunch,
+            Signal::LiquidityGone,
+            Signal::CreatorSoldOut,
+            Signal::BuyersCannotSell,
+            Signal::RepeatLauncher,
+            Signal::HolderConcentration,
+            Signal::OwnerCanStillMintOrPause,
+        ] {
+            let plain = signal.plain();
+            assert!(!plain.is_empty(), "{signal:?} has an empty plain phrase");
+            assert!(
+                plain.len() < 60,
+                "{signal:?}'s plain phrase is {} chars, over the card's budget: {plain}",
+                plain.len()
+            );
+            assert!(
+                !plain.chars().any(|c| c.is_ascii_digit()),
+                "{signal:?}'s plain phrase carries a digit, which the card must never draw: \
+                 {plain}"
             );
         }
     }

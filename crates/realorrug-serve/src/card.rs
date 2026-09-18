@@ -17,7 +17,24 @@
 //! RPC calls here exactly as it does there. The token name and symbol this
 //! route needs (and the JSON route's own contract never carries, per its
 //! `assert_contract` test) are read back off the same cache file, under the
-//! `_name`/`_symbol` keys `check.rs` stashes there on a verdict write.
+//! `_name`/`_symbol` keys `check.rs` stashes there on a verdict write. The
+//! same cache file carries `_signals`: the fired [`realorrug_roast::sheet::Signal`]s'
+//! plain-English phrases, stashed by `check.rs` at write time and read back
+//! here to draw under the verdict word.
+//!
+//! # Why signals draw the "why" lines, never `Verdict::reasons`
+//!
+//! `realorrug_roast::verdict::level` picks the ladder level from
+//! `sheet.signals` alone — nothing else. That makes the fired signals *the
+//! reason* the word above them says what it says, so a card built from them
+//! can never draw a line that disagrees with its own headline. `reasons` is
+//! ordered by "worth reading", not by "what moved the level" (its own doc
+//! comment says so), and can lead with a fact — how long ago a token
+//! launched, on the token this route was built against — that never fired a
+//! signal at all. Numbers stay excluded the same way the rest of this module
+//! excludes them: [`realorrug_roast::sheet::Signal::plain`] returns a fixed,
+//! digit-free phrase per variant, so the "No price, ever" section below and
+//! its pinning test are untouched by this feature.
 //!
 //! # Never a verdict for what the ladder does not know
 //!
@@ -30,13 +47,17 @@
 //!
 //! # No price, ever
 //!
-//! [`build_svg`] takes exactly four strings — verdict word, chain, name,
-//! symbol — and never a number. There is no code path from a price or
-//! market-cap field to this function's parameters. The token's own name and
-//! symbol are drawn as written, digits included: "Pepe2024" is a name, and
-//! scrubbing digits from it would misquote the token. A test below pins that
-//! with every text input free of digits, the only digits in the SVG are the
-//! template's own layout numbers, so nothing numeric enters by any other road.
+//! [`build_svg`] takes exactly four strings and one string slice — verdict
+//! word, chain, name, symbol, and up to three signal-phrase flags — and
+//! never a number. There is no code path from a price or market-cap field to
+//! this function's parameters. The token's own name and symbol are drawn as
+//! written, digits included: "Pepe2024" is a name, and scrubbing digits from
+//! it would misquote the token. The flags are [`realorrug_roast::sheet::Signal::plain`]'s
+//! own fixed, digit-free phrases, never a fact with a number in it — that is
+//! why this route draws *signals*, not the fact sheet's measured values. A
+//! test below pins that with every text input free of digits, the only
+//! digits in the SVG are the template's own layout numbers, so nothing
+//! numeric enters by any other road.
 //!
 //! # Font
 //!
@@ -113,21 +134,30 @@ async fn handle(
     let level = doc["level"].as_str().map(str::to_owned);
     let raw_address = doc["address"].as_str().unwrap_or(&address).to_owned();
 
-    let (name, symbol) = if level.is_some() {
+    let (name, symbol, signals) = if level.is_some() {
         let key = format!("{chain}:{raw_address}");
         let cache_path = state.cache_dir.join(format!("{}.json", cache_key(&key)));
-        fresh_cached_raw(&cache_path, now_secs()).map_or((None, None), |raw| {
+        fresh_cached_raw(&cache_path, now_secs()).map_or((None, None, Vec::new()), |raw| {
+            let signals = raw["_signals"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
             (
                 raw["_name"].as_str().map(str::to_owned),
                 raw["_symbol"].as_str().map(str::to_owned),
+                signals,
             )
         })
     } else {
-        (None, None)
+        (None, None, Vec::new())
     };
 
     let word = stamp_word(level.as_deref());
-    let svg = build_svg(word, &chain, name.as_deref(), symbol.as_deref());
+    let svg = build_svg(word, &chain, name.as_deref(), symbol.as_deref(), &signals);
 
     match render_png(&svg) {
         Ok(png) => (
@@ -156,6 +186,21 @@ pub(crate) fn stamp_word(level: Option<&str>) -> &'static str {
         Some("Sketchy") => "Sketchy",
         Some("NothingUglyYet") => "Nothing ugly yet",
         _ => "Can't tell",
+    }
+}
+
+/// The one line to draw when no signal fired: a true statement derived from
+/// the verdict word itself, so the card never sits with an empty middle.
+///
+/// This is the single place the word-to-line rule lives — [`build_svg`]
+/// calls this only when `flags` is empty, and nowhere else picks a
+/// no-signal line of its own.
+fn no_signal_line(word: &str) -> &'static str {
+    match word {
+        "Rugged" | "Rug mechanics live" => "the mechanics of this token did the harm",
+        "Sketchy" => "something about this token did not read clean",
+        "Nothing ugly yet" => "nothing ugly in what was read",
+        _ => "not enough of it could be read",
     }
 }
 
@@ -190,6 +235,10 @@ pub(crate) fn escape_xml(s: &str) -> String {
 /// the card (it can still be ugly text, never markup or overflow).
 pub(crate) const MAX_NAME_CHARS: usize = 40;
 pub(crate) const MAX_SYMBOL_CHARS: usize = 12;
+/// The signal/no-signal lines sit at 34px, narrower per character than the
+/// 48px name line, so they tolerate more characters across the same card
+/// width before truncation is needed.
+pub(crate) const MAX_FLAG_CHARS: usize = 60;
 
 pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -237,7 +286,19 @@ const FONT_MONO: &str =
 /// `word` is [`stamp_word`]'s output — never a raw `Level` variant name, so
 /// this function cannot itself pick the wrong ladder word; that choice is
 /// made once, by `stamp_word`, and this function only draws it.
-fn build_svg(word: &str, chain: &str, name: Option<&str>, symbol: Option<&str>) -> String {
+///
+/// `flags` is up to three of [`realorrug_roast::sheet::Signal::plain`]'s
+/// phrases for the signals that fired on this token — the same signals
+/// `verdict::level` used to choose `word`, so these lines can never
+/// contradict it (see this module's doc comment). An empty slice draws
+/// [`no_signal_line`]'s single true statement instead of nothing.
+fn build_svg(
+    word: &str,
+    chain: &str,
+    name: Option<&str>,
+    symbol: Option<&str>,
+    flags: &[String],
+) -> String {
     let color = stamp_color(word);
     let name_text = name.map(|n| escape_xml(&truncate(n, MAX_NAME_CHARS)));
     let symbol_text = symbol.map(|s| escape_xml(&truncate(s, MAX_SYMBOL_CHARS)));
@@ -268,6 +329,19 @@ fn build_svg(word: &str, chain: &str, name: Option<&str>, symbol: Option<&str>) 
         let _ = write!(
             body,
             r#"<text x="100" y="320" font-family="{FONT_SANS}" font-size="48" fill="{COLOR_PAPER_INK}">{name_text}</text>"#,
+        );
+    }
+    let lines: Vec<String> = if flags.is_empty() {
+        vec![no_signal_line(word).to_owned()]
+    } else {
+        flags.iter().take(3).cloned().collect()
+    };
+    for (i, line) in lines.iter().enumerate() {
+        let text = escape_xml(&truncate(line, MAX_FLAG_CHARS));
+        let y = 400 + i * 56;
+        let _ = write!(
+            body,
+            r#"<text x="100" y="{y}" font-family="{FONT_SANS}" font-size="34" fill="{COLOR_PAPER_INK}">{text}</text>"#,
         );
     }
     let _ = write!(
@@ -323,6 +397,7 @@ mod tests {
             "solana",
             Some("<script>alert(1)</script> & Friends"),
             Some("EVIL"),
+            &[],
         );
         assert!(
             !svg.contains("<script>"),
@@ -342,7 +417,7 @@ mod tests {
         assert_eq!(word, "Can't tell");
         assert_eq!(stamp_color(word), COLOR_UNKNOWN);
 
-        let svg = build_svg(word, "solana", None, None);
+        let svg = build_svg(word, "solana", None, None, &[]);
         assert!(svg.contains("Can&apos;t tell") || svg.contains("Can't tell"));
         assert!(svg.contains(COLOR_UNKNOWN));
         assert!(!svg.contains(COLOR_RUG));
@@ -375,7 +450,7 @@ mod tests {
     #[test]
     fn a_long_name_is_truncated() {
         let long = "A".repeat(200);
-        let svg = build_svg("Sketchy", "solana", Some(&long), Some("SYM"));
+        let svg = build_svg("Sketchy", "solana", Some(&long), Some("SYM"), &[]);
         assert!(
             !svg.contains(&long),
             "the full 200-char name must not appear verbatim"
@@ -393,7 +468,17 @@ mod tests {
     /// into the template's visible text fails this.
     #[test]
     fn the_only_digits_on_a_digit_free_card_are_layout_numbers() {
-        let svg = build_svg("Sketchy", "robinhood", Some("Pepe Coin"), Some("PEPE"));
+        let flags = vec![
+            "one address holds most of the supply".to_owned(),
+            "a test sell into this token failed".to_owned(),
+        ];
+        let svg = build_svg(
+            "Sketchy",
+            "robinhood",
+            Some("Pepe Coin"),
+            Some("PEPE"),
+            &flags,
+        );
         let visible: String = svg
             .split('>')
             .filter_map(|chunk| chunk.split('<').next())
@@ -401,6 +486,59 @@ mod tests {
         assert!(
             !visible.chars().any(|c| c.is_ascii_digit()),
             "visible card text carries a digit the inputs did not: {visible}"
+        );
+    }
+
+    /// Two fired signals both land on the card as their `plain()` text.
+    #[test]
+    fn two_flags_both_appear_on_the_card() {
+        let flags = vec![
+            "one address holds most of the supply".to_owned(),
+            "a test sell into this token failed".to_owned(),
+        ];
+        let svg = build_svg("Sketchy", "solana", None, None, &flags);
+        assert!(
+            svg.contains("one address holds most of the supply"),
+            "{svg}"
+        );
+        assert!(svg.contains("a test sell into this token failed"), "{svg}");
+    }
+
+    /// Four fired signals draw only the first three — the card has room for
+    /// three lines, never a fourth spilling past the card's edge.
+    #[test]
+    fn four_flags_draw_only_three() {
+        let flags = vec![
+            "flag one is drawn".to_owned(),
+            "flag two is drawn".to_owned(),
+            "flag three is drawn".to_owned(),
+            "flag four is dropped".to_owned(),
+        ];
+        let svg = build_svg("Sketchy", "solana", None, None, &flags);
+        assert!(svg.contains("flag one is drawn"));
+        assert!(svg.contains("flag two is drawn"));
+        assert!(svg.contains("flag three is drawn"));
+        assert!(
+            !svg.contains("flag four is dropped"),
+            "a fourth flag must never reach the card: {svg}"
+        );
+    }
+
+    /// With no signal fired, the card still says something true rather than
+    /// leaving the middle empty — one line derived from the verdict word via
+    /// [`no_signal_line`], the single place that mapping lives.
+    #[test]
+    fn no_flags_draws_the_levels_own_line() {
+        let svg = build_svg("Nothing ugly yet", "solana", None, None, &[]);
+        assert!(
+            svg.contains("nothing ugly in what was read"),
+            "the no-signal fallback line for this word must be drawn: {svg}"
+        );
+
+        let svg = build_svg("Can't tell", "solana", None, None, &[]);
+        assert!(
+            svg.contains("not enough of it could be read"),
+            "the no-signal fallback line for this word must be drawn: {svg}"
         );
     }
 
@@ -432,14 +570,14 @@ mod tests {
         if db.is_empty() {
             return;
         }
-        let a = render_png(&build_svg("Sketchy", "robinhood", None, None)).expect("render");
-        let b = render_png(&build_svg("Rugged", "robinhood", None, None)).expect("render");
+        let a = render_png(&build_svg("Sketchy", "robinhood", None, None, &[])).expect("render");
+        let b = render_png(&build_svg("Rugged", "robinhood", None, None, &[])).expect("render");
         assert_ne!(a, b, "the stamp word left no mark on the image");
     }
 
     #[test]
     fn the_rendered_card_is_under_the_size_budget_and_the_right_dimensions() {
-        let svg = build_svg("Sketchy", "solana", Some("Example Token"), Some("EX"));
+        let svg = build_svg("Sketchy", "solana", Some("Example Token"), Some("EX"), &[]);
         let png = render_png(&svg).expect("renders");
         assert!(
             png.len() <= MAX_BYTES,
