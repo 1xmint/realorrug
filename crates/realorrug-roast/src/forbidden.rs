@@ -940,10 +940,18 @@ fn topic(phrase: &str) -> &str {
 /// word must appear -- and it no longer turns on grammar the model was never
 /// told to copy.
 ///
-/// It does **not** stem: "holder" does not satisfy "holders". Stemming trades
-/// a false refusal for a false pass, and on a check whose whole job is to
-/// stop a bare "can't tell" reaching a reader, the false refusal is the safer
-/// one. It costs a fallback; the other costs the rule.
+/// Until 2026-09-17 this required an exact substring for each content word,
+/// which meant "holder" did not satisfy "holders" and a reply calling
+/// something "unreadable" did not satisfy "could not be read". Measured on
+/// the box the same day: a real model draft naming the holders in different
+/// words fell back on this check even though it plainly named the topic.
+///
+/// A word now satisfies the topic word if it shares a simple stem (plural
+/// `-s`/`-es`, so "holder" and "holders" match each other) or appears in
+/// [`synonyms`], a short hand-written list for word forms stemming does not
+/// reach ("unread", "readable" for "read"). It still requires every content
+/// word's topic to be named, and a phrase with no content words still cannot
+/// pass -- a bare "can't tell" that names nothing still fails.
 fn topic_words(phrase: &str) -> Vec<String> {
     topic(phrase)
         .split_whitespace()
@@ -954,6 +962,40 @@ fn topic_words(phrase: &str) -> Vec<String> {
         })
         .filter(|w| !w.is_empty())
         .collect()
+}
+
+/// A simple plural/singular stem: strips a trailing `-es` or `-s` when the
+/// remainder is still long enough to be a real word on its own ("holders" ->
+/// "holder", but not "as" -> "a"). Good enough for the noun phrases
+/// `sheet::phrase_for` builds; it is not a general English stemmer.
+fn stem(word: &str) -> &str {
+    word.strip_suffix("es")
+        .or_else(|| word.strip_suffix('s'))
+        .filter(|s| s.len() >= 3)
+        .unwrap_or(word)
+}
+
+/// Word forms that count as naming `word`'s topic but do not share its stem
+/// -- a prefix like "un-" or a suffix like "-able" changes the stem outright.
+/// Hand-written and short on purpose: the phrases `sheet::phrase_for` builds
+/// name four topics today, so a complete per-word list costs less and risks
+/// less than a general synonym lookup would.
+fn synonyms(word: &str) -> &'static [&'static str] {
+    match word {
+        "read" => &["unread", "readable", "unreadable", "reading"],
+        _ => &[],
+    }
+}
+
+/// Whether `text` (already lowercased) names `topic_word` by its stem or by
+/// one of its listed synonyms.
+fn names_topic_word(text: &str, topic_word: &str) -> bool {
+    let topic_stem = stem(topic_word);
+    let by_stem = text
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| !w.is_empty() && stem(w) == topic_stem);
+    let by_synonym = synonyms(topic_word).iter().any(|syn| text.contains(syn));
+    by_stem || by_synonym
 }
 
 fn check_required_canttell(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violation> {
@@ -974,7 +1016,7 @@ fn check_required_canttell(text: &str, sheet: &crate::sheet::FactSheet) -> Vec<V
         // answer this check may never give by accident. No phrase
         // `sheet::phrase_for` builds reduces to nothing, so this is a guard
         // against a future phrase, not a case seen today.
-        !words.is_empty() && words.iter().all(|w| lower.contains(w.as_str()))
+        !words.is_empty() && words.iter().all(|w| names_topic_word(&lower, w))
     });
     if named {
         Vec::new()
