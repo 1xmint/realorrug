@@ -15,10 +15,10 @@
 //!
 //! The verdict is [`realorrug_roast::verdict::Verdict::from`] over the same
 //! [`realorrug_roast::sheet::FactSheet`] `realorrug-roast::roast` builds,
-//! stopped before the voice pass. `FactSheet::build` already drops every
-//! [`realorrug_roast::sheet::About::Price`] fact before anything downstream
-//! can state it (AGENTS.md §3 rule 5) — this route inherits that guarantee
-//! rather than re-implementing it, and a test below pins it.
+//! stopped before the voice pass. Every
+//! [`realorrug_roast::sheet::About::Price`] fact the sheet carries is
+//! reported in the `price` field, each with the moment it was read at (ADR
+//! 0033) — never a bare number, and a test below pins the field's shape.
 //!
 //! # The cache, and the TTL stand-in
 //!
@@ -334,6 +334,7 @@ pub(crate) async fn check(
                 "reasons": Vec::<String>::new(),
                 "twins": Vec::<String>::new(),
                 "measured_at": Value::Null,
+                "price": Vec::<Value>::new(),
                 "message": "You're checking addresses faster than we can read them. \
                              Wait a minute and try again.",
             }),
@@ -352,6 +353,7 @@ pub(crate) async fn check(
                 "reasons": Vec::<String>::new(),
                 "twins": Vec::<String>::new(),
                 "measured_at": Value::Null,
+                "price": Vec::<Value>::new(),
                 "message": "That's not shaped like a Robinhood Chain or a Solana \
                              address. Robinhood Chain: 0x + 40 hex characters. \
                              Solana: a base58 string, 32-44 characters, no 0, O, I \
@@ -424,7 +426,8 @@ pub(crate) async fn check(
     let sheet = FactSheet::build(&dossier, state.rates.as_ref(), None, None, None);
     let verdict = Verdict::from(&sheet);
     let measured_at = realorrug_types::civil::timestamp_from_seconds(now_secs());
-    let doc = verdict_doc(raw_address, &chain, &verdict, &measured_at);
+    let price = price_facts(&sheet);
+    let doc = verdict_doc(raw_address, &chain, &verdict, &measured_at, &price);
 
     // The card route (§7's requirement) needs the token name/symbol to draw
     // on the image, but the JSON contract below (`assert_contract`) never
@@ -494,6 +497,7 @@ fn unreadable_doc(raw_address: &str, chain: &str, why: &str) -> (StatusCode, Val
                 "reasons": Vec::<String>::new(),
                 "twins": Vec::<String>::new(),
                 "measured_at": Value::Null,
+                "price": Vec::<Value>::new(),
                 "message": "We looked for this address on Robinhood Chain and found \
                              nothing there. If this is a token on a chain we don't \
                              read yet, we can't tell you anything about it -- not \
@@ -514,6 +518,7 @@ fn cant_read_doc(raw_address: &str, chain: &str, why: &str) -> Value {
         "reasons": vec![format!("not known -- {why}")],
         "twins": Vec::<String>::new(),
         "measured_at": Value::Null,
+        "price": Vec::<Value>::new(),
         "message": "We couldn't read something we needed to give this a real \
                      verdict. That is not the same as clean -- it means we don't \
                      know, and a token we don't know about is not a token we're \
@@ -530,6 +535,7 @@ fn bad_address_doc(raw_address: &str) -> Value {
         "reasons": Vec::<String>::new(),
         "twins": Vec::<String>::new(),
         "measured_at": Value::Null,
+        "price": Vec::<Value>::new(),
         "message": "That's not shaped like a Robinhood Chain or a Solana address. \
                      Robinhood Chain: 0x + 40 hex characters. Solana: a base58 \
                      string, 32-44 characters, no 0, O, I or l. Paste the address \
@@ -546,12 +552,19 @@ fn budget_doc(raw_address: &str) -> Value {
         "reasons": Vec::<String>::new(),
         "twins": Vec::<String>::new(),
         "measured_at": Value::Null,
+        "price": Vec::<Value>::new(),
         "message": "New checks are switched off right now. Cached verdicts still \
                      work.",
     })
 }
 
-fn verdict_doc(raw_address: &str, chain: &str, verdict: &Verdict, measured_at: &str) -> Value {
+fn verdict_doc(
+    raw_address: &str,
+    chain: &str,
+    verdict: &Verdict,
+    measured_at: &str,
+    price: &[Value],
+) -> Value {
     let level = level_name(verdict.level);
     let state = if matches!(verdict.level, Level::CantTell) {
         "cant_read"
@@ -566,8 +579,22 @@ fn verdict_doc(raw_address: &str, chain: &str, verdict: &Verdict, measured_at: &
         "reasons": verdict.reasons,
         "twins": verdict.twins,
         "measured_at": measured_at,
+        "price": price,
         "message": Value::Null,
     })
+}
+
+/// Every [`realorrug_roast::sheet::About::Price`] fact the sheet carries,
+/// each with the moment it was read at (ADR 0033: price is stated with its
+/// moment). `Fact::label` already names that moment (`sheet.rs`'s
+/// `push_curve`), so this route need not track it separately.
+fn price_facts(sheet: &FactSheet) -> Vec<Value> {
+    sheet
+        .facts
+        .iter()
+        .filter(|fact| fact.about == realorrug_roast::sheet::About::Price)
+        .map(|fact| json!({ "label": fact.label, "value": fact.rendered }))
+        .collect()
 }
 
 fn level_name(level: Level) -> &'static str {
@@ -816,10 +843,10 @@ mod tests {
         waiter.await.expect("the waiter finishes once released");
     }
 
-    /// The full JSON contract this route promises: exactly these eight
-    /// fields, on every shape of response, and never a `price` or
-    /// `market_cap` key -- AGENTS.md §3 rule 5, and the site depends on the
-    /// field names not moving.
+    /// The full JSON contract this route promises: exactly these nine
+    /// fields, on every shape of response, and `price` empty unless the
+    /// sheet actually carried a price fact (ADR 0033) -- the site depends on
+    /// the field names not moving.
     fn assert_contract(doc: &Value) {
         let obj = doc.as_object().expect("a JSON object");
         let expected: std::collections::BTreeSet<&str> = [
@@ -830,6 +857,7 @@ mod tests {
             "reasons",
             "twins",
             "measured_at",
+            "price",
             "message",
         ]
         .into_iter()
@@ -840,15 +868,10 @@ mod tests {
             actual, expected,
             "the response must carry exactly the contracted fields"
         );
-        let text = doc.to_string();
-        assert!(
-            !text.to_lowercase().contains("price") && !text.to_lowercase().contains("market_cap"),
-            "a checker response must never carry price or market cap (AGENTS.md §3 rule 5): {text}"
-        );
     }
 
     #[test]
-    fn every_response_shape_matches_the_contract_and_carries_no_price() {
+    fn every_response_shape_matches_the_contract() {
         assert_contract(&bad_address_doc("not-an-address"));
         assert_contract(&budget_doc("0x0000000000000000000000000000000000000000"));
         assert_contract(&cant_read_doc(
@@ -866,7 +889,81 @@ mod tests {
             "robinhood",
             &verdict,
             "2026-01-01T00:00:00Z",
+            &[],
         ));
+    }
+
+    /// A sheet that carries an `About::Price` fact must show up in the
+    /// `price` field, with the moment it was read at -- ADR 0033's actual
+    /// requirement, not just "the field exists."
+    #[test]
+    fn a_price_fact_on_the_sheet_appears_in_the_price_field() {
+        let verdict = Verdict {
+            level: Level::NothingUglyYet,
+            reasons: vec!["nothing observed yet".to_owned()],
+            twins: Vec::new(),
+        };
+        let price = vec![json!({
+            "label": "quote asset held in the bonding curve now, read at slot 12345",
+            "value": "5.2 SOL",
+        })];
+        let doc = verdict_doc(
+            "0x0000000000000000000000000000000000000000",
+            "robinhood",
+            &verdict,
+            "2026-01-01T00:00:00Z",
+            &price,
+        );
+        assert_contract(&doc);
+        assert_eq!(doc["price"], json!(price));
+        let text = doc.to_string();
+        assert!(text.contains("read at slot 12345"), "{text}");
+    }
+
+    /// [`price_facts`] itself: it must pick out the sheet's `About::Price`
+    /// facts (and only those, never an `About::Measurement` one) and carry
+    /// each one's label -- which is where the moment it was read at lives
+    /// (`sheet.rs`'s `push_curve`) -- through unchanged.
+    #[test]
+    fn price_facts_carries_the_moment_from_the_sheets_price_fact() {
+        use realorrug_roast::clause::Kind;
+        use realorrug_roast::sheet::{About, Fact};
+
+        let sheet = FactSheet {
+            mint: "So11111111111111111111111111111111111111112".to_owned(),
+            read_at: None,
+            facts: vec![
+                Fact {
+                    about: About::Measurement,
+                    kind: Kind::LaunchRecipients,
+                    label: "distinct accounts credited in the launch block".to_owned(),
+                    rendered: "12".to_owned(),
+                    values: vec![12.0],
+                    clauses: Vec::new(),
+                },
+                Fact {
+                    about: About::Price,
+                    kind: Kind::CurveLiquidity,
+                    label: "quote asset held in the bonding curve now, read at slot 12345"
+                        .to_owned(),
+                    rendered: "5.2 SOL".to_owned(),
+                    values: vec![5.2],
+                    clauses: Vec::new(),
+                },
+            ],
+            untrusted: Vec::new(),
+            unknown: Vec::new(),
+            signals: Vec::new(),
+            twins: Vec::new(),
+        };
+
+        let price = price_facts(&sheet);
+        assert_eq!(price.len(), 1, "only the About::Price fact, never the measurement");
+        assert_eq!(
+            price[0]["label"],
+            json!("quote asset held in the bonding curve now, read at slot 12345")
+        );
+        assert_eq!(price[0]["value"], json!("5.2 SOL"));
     }
 
     /// A Robinhood chain read with no `REALORRUG_ROBINHOOD_RPC` configured must
