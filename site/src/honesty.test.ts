@@ -126,6 +126,14 @@ describe("links", () => {
     expect(summonIntent("", mint)).toBe(null);
     expect(summonIntent("a".repeat(16), mint)).toBe(null);
     expect(summonIntent("realorrug", "not an address")).toBe(null);
+
+    // And a Robinhood Chain address is a real half too. This gated on base58
+    // alone until 2026-09-17; re-apply the bug by dropping `evmShaped` from
+    // `summonIntent` and this returns null for the chain the bot mainly reads.
+    const token = "0x13e6cdB0470B10AfCB96177Ae8702ace2ac72cD6";
+    expect(summonIntent("realorrug", token)).toBe(
+      `https://x.com/intent/post?text=%40realorrug%20${token}`,
+    );
   });
 
   it("encodes the mint rather than pasting it into a query string", () => {
@@ -143,7 +151,9 @@ describe("links", () => {
     // Chain now (ADR 0029, ADR 0025) -- these are the links Pool.tsx and
     // History.tsx actually render.
     const good = `0x${"a".repeat(64)}`;
-    expect(explorerTx(good)).toBe(`https://robinhoodchain.blockscout.com/tx/${good}`);
+    expect(explorerTx(good)).toBe(
+      `https://robinhoodchain.blockscout.com/tx/${good}`,
+    );
     expect(explorerTx("a".repeat(64))).toBe(null);
     expect(explorerTx(`0x${"a".repeat(63)}`)).toBe(null);
     expect(explorerTx(`0x${"a".repeat(65)}`)).toBe(null);
