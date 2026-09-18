@@ -315,6 +315,36 @@ impl LaunchedToken {
     }
 }
 
+/// Which of a launch's two paid accounts an address is, if either: the
+/// deployer who launched it, or the account its trading fees are paid to.
+/// Kept as a named role, not a boolean, because a caller that only asked "is
+/// this the deployer" would silently miss a fee-recipient-only payout, and
+/// design 0027 slice 5's whole point is that the two are read and shown
+/// separately -- on Pons v2 they are usually the same address, but not
+/// always, and nothing here assumes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreatorRole {
+    /// Matched [`LaunchedToken::deployer`].
+    Deployer,
+    /// Matched [`LaunchedToken::creator_fee_recipient`].
+    FeeRecipient,
+}
+
+/// Which of `record`'s two paid accounts `address` is, if either. The two
+/// comparisons are independent: a launch where they differ must still
+/// recognise a payment to either one on its own, not only when both happen
+/// to be the same address.
+#[must_use]
+pub fn creator_role(address: &Address, record: &LaunchedToken) -> Option<CreatorRole> {
+    if *address == record.deployer {
+        Some(CreatorRole::Deployer)
+    } else if *address == record.creator_fee_recipient {
+        Some(CreatorRole::FeeRecipient)
+    } else {
+        None
+    }
+}
+
 /// One reason a launch transaction is not a clean launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unclean {
@@ -993,5 +1023,56 @@ mod curve_read_tests {
         let balances = holdings(&transfers).expect("fits i128");
         assert_eq!(balances.get(&a), Some(&-30));
         assert_eq!(balances.get(&b), Some(&30));
+    }
+}
+
+#[cfg(test)]
+mod creator_role_tests {
+    use super::{Address, CreatorRole, LaunchedToken, creator_role};
+
+    fn record(deployer: Address, creator_fee_recipient: Address) -> LaunchedToken {
+        LaunchedToken {
+            token: Address([0x01; 20]),
+            curve: Address([0x02; 20]),
+            deployer,
+            creator_fee_recipient,
+            pair: None,
+            graduation_threshold: 0,
+            creator_tax_bps: 0,
+            buyback: false,
+            phase: 0,
+            exists: true,
+        }
+    }
+
+    /// A launch where the two accounts differ, design 0027 slice 5's fixture
+    /// requirement: each comparison is checked on its own, not derived from
+    /// the other, so a fee recipient that is not the deployer is still
+    /// recognised.
+    #[test]
+    fn deployer_and_fee_recipient_are_recognised_independently_when_they_differ() {
+        let deployer = Address([0xaa; 20]);
+        let fee_recipient = Address([0xbb; 20]);
+        let stranger = Address([0xcc; 20]);
+        let record = record(deployer, fee_recipient);
+
+        assert_eq!(
+            creator_role(&deployer, &record),
+            Some(CreatorRole::Deployer)
+        );
+        assert_eq!(
+            creator_role(&fee_recipient, &record),
+            Some(CreatorRole::FeeRecipient)
+        );
+        assert_eq!(creator_role(&stranger, &record), None);
+    }
+
+    /// The common case, where both fields hold the same address: either
+    /// comparison alone must still match it.
+    #[test]
+    fn a_single_address_holding_both_roles_matches_as_deployer() {
+        let both = Address([0xdd; 20]);
+        let record = record(both, both);
+        assert_eq!(creator_role(&both, &record), Some(CreatorRole::Deployer));
     }
 }
