@@ -340,7 +340,7 @@ re-approval.
 ## 5. The scam catalog — approved 2026-09-18
 
 A second golden round (Fable's plan, then a review started by Astra and
-completed by Sonnet when Astra's quota ran out; packet `golden-r5-final.md`
+completed by Sonnet when Astra's quota ran out; the round-5 final packet
 in the gitignored run folder) answered two questions from Josh: can a model
 judge real-vs-scam more accurately than code, and should the bot keep a
 growing catalog of scam methods and multi-step schemes (fee-bait and the
@@ -375,12 +375,12 @@ sample, outcome refresh) so a count never claims more than its sample.
    rejected by construction), not by a word list.
 
 **What it adds to §3.** Three slices, inserted without reordering the
-twelve: **7b** catalog, matcher and packet log (roast `catalog.rs`,
-`playbook.rs`; onchain `memory.rs` gains `packets`, `method_occurrences`,
+twelve: **7b** catalog, matcher and packet log (roast catalog.rs (new),
+playbook.rs (new); onchain `memory.rs` gains `packets`, `method_occurrences`,
 `playbook_occurrences` and `wallet_families`; seeds under
-`docs/research/catalog/`), after 7; **7c** shadow adviser (analyst
+a new docs/research/catalog folder), after 7; **7c** shadow adviser (analyst
 `answer.rs`), after 7b; **9b** weekly catalog review writing only to
-`docs/research/catalog/candidates/`, after 9 and 7b. Slice 7 gains a
+that folder's candidates area, after 9 and 7b. Slice 7 gains a
 `causal_episode_id` so correlated findings count once; slice 8's
 calibration becomes the evaluation harness comparing code, model and a
 non-model learned baseline; slice 10 carries item 5; slice 12 may publish a
