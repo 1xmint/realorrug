@@ -75,10 +75,10 @@ function Hero() {
           <span className="text-[var(--color-signal)]">before you buy.</span>
         </h1>
         <p className="mt-6 max-w-2xl text-[length:var(--text-lead)] text-[var(--color-dim)]">
-          Paste a Robinhood Chain contract address and Real or Rug reads the
-          chain right then — the launch, the creator&apos;s history, what
-          actually happened — and hands back what it found. Not a prediction,
-          not advice: what the chain shows.
+          Paste a token&apos;s contract address — Robinhood Chain or Solana —
+          and Real or Rug reads the chain right then: the launch, the
+          creator&apos;s history, what actually happened. Not a prediction, not
+          advice: what the chain shows.
         </p>
         <CheckBox />
         <TokenAddress />
@@ -194,7 +194,10 @@ function JustChecked() {
                   className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm"
                 >
                   <span className="flex items-center gap-3">
-                    <span className="stamp text-base" style={{ color: rung?.ink }}>
+                    <span
+                      className="stamp text-base"
+                      style={{ color: rung?.ink }}
+                    >
                       {rung?.stamp ?? v.level}
                     </span>
                     <Link
@@ -234,9 +237,9 @@ function NeverSays() {
       <Act n="04">What it will never say</Act>
       <Heading>The refusals are the product</Heading>
       <p className="max-w-2xl text-[var(--color-dim)]">
-        No price target, no "buy" or "sell", no "this one is safe". Real or
-        Rug reports what the chain shows and lets the numbers say it —
-        enforced in code, on every reply, before it is sent.
+        No price target, no "buy" or "sell", no "this one is safe". Real or Rug
+        reports what the chain shows and lets the numbers say it — enforced in
+        code, on every reply, before it is sent.
       </p>
       <p className="mt-4">
         <Link

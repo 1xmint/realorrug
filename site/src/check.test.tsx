@@ -5,7 +5,13 @@
 //! unreachable server drawn as a verdict, a budget refusal that reads like a
 //! finding about the token. Each test below is one of those, pinned.
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -98,13 +104,21 @@ describe("the checker page", () => {
   });
 
   it("draws no verdict when the server cannot be reached", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no server"))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("no server"))),
+    );
     renderAt(`/check/${ADDR}`);
     await waitFor(() =>
       expect(screen.getByText(/could not be reached/i)).toBeTruthy(),
     );
     expect(screen.getByText(/says nothing about the token/i)).toBeTruthy();
-    for (const stamp of ["Rugged", "Sketchy", "Nothing ugly yet", "Can't tell"]) {
+    for (const stamp of [
+      "Rugged",
+      "Sketchy",
+      "Nothing ugly yet",
+      "Can't tell",
+    ]) {
       expect(screen.queryByText(stamp)).toBeNull();
     }
   });
@@ -122,7 +136,9 @@ describe("the checker page", () => {
   it("asks the server nothing for a string that is not an address", async () => {
     const fetch = serverSays(200, body({ level: "Rugged" }));
     renderAt("/check/not-an-address");
-    expect(screen.getAllByText(/not a contract address/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/not a contract address/i).length,
+    ).toBeGreaterThan(0);
     expect(fetch).not.toHaveBeenCalledWith(
       expect.stringContaining("/v1/check/"),
       expect.anything(),
@@ -132,7 +148,10 @@ describe("the checker page", () => {
 
 describe("the paste box", () => {
   it("goes to the checker page for an address", () => {
-    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no server"))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("no server"))),
+    );
     const { history } = renderAt("/");
     fireEvent.change(screen.getByLabelText(/contract address/i), {
       target: { value: `  ${ADDR}  ` },
@@ -142,14 +161,36 @@ describe("the paste box", () => {
   });
 
   it("stays put and says why for something that is not one", () => {
-    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("no server"))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("no server"))),
+    );
     const { history } = renderAt("/");
     fireEvent.change(screen.getByLabelText(/contract address/i), {
       target: { value: "pepe" },
     });
     fireEvent.click(screen.getByRole("button", { name: /check it/i }));
     expect(history.at(-1)).toBe("/");
-    expect(screen.getByText(/should start with 0x/i)).toBeTruthy();
+    expect(screen.getByText(/not a contract address/i)).toBeTruthy();
+  });
+
+  it("takes a Solana mint to the checker too, not only an 0x one", () => {
+    // The box has accepted both shapes since it was written, but until
+    // 2026-09-17 it said "0x…" on the field and "should start with 0x and be
+    // 42 characters long" when it refused, so a pump.fun holder read the front
+    // door as closed. Re-apply the bug by dropping `mintShaped` from
+    // `CheckBox`'s guard and this stays on "/".
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("no server"))),
+    );
+    const mint = "So11111111111111111111111111111111111111112";
+    const { history } = renderAt("/");
+    fireEvent.change(screen.getByLabelText(/contract address/i), {
+      target: { value: mint },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /check it/i }));
+    expect(history.at(-1)).toBe(`/check/${mint}`);
   });
 });
 
@@ -160,7 +201,10 @@ describe("the share text", () => {
     expect(text).toMatch(/^SKETCHY\. Real red flags\. Checked by @realorrug /);
     expect(text.endsWith(`/check/${ADDR}`)).toBe(true);
     expect(text).not.toMatch(/\$|price|market cap/i);
-    const untagged = decodeURIComponent(shareHref("Sketchy", "Real red flags.", ADDR, null).split("text=")[1] ?? "");
+    const untagged = decodeURIComponent(
+      shareHref("Sketchy", "Real red flags.", ADDR, null).split("text=")[1] ??
+        "",
+    );
     expect(untagged).not.toContain("@");
     expect(untagged).toMatch(/Checked on Real or Rug /);
   });
