@@ -324,42 +324,12 @@ pub(crate) async fn check(
     ip: &str,
 ) -> (StatusCode, Value) {
     if !state.allow(ip, Instant::now()) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            json!({
-                "state": "busy",
-                "chain": Value::Null,
-                "address": raw_address,
-                "level": Value::Null,
-                "reasons": Vec::<String>::new(),
-                "twins": Vec::<String>::new(),
-                "measured_at": Value::Null,
-                "price": Vec::<Value>::new(),
-                "message": "You're checking addresses faster than we can read them. \
-                             Wait a minute and try again.",
-            }),
-        );
+        return (StatusCode::TOO_MANY_REQUESTS, busy_doc(raw_address));
     }
 
     let parsed: Result<ChainAddress, _> = raw_address.parse();
     let Ok(address) = parsed else {
-        return (
-            StatusCode::BAD_REQUEST,
-            json!({
-                "state": "bad_address",
-                "chain": Value::Null,
-                "address": raw_address,
-                "level": Value::Null,
-                "reasons": Vec::<String>::new(),
-                "twins": Vec::<String>::new(),
-                "measured_at": Value::Null,
-                "price": Vec::<Value>::new(),
-                "message": "That's not shaped like a Robinhood Chain or a Solana \
-                             address. Robinhood Chain: 0x + 40 hex characters. \
-                             Solana: a base58 string, 32-44 characters, no 0, O, I \
-                             or l. Paste the address exactly as the chain gave it.",
-            }),
-        );
+        return (StatusCode::BAD_REQUEST, bad_address_doc(raw_address));
     };
 
     let chain = chain_name(&address);
@@ -472,6 +442,24 @@ fn stash_signals(stored: &mut Value, signals: &[realorrug_roast::sheet::Signal])
     stored["_signals"] = json!(plain);
 }
 
+/// The shared skeleton behind every non-verdict response: no level was
+/// reached, so `level`, `reasons`, `twins`, `measured_at` and `price` are all
+/// empty or null (never a guess standing in for a fact the route never read).
+/// `verdict_doc` is the only doc shape with something to put in those fields.
+fn empty_doc(state: &str, chain: Value, raw_address: &str, level: Value, message: &str) -> Value {
+    json!({
+        "state": state,
+        "chain": chain,
+        "address": raw_address,
+        "level": level,
+        "reasons": Vec::<String>::new(),
+        "twins": Vec::<String>::new(),
+        "measured_at": Value::Null,
+        "price": Vec::<Value>::new(),
+        "message": message,
+    })
+}
+
 /// Whether `dispatch::Error::Unreadable`'s message names the one case design
 /// 0023 §1 calls "wrong chain" — the address is real but the factory (or,
 /// eventually, Solana's own launch record) has no record of it — versus every
@@ -489,73 +477,70 @@ fn unreadable_doc(raw_address: &str, chain: &str, why: &str) -> (StatusCode, Val
     if why.contains("no record of this token") {
         return (
             StatusCode::OK,
-            json!({
-                "state": "not_a_token",
-                "chain": chain,
-                "address": raw_address,
-                "level": Value::Null,
-                "reasons": Vec::<String>::new(),
-                "twins": Vec::<String>::new(),
-                "measured_at": Value::Null,
-                "price": Vec::<Value>::new(),
-                "message": "We looked for this address on Robinhood Chain and found \
-                             nothing there. If this is a token on a chain we don't \
-                             read yet, we can't tell you anything about it -- not \
-                             \"clean,\" not \"sketchy.\" We just haven't looked at the \
-                             right place.",
-            }),
+            empty_doc(
+                "not_a_token",
+                json!(chain),
+                raw_address,
+                Value::Null,
+                "We looked for this address on Robinhood Chain and found \
+                 nothing there. If this is a token on a chain we don't \
+                 read yet, we can't tell you anything about it -- not \
+                 \"clean,\" not \"sketchy.\" We just haven't looked at the \
+                 right place.",
+            ),
         );
     }
     (StatusCode::OK, cant_read_doc(raw_address, chain, why))
 }
 
 fn cant_read_doc(raw_address: &str, chain: &str, why: &str) -> Value {
-    json!({
-        "state": "cant_read",
-        "chain": chain,
-        "address": raw_address,
-        "level": "CantTell",
-        "reasons": vec![format!("not known -- {why}")],
-        "twins": Vec::<String>::new(),
-        "measured_at": Value::Null,
-        "price": Vec::<Value>::new(),
-        "message": "We couldn't read something we needed to give this a real \
-                     verdict. That is not the same as clean -- it means we don't \
-                     know, and a token we don't know about is not a token we're \
-                     calling safe.",
-    })
+    let mut doc = empty_doc(
+        "cant_read",
+        json!(chain),
+        raw_address,
+        json!("CantTell"),
+        "We couldn't read something we needed to give this a real \
+         verdict. That is not the same as clean -- it means we don't \
+         know, and a token we don't know about is not a token we're \
+         calling safe.",
+    );
+    doc["reasons"] = json!(vec![format!("not known -- {why}")]);
+    doc
+}
+
+fn busy_doc(raw_address: &str) -> Value {
+    empty_doc(
+        "busy",
+        Value::Null,
+        raw_address,
+        Value::Null,
+        "You're checking addresses faster than we can read them. \
+         Wait a minute and try again.",
+    )
 }
 
 fn bad_address_doc(raw_address: &str) -> Value {
-    json!({
-        "state": "bad_address",
-        "chain": Value::Null,
-        "address": raw_address,
-        "level": Value::Null,
-        "reasons": Vec::<String>::new(),
-        "twins": Vec::<String>::new(),
-        "measured_at": Value::Null,
-        "price": Vec::<Value>::new(),
-        "message": "That's not shaped like a Robinhood Chain or a Solana address. \
-                     Robinhood Chain: 0x + 40 hex characters. Solana: a base58 \
-                     string, 32-44 characters, no 0, O, I or l. Paste the address \
-                     exactly as the chain gave it.",
-    })
+    empty_doc(
+        "bad_address",
+        Value::Null,
+        raw_address,
+        Value::Null,
+        "That's not shaped like a Robinhood Chain or a Solana address. \
+         Robinhood Chain: 0x + 40 hex characters. Solana: a base58 \
+         string, 32-44 characters, no 0, O, I or l. Paste the address \
+         exactly as the chain gave it.",
+    )
 }
 
 fn budget_doc(raw_address: &str) -> Value {
-    json!({
-        "state": "budget",
-        "chain": Value::Null,
-        "address": raw_address,
-        "level": Value::Null,
-        "reasons": Vec::<String>::new(),
-        "twins": Vec::<String>::new(),
-        "measured_at": Value::Null,
-        "price": Vec::<Value>::new(),
-        "message": "New checks are switched off right now. Cached verdicts still \
-                     work.",
-    })
+    empty_doc(
+        "budget",
+        Value::Null,
+        raw_address,
+        Value::Null,
+        "New checks are switched off right now. Cached verdicts still \
+         work.",
+    )
 }
 
 fn verdict_doc(
@@ -958,7 +943,11 @@ mod tests {
         };
 
         let price = price_facts(&sheet);
-        assert_eq!(price.len(), 1, "only the About::Price fact, never the measurement");
+        assert_eq!(
+            price.len(),
+            1,
+            "only the About::Price fact, never the measurement"
+        );
         assert_eq!(
             price[0]["label"],
             json!("quote asset held in the bonding curve now, read at slot 12345")
