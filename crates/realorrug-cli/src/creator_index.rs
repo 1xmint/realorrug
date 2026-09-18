@@ -792,6 +792,20 @@ fn note_curve_buy(
     }
 }
 
+/// Whether the requested range runs backwards: an end block named before its
+/// start. Pulled out of [`run`] (which needs a live RPC endpoint to reach
+/// either call site) so the decision itself has a direct unit test.
+fn range_is_backwards(to: u64, from: u64) -> bool {
+    to < from
+}
+
+/// Whether an exact-read response names a different block than the one
+/// asked for, meaning the endpoint cannot be trusted for this call. Pulled
+/// out of [`run`] for the same reason as [`range_is_backwards`].
+fn timestamp_names_wrong_block(returned: u64, requested: u64) -> bool {
+    returned != requested
+}
+
 /// Runs the command.
 ///
 /// # Errors
@@ -840,7 +854,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         );
     }
     if let Some(to) = explicit_to
-        && to < from
+        && range_is_backwards(to, from)
     {
         return Err(format!("--from {from} is after --to {to}"));
     }
@@ -853,14 +867,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let (returned, time) = rpc
                 .block_time(Some(block))
                 .map_err(|e| format!("--to: {e}"))?;
-            if returned != block {
+            if timestamp_names_wrong_block(returned, block) {
                 return Err("--to: timestamp response names another block".to_owned());
             }
             (block, time)
         }
         None => rpc.block_time(None).map_err(|e| format!("--to: {e}"))?,
     };
-    if to < from {
+    if range_is_backwards(to, from) {
         return Err(format!("--from {from} is after --to {to}"));
     }
 
@@ -1158,12 +1172,26 @@ mod tests {
     use super::{
         BlockTimeModel, DAY, LaunchInfo, LaunchMeasurement, Summary, TIME_SAMPLES, base_rates_json,
         count_stillborn, credit_graduation, disagreement, invalid_graduation, is_curve_buy,
-        note_curve_buy, note_recipient, now, number, repeats_a_token_or_curve, run, sample,
-        summary, trade_precedes_launch,
+        note_curve_buy, note_recipient, now, number, range_is_backwards,
+        repeats_a_token_or_curve, run, sample, summary, timestamp_names_wrong_block,
+        trade_precedes_launch,
     };
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn range_is_backwards_only_when_to_is_strictly_before_from() {
+        assert!(range_is_backwards(4, 5));
+        assert!(!range_is_backwards(5, 5));
+        assert!(!range_is_backwards(6, 5));
+    }
+
+    #[test]
+    fn timestamp_names_wrong_block_only_when_they_differ() {
+        assert!(timestamp_names_wrong_block(1, 2));
+        assert!(!timestamp_names_wrong_block(2, 2));
     }
 
     fn fill(quote: u128, tokens: u128) -> realorrug_robinhood::pons::Trade {
@@ -1344,6 +1372,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "every ratio below is built from small exact integers, so equality is the \
+                  correct check; a tolerance would hide a wrong denominator instead of a \
+                  rounding difference"
+    )]
     fn population_bands_share_the_full_denominator_and_outcomes_exclude_unfinished_and_unpriced_launches()
      {
         let mut launches = BTreeMap::new();
@@ -1500,6 +1534,47 @@ mod tests {
         // A block outside every anchor extrapolates from the nearest pair
         // rather than refusing or clamping to an anchor's own time.
         assert_eq!(model.estimate(2_000), 20_000);
+    }
+
+    #[test]
+    fn a_block_time_model_samples_the_stride_by_dividing_not_multiplying_or_remaindering() {
+        // The stride is `span * i / steps`; if that division became a
+        // remainder every sample would collapse onto the same block, and if
+        // it became a multiplication the requested blocks would explode
+        // instead of walking the range evenly.
+        let mut requested = Vec::new();
+        let model = BlockTimeModel::build(0, 32, (32, 320), |b| {
+            requested.push(b);
+            Ok((b, b * 10))
+        })
+        .expect("build");
+        assert_eq!(requested, (0..32).collect::<Vec<_>>());
+        assert_eq!(model.calls, 32);
+    }
+
+    #[test]
+    fn a_block_time_model_extrapolates_before_the_first_anchor_instead_of_refusing() {
+        // `from` is not zero here, so a block before it exercises the
+        // `idx == 0` branch specifically (block 0 would always land there
+        // trivially). Flipping that check to `!=` sends this block to the
+        // `anchors[idx - 1]` branch instead, which underflows and panics.
+        let model = BlockTimeModel::build(100, 200, (200, 2_000), |b| Ok((b, b * 10)))
+            .expect("build");
+        assert_eq!(model.estimate(50), 1_000);
+    }
+
+    #[test]
+    fn a_block_time_model_extrapolates_past_the_end_from_the_last_two_anchors() {
+        // Anchors are deliberately not colinear here (unlike the other
+        // tests' `b * 10` fetch), so extrapolating from the wrong pair of
+        // anchors changes the answer: this is the only way to notice that
+        // `anchors.len() - 2` picked something other than the last two.
+        let times = [(0, 0), (1, 1_000), (2, 2_000), (3, 3_000)];
+        let model = BlockTimeModel::build(0, 4, (4, 100_000), |b| {
+            Ok((b, times.iter().find(|&&(bb, _)| bb == b).expect("known block").1))
+        })
+        .expect("build");
+        assert_eq!(model.estimate(5), 197_000);
     }
 
     #[test]
