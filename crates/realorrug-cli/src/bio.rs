@@ -209,7 +209,14 @@ mod tests {
         // previous test alone did not catch it. Pinning the exact figures
         // does.
         let a = args(&[
-            "bio", "--preview", "--leader", "alice", "--leader", "bob", "--leader", "carol",
+            "bio",
+            "--preview",
+            "--leader",
+            "alice",
+            "--leader",
+            "bob",
+            "--leader",
+            "carol",
         ]);
         let state = sample_state(&a, 1_800_000_000).expect("a state");
         assert_eq!(state.leaders[0].points, 30);
@@ -218,8 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn the_week_and_last_winner_dates_come_from_dividing_seconds_by_a_day_not_the_remainder_or_the_product(
-    ) {
+    fn sample_dates_divide_seconds_by_a_day() {
         // `now` here (2027-01-15) falls inside the contest week that opens
         // 2027-01-11 and closes 2027-01-18. `opens_at()`/`closes_at()` are
         // always exact multiples of a day, so a mutant that swaps `/` for
@@ -303,10 +309,7 @@ mod tests {
         // Exact-message rather than `is_err()`: a mutant that drops the `!`
         // or flips the `--preview` comparison in `run` still returns *some*
         // `Err` here (from deeper in `preview_text`), just not this one.
-        assert_eq!(
-            run(&args(&["bio", "--pool", "0.1"])),
-            Err(USAGE.to_owned())
-        );
+        assert_eq!(run(&args(&["bio", "--pool", "0.1"])), Err(USAGE.to_owned()));
     }
 
     #[test]
@@ -314,7 +317,17 @@ mod tests {
         // The mirror of the test above: a mutant that drops the `!` in
         // `run`'s guard would refuse this call with `USAGE` even though
         // `--preview` is right there.
-        assert!(run(&args(&["bio", "--preview", "--lead", "hi", "--pool", "0.1"])).is_ok());
+        assert!(
+            run(&args(&[
+                "bio",
+                "--preview",
+                "--lead",
+                "hi",
+                "--pool",
+                "0.1"
+            ]))
+            .is_ok()
+        );
     }
 
     #[test]
