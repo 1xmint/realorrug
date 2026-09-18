@@ -1466,6 +1466,7 @@ mod tests {
         let clients = crate::dispatch::Clients {
             solana: &client,
             robinhood: None,
+            market: None,
         };
         let mut budget = Budget::default();
         let dossier =

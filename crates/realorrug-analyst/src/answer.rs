@@ -367,9 +367,11 @@ fn sheet_for(
     // than each writing its own "which chain is this" match. The budget
     // uses `realorrug-onchain`'s default: a stranger chooses when this
     // runs, so the ceiling must not drift between callers.
+    let market = realorrug_onchain::market::Http::default();
     let clients = dispatch::Clients {
         solana: ctx.client,
         robinhood: ctx.robinhood,
+        market: Some(&market),
     };
     let mut budget = realorrug_onchain::Budget::default();
     let result = dispatch::read_with_memory(mint_text, &clients, ctx.memory, &mut budget);

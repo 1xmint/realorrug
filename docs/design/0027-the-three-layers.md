@@ -304,7 +304,7 @@ or no checked count, ranks it below concentration. Slices 5 and 6 build on
 `wallets::investigate`, `Funding`, `Candidate`, `Funder` and
 `Memory::funding_edges`.
 
-### Slice 4: started, not built (2026-09-18)
+### Slice 4: the market read is now built, custody is not (2026-09-18)
 
 Recording, not recommending, and recording a partial start honestly rather
 than marking row 4 built before it is. `crates/realorrug-onchain/src/
@@ -329,26 +329,47 @@ cannot touch `Dossier::curve.quote_capacity`, which is this row's
 "liquidity dollars never become capacity" requirement made a running
 check rather than a reviewer's promise.
 
-**Not done, and left for the next slice-4 session:** neither module is
-wired into a live read path yet. `dispatch.rs`'s `robinhood()` arm needs
-a `Clients.market: Option<&dyn market::HttpGet>` field (deny-by-default,
-the same shape as `Clients.robinhood`'s "no endpoint configured" rule) so
-a real DexScreener call reaches `radar dossier` and the analyst daemon,
-with a named "market" gap when it is absent or fails. `crates/realorrug-roast/src/sheet.rs`
-does not yet publish the snapshot or a denominator-carrying concentration
-fact — `push_holders`'s existing wording (checked against `origin/main`,
-built by an earlier, different slice) already excludes curve/factory/zero
-by construction and already uses unresolved-role wording ("may be a pool
-or a contract rather than a person"), so this row's (a), (b) and (f) are
-largely already met by that prior work; what is missing is the market
-snapshot fact and its moment. Custody and admin-power facts
-(`isLocked(token)` etc.) are not implemented at all: `pons.rs`'s existing
-selector table is verified against deployed bytecode by a documented
-methodology, and no real locker contract's bytecode has been verified
-that way in this sandbox — inventing one would be introducing a fact
-AGENTS.md rule 2 forbids, not recording one. Row 4 stays open in the
-table above until a session with that verification, and the dispatch and
-sheet wiring, closes it.
+**Now built (2026-09-18, a later session): the market read is wired into
+the live path.** `crates/realorrug-onchain/src/dispatch.rs`'s `Clients`
+gained `market: Option<&dyn market::HttpGet>` — deny-by-default, the same
+shape as `Clients.robinhood`'s "no endpoint configured" rule — and its
+`robinhood()` arm calls `market::snapshot` and `market::attach` only when
+`Some`. A failed read (both DexScreener and GeckoTerminal) never zeroes
+anything; it pushes `Dossier::Unavailable { fact: "market", .. }`, the
+same gap-naming path every other optional read uses. `crates/realorrug-cli/src/roast.rs`,
+`crates/realorrug-analyst/src/daemon.rs` and `crates/realorrug-analyst/src/answer.rs`
+each pass `Some(&market::Http::default())`; every other `Clients` site,
+including test fixtures and `crates/realorrug-serve/src/check.rs` (a
+route the market read is deliberately not extended to in this slice),
+passes `None`.
+
+`crates/realorrug-roast/src/clause.rs` gained a `Kind::Market`;
+`crates/realorrug-roast/src/fidelity.rs` maps it to `Subject::Token`, the
+same subject `Kind::Graduated`/`Kind::Age` already use, since a price or
+cap is a fact about the token, not the pool's tradeable depth
+(`Subject::Liquidity`). `crates/realorrug-roast/src/sheet.rs`'s new
+`push_market` renders the snapshot's own `observed_at` wall clock — never
+`Dossier::read_at`'s chain block, a different clock for a different
+question, per ADR 0033 — into the fact's sentence, so the moment a price
+was read travels with the number itself; it never reaches into
+`liquidity_usd` for anything but its own sentence, keeping
+`market.rs`'s own `liquidity_dollars_never_reach_capacity` regression the
+only writer of that boundary. A failed market read joins the
+`capacity`/`fees` skip-list in `FactSheet::build()`: the named gap still
+reaches the operator, but does not degrade `verdict::level`'s severity,
+since an off-chain aggregator hiccup is not a required fact the way a
+missing launch block is. `crates/realorrug-roast/src/salience.rs`'s new
+`market()` candidate ranks at priority 40, below every risk-bearing
+candidate — `launch_recipients` at 70 is the lowest of those — so a price
+is recorded, per AGENTS.md §3 rule 5, but never leads a reply.
+
+Custody and admin-power facts (`isLocked(token)` etc.) remain not
+implemented: `pons.rs`'s existing selector table is verified against
+deployed bytecode by a documented methodology, and no real locker
+contract's bytecode has been verified that way in this sandbox —
+inventing one would be introducing a fact AGENTS.md rule 2 forbids, not
+recording one. Row 4 stays open in the table above until a session with
+that verification closes it.
 
 ### Slice 6a as built (2026-09-18)
 
