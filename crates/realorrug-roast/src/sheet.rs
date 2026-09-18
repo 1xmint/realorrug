@@ -595,6 +595,17 @@ impl FactSheet {
             push_token_ownership(&mut facts, ownership);
         }
 
+        // Design 0027 slice 5's creator cash-flow facts. `dossier.creator_cash_flow`
+        // is `None` both when no read was configured (Solana today; see
+        // `dossier::empty`'s "Solana not built" gap) and when the read ran but
+        // could not complete -- `push_creator_cash_flow` itself reads
+        // `CreatorCashFlow::trades_complete` through the type's own accessors
+        // and publishes nothing when it is false, so there is nothing further
+        // to gate here.
+        if let Some(cash_flow) = &dossier.creator_cash_flow {
+            push_creator_cash_flow(&mut facts, cash_flow);
+        }
+
         if let Some(count) = dossier.creator_transactions {
             let rendered = format!("{count}");
             facts.push(
@@ -2054,7 +2065,7 @@ fn render_observed_at(observed_at: std::time::SystemTime) -> String {
 /// Days since the Unix epoch (1970-01-01) to a proleptic Gregorian calendar
 /// date. Howard Hinnant's `civil_from_days`
 /// (<http://howardhinnant.github.io/date_algorithms.html>, public domain),
-/// ported to Rust -- correct for any `i64` day count, including every leap
+/// ported to Rust -- correct for any `u64` day count, including every leap
 /// day the Gregorian rule recognises, without pulling in a date-and-time
 /// crate for one read-only conversion.
 fn civil_from_days(days_since_epoch: u64) -> (u64, u32, u32) {
@@ -2142,6 +2153,113 @@ fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::To
                 format!("One unidentified wallet: {pct} of supply."),
             ),
     );
+}
+
+/// The creator's observed on-chain cash flow on Pons v2 (design 0027 slice
+/// 5: `realorrug_onchain::wallets::CreatorCashFlow`, Robinhood only).
+///
+/// Reads `trades_complete` through the type's own accessors rather than the
+/// raw fields: [`realorrug_onchain::wallets::CreatorCashFlow::proceeds_wei`]
+/// and `net_wei` already return `None` when the trade history is partial
+/// (rule 9, absent is not zero), and gating this whole function on
+/// `proceeds_wei` being `Some` extends the same rule to
+/// [`realorrug_onchain::wallets::CreatorCashFlow::transfers_out`], whose raw
+/// `u32` has no `None` case of its own to fall back to. When the read is
+/// incomplete this writes no fact at all, and the gap text on
+/// `CreatorCashFlow::gaps` is left unpublished the same way a failed
+/// `capacity`/`fees`/`token ownership` read is in `FactSheet::build` --
+/// an optional read this analyst's verdict does not depend on, never turned
+/// into an `unknown` line that would force `CantTell`.
+///
+/// Never renders the word "profit": the net figure is proceeds from decoded
+/// sales minus quote spent on decoded buys, nothing else -- it excludes gas,
+/// fees and any token still held but not sold.
+fn push_creator_cash_flow(
+    facts: &mut Vec<Fact>,
+    cash_flow: &realorrug_onchain::wallets::CreatorCashFlow,
+) {
+    let Some(proceeds) = cash_flow.proceeds_wei() else {
+        return;
+    };
+    let eth = format!("{} ETH", render_quote(proceeds, 18));
+    facts.push(
+        Fact::exact(
+            Kind::CreatorCashFlow,
+            "ETH the creator received in sales -- summed across every decoded sale by the \
+             deployer or fee recipient on Pons v2",
+            quote_as_f64(proceeds, 18),
+            eth.clone(),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "The creator has received {eth} in sales of this token on Pons v2, across \
+                 every decoded sale by the deployer or fee recipient."
+            ),
+        )
+        .saying(Voice::Blunt, format!("Creator sale proceeds: {eth}.")),
+    );
+
+    // `net_wei` cannot be `None` here: it is `None` only when either half of
+    // the subtraction is, and `proceeds_wei` above already proved
+    // `trades_complete`, which is the only thing gating either half.
+    if let Some(net) = cash_flow.net_wei() {
+        let magnitude = net.unsigned_abs();
+        let sign = if net < 0 { "-" } else { "" };
+        let rendered = format!("{sign}{} ETH", render_quote(magnitude, 18));
+        let value = if net < 0 {
+            -quote_as_f64(magnitude, 18)
+        } else {
+            quote_as_f64(magnitude, 18)
+        };
+        facts.push(
+            Fact::exact(
+                Kind::CreatorCashFlow,
+                "observed net cash flow on Pons v2 -- sale proceeds minus quote spent buying \
+                 in, across every decoded trade by the deployer or fee recipient; excludes \
+                 gas, fees and anything still held but not sold",
+                value,
+                rendered.clone(),
+            )
+            .saying(
+                Voice::Plain,
+                format!(
+                    "The creator's observed net cash flow on Pons v2 is {rendered} -- sale \
+                     proceeds minus what they spent buying in, nothing else."
+                ),
+            )
+            .saying(Voice::Blunt, format!("Observed net cash flow: {rendered}.")),
+        );
+    }
+
+    // A transfer is never a sale (rule (b), `count_transfers_out`'s own doc
+    // comment): it is only counted here, never priced, and only said when
+    // there is at least one to say.
+    if cash_flow.transfers_out > 0 {
+        let count = cash_flow.transfers_out;
+        let rendered = format!("{count}");
+        facts.push(
+            Fact::exact(
+                Kind::CreatorCashFlow,
+                "outgoing token transfers from the creator's deployer or fee-recipient \
+                 address that were not a decoded sale on the curve -- a count of transfers, \
+                 never a count of sales",
+                f64::from(count),
+                rendered.clone(),
+            )
+            .saying(
+                Voice::Plain,
+                format!(
+                    "The creator's address also sent {rendered} outgoing token transfers that \
+                     were not decoded sales on the curve."
+                ),
+            )
+            .saying(
+                Voice::Blunt,
+                format!("Plus {rendered} outgoing transfers -- transfers, not sales."),
+            ),
+        );
+    }
 }
 
 /// The venue's own fee, which is not the cost of trading and says so.
@@ -3498,6 +3616,224 @@ mod tests {
             ownership_rank > concentration_rank,
             "token ownership must rank below concentration: {ranked:?}"
         );
+    }
+
+    fn creator_trade(
+        role: realorrug_robinhood::pons::CreatorRole,
+        side: realorrug_robinhood::pons::Side,
+        quote: u128,
+    ) -> realorrug_onchain::wallets::CreatorTrade {
+        realorrug_onchain::wallets::CreatorTrade {
+            role,
+            side,
+            quote,
+            tokens: 1,
+            block: 1,
+            transaction: realorrug_robinhood::Hash32([1; 32]),
+            unique_id: format!("0x01-0-{quote}"),
+        }
+    }
+
+    /// Design 0027 slice 5's own done criterion (a): a sale by either role --
+    /// the deployer or the fee recipient, not only one -- must be counted
+    /// toward the same published proceeds figure.
+    #[test]
+    fn proceeds_count_trades_from_both_the_deployer_and_the_fee_recipient() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![
+                creator_trade(
+                    realorrug_robinhood::pons::CreatorRole::Deployer,
+                    realorrug_robinhood::pons::Side::Sell,
+                    200_000_000_000_000,
+                ),
+                creator_trade(
+                    realorrug_robinhood::pons::CreatorRole::FeeRecipient,
+                    realorrug_robinhood::pons::Side::Sell,
+                    300_000_000_000_000,
+                ),
+            ],
+            transfers_out: 0,
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::CreatorCashFlow).expect("a proceeds fact");
+        assert_eq!(fact.rendered, "0.0005 ETH");
+    }
+
+    /// Done criterion (b), read the other direction from `wallets.rs`'s own
+    /// test of the same rule: a transfer out is never folded into the
+    /// published proceeds figure, even when it is the only thing on the
+    /// sheet.
+    #[test]
+    fn a_transfer_out_never_adds_to_proceeds() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![creator_trade(
+                realorrug_robinhood::pons::CreatorRole::Deployer,
+                realorrug_robinhood::pons::Side::Sell,
+                100_000_000_000_000,
+            )],
+            transfers_out: 3,
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let proceeds = fact_of(&sheet, Kind::CreatorCashFlow).expect("a proceeds fact");
+        assert_eq!(
+            proceeds.rendered, "0.0001 ETH",
+            "the 3 outgoing transfers must not inflate the sale"
+        );
+        let transfer_fact = sheet
+            .facts
+            .iter()
+            .find(|f| f.kind == Kind::CreatorCashFlow && f.rendered == "3")
+            .expect("a transfers-out fact");
+        // Worded as a transfer that was *not* a sale ("were not decoded
+        // sales on the curve") is the required disclaimer; the fact must
+        // never be worded as "received in sales" the way the proceeds fact
+        // is.
+        assert!(
+            transfer_fact
+                .clauses
+                .iter()
+                .all(|c| !c.text.contains("received")),
+            "a transfer must never be worded as if it were received in a sale: {:?}",
+            transfer_fact.clauses
+        );
+        assert!(
+            transfer_fact
+                .clauses
+                .iter()
+                .any(|c| c.text.contains("not decoded sales")),
+            "{:?}",
+            transfer_fact.clauses
+        );
+    }
+
+    /// Done criterion (c), the sheet-level half of `wallets.rs`'s own test:
+    /// an incomplete trade history publishes no ETH number at all.
+    #[test]
+    fn incomplete_trades_publish_no_eth_number() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![creator_trade(
+                realorrug_robinhood::pons::CreatorRole::Deployer,
+                realorrug_robinhood::pons::Side::Sell,
+                100_000_000_000_000,
+            )],
+            transfers_out: 1,
+            trades_complete: false,
+            gaps: vec!["creator trade history: too many results".to_owned()],
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.facts.iter().any(|f| f.kind == Kind::CreatorCashFlow),
+            "an incomplete read must publish nothing, not a partial number: {:?}",
+            sheet.facts
+        );
+        // The gap is an optional miss, same treatment as a failed
+        // `capacity`/`fees`/`token ownership` read: never forced into
+        // `unknown`, which would degrade the verdict to `CantTell`.
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("cash flow")),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_negative_net_renders_with_its_sign() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![
+                creator_trade(
+                    realorrug_robinhood::pons::CreatorRole::Deployer,
+                    realorrug_robinhood::pons::Side::Buy,
+                    500_000_000_000_000_000,
+                ),
+                creator_trade(
+                    realorrug_robinhood::pons::CreatorRole::Deployer,
+                    realorrug_robinhood::pons::Side::Sell,
+                    100_000_000_000_000_000,
+                ),
+            ],
+            transfers_out: 0,
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let facts: Vec<_> = sheet
+            .facts
+            .iter()
+            .filter(|f| f.kind == Kind::CreatorCashFlow)
+            .collect();
+        let net = facts
+            .iter()
+            .find(|f| f.rendered.starts_with('-'))
+            .expect("a negative net fact");
+        assert_eq!(net.rendered, "-0.4000 ETH");
+        assert!(
+            !net.label.to_lowercase().contains("profit"),
+            "{}",
+            net.label
+        );
+        assert!(
+            !net.clauses
+                .iter()
+                .any(|c| c.text.to_lowercase().contains("profit")),
+            "{:?}",
+            net.clauses
+        );
+        let authorised: Vec<f64> = sheet.authorised().into_iter().map(|a| a.value).collect();
+        assert!(
+            authorised.contains(&-0.4),
+            "the negative net's value must be authorised: {authorised:?}"
+        );
+    }
+
+    #[test]
+    fn a_zero_transfer_count_writes_no_transfer_fact() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![creator_trade(
+                realorrug_robinhood::pons::CreatorRole::Deployer,
+                realorrug_robinhood::pons::Side::Sell,
+                100,
+            )],
+            transfers_out: 0,
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet
+                .facts
+                .iter()
+                .any(|f| f.kind == Kind::CreatorCashFlow && f.rendered == "0"),
+            "a zero transfer count must not be published: {:?}",
+            sheet.facts
+        );
+    }
+
+    #[test]
+    fn every_creator_cash_flow_number_is_authorised() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![creator_trade(
+                realorrug_robinhood::pons::CreatorRole::Deployer,
+                realorrug_robinhood::pons::Side::Sell,
+                1_000_000_000_000_000_000,
+            )],
+            transfers_out: 2,
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let authorised: Vec<f64> = sheet.authorised().into_iter().map(|a| a.value).collect();
+        assert!(authorised.contains(&1.0), "{authorised:?}");
+        assert!(authorised.contains(&2.0), "{authorised:?}");
     }
 
     #[test]
