@@ -49,6 +49,12 @@ pub struct Clients<'a> {
     pub solana: &'a RpcClient,
     /// Robinhood Chain's reader, or `None` when no endpoint is configured.
     pub robinhood: Option<&'a realorrug_robinhood::Rpc>,
+    /// A market-data seam (design 0027 §2.2, "Market and exit"), or `None`
+    /// when no market read is configured. Deny-by-default, the same shape as
+    /// `robinhood` above: `None` means "no market read", never a read
+    /// against a default this crate invented. Wired into the Robinhood arm
+    /// only -- see [`robinhood`]'s own doc comment.
+    pub market: Option<&'a dyn crate::market::HttpGet>,
 }
 
 /// Why [`read`] did not produce a dossier.
@@ -98,7 +104,9 @@ pub fn read_with_memory(
     let address: ChainAddress = mint_text.parse().map_err(|_| Error::NotAnAddress)?;
     match address {
         ChainAddress::Solana(mint) => solana(clients.solana, budget, &mint, memory),
-        ChainAddress::Robinhood(token) => robinhood(clients.robinhood, budget, &token, memory),
+        ChainAddress::Robinhood(token) => {
+            robinhood(clients.robinhood, clients.market, budget, &token, memory)
+        }
     }
 }
 
@@ -118,8 +126,19 @@ fn solana(
 /// configured, and that is answered [`Error::Unreadable`] before any read is
 /// attempted -- there is nothing to fall back to, and falling back to Solana
 /// would be answering about the wrong chain entirely.
+///
+/// `market` is the deny-by-default market-data seam (design 0027 §2.2).
+/// `None` attaches nothing -- not a gap, because no read was configured, the
+/// same distinction `Clients::robinhood` draws for "no endpoint". `Some`
+/// that fails to read names `"market"` in [`Dossier::unavailable`]
+/// (AGENTS.md §3 rule 8: absent is not zero), never a dossier with zeros
+/// standing in for a price nobody read. Wired here, on the Robinhood arm
+/// only: DexScreener and GeckoTerminal price EVM-style tokens, and the
+/// Solana arm has no equivalent read wired up yet (design 0027's slice 4
+/// note).
 fn robinhood(
     client: Option<&realorrug_robinhood::Rpc>,
+    market: Option<&dyn crate::market::HttpGet>,
     budget: &mut Budget,
     token: &realorrug_robinhood::Address,
     memory: Option<&crate::memory::Memory>,
@@ -129,9 +148,29 @@ fn robinhood(
             "no Robinhood endpoint is configured, so this token's chain cannot be read".to_owned(),
         ));
     };
-    RobinhoodReader { memory }
+    let mut dossier = RobinhoodReader { memory }
         .read(client, budget, token)
-        .map_err(|e| Error::Unreadable(e.to_string()))
+        .map_err(|e| Error::Unreadable(e.to_string()))?;
+    if let Some(http) = market {
+        let token_text = token.to_string();
+        // DexScreener's token lookup takes a bare address, no chain slug --
+        // one endpoint answers for every chain it indexes. GeckoTerminal
+        // needs a network slug per its own path shape; "robinhood" is the
+        // same identifier `robinhood.rs::MEMORY_CHAIN` already uses to name
+        // this chain elsewhere in this crate, kept in sync with it rather
+        // than a second name invented here.
+        let dexscreener_url = format!("https://api.dexscreener.com/latest/dex/tokens/{token_text}");
+        let geckoterminal_url =
+            format!("https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/{token_text}");
+        match crate::market::snapshot(http, budget, &dexscreener_url, &geckoterminal_url) {
+            Ok(snapshot) => crate::market::attach(&mut dossier, snapshot),
+            Err(why) => dossier.unavailable.push(crate::dossier::Unavailable {
+                fact: "market",
+                why,
+            }),
+        }
+    }
+    Ok(dossier)
 }
 
 #[cfg(test)]
@@ -160,6 +199,7 @@ mod tests {
         let clients = Clients {
             solana: &solana,
             robinhood: None,
+            market: None,
         };
         let err = read(ROBINHOOD_SHAPED, &clients).expect_err("no endpoint, no dossier");
         assert!(
@@ -179,6 +219,7 @@ mod tests {
         let clients = Clients {
             solana: &solana,
             robinhood: None,
+            market: None,
         };
         let err = read(ROBINHOOD_SHAPED, &clients).expect_err("no endpoint, no dossier");
         let Error::Unreadable(why) = err else {
@@ -194,6 +235,7 @@ mod tests {
         let clients = Clients {
             solana: &solana,
             robinhood: None,
+            market: None,
         };
         for text in ["", "not an address", "0xshort", &"a".repeat(60)] {
             let err = read(text, &clients).expect_err("neither shape, no dossier");
@@ -222,6 +264,7 @@ mod tests {
         let clients = Clients {
             solana: &solana,
             robinhood: Some(&robinhood),
+            market: None,
         };
         let memory = Memory::open_in_memory().expect("a memory");
         let mut budget = Budget::default();
@@ -232,6 +275,76 @@ mod tests {
             .token_checkpoint("robinhood", &token().to_string())
             .expect("read");
         assert_eq!(checkpoint.map(|c| c.block), Some(0x64));
+    }
+
+    /// A GET that always fails, so `market::snapshot` fails both aggregators
+    /// and `robinhood`'s market arm has something to name a gap about.
+    struct AlwaysFails;
+
+    impl crate::market::HttpGet for AlwaysFails {
+        fn get(&self, _url: &str) -> Result<String, String> {
+            Err("connection refused".to_owned())
+        }
+    }
+
+    /// `Clients.market: None` is deny-by-default (AGENTS.md §3 rule 7): no
+    /// read is attempted, so no `"market"` gap is named and `Dossier::market`
+    /// stays `None` -- absent because nothing was configured, not because a
+    /// read failed. Distinct from the next test, which configures a client
+    /// that *fails*.
+    #[test]
+    fn no_market_client_means_no_market_fact_and_no_gap() {
+        use crate::robinhood::tests::{full_bodies, record, serve, token};
+
+        let rec = record(
+            true,
+            realorrug_robinhood::Address([0x23; 20]),
+            realorrug_robinhood::Address([0x34; 20]),
+        );
+        let robinhood = realorrug_robinhood::Rpc::new(serve(full_bodies(&rec, "0x1")));
+        let solana = unreachable_solana();
+        let clients = Clients {
+            solana: &solana,
+            robinhood: Some(&robinhood),
+            market: None,
+        };
+        let dossier = read(&token().to_string(), &clients).expect("a dossier");
+        assert!(dossier.market.is_none());
+        assert!(
+            !dossier.unavailable.iter().any(|u| u.fact == "market"),
+            "no market client configured must never name a market gap: {:?}",
+            dossier.unavailable
+        );
+    }
+
+    /// A configured market client that fails names the gap as `"market"` on
+    /// `Dossier::unavailable`, per AGENTS.md §3 rule 8 (absent is not zero):
+    /// the rest of the dossier still comes back, and the price is missing,
+    /// never zero.
+    #[test]
+    fn a_failed_market_read_names_the_market_gap() {
+        use crate::robinhood::tests::{full_bodies, record, serve, token};
+
+        let rec = record(
+            true,
+            realorrug_robinhood::Address([0x23; 20]),
+            realorrug_robinhood::Address([0x34; 20]),
+        );
+        let robinhood = realorrug_robinhood::Rpc::new(serve(full_bodies(&rec, "0x1")));
+        let solana = unreachable_solana();
+        let market = AlwaysFails;
+        let clients = Clients {
+            solana: &solana,
+            robinhood: Some(&robinhood),
+            market: Some(&market),
+        };
+        let dossier = read(&token().to_string(), &clients).expect("a dossier");
+        assert!(dossier.market.is_none());
+        assert!(
+            dossier.unavailable.iter().any(|u| u.fact == "market"),
+            "a failed market read must name the gap: {:?}",
+            dossier.unavailable
+        );
     }
 
     #[test]
@@ -264,6 +377,7 @@ mod tests {
         let clients = Clients {
             solana: &client_b,
             robinhood: None,
+            market: None,
         };
         let via_dispatch = read(SOLANA_SHAPED, &clients);
 

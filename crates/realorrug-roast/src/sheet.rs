@@ -23,6 +23,7 @@
 //! that can be argued into accepting a number nobody measured.
 
 use realorrug_onchain::budget::Count;
+use realorrug_onchain::market::MarketSnapshot;
 use realorrug_onchain::{ChainLaunch, Dossier, Funding, Holders, LaunchBlock};
 #[cfg(test)]
 use realorrug_types::Slot;
@@ -573,6 +574,17 @@ impl FactSheet {
             unknown.push("the bonding curve could not be read".to_owned());
         }
 
+        // Design 0027 §2.2's "Market and exit" row, wired up per the slice 4
+        // note: `dossier.market` is `None` both when no read was configured
+        // and when one was attempted and failed (the failure already named
+        // `"market"` on `dossier.unavailable` by `dispatch::robinhood`, and
+        // skipped from `unknown` above the same way `capacity`/`fees` are) --
+        // there is nothing further to do here in either case, which is the
+        // point: a missing market read is absent, never a price of zero.
+        if let Some(market) = &dossier.market {
+            push_market(&mut facts, market);
+        }
+
         if let Some(count) = dossier.creator_transactions {
             let rendered = format!("{count}");
             facts.push(
@@ -640,7 +652,18 @@ impl FactSheet {
             // `verdict::level`. The raw reason still lives on
             // `Dossier::unavailable` for the operator; only the sheet's public
             // rendering treats the miss as unremarkable.
-            if matches!(miss.fact, "capacity" | "fees" | "creator transactions") {
+            // `market` joins this list for the same reason `capacity` and
+            // `fees` do: an off-chain aggregator that is slow or down is not
+            // a required fact this analyst's verdict depends on
+            // (`verdict::level`'s own doc comment), so a failed market read
+            // must not degrade the level the way a missing launch block or
+            // curve does. The raw reason still lands on `Dossier::unavailable`
+            // named `"market"` -- see `dispatch::robinhood` -- for the
+            // operator; only the public verdict severity is unaffected.
+            if matches!(
+                miss.fact,
+                "capacity" | "fees" | "creator transactions" | "market"
+            ) {
                 continue;
             }
             // **Radar's own phrase, never the raw reason.** `miss.why` is
@@ -836,6 +859,7 @@ fn phrase_for(fact: &str) -> String {
         "funding" => "who funded the early buyers could not be read",
         "curve" => "the bonding curve could not be read",
         "creator history" => "the creator's history could not be read",
+        "market" => "the market price could not be read",
         _ => "part of this could not be read",
     }
     .to_owned()
@@ -1895,6 +1919,95 @@ fn push_curve(
     push_fee(facts, curve);
 }
 
+/// The dated market snapshot (design 0027 §2.2, ADR 0033): a USD price and,
+/// when the aggregator reported one, a market cap with its basis.
+///
+/// **The moment is `snapshot.observed_at`, never `dossier.read_at`.** Those
+/// are two different clocks -- `market.rs`'s own doc comment explains why:
+/// this is what DexScreener or GeckoTerminal said at the wall-clock instant
+/// the HTTP call returned, not what a block on this dossier's own chain
+/// held. Rendering the chain's read point here would be publishing a false
+/// precision the aggregator never gave.
+///
+/// **Never `curve.quote_capacity`.** `market.rs`'s own regression test
+/// (`liquidity_dollars_never_reach_capacity`) guards the write side of that
+/// boundary; this function is the read side, and it never reaches into
+/// `snapshot.liquidity_usd` for anything but its own sentence -- a dollar
+/// figure the aggregator computed from reserves, not an amount Real or Rug
+/// can size a trade into.
+fn push_market(facts: &mut Vec<Fact>, snapshot: &MarketSnapshot) {
+    let moment = render_observed_at(snapshot.observed_at);
+    if let Some(price) = snapshot.price_usd {
+        let rendered = format!("${}", render_usd(price));
+        facts.push(
+            Fact {
+                about: About::Price,
+                kind: Kind::Market,
+                label: format!("USD price, read from an off-chain aggregator at {moment}"),
+                rendered: rendered.clone(),
+                values: vec![price],
+                clauses: Vec::new(),
+            }
+            .saying(
+                Voice::Plain,
+                format!("An aggregator priced it at {rendered} as of {moment}."),
+            )
+            .saying(Voice::Blunt, format!("{rendered}, as of {moment}.")),
+        );
+    }
+    if let Some(cap) = snapshot.market_cap_usd {
+        // `cap_basis` is `Some` whenever `market_cap_usd` is, per
+        // `MarketSnapshot`'s own doc comment -- never guessed, so this
+        // fact never states a basis the aggregator did not itself give.
+        let basis = snapshot.cap_basis.unwrap_or("basis not reported");
+        let rendered = format!("${}", render_usd(cap));
+        facts.push(
+            Fact {
+                about: About::Price,
+                kind: Kind::Market,
+                label: format!(
+                    "USD market cap ({basis}), read from an off-chain aggregator at {moment}"
+                ),
+                rendered: rendered.clone(),
+                values: vec![cap],
+                clauses: Vec::new(),
+            }
+            .saying(
+                Voice::Plain,
+                format!("An aggregator put the market cap at {rendered} ({basis}) as of {moment}."),
+            )
+            .saying(
+                Voice::Blunt,
+                format!("{rendered} market cap ({basis}), as of {moment}."),
+            ),
+        );
+    }
+}
+
+/// Formats a market snapshot's wall-clock read point as Unix seconds --
+/// `MarketSnapshot::observed_at`'s own clock, not a chain's block or slot, so
+/// this is the one place that turns it into words rather than reusing
+/// `ReadAt`'s `Display` (which only knows how to say a slot or a block).
+fn render_observed_at(observed_at: std::time::SystemTime) -> String {
+    observed_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or_else(
+            |_| "an unread point".to_owned(),
+            |d| format!("unix time {}", d.as_secs()),
+        )
+}
+
+/// Renders a USD figure with two decimal places for a normal price and full
+/// precision for a sub-cent one, so a fraction-of-a-cent token price does not
+/// round to "$0.00" and read as free.
+fn render_usd(value: f64) -> String {
+    if value.abs() < 0.01 && value != 0.0 {
+        format!("{value}")
+    } else {
+        format!("{value:.2}")
+    }
+}
+
 /// The venue's own fee, which is not the cost of trading and says so.
 fn push_fee(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
     if let Some(fees) = &curve.fees {
@@ -2925,6 +3038,111 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("cannot size into this"), "{rendered}");
+    }
+
+    #[test]
+    fn a_market_snapshot_produces_a_fact_carrying_its_read_time() {
+        // ADR 0033: a price carries the moment it was read. `observed_at` is
+        // `MarketSnapshot`'s own wall clock, not `dossier.read_at` -- so the
+        // rendered sentence must carry the snapshot's own Unix seconds, and
+        // this pins that against a future edit that reaches for the wrong
+        // clock.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.market = Some(realorrug_onchain::market::MarketSnapshot {
+            price_usd: Some(0.0421),
+            market_cap_usd: Some(420_000.0),
+            cap_basis: Some("circulating, as DexScreener reports it"),
+            liquidity_usd: Some(15_000.0),
+            pair_address: Some("0xabc".to_owned()),
+            source: realorrug_onchain::market::Source::DexScreener,
+            observed_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_758_000_000),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let rendered = sheet.render();
+        assert!(
+            rendered.contains("unix time 1758000000"),
+            "the rendered sheet must carry the snapshot's own read time: {rendered}"
+        );
+        assert!(rendered.contains("$0.04"), "{rendered}");
+        assert!(rendered.contains("$420000.00"), "{rendered}");
+        assert!(
+            rendered.contains("circulating, as DexScreener reports it"),
+            "{rendered}"
+        );
+        // Every literal the market fact renders must be authorised, the same
+        // check any other numeric fact must pass.
+        let authorised: Vec<f64> = sheet.authorised().into_iter().map(|a| a.value).collect();
+        assert!(authorised.contains(&0.0421));
+        assert!(authorised.contains(&420_000.0));
+    }
+
+    #[test]
+    fn no_market_snapshot_means_no_market_fact() {
+        // `Dossier::market: None` -- no client configured, or a failed read
+        // already turned into a named gap by `dispatch::robinhood` -- must
+        // never produce a market fact, and must never surface as an
+        // "unknown" line either (`market` is optional, like `capacity` and
+        // `fees`).
+        let dossier = dossier_for([3u8; 32]);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.facts.iter().any(|f| f.kind == Kind::Market));
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("market")),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_failed_market_read_is_an_optional_gap_not_an_unknown_line() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "market",
+            why: "dexscreener: timed out; fallback also failed: geckoterminal: timed out"
+                .to_owned(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("market")),
+            "a failed market read must not degrade verdict severity: {:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_market_candidate_never_outranks_concentration() {
+        // AGENTS.md §3 rule 5: price never leads a reply. `salience::rank`
+        // is the one ranking every reader shares, so pinning the order here
+        // is pinning it everywhere `lead`, `template` and `request_for` read
+        // from.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.holders = Some(realorrug_onchain::Holders {
+            count: 529,
+            largest_share_bps: Some(5020),
+        });
+        dossier.market = Some(realorrug_onchain::market::MarketSnapshot {
+            price_usd: Some(1.0),
+            market_cap_usd: None,
+            cap_basis: None,
+            liquidity_usd: None,
+            pair_address: None,
+            source: realorrug_onchain::market::Source::GeckoTerminal,
+            observed_at: std::time::SystemTime::now(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let ranked = crate::salience::rank(&sheet);
+        let market_rank = ranked
+            .iter()
+            .position(|c| c.id == crate::salience::CandidateId(vec![Kind::Market]))
+            .expect("market candidate present");
+        let concentration_rank = ranked
+            .iter()
+            .position(|c| c.id.0.contains(&Kind::Holders))
+            .expect("concentration candidate present");
+        assert!(
+            market_rank > concentration_rank,
+            "market must rank below concentration: {ranked:?}"
+        );
     }
 
     #[test]
