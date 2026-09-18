@@ -51,6 +51,15 @@ pub const DEFAULT_MAX_PAGES: u32 = 3;
 /// reads the chain rather than the store.
 pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(20);
 
+/// How many provider compute units one cold dossier may spend.
+///
+/// Design 0027 §2.4: 2,000 CU per ordinary cold dossier, retries included,
+/// so that 200 dossiers a day fit the free plan's 30M CU a month with room
+/// for index upkeep. Calls are counted too (`DEFAULT_MAX_CALLS`); this is a
+/// second, finer ceiling for the reads whose price is not one unit each --
+/// `alchemy_getAssetTransfers` costs six times an `eth_call`.
+pub const DEFAULT_MAX_CU: u32 = 2_000;
+
 /// What a bounded read ran out of.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Exhausted {
@@ -60,6 +69,8 @@ pub enum Exhausted {
     Pages,
     /// The wall clock ran out.
     Deadline,
+    /// The compute-unit allowance was spent.
+    ComputeUnits,
 }
 
 /// The bounds one dossier is built inside.
@@ -73,6 +84,8 @@ pub struct Budget {
     started: Instant,
     deadline: Duration,
     calls_made: u32,
+    cu_left: u32,
+    cu_spent: u32,
 }
 
 impl Default for Budget {
@@ -82,16 +95,58 @@ impl Default for Budget {
 }
 
 impl Budget {
-    /// A budget with the given allowances.
+    /// A budget with the given allowances and [`DEFAULT_MAX_CU`] compute
+    /// units.
     #[must_use]
     pub fn new(calls: u32, pages: u32, deadline: Duration) -> Self {
+        Self::with_compute_units(calls, pages, deadline, DEFAULT_MAX_CU)
+    }
+
+    /// A budget with the given allowances, including its compute units.
+    #[must_use]
+    pub fn with_compute_units(calls: u32, pages: u32, deadline: Duration, cu: u32) -> Self {
         Self {
             calls_left: calls,
             pages_left: pages,
             started: Instant::now(),
             deadline,
             calls_made: 0,
+            cu_left: cu,
+            cu_spent: 0,
         }
+    }
+
+    /// Takes `cost` compute units, or refuses without taking any.
+    ///
+    /// All-or-nothing: a read that costs 120 CU against 100 left is not
+    /// made at all, because the provider bills the whole call, not the part
+    /// the budget could afford. Separate from [`Budget::take_call`] because
+    /// the two ceilings measure different things -- sixty cheap calls fit
+    /// the CU allowance easily, and eight expensive ones do not.
+    ///
+    /// # Errors
+    ///
+    /// [`Exhausted::ComputeUnits`] when fewer than `cost` units remain.
+    pub fn take_cu(&mut self, cost: u32) -> Result<(), Exhausted> {
+        if self.cu_left < cost {
+            return Err(Exhausted::ComputeUnits);
+        }
+        self.cu_left -= cost;
+        self.cu_spent += cost;
+        Ok(())
+    }
+
+    /// How many compute units remain, for a read that sizes its own inner
+    /// cap from what is actually left (see [`Budget::calls_left`]).
+    #[must_use]
+    pub const fn cu_left(&self) -> u32 {
+        self.cu_left
+    }
+
+    /// How many compute units have been spent.
+    #[must_use]
+    pub const fn cu_spent(&self) -> u32 {
+        self.cu_spent
     }
 
     /// Takes one call, or says why it cannot.
@@ -235,6 +290,29 @@ mod tests {
         assert!(budget.take_page().is_ok());
         assert!(budget.take_page().is_ok());
         assert_eq!(budget.take_page(), Err(Exhausted::Pages));
+    }
+
+    #[test]
+    fn compute_units_are_taken_whole_or_not_at_all() {
+        let mut budget = Budget::with_compute_units(60, 3, Duration::from_secs(60), 150);
+        assert_eq!(budget.take_cu(120), Ok(()));
+        assert_eq!(budget.cu_left(), 30);
+        assert_eq!(budget.cu_spent(), 120);
+        // 30 left, 120 asked: refused, and nothing is taken for the refusal.
+        assert_eq!(budget.take_cu(120), Err(Exhausted::ComputeUnits));
+        assert_eq!(budget.cu_left(), 30);
+        assert_eq!(budget.cu_spent(), 120);
+        // Exactly what is left is still affordable (`<`, not `<=`).
+        assert_eq!(budget.take_cu(30), Ok(()));
+        assert_eq!(budget.cu_left(), 0);
+        // Calls are a separate ceiling: none was taken above.
+        assert_eq!(budget.calls_made(), 0);
+    }
+
+    #[test]
+    fn a_default_budget_carries_the_dossier_cu_allowance() {
+        assert_eq!(Budget::default().cu_left(), DEFAULT_MAX_CU);
+        assert_eq!(DEFAULT_MAX_CU, 2_000);
     }
 
     #[test]

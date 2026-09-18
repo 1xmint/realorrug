@@ -173,6 +173,15 @@ pub enum Kind {
     /// The largest single address's share of the supply outside the curve.
     /// An address, which may be a pool or contract, never called a person.
     LargestHolderShare,
+    /// Early buyers whose funding was checked, of the buyers the launch
+    /// window held (design 0027 slice 3). A count of what was read, with
+    /// its denominator, so "3 of 4" can never be read as "all".
+    FundingChecked,
+    /// How many of the checked early buyers one address sent material
+    /// value to before their first purchase. On-chain flow between
+    /// addresses, which an exchange's hot wallet also produces: never who
+    /// owns or controls whom.
+    SharedFunder,
 }
 
 /// Which register a clause is written in.
