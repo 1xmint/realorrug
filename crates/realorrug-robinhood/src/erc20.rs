@@ -221,6 +221,20 @@ mod tests {
             "length past {MAX_BYTES}"
         );
 
+        // The high half carries the attack: the low half says four, so a
+        // decoder that reads only the low half takes 2^120 + 4 for four and
+        // hands back a name. Refusing on the high half alone is what stops
+        // it, which is why `length > MAX_BYTES` cannot be the only test --
+        // this length is not greater than 128 in the half a naive decoder
+        // looks at.
+        let mut lying_high_half = encoded(b"Pepe");
+        lying_high_half[32] = 1;
+        assert_eq!(
+            string_from_return(&lying_high_half),
+            None,
+            "length whose high half the low half contradicts"
+        );
+
         let mut far_offset = encoded(b"Pepe");
         far_offset[24..32].copy_from_slice(&u64::MAX.to_be_bytes());
         assert_eq!(
