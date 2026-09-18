@@ -51,17 +51,23 @@
 //! [`investigate_solana`] is the Solana half. It has no `CurveBuy` log to
 //! read purchases from, so it does not build [`Purchase`], [`Buyer`] or
 //! [`Selection`] -- those three stay Robinhood-only, EVM-`Address`-typed
-//! helpers that feed [`investigate`]. Its candidates are early buyers in the
-//! same sense Robinhood's are: it pages the mint's own earliest signatures
-//! ([`RpcClient::signatures_back_to_oldest`]), walks the transactions oldest
-//! first, and takes the first distinct wallets whose balance of this mint
-//! rose (`post_token_balances` against `pre_token_balances`, keyed by
-//! [`crate::rpc::TokenBalance::owner`]) -- excluding the proven bonding-curve
-//! PDA ([`realorrug_pumpfun::pda::bonding_curve`]), which is the pool side of
-//! every trade and never a beneficiary. A wallet's first observed rise is its
-//! `first_purchase_block`; a separate read of that wallet's own oldest
-//! signature finds the native transfer that funded it before that point, the
-//! same way [`investigate`] does not need a `CurveBuy` for that half either.
+//! helpers that feed [`investigate`]. Its launch window is the mint's own
+//! first [`SOLANA_WINDOW_TRANSACTIONS`] *successful* transactions, read
+//! oldest first via [`RpcClient::signatures_back_to_oldest`]: every distinct
+//! wallet whose balance of this mint rose in them (`post_token_balances`
+//! against `pre_token_balances`, keyed by [`crate::rpc::TokenBalance::owner`])
+//! -- excluding the proven bonding-curve PDA
+//! ([`realorrug_pumpfun::pda::bonding_curve`]), which is the pool side of
+//! every trade and never a beneficiary -- is a buyer in `Funding::buyers`.
+//! The first [`MAX_CANDIDATES`] of them by first purchase are checked: a
+//! separate read of that wallet's own oldest signature finds the native
+//! transfer that funded it, counted only when it landed at or before that
+//! wallet's first-purchase slot -- the same way [`investigate`] does not
+//! need a `CurveBuy` for that half either. If the mint's own signature
+//! history was truncated by the read budget before its window could be
+//! read, none of the buyers found in the truncated read are "the early
+//! buyers" (a budget that runs out first drops the oldest, undiscovered
+//! page), so nothing is checked and the gap says so.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -331,8 +337,10 @@ pub struct Funding {
     /// Candidates chosen, whether or not they were checked.
     pub selected: u32,
     /// The chosen candidates' share of all launch-window buying, in basis
-    /// points.
-    pub coverage_bps: u16,
+    /// points. `None` on Solana, which has no quote amount to weigh a share
+    /// against -- rendering it as 0% would claim they bought nothing, which
+    /// is false, not merely unmeasured.
+    pub coverage_bps: Option<u16>,
     /// The rule that chose them.
     pub rule: &'static str,
     /// The candidates actually checked.
@@ -636,7 +644,7 @@ pub fn investigate(
     let funding = Funding {
         buyers: selection.buyers,
         selected: u32::try_from(selection.candidates.len()).unwrap_or(u32::MAX),
-        coverage_bps: selection.coverage_bps,
+        coverage_bps: Some(selection.coverage_bps),
         rule: SELECTION_RULE,
         checked,
         shared,
@@ -685,11 +693,13 @@ pub fn investigate(
                 },
                 calls: budget.calls_made().saturating_sub(calls_before),
                 note: format!(
-                    "{} of {} candidates checked, {} buyers, coverage {} bps; {}",
+                    "{} of {} candidates checked, {} buyers, coverage {}; {}",
                     funding.checked.len(),
                     funding.selected,
                     funding.buyers,
-                    funding.coverage_bps,
+                    funding
+                        .coverage_bps
+                        .map_or_else(|| "unmeasured".to_owned(), |bps| format!("{bps} bps")),
                     funding.gaps.join("; ")
                 ),
                 ran_at: std::time::SystemTime::now(),
@@ -700,12 +710,24 @@ pub fn investigate(
     Ok(funding)
 }
 
+/// How many of the mint's own earliest successful transactions define the
+/// Solana launch window. Read oldest first, capped by the page budget the
+/// same way [`RpcClient::signatures_back_to_oldest`] is; a failed read (err
+/// on the signature, or a transaction that could not be fetched) is a gap
+/// and does not count toward this cap, so 25 always means 25 transactions
+/// actually read, not 25 attempts.
+pub const SOLANA_WINDOW_TRANSACTIONS: usize = 25;
+
 /// The Solana selection rule, recorded on every [`investigate_solana`]
-/// result on the same terms [`SELECTION_RULE`] is for Robinhood.
-pub const SOLANA_SELECTION_RULE: &str = "the first distinct wallets, up to the same limit as \
-                                          Robinhood, whose balance of this mint rose in the \
-                                          mint's own earliest transactions, excluding the \
-                                          proven bonding curve";
+/// result on the same terms [`SELECTION_RULE`] is for Robinhood: every
+/// distinct buyer in the mint's own first [`SOLANA_WINDOW_TRANSACTIONS`]
+/// successful transactions (read oldest first) is the launch window
+/// (`Funding::buyers`); the first [`MAX_CANDIDATES`] of them by first
+/// purchase are checked.
+pub const SOLANA_SELECTION_RULE: &str = "every distinct buyer in the mint's first 25 successful \
+                                          transactions read oldest first, excluding the proven \
+                                          bonding curve; the first wallets by first purchase, up \
+                                          to the same limit as Robinhood, are checked";
 
 /// The funder of one candidate's earliest lamport balance increase, read
 /// from a single transaction's `pre_balances`/`post_balances`.
@@ -783,22 +805,32 @@ struct EarlyBuyer {
 
 /// Checks funding for a Solana mint's early buyers.
 ///
-/// Candidates come from the mint's own signature history
-/// ([`RpcClient::signatures_back_to_oldest`]), read oldest first, taking the
-/// first [`MAX_CANDIDATES`] distinct wallets whose balance of this mint rose
-/// ([`buyers_in`]) and excluding the verified bonding-curve PDA
-/// ([`realorrug_pumpfun::pda::bonding_curve`]). Each candidate's own oldest
-/// signature is then read separately for the native lamport transfer that
-/// funded it before its first purchase, on the same terms [`funder_of`]
-/// already reads for Robinhood: the account whose balance fell the most,
-/// subject to [`is_material`] against [`GAS_ALLOWANCE_LAMPORTS`] (quote 0 --
-/// no SOL cost of the buy itself is read here, so materiality falls back to
-/// "more than dust").
+/// The launch window is the mint's own first [`SOLANA_WINDOW_TRANSACTIONS`]
+/// successful transactions, read oldest first
+/// ([`RpcClient::signatures_back_to_oldest`]); every distinct wallet whose
+/// balance of this mint rose in them ([`buyers_in`]), excluding the verified
+/// bonding-curve PDA ([`realorrug_pumpfun::pda::bonding_curve`]), is a buyer
+/// (`Funding::buyers` -- see [`SOLANA_SELECTION_RULE`]). The first
+/// [`MAX_CANDIDATES`] of them by first purchase are checked: each candidate's
+/// own oldest signature is read separately for the native lamport transfer
+/// that funded it, on the same terms [`funder_of`] already reads for
+/// Robinhood (the account whose balance fell the most), counted only when
+/// [`Transaction::slot`] is at or before the candidate's first-purchase slot
+/// -- a transfer after the purchase it is supposed to finance did not fund
+/// it -- and subject to [`is_material`] against [`GAS_ALLOWANCE_LAMPORTS`]
+/// (quote 0: no SOL cost of the buy itself is read here, so materiality
+/// falls back to "more than dust").
 ///
-/// **If the mint's own history was truncated by the budget before its oldest
-/// signature was reached, or a candidate's own signature history was, that is
-/// recorded in [`Funding::gaps`] / the candidate's `funding_complete` --
-/// never as "no funder"** (AGENTS.md rule 8).
+/// **If the mint's own history was truncated before its window could be
+/// read, none of the buyers found in what *was* read are "the early
+/// buyers"** -- a budget that runs out paging backward from the newest
+/// drops the oldest, undiscovered page first, so the window is not
+/// necessarily the earliest one. Nothing is checked, `Funding::buyers` and
+/// `checked` are both empty, and the gap says why. **If a candidate's own
+/// signature history is truncated before its oldest transaction, no funder
+/// is recorded for it** -- `signatures.last()` there is not its oldest
+/// transaction either -- again never as "no funder found"; both cases are
+/// named in [`Funding::gaps`] (AGENTS.md rule 8).
 ///
 /// # Errors
 ///
@@ -816,22 +848,41 @@ pub fn investigate_solana(
         .signatures_back_to_oldest(budget, mint)
         .map_err(|e| format!("funding: {e}"))?;
 
-    let mut gaps = Vec::new();
     if truncated {
-        gaps.push(
-            "the mint's signature history is longer than the page budget allows; earlier \
-             buyers than the ones checked may exist"
-                .to_owned(),
-        );
+        // A truncated mint history means the transactions this reader could
+        // see are not necessarily the mint's *earliest* ones -- paging from
+        // the newest backward, a budget that runs out first drops the
+        // oldest, undiscovered page. Whatever buyers were found in what was
+        // read are not "the early buyers"; checking them would put a funder
+        // on the wrong candidate. Nothing is checked, and the gap says why
+        // (AGENTS.md rule 8: absent is not zero).
+        return Ok(Funding {
+            buyers: 0,
+            selected: 0,
+            coverage_bps: None,
+            rule: SOLANA_SELECTION_RULE,
+            checked: Vec::new(),
+            shared: Vec::new(),
+            gaps: vec![
+                "the mint's signature history is longer than the page budget allows; the \
+                 launch's first buyers could not be reached within the read budget"
+                    .to_owned(),
+            ],
+            cu_spent: 0,
+        });
     }
 
     // `signatures` is newest-first, the same order every other reader in
     // this crate gets from `getSignaturesForAddress`; walk it in reverse to
-    // see buys in the order they happened.
+    // see transactions in the order they happened, and stop once
+    // `SOLANA_WINDOW_TRANSACTIONS` of them were successfully read -- that
+    // window, not the capped candidate list, is where `buyers` comes from.
+    let mut gaps = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut early_buyers: Vec<EarlyBuyer> = Vec::new();
+    let mut window_buyers: Vec<EarlyBuyer> = Vec::new();
+    let mut window_read = 0usize;
     for sig in signatures.iter().rev() {
-        if early_buyers.len() >= MAX_CANDIDATES {
+        if window_read >= SOLANA_WINDOW_TRANSACTIONS {
             break;
         }
         if sig.err.is_some() {
@@ -839,12 +890,10 @@ pub fn investigate_solana(
         }
         match client.transaction(budget, &sig.signature) {
             Ok(Some(tx)) => {
+                window_read += 1;
                 for buyer in buyers_in(&tx, &mint_key, curve.as_deref()) {
-                    if early_buyers.len() >= MAX_CANDIDATES {
-                        break;
-                    }
                     if seen.insert(buyer.clone()) {
-                        early_buyers.push(EarlyBuyer {
+                        window_buyers.push(EarlyBuyer {
                             address: buyer,
                             first_purchase_slot: sig.slot,
                         });
@@ -859,16 +908,17 @@ pub fn investigate_solana(
         }
     }
 
+    let buyers = u32::try_from(window_buyers.len()).unwrap_or(u32::MAX);
     let mut checked = Vec::new();
-    for buyer in &early_buyers {
+    for buyer in window_buyers.iter().take(MAX_CANDIDATES) {
         checked.push(check_solana_candidate(client, budget, buyer, &mut gaps));
     }
 
     let shared = shared_funders(&checked);
     Ok(Funding {
-        buyers: u32::try_from(early_buyers.len()).unwrap_or(u32::MAX),
+        buyers,
         selected: u32::try_from(checked.len()).unwrap_or(u32::MAX),
-        coverage_bps: 0,
+        coverage_bps: None,
         rule: SOLANA_SELECTION_RULE,
         checked,
         shared,
@@ -908,15 +958,29 @@ fn check_solana_candidate(
         Ok((signatures, truncated)) => {
             candidate.funding_complete = !truncated;
             if truncated {
+                // `signatures.last()` is only the oldest transaction seen so
+                // far, not the candidate's actual oldest -- a truncated page
+                // walk drops the earlier, undiscovered pages first (same
+                // reasoning as the mint-level truncation above). Recording a
+                // funder from a non-oldest transaction would misattribute
+                // who financed the buy, so no funder is recorded at all; the
+                // gap says why (AGENTS.md rule 8).
                 gaps.push(format!(
                     "funding of {address}: signature history truncated before its oldest \
-                     transaction; an earlier funder may exist"
+                     transaction; no funder recorded"
                 ));
-            }
-            if let Some(oldest) = signatures.last() {
+            } else if let Some(oldest) = signatures.last() {
                 match client.transaction(budget, &oldest.signature) {
                     Ok(Some(tx)) => {
-                        if let Some((from, amount)) = funder_of(&tx, &address) {
+                        if tx.slot.0 > buyer.first_purchase_slot {
+                            // A transfer after the purchase it is supposed to
+                            // finance did not fund it; only a transfer at or
+                            // before the first-purchase slot can have.
+                            gaps.push(format!(
+                                "funding of {address}: its oldest transaction landed after its \
+                                 first purchase; no funder recorded"
+                            ));
+                        } else if let Some((from, amount)) = funder_of(&tx, &address) {
                             candidate.funders.push(Funder {
                                 address: from,
                                 amount_wei: amount,
@@ -1204,6 +1268,159 @@ mod tests {
         Budget::new(60, 60, std::time::Duration::from_secs(30))
     }
 
+    /// A single-page `getSignaturesForAddress` answer at a chosen `slot`,
+    /// for tests that need control over the slot a signature landed at.
+    fn signatures_page_at(signature: &str, slot: u64) -> String {
+        format!(r#"{{"result":[{{"signature":"{signature}","slot":{slot}}}],"error":null}}"#)
+    }
+
+    /// A `getTransaction` answer whose only lamport move is `from` funding
+    /// `to` by `amount`, landing at a chosen `slot`.
+    fn funding_tx_at(from: &str, to: &str, amount: u64, slot: u64) -> String {
+        format!(
+            r#"{{"result":{{"slot":{slot},"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{from}","{to}"],"instructions":[]}}}}}},"error":null}}"#,
+            pre_left = 1_000_000u64.saturating_sub(amount),
+        )
+    }
+
+    /// A full, 1,000-signature `getSignaturesForAddress` page -- the shape
+    /// that makes `signatures_back_to_oldest` try a second page, so a page
+    /// budget of one exhausts on it and reports a truncated read.
+    fn full_signatures_page() -> String {
+        let entries: Vec<String> = (0..1000)
+            .map(|i| format!(r#"{{"signature":"sig-{i}","slot":1}}"#))
+            .collect();
+        format!(r#"{{"result":[{}],"error":null}}"#, entries.join(","))
+    }
+
+    #[test]
+    fn a_truncated_mint_history_checks_nobody_instead_of_the_wrong_buyers() {
+        // A full page means there may be more signatures older than it; with
+        // only one page in budget, the walk cannot reach the mint's oldest
+        // transactions. Whatever buyers happen to be in the page read are
+        // NOT the early buyers, so nothing may be checked -- reporting them
+        // would put the sheet's "early buyers" sentence on data that isn't
+        // the launch window.
+        let mint = solana_addr(9);
+        let responses = [full_signatures_page()];
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Canned::boxed(&responses.iter().map(String::as_str).collect::<Vec<_>>()),
+        );
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+
+        assert_eq!(funding.buyers, 0);
+        assert!(funding.checked.is_empty());
+        assert_eq!(funding.coverage_bps, None);
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("could not be reached within the read budget")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_truncated_candidate_history_records_no_funder() {
+        // The overall budget allows exactly one page: the mint's own read
+        // spends it, so the candidate's own `signatures_back_to_oldest` call
+        // fails before returning anything. `signatures.last()` is unusable
+        // (there's no `last()` to take) -- the old code trusted a partial
+        // read as if it ended at the oldest transaction.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let responses = [
+            signatures_page("mint-sig"),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(!funding.checked[0].funding_complete);
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("no funder recorded")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_funder_transaction_after_the_first_purchase_does_not_count() {
+        // The candidate's own oldest transaction landed at slot 9, after its
+        // first purchase at slot 5 -- so whatever moved lamports there did
+        // not fund the buy; it happened afterward, and recording it as "who
+        // funded the early buyer" would be false.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_at("buyer-sig", 9),
+            funding_tx_at(&funder, &buyer, 500_000, 9),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("after its first purchase")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn buyers_counts_the_whole_window_not_just_the_checked_candidates() {
+        // Six distinct buyers appear in the launch window, but only
+        // `MAX_CANDIDATES` are checked; `Funding::buyers` must still report
+        // all six, not the capped count -- the sheet's "of the N early
+        // buyers" number describes the window, not who got checked.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyers: Vec<String> = (1..=6u8).map(|b| solana_addr(b).to_string()).collect();
+        let funder = solana_addr(0xf0).to_string();
+
+        let mut responses = vec![
+            signatures_page("mint-sig"),
+            buy_tx(
+                &mint_key,
+                &buyers.iter().map(|b| (b.as_str(), 500)).collect::<Vec<_>>(),
+            ),
+        ];
+        for (i, buyer) in buyers.iter().take(MAX_CANDIDATES).enumerate() {
+            responses.push(signatures_page(&format!("buyer{i}-sig")));
+            responses.push(funding_tx(&funder, buyer, 100));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+
+        assert_eq!(funding.buyers, 6);
+        assert_eq!(funding.selected, u32::try_from(MAX_CANDIDATES).unwrap());
+        assert_eq!(funding.checked.len(), MAX_CANDIDATES);
+    }
+
     #[test]
     fn two_buyers_funded_by_one_address_are_a_shared_funder() {
         let mint = solana_addr(9);
@@ -1212,7 +1429,7 @@ mod tests {
         let buyer2 = solana_addr(2).to_string();
         let funder = solana_addr(0xf0).to_string();
 
-        let responses = vec![
+        let responses = [
             // The mint's own signature history: one transaction, both
             // buyers' balances rise in it.
             signatures_page("mint-sig"),

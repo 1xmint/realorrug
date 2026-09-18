@@ -1535,7 +1535,7 @@ pub(crate) mod tests {
             "a transfer-only recipient was checked as a buyer"
         );
         assert_eq!(funding.selected, 4);
-        assert_eq!(funding.coverage_bps, 10_000);
+        assert_eq!(funding.coverage_bps, Some(10_000));
         assert_eq!(
             funding
                 .checked
