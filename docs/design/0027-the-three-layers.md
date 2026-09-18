@@ -614,3 +614,74 @@ catalog, matcher and packet log (slice 7b), so nothing extra is built.
 
 Still pending from §4: model band choice stays shadow-only, contest
 weights, the honeypot and wallet-language gates, and age prose.
+
+### Slice 6a's sheet follow-up as built (2026-09-18)
+
+Recording, not recommending. Closes slice 6a's "not done" note: nothing in
+`realorrug-roast` read `Dossier::token_ownership`; now something does.
+
+`crates/realorrug-roast/src/clause.rs` gained `Kind::TokenOwnership`;
+`fidelity.rs` maps it to `Subject::Holders`, beside `Kind::Holders` and
+`Kind::LargestHolderShare` -- it is a different reading of the same
+question, who holds the supply, not a fact about the token as a thing.
+`sheet.rs`'s new `push_token_ownership` finds the largest owner among
+`TokenOwnership::owners` (already amount-sorted) whose role is not
+`OwnerRole::BondingCurve`, and renders its `share_bps` of the *total*
+`getTokenSupply` reading. Every such owner is `OwnerRole::Unresolved` by
+construction -- the reader in `dossier.rs` proves only the bonding curve,
+nothing else -- so the sentence always says "one unidentified wallet",
+never a role the sheet did not establish (AGENTS.md §4's last bullet). A
+sample where every owner is the curve, or an owner whose share is
+unmeasurable (`share_bps: None`, a zero supply), writes no fact rather than
+one about zero. A failed read joins the `capacity`/`fees`/`market`
+skip-list in `FactSheet::build()`, since Solana's dossier does not set
+`holders` today and so no verdict currently depends on a holder-
+concentration read for that chain.
+
+**This is a second, different concentration reading, not a restatement of
+`concentration()`'s `Holders`/`LargestHolderShare`.** That one is every
+circulating token account's share of the circulating supply, with the
+curve's own stock excluded from both sides -- and it is Robinhood-only
+today. `TokenOwnership` is a capped twenty-account sample's share of the
+*total* supply, with only the bonding curve's address proven-excluded --
+and it is Solana-only today. The two never fire on the same dossier as a
+result, but `salience.rs`'s new `token_ownership()` candidate is still
+ranked one step below `concentration` (85, not 90) rather than at an
+unrelated priority, so that property -- whichever fires, the fuller
+non-sampled reading would win the tie -- holds by construction rather than
+by the two chains happening to stay disjoint forever. Still above
+`launch_recipients` (70): an address-level concentration finding, even a
+sampled one, is more specific than a bare recipient count with nothing to
+weigh it against.
+
+### Readable market time, as built (2026-09-18)
+
+`push_market`'s "as of" moment was Unix seconds ("unix time 1758000000"),
+correct but unreadable. `render_observed_at` now renders it as a UTC
+calendar moment instead -- but not as the punctuated `2025-09-16 05:20 UTC`
+first tried, because that form fails the fidelity check the packet asked to
+be checked first.
+
+`FactSheet::authorised()` scans every fact's label text with
+`fidelity::literals` and authorises whatever numbers it finds under that
+fact's `Subject`; `Kind::Market`'s subject is `Subject::Token`, the same one
+`Kind::Age` uses. `literals` ends a numeric token on `-`, `:` and space, so
+a punctuated date-time would authorise five small numbers on their own
+(2025, 09, 16, 05, 20) under `Subject::Token` -- and a model could then
+attach any of them to an unrelated `Subject::Token` claim it never earned:
+"it launched 16 hours ago" would pass `fidelity::check` because "16" came
+from the day-of-month, not because the sheet ever measured a 16-hour age.
+The original ten-digit Unix timestamp never had this problem because it
+scanned as one large, hard-to-collide-with number.
+
+The fix keeps that property while keeping the date readable: a small
+`civil_from_days` (Howard Hinnant's public-domain algorithm, ported with no
+new dependency) turns the Unix seconds into a proleptic-Gregorian calendar
+date, rendered `2025-09-16 05:20 UTC`, and `fidelity::literals` reads that
+exact shape as the single value `20250916.0520`, not five small numbers. A
+near miss (another separator, a letter, a longer digit run) scans as plain
+numbers as before. Tested against known dates including
+both a leap day that falls on a `/4` century boundary (2000) and one that
+does not (2100), plus the epoch itself. The day count is unsigned: a
+market moment is always after 1970, so the calendar has no branch for
+earlier dates.

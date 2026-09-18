@@ -119,10 +119,14 @@ impl Subject {
             // Who funded the early buyers is about the wallets holding the
             // token, not about the creator: a sentence about the creator
             // may not cite it as their doing.
+            // `TokenOwnership` is a different reading of the same question
+            // -- who holds the supply -- so it belongs beside the other
+            // holder-subject kinds rather than under `Self::Token`.
             Kind::Holders
             | Kind::LargestHolderShare
             | Kind::FundingChecked
-            | Kind::SharedFunder => Self::Holders,
+            | Kind::SharedFunder
+            | Kind::TokenOwnership => Self::Holders,
             // `OutcomeRate` (ADR 0033) measures launches shaped like this one,
             // not this launch alone, but it is still a claim about the launch
             // population rather than the creator, holders or venue -- the
@@ -488,6 +492,14 @@ pub fn literals(text: &str) -> Vec<(String, f64)> {
             i += 1;
             continue;
         }
+        if let Some((end, glued)) = date_time_at(&bytes, i) {
+            // One moment, one number: see `date_time_at`.
+            if let Ok(value) = glued.parse::<f64>() {
+                out.push((glued, value));
+            }
+            i = end;
+            continue;
+        }
         let start = i;
         let mut seen_dot = false;
         for _ in 0..=bytes.len() {
@@ -520,9 +532,68 @@ pub fn literals(text: &str) -> Vec<(String, f64)> {
     out
 }
 
+/// The shape of a UTC moment as the sheet writes it: `d` is a digit, every
+/// other character must match exactly.
+const DATE_TIME: &str = "dddd-dd-dd dd:dd";
+
+/// A moment written `2025-09-16 05:20` starting at `start`, read as the one
+/// number `20250916.0520` instead of five.
+///
+/// Five small numbers would each be authorised by the fact that carries the
+/// moment, so "16" from the day could back "it launched 16 hours ago". Read
+/// whole, the moment is a single value that only another mention of the
+/// same moment can match -- the hard-to-collide-with property a raw Unix
+/// timestamp had, while the reply stays readable. A digit straight after the
+/// pattern means it was something longer, and it is scanned as plain numbers.
+fn date_time_at(bytes: &[char], start: usize) -> Option<(usize, String)> {
+    let end = start + DATE_TIME.chars().count();
+    let window = bytes.get(start..end)?;
+    let mut glued = String::new();
+    for (&c, want) in window.iter().zip(DATE_TIME.chars()) {
+        if want == 'd' {
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            glued.push(c);
+            if glued.len() == 8 {
+                glued.push('.');
+            }
+        } else if c != want {
+            return None;
+        }
+    }
+    if bytes.get(end).is_some_and(char::is_ascii_digit) {
+        return None;
+    }
+    Some((end, glued))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_written_moment_is_one_number_not_five() {
+        let found = literals("as of 2025-09-16 05:20 UTC.");
+        assert_eq!(found, vec![("20250916.0520".to_owned(), 20_250_916.052)]);
+    }
+
+    #[test]
+    fn a_near_miss_of_the_moment_shape_is_read_as_plain_numbers() {
+        // Wrong separator, a letter where a digit belongs, and a longer run
+        // of digits after the minutes: none of them is a moment.
+        assert_eq!(literals("2025/09/16 05:20").len(), 5);
+        assert_eq!(literals("2025-09-16 05:2x").len(), 5);
+        assert_eq!(literals("2025-09-16 05:201").len(), 5);
+        assert_eq!(literals("2025-09-16").len(), 3);
+    }
+
+    #[test]
+    fn a_day_of_month_cannot_back_an_invented_age() {
+        let moment = || [Authorised::anywhere(20_250_916.052)];
+        assert!(super::check("It was read 2025-09-16 05:20 UTC.", &moment()).is_empty());
+        assert!(!super::check("It launched 16 hours ago.", &moment()).is_empty());
+    }
 
     /// The membership rule on its own, with no subject attached to anything.
     ///

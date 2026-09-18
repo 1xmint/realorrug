@@ -245,6 +245,35 @@ fn market(sheet: &FactSheet) -> Option<Candidate> {
     })
 }
 
+/// The token-ownership bundle: the largest owner among the sampled top
+/// token accounts, once any bonding-curve address is proven-excluded
+/// (design 0027 row 6/7 slice 6a, Solana only).
+///
+/// Ranked just below [`concentration`] at 85, not level with it, because the
+/// two read different things and never both fire on the same dossier today
+/// ([`concentration`]'s `Holders` is Robinhood-only; this kind is
+/// Solana-only) -- but they are the same *shape* of finding, a share of
+/// supply at an unidentified address, and a future dossier that fills both
+/// should still only ever lead with one of them. Sitting one step below
+/// `concentration` rather than at an unrelated priority makes that
+/// non-double-leading property hold by construction: whichever fires,
+/// [`concentration`] wins the tie if both ever do. Still above
+/// `launch_recipients` (70): an address-level concentration reading, even a
+/// capped twenty-account sample of it, is more specific than a bare
+/// recipient count with no share to weigh it against.
+fn token_ownership(sheet: &FactSheet) -> Option<Candidate> {
+    let share = fact(sheet, Kind::TokenOwnership)?;
+    Some(Candidate {
+        id: CandidateId(vec![Kind::TokenOwnership]),
+        priority: 85,
+        sentence: format!(
+            "Among the largest sampled token accounts, one unidentified wallet holds {} of the \
+             total supply.",
+            share.rendered
+        ),
+    })
+}
+
 /// Every candidate this sheet supports, ranked highest priority first.
 ///
 /// **The one ranking every caller shares.** [`crate::verdict::headline`],
@@ -259,6 +288,7 @@ pub fn rank(sheet: &FactSheet) -> Vec<Candidate> {
         creator_record(sheet),
         shared_funder(sheet),
         concentration(sheet),
+        token_ownership(sheet),
         launch_recipients(sheet),
         market(sheet),
     ]
