@@ -140,10 +140,11 @@ impl Subject {
             | Kind::RoundTripKernel
             | Kind::RoundTripBar
             | Kind::CostBand => Self::Venue,
-            Kind::Capacity | Kind::CapacityNone | Kind::CapacityAfterGraduation => {
-                Self::Liquidity
-            }
-            Kind::Graduated | Kind::Age | Kind::SelfMintWithheld => Self::Token,
+            Kind::Capacity
+            | Kind::CapacityNone
+            | Kind::CapacityAfterGraduation
+            | Kind::CurveLiquidity => Self::Liquidity,
+            Kind::Graduated | Kind::Age => Self::Token,
         }
     }
 }
