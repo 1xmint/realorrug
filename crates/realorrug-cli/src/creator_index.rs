@@ -104,6 +104,17 @@
 //! sampled token disagrees -- forty calls instead of 171,000, and the
 //! difference between a published figure and a guess.
 //!
+//! **It only means anything when `--to` is the head of the chain.**
+//! `getLaunchedToken` answers with the token's state *now*; the walk answers
+//! for the range it was given. A token that graduated after `--to` is
+//! correctly absent from the walk's answer and correctly graduated in the
+//! factory's, and `--verify` calls that a disagreement and refuses to write.
+//! It is not wrong to do so -- it cannot tell that disagreement from the one
+//! it exists to catch -- but on a short range it will fire for a reason that
+//! has nothing to do with the decode. Leave `--to` off, which defaults it to
+//! the head, unless you are deliberately re-reading an old range, and then
+//! expect to drop `--verify` with it.
+//!
 //! # Why the launcher and not the fee recipient
 //!
 //! Research 0038 §2 recommends keying on `creator_fee_recipient`: the escrow
@@ -354,7 +365,27 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // mined while the walk is running is outside the range that was asked
     // for, and a watermark read afterwards would claim it was included.
     let to = match number(args, "--to")? {
-        Some(block) => block,
+        Some(block) => {
+            // `--verify` asks the factory what a token's phase is *now* and
+            // compares it to what the walk concluded for the range. Those two
+            // only answer the same question when the range ends at the head:
+            // a token that graduated after `--to` disagrees for a reason that
+            // says nothing about the decode `--verify` exists to check. The
+            // refusal is here rather than in the sampler because a check that
+            // fires for the wrong reason is worse than no check -- an
+            // operator who has seen one false disagreement discounts the true
+            // one. Found by hitting it: a hundred-thousand-block range ending
+            // four thousand blocks short of the head refused to write over
+            // one token that had graduated in between.
+            if verify.is_some() {
+                return Err(
+                    "--verify compares against the token's state now, so it only holds when the \
+                     range ends at the head of the chain: drop --to, or drop --verify"
+                        .to_owned(),
+                );
+            }
+            block
+        }
         None => rpc.block_time(None).map_err(|e| format!("--to: {e}"))?.0,
     };
     if to < from {
@@ -623,6 +654,52 @@ mod tests {
             "--from 900 is after --to 100"
         );
         assert!(!std::path::Path::new("unwritten.json").exists());
+    }
+
+    /// The pairing that makes `--verify` answer a question nobody asked.
+    ///
+    /// Refused before the endpoint is touched, which is what the unreachable
+    /// address proves: the operator learns it from the flags alone, not after
+    /// a walk that then throws its own result away. Re-apply the bug by
+    /// deleting the `verify.is_some()` arm and this returns a connection
+    /// error instead of the sentence.
+    #[test]
+    fn verifying_a_range_that_stops_short_of_the_head_is_refused_up_front() {
+        let with_both = args(&[
+            "creator-index",
+            "--rpc",
+            "http://127.0.0.1:1/never",
+            "--out",
+            "unwritten.json",
+            "--to",
+            "65760000",
+            "--verify",
+            "20",
+        ]);
+        assert_eq!(
+            run(&with_both).expect_err("--to with --verify is an error"),
+            "--verify compares against the token's state now, so it only holds when the range \
+             ends at the head of the chain: drop --to, or drop --verify"
+        );
+        assert!(!std::path::Path::new("unwritten.json").exists());
+
+        // `--to` on its own is still an ordinary thing to ask for: it gets
+        // past the flags and fails on the unreachable endpoint instead.
+        let to_only = args(&[
+            "creator-index",
+            "--rpc",
+            "http://127.0.0.1:1/never",
+            "--out",
+            "unwritten.json",
+            "--to",
+            "65760000",
+        ]);
+        assert!(
+            !run(&to_only)
+                .expect_err("the endpoint is unreachable")
+                .starts_with("--verify"),
+            "--to alone must not be refused for --verify's reason"
+        );
     }
 
     #[test]
