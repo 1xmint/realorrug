@@ -1462,14 +1462,13 @@ fn wait_for_data_dir(path: &std::path::Path, mut wait: impl FnMut()) {
 /// here keeps ownership out of the model and lets a later poll recover from
 /// an unavailable file without restarting the daemon.
 pub(crate) fn open_memory(path: &str) -> Option<realorrug_onchain::memory::Memory> {
-    match realorrug_onchain::memory::Memory::open(std::path::Path::new(path)) {
-        Ok(memory) => Some(memory),
-        Err(_) => {
-            eprintln!(
-                "realorrug-analyst: read memory unavailable; launch records will be read from chain"
-            );
-            None
-        }
+    if let Ok(memory) = realorrug_onchain::memory::Memory::open(std::path::Path::new(path)) {
+        Some(memory)
+    } else {
+        eprintln!(
+            "realorrug-analyst: read memory unavailable; launch records will be read from chain"
+        );
+        None
     }
 }
 

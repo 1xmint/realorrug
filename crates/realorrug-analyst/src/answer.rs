@@ -318,46 +318,9 @@ fn answer_measured(
         Admitted::Yes | Admitted::YesCached => {}
     }
 
-    // `cached` is only `Some` when `Gate::admit` just said this mint's last
-    // read is fresh enough to reuse (`Admitted::YesCached`) -- a burst of
-    // distinct posts about the same token inside the same short window. Any
-    // older read misses the cache and falls through to reading the chain
-    // again, which is the default: the facts a young token's reply rests on
-    // move fast enough that a second post deserves another look.
-    let (sheet, read_at) = if let Some((sheet, read_at)) = cached {
-        (sheet, read_at)
-    } else {
-        // Dispatched on the address's own shape -- `0x` is always Robinhood's,
-        // anything else is tried as Solana's base58 -- never on configuration
-        // and never guessed. The one function this whole task exists to
-        // introduce: both analyst entry points and the CLI call it rather
-        // than each writing its own "which chain is this" match. The budget
-        // uses `realorrug-onchain`'s default: a stranger chooses when this
-        // runs, so the ceiling must not drift between callers.
-        let clients = dispatch::Clients {
-            solana: ctx.client,
-            robinhood: ctx.robinhood,
-        };
-        let mut budget = realorrug_onchain::Budget::default();
-        let result = dispatch::read_with_memory(&mint_text, &clients, ctx.memory, &mut budget);
-        // Read the meter even on error: failed RPCs also cost calls. A cache
-        // hit or an answer with no chain read leaves both measurements zero.
-        metrics.calls = budget.calls_made();
-        metrics.elapsed_ms = budget.elapsed().as_millis();
-        let dossier = match result {
-            Ok(d) => d,
-            Err(dispatch::Error::NotAnAddress) => return Answered::NotAnAddress,
-            Err(dispatch::Error::Unreadable(why)) => return Answered::Unreadable(why),
-        };
-        let sheet = realorrug_roast::FactSheet::build(
-            &dossier,
-            ctx.rates,
-            ctx.creators,
-            ctx.self_mint,
-            None,
-        );
-        gate.cache_sheet(&mint_text, sheet.clone(), dossier.read_at, ctx.now);
-        (sheet, dossier.read_at)
+    let (sheet, read_at) = match sheet_for(&mint_text, cached, gate, ctx, metrics) {
+        Ok(pair) => pair,
+        Err(refused) => return refused,
     };
     // Written fresh every time, even from a cached sheet: two people asking
     // in the same minute get two posts, not one post copied twice.
@@ -373,6 +336,68 @@ fn answer_measured(
     if let Some(conversation) = &mention.conversation {
         threads.record(conversation, &mint_text, level);
     }
+
+    build_reply(mention, mint_text, sheet, read_at, level, reply, ctx.now)
+}
+
+/// Resolves the fact sheet for `mint_text`, from `cached` when a burst of
+/// distinct posts about the same token inside the same short window made one
+/// available, or from the chain otherwise. Returns `Err` for the two chain
+/// outcomes that end the answer immediately rather than producing a sheet.
+fn sheet_for(
+    mint_text: &str,
+    cached: Option<(realorrug_roast::FactSheet, Option<realorrug_types::ReadAt>)>,
+    gate: &mut Gate,
+    ctx: &Answering<'_>,
+    metrics: &mut DossierMetrics,
+) -> Result<(realorrug_roast::FactSheet, Option<realorrug_types::ReadAt>), Answered> {
+    // `cached` is only `Some` when `Gate::admit` just said this mint's last
+    // read is fresh enough to reuse (`Admitted::YesCached`) -- a burst of
+    // distinct posts about the same token inside the same short window. Any
+    // older read misses the cache and falls through to reading the chain
+    // again, which is the default: the facts a young token's reply rests on
+    // move fast enough that a second post deserves another look.
+    if let Some((sheet, read_at)) = cached {
+        return Ok((sheet, read_at));
+    }
+    // Dispatched on the address's own shape -- `0x` is always Robinhood's,
+    // anything else is tried as Solana's base58 -- never on configuration
+    // and never guessed. The one function this whole task exists to
+    // introduce: both analyst entry points and the CLI call it rather
+    // than each writing its own "which chain is this" match. The budget
+    // uses `realorrug-onchain`'s default: a stranger chooses when this
+    // runs, so the ceiling must not drift between callers.
+    let clients = dispatch::Clients {
+        solana: ctx.client,
+        robinhood: ctx.robinhood,
+    };
+    let mut budget = realorrug_onchain::Budget::default();
+    let result = dispatch::read_with_memory(mint_text, &clients, ctx.memory, &mut budget);
+    // Read the meter even on error: failed RPCs also cost calls. A cache
+    // hit or an answer with no chain read leaves both measurements zero.
+    metrics.calls = budget.calls_made();
+    metrics.elapsed_ms = budget.elapsed().as_millis();
+    let dossier = match result {
+        Ok(d) => d,
+        Err(dispatch::Error::NotAnAddress) => return Err(Answered::NotAnAddress),
+        Err(dispatch::Error::Unreadable(why)) => return Err(Answered::Unreadable(why)),
+    };
+    let sheet =
+        realorrug_roast::FactSheet::build(&dossier, ctx.rates, ctx.creators, ctx.self_mint, None);
+    gate.cache_sheet(mint_text, sheet.clone(), dossier.read_at, ctx.now);
+    Ok((sheet, dossier.read_at))
+}
+
+/// Assembles the published outcome once a sheet, fresh or reused, exists.
+fn build_reply(
+    mention: &Mention,
+    mint_text: String,
+    sheet: realorrug_roast::FactSheet,
+    read_at: Option<realorrug_types::ReadAt>,
+    level: realorrug_roast::Level,
+    reply: realorrug_roast::Reply,
+    now: u64,
+) -> Answered {
     // Kept whole for callers inspecting the answer, before `sheet.signals`
     // is moved into the log. The gate already holds any newly read sheet.
     let cached_sheet = Box::new((sheet.clone(), read_at));
@@ -383,7 +408,7 @@ fn answer_measured(
         billed: reply.billed,
         sheet: cached_sheet,
         entry: Box::new(Entry {
-            at: ctx.now,
+            at: now,
             mention_id: mention.id.clone(),
             summoner: mention.author.clone(),
             mint: Some(mint_text),
@@ -576,7 +601,11 @@ mod tests {
         assert!(matches!(outcome, Answered::Unreadable(_)));
         assert_eq!(failed.calls, 1);
         assert_eq!(failed.notice("m1").lines().count(), 1);
-        assert!(failed.notice("m1").contains(&format!("elapsed_ms={}", failed.elapsed_ms)));
+        assert!(
+            failed
+                .notice("m1")
+                .contains(&format!("elapsed_ms={}", failed.elapsed_ms))
+        );
 
         let mut no_read = DossierMetrics::default();
         let outcome = answer_measured(

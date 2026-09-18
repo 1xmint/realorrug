@@ -1014,14 +1014,7 @@ mod tests {
             Admitted::YesCached,
             "under the window, the sheet just read is reused"
         );
-        gate.record(
-            "bob",
-            "MintOne",
-            "r2",
-            Some("t2"),
-            None,
-            DAY + 30,
-        );
+        gate.record("bob", "MintOne", "r2", Some("t2"), None, DAY + 30);
         // Bob's own answer is on record, distinct from alice's.
         assert_eq!(gate.answered_reply_id("MintOne"), Some("r2"));
     }

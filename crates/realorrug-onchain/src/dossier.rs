@@ -1165,10 +1165,8 @@ mod tests {
         store_launch(&memory, &mint_key, &launch).expect("store launch");
         drop(memory);
         let memory = Memory::open(&path).expect("reopen");
-        let client = RpcClient::with_transport(
-            "http://test.invalid",
-            Box::new(HitVsMiss(mint_key.clone())),
-        );
+        let client =
+            RpcClient::with_transport("http://test.invalid", Box::new(HitVsMiss(mint_key.clone())));
         let clients = crate::dispatch::Clients {
             solana: &client,
             robinhood: None,
