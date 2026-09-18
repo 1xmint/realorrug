@@ -245,7 +245,7 @@ tests already run.
 |---|---|---|---|
 | 1. Typed story selection and audit | roast salience.rs (new), `verdict.rs`, `voice.rs`, `sheet.rs`; analyst `log.rs` | Renaming labels cannot change selection; a 529-holder/50.2%-concentration fixture surfaces both with unresolved-role wording; all draft bytes and selected IDs logged | None |
 | 2. Snapshot and event memory | robinhood `lib.rs`; onchain `memory.rs`, `dispatch.rs`, `robinhood.rs`, `dossier.rs` | Explicit read block, durable ordered event identity, transactional suffix checkpoint; duplicate/reorg fixtures preserve balances; Robinhood receives memory | None |
-| 3. Bounded funding investigation | onchain wallets.rs (new), `budget.rs`, `robinhood.rs`; roast `sheet.rs`, `clause.rs` | Four selected buyers produce evidenced funding paths and sample coverage; dust/shared-service fixtures cannot become ownership claims; CU cap enforced | 2 |
+| 3. Bounded funding investigation — **built 2026-09-18**, see below | onchain `wallets.rs`, `budget.rs`, `robinhood.rs`, `memory.rs`; roast `sheet.rs`, `clause.rs`, `fidelity.rs` | Four selected buyers produce evidenced funding paths and sample coverage; dust/shared-service fixtures cannot become ownership claims; CU cap enforced | 2 |
 | 4. Roles, market and venue mechanics | onchain roles.rs (new), `market.rs` (new), `robinhood.rs`; robinhood `pons.rs`; roast `sheet.rs` | Pool/locker excluded only with proof; dated market snapshot, role-correct concentration, custody and verified admin facts available; liquidity dollars never become capacity | 2 |
 | 5. Creator cash-flow ledger | onchain wallets.rs, `memory.rs`; robinhood `pons.rs`; roast `sheet.rs` | Fee recipient differs from deployer in fixture; transfers cannot masquerade as sales; incomplete basis cannot print profit | 3, 4 |
 | 6. Solana owner/funding adapter | onchain `rpc.rs`, `dossier.rs`, wallets.rs | Largest accounts aggregated by owner; paged funding preserves incomplete history; identical finding types across chains | 2, 3 |
@@ -260,6 +260,46 @@ The first three slices are meant to fix the visible failure (label matching
 that can be defeated by renaming a word), make evidence reusable across the
 reply, card and website, and deliver the owner's most distinctive signal
 (funding evidence) before anything downstream depends on it.
+
+### Slice 3 as built (2026-09-18)
+
+Recording, not recommending. `crates/realorrug-onchain/src/wallets.rs`
+reads the launch window's `CurveBuy` events on the verified curve (launch
+block to launch block + 6,000, capped at the dossier's read point) and
+aggregates them by **beneficiary** (`Trade::recipient`), keeping the trade
+caller separate: a Transfer-only recipient is never a buyer. It chooses at
+most four candidates — the two largest launch-window buyers by quote, the
+earliest of the rest, and the lowest remaining address as a deterministic
+sample — and records the rule and the candidates' quote-weighted share of
+the window (`Funding::coverage_bps`). Per candidate it reads `eth_getCode`,
+`alchemy_getAssetTransfers` (external, into the address, from 360,000 blocks
+before its first purchase to the block before it, at most two pages) and
+`eth_getTransactionCount` at the block before launch; a zero nonce means no
+prior outgoing transactions, nothing more. A funder is *material* when its
+transfer covers at least half of the purchase plus a gas allowance; dust is
+kept as an observation (`FundingEdge::material = false`) and never counts
+toward a shared funder. `Funding::shared` lists addresses that materially
+funded two or more of the checked candidates.
+
+`budget.rs` gained a compute-unit ceiling beside the call ceiling
+(`Budget::with_compute_units`, 2,000 CU per cold dossier by default). The
+investigation runs after the core reads and caps itself at the smaller of
+640 CU and what the dossier has left; when the cap stops it mid-way the gap
+is recorded in `Funding::gaps` and the dossier is still built. A provider
+that does not serve `alchemy_getAssetTransfers` degrades the read the same
+way. With a memory, the edges are remembered as events keyed by the
+provider's `uniqueId` (`funding_edges`) and a `funding` check run records
+the window and whether every candidate was fully read.
+
+The sheet (`realorrug-roast/src/sheet.rs::push_funding`) publishes two
+facts: `FundingChecked` ("4 of 4", with the coverage) and `SharedFunder`
+("the same address funded 3 of the 4 early buyers checked"). The
+denominator is always the checked count, "checked" is in the words, and
+the sentence names the innocent reading (an exchange paying out
+withdrawals). It never says "one person", "insiders", "the same owner" or
+"common control", and its tests fail if it does. Slices 5 and 6 build on
+`wallets::investigate`, `Funding`, `Candidate`, `Funder` and
+`Memory::funding_edges`.
 
 ## 4. Decisions pending the owner
 

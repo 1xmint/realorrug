@@ -511,6 +511,27 @@ pub struct TransferEvent {
     pub amount: u128,
 }
 
+/// One native-currency transfer into a wallet that later bought the token:
+/// an observed edge, never an ownership claim (design 0027 §2.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FundingEdge {
+    /// The buyer that received the funds (its address, lowercase hex).
+    pub recipient: String,
+    /// The address that sent them.
+    pub funder: String,
+    /// The block the transfer landed in.
+    pub block: u64,
+    /// The transaction that carried it.
+    pub transaction: String,
+    /// The provider's identity for this transfer, the dedupe key.
+    pub unique_id: String,
+    /// Wei transferred.
+    pub amount: u128,
+    /// Whether the amount was material against the buyer's purchase; dust
+    /// is kept as an observation but never counts for attribution.
+    pub material: bool,
+}
+
 /// What [`Memory::extend_transfers`] did with the events it was handed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Extended {
@@ -625,9 +646,114 @@ impl Memory {
                 ran_at       INTEGER NOT NULL
              );
              CREATE INDEX IF NOT EXISTS check_runs_by_subject
-                ON check_runs (chain, token, what, id);",
+                ON check_runs (chain, token, what, id);
+             CREATE TABLE IF NOT EXISTS funding_edges (
+                chain     TEXT    NOT NULL,
+                token     TEXT    NOT NULL,
+                recipient TEXT    NOT NULL,
+                funder    TEXT    NOT NULL,
+                block     INTEGER NOT NULL,
+                tx_hash   TEXT    NOT NULL,
+                unique_id TEXT    NOT NULL,
+                amount    TEXT    NOT NULL,
+                material  INTEGER NOT NULL,
+                PRIMARY KEY (chain, unique_id)
+             );
+             CREATE INDEX IF NOT EXISTS funding_edges_by_token
+                ON funding_edges (chain, token, recipient);
+             CREATE INDEX IF NOT EXISTS funding_edges_by_funder
+                ON funding_edges (chain, funder);",
         )?;
         Ok(())
+    }
+
+    /// Remembers funding edges as events, once each.
+    ///
+    /// The identity is the provider's own `uniqueId` for the transfer
+    /// (`hash:external:index` on Alchemy), not `(recipient, funder, amount)`:
+    /// two identical top-ups an hour apart are two events, and collapsing
+    /// them would understate how often one wallet fed another (design 0027
+    /// §2.3, "as events, not a collapsing key"). A retry that re-reads the
+    /// same page inserts nothing the second time.
+    ///
+    /// Indexed both ways -- by `(token, recipient)` for "who funded this
+    /// buyer" and by `funder` for "who else did this wallet fund" -- so a
+    /// later slice can walk paths without a cluster that cannot be undone.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if a write fails.
+    pub fn record_funding_edges(
+        &self,
+        chain: &str,
+        token: &str,
+        edges: &[FundingEdge],
+    ) -> Result<u64, Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut inserted = 0u64;
+        for edge in edges {
+            let changed = tx.execute(
+                "INSERT OR IGNORE INTO funding_edges
+                 (chain, token, recipient, funder, block, tx_hash, unique_id, amount, material)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    chain,
+                    token,
+                    edge.recipient,
+                    edge.funder,
+                    to_i64(edge.block),
+                    edge.transaction,
+                    edge.unique_id,
+                    edge.amount.to_string(),
+                    i32::from(edge.material),
+                ],
+            )?;
+            inserted += u64::try_from(changed).unwrap_or(0);
+        }
+        tx.commit()?;
+        Ok(inserted)
+    }
+
+    /// Every funding edge remembered for `(chain, token)`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails, or a stored amount no longer
+    /// parses.
+    pub fn funding_edges(&self, chain: &str, token: &str) -> Result<Vec<FundingEdge>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT recipient, funder, block, tx_hash, unique_id, amount, material
+             FROM funding_edges WHERE chain = ?1 AND token = ?2
+             ORDER BY block, unique_id",
+        )?;
+        let rows = stmt.query_map(params![chain, token], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i32>(6)?,
+            ))
+        })?;
+        let mut edges = Vec::new();
+        for row in rows {
+            let (recipient, funder, block, transaction, unique_id, amount, material) = row?;
+            edges.push(FundingEdge {
+                recipient,
+                funder,
+                block: u64::try_from(block).unwrap_or(0),
+                transaction,
+                unique_id,
+                amount: amount.parse().map_err(|_| Error::Ledger {
+                    token: token.to_owned(),
+                    why: format!("funding amount {amount:?} does not parse"),
+                })?,
+                material: material != 0,
+            });
+        }
+        Ok(edges)
     }
 
     /// The block `token`'s transfer memory is complete through, or `None`
@@ -1569,5 +1695,41 @@ mod tests {
             mem.token_balances(CHAIN, TOKEN).expect("balances"),
             vec![("alice".to_owned(), u128::from(count))]
         );
+    }
+
+    #[test]
+    fn a_funding_edge_is_remembered_once_by_its_provider_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mem = Memory::open(&dir.path().join("m.sqlite3")).expect("open");
+        let edge = |unique_id: &str, amount: u128, material: bool| FundingEdge {
+            recipient: "buyer".to_owned(),
+            funder: "funder".to_owned(),
+            block: 7,
+            transaction: "0xaa".to_owned(),
+            unique_id: unique_id.to_owned(),
+            amount,
+            material,
+        };
+        // Two identical top-ups with different identities are two events;
+        // the same identity read twice (a retried page) is one.
+        let first = [
+            edge("0xaa:external:0", 5, true),
+            edge("0xaa:external:1", 5, false),
+        ];
+        assert_eq!(
+            mem.record_funding_edges(CHAIN, TOKEN, &first)
+                .expect("record"),
+            2
+        );
+        assert_eq!(
+            mem.record_funding_edges(CHAIN, TOKEN, &first)
+                .expect("again"),
+            0
+        );
+        let back = mem.funding_edges(CHAIN, TOKEN).expect("read");
+        assert_eq!(back, first.to_vec());
+        assert!(back[0].material && !back[1].material);
+        // Scoped to the token asked about.
+        assert!(mem.funding_edges(CHAIN, "other").expect("read").is_empty());
     }
 }

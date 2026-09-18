@@ -452,6 +452,17 @@ asserted, when a real memory has run for a while.
 ### Cost
 
 Within the existing sixty-call budget (`budget.rs`): a first summon costs what
-it did (ten calls on the fixture), a second costs one header more plus only
-the pages the suffix needs. The fixture tests in `robinhood.rs` pin both
-numbers.
+it did plus the funding window's log read (eleven calls on the fixture, before
+the per-candidate funding reads of design 0027 slice 3), a second costs one
+header more plus only the pages the suffix needs. The fixture tests in
+`robinhood.rs` pin both numbers.
+
+### Funding edges (design 0027 slice 3)
+
+Beside the Transfers, the memory keeps `funding_edges`: native transfers
+into an early buyer before its first purchase, keyed by the provider's
+`uniqueId` so a page read twice inserts nothing twice, each with the funder,
+the amount and whether it was material against the purchase. A `funding`
+check run records the launch window read and `Complete` only when every
+chosen candidate's history was read to its end; a compute-unit cap or a
+provider that does not serve the method leaves it `Truncated`.
