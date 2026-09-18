@@ -684,6 +684,37 @@ impl Rpc {
         to_block: u64,
     ) -> Result<Vec<Log>, LogsError> {
         let topics: Vec<String> = topics.iter().map(ToString::to_string).collect();
+        self.logs_range_filter(address, &serde_json::json!(topics), from_block, to_block)
+    }
+
+    /// Logs for any of these event signatures, in block/log-index order.
+    ///
+    /// The creator-index rebuild needs buys and sells interleaved to find the
+    /// first fill. Ordinary `topics` arguments match successive topic positions;
+    /// the nested array here instead matches alternatives at position zero.
+    ///
+    /// # Errors
+    ///
+    /// [`LogsError`], including missing ordering metadata: inventing an order
+    /// would invent the price against which every multiple is measured.
+    pub fn logs_range_any_event(
+        &self,
+        events: &[Hash32],
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>, LogsError> {
+        let events: Vec<String> = events.iter().map(ToString::to_string).collect();
+        self.logs_range_filter(None, &serde_json::json!([events]), from_block, to_block)
+    }
+
+    fn logs_range_filter(
+        &self,
+        address: Option<&Address>,
+        topics: &serde_json::Value,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>, LogsError> {
+        let ordered = topics.get(0).is_some_and(serde_json::Value::is_array);
         let mut params = serde_json::json!({
             "fromBlock": format!("{from_block:#x}"),
             "toBlock": format!("{to_block:#x}"),
@@ -701,7 +732,11 @@ impl Rpc {
                     LogsError::Other(e)
                 }
             })?;
-        parse_logs(&result).map_err(LogsError::Other)
+        if ordered {
+            parse_ordered_logs(&result).map_err(LogsError::Other)
+        } else {
+            parse_logs(&result).map_err(LogsError::Other)
+        }
     }
 
     /// A block's number and its timestamp in seconds: block `number`, or the
@@ -877,6 +912,29 @@ impl Rpc {
 ///
 /// Shared by [`Rpc::logs`] and [`Rpc::logs_range`] so the two calls parse the
 /// same shape the same way; only the request they send differs.
+fn parse_ordered_logs(result: &serde_json::Value) -> Result<Vec<Log>, String> {
+    let mut logs = result
+        .as_array()
+        .ok_or("eth_getLogs returned no list")?
+        .iter()
+        .map(|value| {
+            if value.get("removed").and_then(serde_json::Value::as_bool) == Some(true) {
+                return Err("eth_getLogs returned a removed log".to_owned());
+            }
+            let log = Log::from_json(value).map_err(|e| format!("log: {e}"))?;
+            let index = field(value, "logIndex")
+                .and_then(quantity)
+                .map_err(|e| format!("log order: {e}"))?;
+            Ok(((log.block, index), log))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    logs.sort_by_key(|(position, _)| *position);
+    if logs.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err("eth_getLogs returned a duplicate log position".to_owned());
+    }
+    Ok(logs.into_iter().map(|(_, log)| log).collect())
+}
+
 fn parse_logs(result: &serde_json::Value) -> Result<Vec<Log>, String> {
     result
         .as_array()
@@ -942,12 +1000,56 @@ mod tests {
     use std::io::{BufRead as _, BufReader, Read as _, Write as _};
     use std::net::TcpListener;
 
+    #[test]
+    fn trade_logs_are_ordered_by_block_then_log_index_and_missing_order_is_refused() {
+        let log = |block: &str, index: &str, byte: u8| {
+            serde_json::json!({
+                "address": Address([byte; 20]).to_string(), "topics": [], "data": "0x",
+                "blockNumber": block, "logIndex": index,
+                "transactionHash": Hash32([0; 32]).to_string(),
+            })
+        };
+        // Hash order is not execution order. Both fills in the first block
+        // deliberately share a transaction hash, so a hash sort cannot pass.
+        let mut json = serde_json::json!([
+            log("0xb", "0x0", 3),
+            log("0xa", "0x9", 2),
+            log("0xa", "0x2", 1),
+        ]);
+        let ordered = parse_ordered_logs(&json).expect("ordered fills");
+        assert_eq!(
+            ordered.iter().map(|l| l.address).collect::<Vec<_>>(),
+            vec![Address([1; 20]), Address([2; 20]), Address([3; 20])]
+        );
+        json[0].as_object_mut().expect("log").remove("logIndex");
+        assert!(parse_ordered_logs(&json).is_err());
+        assert!(
+            parse_ordered_logs(&serde_json::json!([
+                log("0xa", "0x2", 1),
+                log("0xa", "0x2", 2)
+            ]))
+            .is_err()
+        );
+        let mut removed = log("0xa", "0x2", 1);
+        removed["removed"] = serde_json::json!(true);
+        assert!(parse_ordered_logs(&serde_json::json!([removed])).is_err());
+    }
+
     /// One HTTP answer with a chosen status, served once on a loopback port.
     ///
     /// The status is a parameter because the bug this crate's newest test
     /// covers lives entirely in the status: the same JSON-RPC error body is
     /// handled correctly at 200 and was thrown away unread at 400.
     fn serve_once(status: u16, reason: &str, body: &str) -> String {
+        serve_once_checking_topics(status, reason, body, None)
+    }
+
+    fn serve_once_checking_topics(
+        status: u16,
+        reason: &str,
+        body: &str,
+        topics: Option<serde_json::Value>,
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let url = format!("http://{}", listener.local_addr().expect("an address"));
         let body = body.to_owned();
@@ -969,6 +1071,11 @@ mod tests {
             }
             let mut request = vec![0; length];
             let _ = reader.read_exact(&mut request);
+            if let Some(topics) = topics {
+                let request: serde_json::Value = serde_json::from_slice(&request).expect("request");
+                assert_eq!(request["params"][0]["topics"], topics);
+                assert!(request["params"][0].get("address").is_none());
+            }
             let mut stream = reader.into_inner();
             let _ = write!(
                 stream,
@@ -977,6 +1084,32 @@ mod tests {
             );
         });
         url
+    }
+
+    #[test]
+    fn a_trade_walk_matches_buy_or_sell_at_topic_zero_and_preserves_range_cap_errors() {
+        let events = [pons::topic::CURVE_BUY, pons::topic::CURVE_SELL];
+        let topics = serde_json::json!([[events[0].to_string(), events[1].to_string()]]);
+        let url = serve_once_checking_topics(
+            200,
+            "OK",
+            r#"{"jsonrpc":"2.0","id":1,"result":[]}"#,
+            Some(topics.clone()),
+        );
+        assert_eq!(
+            Rpc::new(url).logs_range_any_event(&events, 0, 100),
+            Ok(vec![])
+        );
+        let url = serve_once_checking_topics(
+            400,
+            "Bad Request",
+            r#"{"jsonrpc":"2.0","id":1,"error":{"message":"Log response size exceeded"}}"#,
+            Some(topics),
+        );
+        assert_eq!(
+            Rpc::new(url).logs_range_any_event(&events, 0, 100),
+            Err(LogsError::TooManyResults)
+        );
     }
 
     #[test]

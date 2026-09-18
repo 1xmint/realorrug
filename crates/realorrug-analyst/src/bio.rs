@@ -7,6 +7,17 @@
 //! asked for it, the objection was put to him, and he asked for it anyway. That
 //! is his call and it is recorded as his.
 //!
+//! Josh asked (2026-09-17) that the bio show the pool, the week's leaders and
+//! the last winner **together**, not as three states that take turns hiding
+//! each other. A visitor who only ever sees the account once should not have
+//! to catch it on the one hour the payout line happened to be up. So the bio
+//! is now a single [`State`] holding whichever of the three parts exist, and a
+//! render that does not fit drops parts -- fewer leaders first, then the last
+//! winner -- rather than dropping the whole thing. The pool is the one part
+//! that is never *dropped for space*: it is either there, from a fresh
+//! reading, or it is not there at all, and a render says nothing only when
+//! none of the three parts has anything to say.
+//!
 //! # A bio has no version history, and everything here follows from that
 //!
 //! A wrong post can be deleted and a wrong reply can be corrected in the
@@ -27,25 +38,26 @@
 //!   @1xmint_` as `@thecabalhunter`, confirmed on 2026-09-07. It was renamed
 //!   `@realorrug` on 2026-09-13 and the label has not been re-read since.
 //!
-//! # Every number goes through the same two checks a reply does
+//! # The status passes the same two checks a reply does; the lead does not
 //!
-//! A bio is a public statement by the same account, so there is no reason it
-//! should be held to a lower standard than a reply.
 //! [`realorrug_roast::forbidden::check`] refuses the verdicts and
 //! [`realorrug_roast::fidelity::check`] refuses any figure the week's record does
-//! not carry. A render that fails either is **not written** -- the previous
-//! bio stands, which is the safe direction, because the previous bio was also
-//! true when it was written.
+//! not carry. Run on [`Bio::status_text`], never on the whole render: the lead
+//! is the operator's own fixed configuration, not text built from `choose`'s
+//! output, and holding an operator's own words to a checker meant for
+//! *generated* claims would refuse the account's own bio over words it wrote
+//! about itself, and did on the live account (`@realorrug`'s lead names
+//! "cabals"). A status that fails either check is **not written** -- the
+//! previous bio stands, which is the safe direction, because the previous bio
+//! was also true when it was written.
 //!
 //! # It says "leads", never "wins"
 //!
-//! The mid-week line is raw, unverified engagement: reposts and quotes are
+//! The leaderboard line is raw, unverified engagement: reposts and quotes are
 //! unbounded per account (finding S16), so a mid-week leader can be one person
 //! with a script. The week's actual winner is decided at close on **verified**
 //! engagement, and the two can differ. Saying "leads" is the whole of the
 //! difference and it is not a stylistic choice.
-
-use std::fmt::Write as _;
 
 use realorrug_contest::{Balance, Record, Vault, Week};
 use realorrug_types::env::env_or_legacy;
@@ -60,6 +72,13 @@ pub const MAX: usize = 160;
 /// What separates the lead from the status.
 const JOIN: &str = " · ";
 
+/// How many of the week's leaders a render will ever show.
+///
+/// A fourth name would not change anybody's decision to join and it is the
+/// first thing dropped when the lead is long, so there is no reason to carry
+/// more than this out of the ranking in the first place.
+pub const MAX_LEADERS: usize = 3;
+
 /// The disclaimer every reply used to end with, until 2026-09-17: the owner
 /// decided it belongs on the profile once, not on every post. Fixed rather
 /// than operator-configured, appended to whatever lead is set, so an
@@ -67,7 +86,10 @@ const JOIN: &str = " · ";
 /// mercy of `REALORRUG_BIO_LEAD`'s own length -- `from_vars` below folds it
 /// into the stored lead and refuses configuration that would not leave room
 /// for it, which is what "always fits" means here: checked once, at
-/// configuration time, rather than hoped for at every render.
+/// configuration time, rather than hoped for at every render. ADR 0033 says
+/// the bio always *ends* with it, so `render` splits it back off the stored
+/// lead and puts it after the status, not before -- see `render`'s own
+/// comment for why the split rather than a second field.
 pub const DISCLAIMER: &str = "Not financial advice.";
 
 /// The bio writer's configuration.
@@ -117,36 +139,89 @@ impl Bio {
     ///
     /// `None` rather than a bio of only the lead: writing the lead back on its
     /// own would be a call that changes nothing, and this endpoint is metered.
+    ///
+    /// The status is built to fit what is left after the lead: `state.status`
+    /// drops parts -- fewer leaders first, then the last winner -- until the
+    /// combined text fits, and only reports `None` when even the pool line
+    /// alone does not.
+    ///
+    /// **This is the part [`check`] should see, and the only part.** The rest
+    /// of a render is the lead: the operator's own configuration, folded with
+    /// [`DISCLAIMER`] in [`from_vars`](Bio::from_vars). Neither is built from
+    /// the week's record, so neither has a figure `fidelity::check` could
+    /// refuse or a phrase that only means something because [`choose`] put it
+    /// there -- and an operator's own words containing a phrase
+    /// `forbidden::check` matches is the operator's call to make about their
+    /// own account, not this module's to overrule on every write.
+    #[must_use]
+    pub fn status_text(&self, state: &State) -> Option<String> {
+        let budget = MAX.checked_sub(self.lead.chars().count() + JOIN.chars().count())?;
+        state.status(budget)
+    }
+
+    /// The bio for a week, or `None` when there is nothing to say.
+    ///
+    /// `None` rather than a bio of only the lead: writing the lead back on its
+    /// own would be a call that changes nothing, and this endpoint is metered.
     #[must_use]
     pub fn render(&self, state: &State) -> Option<String> {
-        let status = state.status()?;
-        let mut out = self.lead.clone();
-        out.push_str(JOIN);
-        out.push_str(&status);
+        let status = self.status_text(state)?;
+        let mut out = String::new();
+        // ADR 0033 says the bio always *ends* with the disclaimer.
+        // `from_vars` folds it into `lead` as `<operator> · <disclaimer>` so
+        // the lead stays one fixed, whole value the operator cannot configure
+        // around -- but a render that just put `lead` first and whole, as
+        // every branch here does, would then read `<operator> ·
+        // <disclaimer> · <status>`, disclaimer before the status instead of
+        // after it. Splitting the known suffix back off here keeps both true
+        // at once: the lead is still first and whole (nothing is inserted
+        // before it), and the disclaimer still ends up last. A `Bio` built
+        // directly rather than through `from_vars` (every fixture below that
+        // is not exercising `from_vars` itself) carries no such suffix, so it
+        // renders exactly as before: `<lead> · <status>`.
+        let with_disclaimer = format!("{JOIN}{DISCLAIMER}");
+        if let Some(core) = self.lead.strip_suffix(with_disclaimer.as_str()) {
+            out.push_str(core);
+            out.push_str(JOIN);
+            out.push_str(&status);
+            out.push_str(JOIN);
+            out.push_str(DISCLAIMER);
+        } else {
+            out.push_str(&self.lead);
+            out.push_str(JOIN);
+            out.push_str(&status);
+        }
+        // The budget arithmetic in `status_text` already guarantees this
+        // (moving the same-length pieces around does not change the total),
+        // but the check stays: it is the one invariant a bio truncated
+        // mid-figure would violate, and it is cheap enough to hold
+        // unconditionally rather than trust the arithmetic that leads to it.
         (out.chars().count() <= MAX).then_some(out)
     }
 }
 
-/// What the bio has to say, in the order the week goes through it.
+/// One name on the week's raw leaderboard.
 ///
-/// An enum rather than three booleans, because the states are exclusive and a
-/// caller holding two of them is a caller that can render a bio saying somebody
-/// both leads and was paid.
+/// Raw, unverified engagement -- see the module's "leads, never wins" note.
+/// Best first is the caller's job: `State::status` shows the first
+/// [`MAX_LEADERS`] of whatever order it is given and does not re-sort.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum State {
-    /// The week is open and somebody is ahead on raw engagement.
-    ///
-    /// **Raw, and the wording says so.** Reposts and quotes are unbounded per
-    /// account (S16), so this is the number a script can move and the week's
-    /// actual winner is decided on verified engagement at close.
-    Leads {
-        /// The Monday the week opened, `YYYY-MM-DD`.
-        week: String,
-        /// The leader's handle, without the `@`.
-        handle: String,
-        /// Their raw score.
-        points: u64,
-    },
+pub struct Leader {
+    /// The leader's handle, without the `@`.
+    pub handle: String,
+    /// Their raw score.
+    pub points: u64,
+}
+
+/// The most recent week that reached a winner: closed and waiting on a claim,
+/// or already paid.
+///
+/// Two variants, not the four `State` used to have, because paid and won are
+/// the only two states a *last* winner can be in: an open week with no winner
+/// yet has nothing to report here, and that case is `None` at the call site,
+/// not a third variant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LastWinner {
     /// The week closed with a winner who has not claimed.
     Won {
         /// The Monday the week opened.
@@ -163,62 +238,114 @@ pub enum State {
         /// `ETH`, or `SOL` for a week paid before the move to Robinhood Chain.
         unit: &'static str,
     },
-    /// The week is open: what the pool holds and how many people are in.
+}
+
+/// The live pool reading, when there is a fresh one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pool {
+    /// The pool, rendered in ETH and cut, never rounded up.
+    pub pool: String,
+    /// Distinct accounts with a published reply on a token this week.
     ///
     /// **Hunters, not replies.** One person summoning the bot ten times is one
     /// person in the running, and a count of replies would let one busy
     /// account make the week look crowded.
-    Open {
-        /// The Monday the week opened.
-        week: String,
-        /// The pool, rendered in ETH and cut, never rounded up.
-        pool: String,
-        /// Distinct accounts with a published reply on a token this week.
-        hunters: usize,
-    },
+    pub hunters: usize,
+}
+
+/// Everything the bio has to say about the week -- whichever of the three
+/// parts exist.
+///
+/// [`choose`] returns `None` only when all three are absent; any one of them
+/// on its own is still something to say. `leaders` and `last_winner` are the
+/// two parts a render may drop to make room for the lead, in that order --
+/// the pool, when present, is never dropped for space.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct State {
+    /// The Monday of the week this render is about.
+    pub week: String,
+    /// The live pool reading, or `None` with no fresh one to quote.
+    pub pool: Option<Pool>,
+    /// The week's leaders so far, best first. May be empty; only the first
+    /// [`MAX_LEADERS`] are ever shown, and fewer still if the lead is long.
+    pub leaders: Vec<Leader>,
+    /// The most recent week to reach a winner, if the bio has anything to say
+    /// about one. Dropped before the leaders are, but after them: the pool and
+    /// the leaders are both about *now*, and the last winner is history.
+    pub last_winner: Option<LastWinner>,
 }
 
 impl State {
-    /// The status half of the bio, or `None`.
-    fn status(&self) -> Option<String> {
-        let mut out = String::new();
-        match self {
-            Self::Leads {
-                week,
-                handle,
-                points,
-            } => {
-                let _ = write!(out, "Week of {week} leads: @{handle}, {points} pts");
-            }
-            Self::Won {
-                week,
-                handle,
-                until,
-            } => {
-                let _ = write!(
-                    out,
-                    "Won the week of {week}: @{handle}. Claim: reply to the prompt under your post by {until}"
-                );
-            }
-            Self::Paid { amount, unit } => {
-                let _ = write!(out, "Paid {amount} {unit} to the week's winner");
-            }
-            Self::Open {
-                week,
-                pool,
-                hunters,
-            } => {
-                let noun = if *hunters == 1 { "hunter" } else { "hunters" };
-                let _ = write!(
-                    out,
-                    "Week of {week}: {pool} ETH prize pool, {hunters} {noun} in"
-                );
-            }
+    /// The status half of the bio that fits in `budget` characters, or `None`
+    /// when nothing does -- including the case where every part is absent.
+    ///
+    /// Tries the fullest render first and drops parts in the fixed order the
+    /// module promises -- fewer leaders first, one at a time down to none,
+    /// then the last winner -- stopping at the first that fits. The pool is
+    /// never among the parts dropped here: it is either present, from
+    /// [`choose`], or it is not, and either way every candidate keeps it.
+    fn status(&self, budget: usize) -> Option<String> {
+        let usable_leaders = self.leaders.len().min(MAX_LEADERS);
+        let has_last = self.last_winner.is_some();
+        let mut attempts: Vec<(usize, bool)> =
+            (0..=usable_leaders).rev().map(|n| (n, has_last)).collect();
+        if has_last {
+            attempts.push((0, false));
         }
-        (!out.is_empty()).then_some(out)
+        attempts
+            .into_iter()
+            .map(|(leaders, last)| self.render_parts(leaders, last))
+            .find(|text| !text.is_empty() && text.chars().count() <= budget)
     }
 
-    /// Every figure this status states, for the fidelity check.
+    /// One candidate render: the pool sentence when there is one, the first
+    /// `leaders` entries, and the last winner when `last` is set -- joined in
+    /// that order, each part a full sentence.
+    ///
+    /// Compact by design: Josh asked (2026-09-17) for the pool, the leaders
+    /// and the last winner to fit *together* rather than take turns, and a
+    /// live lead already spends over half of `MAX`. Each part is `Pool <n>
+    /// ETH`, `Leads @a @b @c` (handles only -- see the module's "leads, never
+    /// wins" note for why points do not belong in a public bio: an
+    /// unverified score published as a fact is a claim this account cannot
+    /// back), or `Last won @handle` / `Last paid <n> <unit>`, joined with the
+    /// same middle dot that separates the lead from the status.
+    fn render_parts(&self, leaders: usize, last: bool) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(pool) = &self.pool {
+            parts.push(format!("Pool {} ETH", pool.pool));
+        }
+        if leaders > 0 {
+            let names = self
+                .leaders
+                .iter()
+                .take(leaders)
+                .map(|l| format!("@{}", l.handle))
+                .collect::<Vec<_>>()
+                .join(" ");
+            parts.push(format!("Leads {names}"));
+        }
+        if last {
+            match &self.last_winner {
+                Some(LastWinner::Won { handle, .. }) => {
+                    parts.push(format!("Last won @{handle}"));
+                }
+                Some(LastWinner::Paid { amount, unit }) => {
+                    parts.push(format!("Last paid {amount} {unit}"));
+                }
+                None => {}
+            }
+        }
+        parts.join(JOIN)
+    }
+
+    /// Every figure this status could state, for the fidelity check.
+    ///
+    /// A superset of whatever a particular render kept after dropping parts:
+    /// `check` only refuses a numeral that appears in the text and is not
+    /// here, so an unused figure being present costs nothing, and computing
+    /// it once for the whole `State` is simpler than threading through which
+    /// parts a given render happened to keep.
     ///
     /// The dates are split into their parts the way `weekly::authorise_date`
     /// does, because a checker reading numerals out of the text sees `2026`,
@@ -226,58 +353,43 @@ impl State {
     #[must_use]
     pub fn authorised(&self) -> Vec<f64> {
         let mut out = Vec::new();
-        let mut date = |d: &str| {
-            out.extend(d.split('-').filter_map(|p| p.parse::<f64>().ok()));
-        };
-        match self {
-            Self::Leads {
-                week,
-                points,
-                handle: _,
-            } => {
-                date(week);
-                #[expect(clippy::cast_precision_loss, reason = "a score, far below 2^53")]
-                out.push(*points as f64);
+        date_parts(&mut out, &self.week);
+        if let Some(pool) = &self.pool {
+            amount_parts(&mut out, &pool.pool);
+            #[expect(clippy::cast_precision_loss, reason = "a head count, far below 2^53")]
+            out.push(pool.hunters as f64);
+        }
+        for leader in &self.leaders {
+            #[expect(clippy::cast_precision_loss, reason = "a score, far below 2^53")]
+            out.push(leader.points as f64);
+        }
+        match &self.last_winner {
+            Some(LastWinner::Won { week, until, .. }) => {
+                date_parts(&mut out, week);
+                date_parts(&mut out, until);
             }
-            Self::Won {
-                week,
-                until,
-                handle: _,
-            } => {
-                date(week);
-                date(until);
-            }
-            Self::Paid { amount, unit: _ } => amount_parts(&mut out, amount),
-            Self::Open {
-                week,
-                pool,
-                hunters,
-            } => {
-                date(week);
-                amount_parts(&mut out, pool);
-                #[expect(clippy::cast_precision_loss, reason = "a head count, far below 2^53")]
-                out.push(*hunters as f64);
-            }
+            Some(LastWinner::Paid { amount, .. }) => amount_parts(&mut out, amount),
+            None => {}
         }
         out
     }
 }
 
-/// The state a closed week's record puts the bio in, or `None`.
+/// The most recent closed week's winner, in the shape the bio's last-winner
+/// part wants, or `None`.
 ///
-/// Reads the record and nothing else. The mid-week [`State::Leads`] is **not**
-/// produced here, because it needs a platform read the record cannot supply and
-/// this function must stay pure — the caller that pays for that read is the one
-/// that builds it.
+/// Reads the record and nothing else. Pure, same as the rest of this module:
+/// the caller that reads the vault and the reply log is the one with a
+/// filesystem to pay for.
 #[must_use]
-pub fn state_of(record: &Record, now: u64) -> Option<State> {
+pub fn last_winner_of(record: &Record, now: u64) -> Option<LastWinner> {
     if let Some(payout) = &record.payout {
         return match payout.paid {
-            realorrug_contest::Paid::Sol { lamports, .. } => Some(State::Paid {
+            realorrug_contest::Paid::Sol { lamports, .. } => Some(LastWinner::Paid {
                 amount: render_sol(lamports),
                 unit: "SOL",
             }),
-            realorrug_contest::Paid::Eth { wei, .. } => Some(State::Paid {
+            realorrug_contest::Paid::Eth { wei, .. } => Some(LastWinner::Paid {
                 amount: wei.to_eth(4),
                 unit: "ETH",
             }),
@@ -298,7 +410,7 @@ pub fn state_of(record: &Record, now: u64) -> Option<State> {
     if !record.accepts_claim_at(now) {
         return None;
     }
-    Some(State::Won {
+    Some(LastWinner::Won {
         week: monday_of(record.week),
         handle: handle.clone(),
         until: day_of(record.claim_window_closes_at()),
@@ -307,19 +419,18 @@ pub fn state_of(record: &Record, now: u64) -> Option<State> {
 
 /// How old a pool reading may be and still be quoted as the pool now.
 ///
-/// The open-week line carries no time, so a reader takes the figure as
-/// current. A reading older than six hours means the job that takes it has
-/// stopped, and the bio then falls back to what the week's record says rather
-/// than quote a figure that may have moved a long way since.
+/// The pool line carries no time, so a reader takes the figure as current. A
+/// reading older than six hours means the job that takes it has stopped, and
+/// the pool is then left out of the status rather than quote a figure that
+/// may have moved a long way since -- the leaders and the last winner, when
+/// either exists, still get said.
 pub const POOL_FRESH_SECONDS: u64 = 6 * 3_600;
 
-/// The open-week state, or `None` when there is no fresh ETH pool reading.
-///
-/// A Solana vault says nothing here: nothing writes one any more, and a SOL
-/// figure in an ETH sentence would be a wrong one.
-#[must_use]
-pub fn open_state(vault: Option<&Vault>, hunters: usize, now: u64) -> Option<State> {
+/// The live pool reading, or `None` with no fresh one to quote.
+fn fresh_pool(vault: Option<&Vault>, hunters: usize, now: u64) -> Option<Pool> {
     let vault = vault?;
+    // A Solana vault says nothing here: nothing writes one any more, and a
+    // SOL figure in an ETH sentence would be a wrong one.
     let Balance::Eth { wei, .. } = &vault.balance else {
         return None;
     };
@@ -327,33 +438,72 @@ pub fn open_state(vault: Option<&Vault>, hunters: usize, now: u64) -> Option<Sta
     if vault.measured_at > now || now - vault.measured_at > POOL_FRESH_SECONDS {
         return None;
     }
-    Some(State::Open {
-        week: monday_of(Week::of(now)),
+    Some(Pool {
         pool: wei.to_eth(3),
         hunters,
     })
 }
 
-/// What the bio says now, from everything it may say.
+/// What the bio says now, combining whichever of the pool, the leaders and
+/// the last winner exist, or `None` when none of the three does.
 ///
-/// **A winner who can still claim comes first.** That line is the only one
-/// somebody has to act on, and the claim window is the week after the close,
-/// so without this order the open-week line would hide it for all seven days.
-/// After that the live pool, because a pool that grows while you watch is the
-/// reason to join; and only with no fresh pool reading does a closed week's
-/// payout stand in.
+/// **No part invents another.** A stale or missing pool reading does not hide
+/// a claimable winner, and a quiet leaderboard does not hide a fresh pool --
+/// each of the three is decided on its own evidence, and the only case with
+/// nothing to say is all three being silent at once.
 #[must_use]
 pub fn choose(
     record: Option<&Record>,
     vault: Option<&Vault>,
     hunters: usize,
+    leaders: &[Leader],
     now: u64,
 ) -> Option<State> {
-    let closed = record.and_then(|r| state_of(r, now));
-    if let Some(won @ State::Won { .. }) = closed {
-        return Some(won);
+    let pool = fresh_pool(vault, hunters, now);
+    let last_winner = record.and_then(|r| last_winner_of(r, now));
+    let leaders: Vec<Leader> = leaders.iter().take(MAX_LEADERS).cloned().collect();
+    if pool.is_none() && leaders.is_empty() && last_winner.is_none() {
+        return None;
     }
-    open_state(vault, hunters, now).or(closed)
+    Some(State {
+        week: monday_of(Week::of(now)),
+        pool,
+        leaders,
+        last_winner,
+    })
+}
+
+/// Whether a rendered bio may be published.
+///
+/// The same two checks a reply passes, and for the same reason: a bio is a
+/// public statement by the same account. `authorised` is the set the week's
+/// record carries, so a figure the record does not hold cannot appear.
+///
+/// # Errors
+///
+/// The forbidden phrase, or the number that is not on the record.
+pub fn check(text: &str, authorised: &[f64]) -> Result<(), String> {
+    if let Some(v) = realorrug_roast::forbidden::check(text).first() {
+        return Err(format!("forbidden phrase {:?}: {}", v.phrase, v.because));
+    }
+    // No subject: a bio's figures all describe the week's record, which is one
+    // thing. The subject rule has nothing to separate here and is given
+    // nothing to separate.
+    let authorised: Vec<realorrug_roast::fidelity::Authorised> = authorised
+        .iter()
+        .copied()
+        .map(realorrug_roast::fidelity::Authorised::anywhere)
+        .collect();
+    match realorrug_roast::fidelity::check(text, &authorised).first() {
+        Some(f) => Err(format!("a figure the record does not carry: {}", f.literal)),
+        None => Ok(()),
+    }
+}
+
+/// A date's numerals, split the way `weekly::authorise_date` does: a checker
+/// reading numerals out of the text sees `2026`, `09` and `07`, not one date.
+fn date_parts(out: &mut Vec<f64>, d: &str) {
+    out.extend(d.split('-').filter_map(|p| p.parse::<f64>().ok()));
 }
 
 /// The numerals a rendered amount puts in the text: each side of the point,
@@ -384,33 +534,6 @@ fn day_of(secs: u64) -> String {
     realorrug_types::civil::date_from_days(i64::try_from(secs / 86_400).unwrap_or(i64::MAX))
 }
 
-/// Whether a rendered bio may be published.
-///
-/// The same two checks a reply passes, and for the same reason: a bio is a
-/// public statement by the same account. `authorised` is the set the week's
-/// record carries, so a figure the record does not hold cannot appear.
-///
-/// # Errors
-///
-/// The forbidden phrase, or the number that is not on the record.
-pub fn check(text: &str, authorised: &[f64]) -> Result<(), String> {
-    if let Some(v) = realorrug_roast::forbidden::check(text).first() {
-        return Err(format!("forbidden phrase {:?}: {}", v.phrase, v.because));
-    }
-    // No subject: a bio's figures all describe the week's record, which is one
-    // thing. The subject rule has nothing to separate here and is given
-    // nothing to separate.
-    let authorised: Vec<realorrug_roast::fidelity::Authorised> = authorised
-        .iter()
-        .copied()
-        .map(realorrug_roast::fidelity::Authorised::anywhere)
-        .collect();
-    match realorrug_roast::fidelity::check(text, &authorised).first() {
-        Some(f) => Err(format!("a figure the record does not carry: {}", f.literal)),
-        None => Ok(()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,19 +546,40 @@ mod tests {
         }
     }
 
-    fn won() -> State {
-        State::Won {
+    fn last_won() -> LastWinner {
+        LastWinner::Won {
             week: "2026-09-07".to_owned(),
             handle: "somebody".to_owned(),
             until: "2026-09-21".to_owned(),
         }
     }
 
-    fn open() -> State {
-        State::Open {
+    fn leaders() -> Vec<Leader> {
+        vec![
+            Leader {
+                handle: "alice".to_owned(),
+                points: 40,
+            },
+            Leader {
+                handle: "bob".to_owned(),
+                points: 31,
+            },
+            Leader {
+                handle: "carol".to_owned(),
+                points: 12,
+            },
+        ]
+    }
+
+    fn state() -> State {
+        State {
             week: "2026-09-14".to_owned(),
-            pool: "0.129".to_owned(),
-            hunters: 17,
+            pool: Some(Pool {
+                pool: "0.129".to_owned(),
+                hunters: 17,
+            }),
+            leaders: leaders(),
+            last_winner: Some(last_won()),
         }
     }
 
@@ -446,23 +590,16 @@ mod tests {
         // must be impossible is a render that drops the lead -- which is where
         // the automation disclosure goes on an account without X's own label,
         // and where the account's own words go on one with it.
-        //
-        // Re-apply by rendering the status alone in any branch: this fails.
         let b = bio();
-        for state in [
-            State::Leads {
-                week: "2026-09-07".to_owned(),
-                handle: "a".to_owned(),
-                points: 12,
+        for s in [
+            state(),
+            State {
+                leaders: Vec::new(),
+                last_winner: None,
+                ..state()
             },
-            won(),
-            State::Paid {
-                amount: "0.1234".to_owned(),
-                unit: "ETH",
-            },
-            open(),
         ] {
-            let text = b.render(&state).expect("a bio");
+            let text = b.render(&s).expect("a bio");
             assert!(text.starts_with(&b.lead), "lead not first: {text}");
             assert!(text.contains(&b.lead), "lead not whole: {text}");
             assert!(
@@ -519,6 +656,34 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_bio_ends_with_the_disclaimer_after_the_status() {
+        // ADR 0033: the bio always *ends* with "Not financial advice." A bio
+        // built through `from_vars` folds the disclaimer into `lead` as
+        // `<operator> · <disclaimer>`, which used to be rendered first and
+        // whole -- `<operator> · <disclaimer> · <status>`, disclaimer before
+        // the status. `render` now moves it back to the true end.
+        let b = Bio::from_vars(&|k| (k == "REALORRUG_BIO_LEAD").then(|| "Automated.".to_owned()))
+            .expect("set");
+        let text = b.render(&state()).expect("a bio");
+        assert!(text.starts_with("Automated."), "{text}");
+        assert!(text.ends_with(DISCLAIMER), "disclaimer not last: {text}");
+        // Not just present, but after the status and not before it -- the
+        // whole point of the fix.
+        let disclaimer_at = text.find(DISCLAIMER).expect("disclaimer somewhere");
+        let pool_at = text.find("Pool").expect("a pool");
+        assert!(pool_at < disclaimer_at, "{text}");
+        assert!(
+            text.chars().count() <= MAX,
+            "{} chars: {text}",
+            text.chars().count()
+        );
+        // And it never appears right after the lead any more, unlike before
+        // this task: the status now sits between the two.
+        let no_status = format!("Automated.{JOIN}{DISCLAIMER}");
+        assert!(!text.ends_with(&no_status), "{text}");
+    }
+
+    #[test]
     fn a_render_that_would_be_cut_off_is_not_written_at_all() {
         // A bio truncated by the platform mid-figure is a wrong figure, in the
         // one place with no record that it was ever right. `None` leaves the
@@ -526,79 +691,239 @@ mod tests {
         let long = Bio {
             lead: "x".repeat(MAX - 10),
         };
-        assert_eq!(long.render(&won()), None);
+        assert_eq!(long.render(&state()), None);
     }
 
     #[test]
-    fn the_mid_week_line_says_leads_and_never_wins() {
+    fn the_leaderboard_line_says_leads_and_never_wins() {
         // Raw engagement: reposts and quotes are unbounded per account (S16),
         // so a mid-week leader can be one person with a script, and the week's
         // actual winner is decided on verified engagement at close. The two
         // can differ, and the wording is the whole of the difference.
-        let text = bio()
-            .render(&State::Leads {
-                week: "2026-09-07".to_owned(),
-                handle: "somebody".to_owned(),
-                points: 12,
-            })
-            .expect("a bio");
-        assert!(text.contains("leads"), "{text}");
+        let text = bio().render(&state()).expect("a bio");
+        assert!(text.contains("Leads"), "{text}");
         assert!(!text.to_lowercase().contains("wins"), "{text}");
-        assert!(!text.to_lowercase().contains("won"), "{text}");
     }
 
     #[test]
-    fn every_branch_passes_the_two_checks_a_reply_passes() {
+    fn all_three_parts_fit_together_when_there_is_room() {
+        // Small enough figures that the pool, both leaders and the last
+        // winner all survive in the same render -- the case this task is
+        // for: a visitor sees all three, not whichever one happened to be up.
+        let s = State {
+            week: "2026-09-14".to_owned(),
+            pool: Some(Pool {
+                pool: "0.1".to_owned(),
+                hunters: 5,
+            }),
+            leaders: vec![
+                Leader {
+                    handle: "ab".to_owned(),
+                    points: 9,
+                },
+                Leader {
+                    handle: "cd".to_owned(),
+                    points: 7,
+                },
+            ],
+            last_winner: Some(LastWinner::Paid {
+                amount: "0.5".to_owned(),
+                unit: "ETH",
+            }),
+        };
+        let text = bio().render(&s).expect("a bio");
+        assert!(text.contains("Pool 0.1 ETH"), "{text}");
+        assert!(text.contains("@ab"), "{text}");
+        assert!(text.contains("@cd"), "{text}");
+        assert!(text.contains("Last paid 0.5 ETH"), "{text}");
+        assert!(text.chars().count() <= MAX);
+        assert_eq!(check(&text, &s.authorised()), Ok(()), "{text}");
+    }
+
+    #[test]
+    fn parts_drop_in_order_when_the_lead_is_long() {
+        // Fewer leaders first, one at a time down to none, and only then the
+        // last winner -- never the pool, which anchors the line. Each budget
+        // below is sized to exactly the next candidate down the fixed
+        // sequence, so a wrong order (say, dropping the last winner before
+        // the leaders are exhausted) would show up as the wrong text.
+        let s = state();
+        let lead_for = |chars: usize| Bio {
+            lead: "x".repeat(MAX - JOIN.chars().count() - chars),
+        };
+
+        // Room for the pool, all three leaders and the last winner: nothing
+        // dropped.
+        let full = s.render_parts(MAX_LEADERS, true).chars().count();
+        let text = lead_for(full).render(&s).expect("a bio");
+        assert!(text.contains("@alice") && text.contains("@carol"), "{text}");
+        assert!(text.contains("Last won"), "{text}");
+
+        // One character less: the third leader goes, the last winner stays.
+        let two_leaders = s.render_parts(2, true).chars().count();
+        let text = lead_for(two_leaders).render(&s).expect("a bio");
+        assert!(text.contains("@bob"), "{text}");
+        assert!(!text.contains("@carol"), "{text}");
+        assert!(text.contains("Last won"), "{text}");
+
+        // Down to no leaders: the last winner still stands alone with the
+        // pool.
+        let no_leaders = s.render_parts(0, true).chars().count();
+        let text = lead_for(no_leaders).render(&s).expect("a bio");
+        assert!(text.contains("Last won"), "{text}");
+        assert!(!text.contains("Leads "), "{text}");
+
+        // Tighter again: the last winner goes too, only the pool is left.
+        let pool_only = s.render_parts(0, false).chars().count();
+        let text = lead_for(pool_only).render(&s).expect("a bio");
+        assert!(text.contains("Pool 0.129 ETH"), "{text}");
+        assert!(!text.contains('@'), "{text}");
+        assert!(!text.contains("Last won"), "{text}");
+
+        // And a lead that leaves no room even for the pool alone: nothing.
+        assert_eq!(lead_for(pool_only - 1).render(&s), None);
+    }
+
+    #[test]
+    fn the_live_lead_keeps_the_pool_two_leaders_and_the_last_winner() {
+        // The case this task was opened for: Josh's actual lead ("Hunting
+        // cabals. Exposing tokens. No mercy. Truth for you.", 57 chars) with
+        // realistic ten-character handles, not the short ones the other
+        // fixtures use. The verbose wording this replaced dropped the
+        // leaders and the last winner here and left only the pool; the
+        // compact format keeps at least the pool, two leaders and the last
+        // winner together, worked out by hand in the PR body.
+        let b = Bio {
+            lead: "Hunting cabals. Exposing tokens. No mercy. Truth for you.".to_owned(),
+        };
+        let s = State {
+            week: "2026-09-14".to_owned(),
+            pool: Some(Pool {
+                pool: "0.42".to_owned(),
+                hunters: 23,
+            }),
+            leaders: vec![
+                Leader {
+                    handle: "aaaaaaaaaa".to_owned(),
+                    points: 40,
+                },
+                Leader {
+                    handle: "bbbbbbbbbb".to_owned(),
+                    points: 31,
+                },
+                Leader {
+                    handle: "cccccccccc".to_owned(),
+                    points: 12,
+                },
+            ],
+            last_winner: Some(LastWinner::Won {
+                week: "2026-09-07".to_owned(),
+                handle: "dddddddddd".to_owned(),
+                until: "2026-09-21".to_owned(),
+            }),
+        };
+        let text = b.render(&s).expect("a bio");
+        assert!(
+            text.chars().count() <= MAX,
+            "{} chars: {text}",
+            text.chars().count()
+        );
+        assert!(text.contains("Pool 0.42 ETH"), "{text}");
+        assert!(text.contains("@aaaaaaaaaa"), "{text}");
+        assert!(text.contains("@bbbbbbbbbb"), "{text}");
+        assert!(text.contains("Last won @dddddddddd"), "{text}");
+        // The third leader is a bonus, not a requirement -- the packet asks
+        // for pool + 2 leaders + last winner at minimum.
+        assert!(text.contains("@cccccccccc"), "{text}");
+        // The real bug this fixture was written for: the lead says "Hunting
+        // cabals", and `forbidden::check` matches "cabal" as a verdict about
+        // an identifiable project. Checking the whole render, as
+        // `daemon::bio_to_write` used to, refused every write on the live
+        // account regardless of what the week's data said. The lead is the
+        // operator's own fixed configuration, not a claim `choose` produced,
+        // so only the generated status goes through the check -- and it does
+        // here, proving a write goes through with the account's real lead.
+        let status = b.status_text(&s).expect("a status");
+        assert_eq!(check(&status, &s.authorised()), Ok(()), "{text}");
+    }
+
+    #[test]
+    fn status_text_budget_subtracts_lead_and_join_not_the_difference() {
+        // `status_text`'s budget is `MAX - (lead.len() + JOIN.len())`. A
+        // mutant that subtracts instead of adds those two lengths hands
+        // `state.status` a budget six characters too generous (twice
+        // `JOIN`'s length), which is enough room here for a leader that the
+        // real budget cannot fit. Pin the boundary exactly rather than just
+        // asserting a length, so the mutant's wrong answer -- the fuller
+        // render -- is what fails, not merely a `<=` check both would pass.
+        let lead = "x".repeat(141);
+        let b = Bio { lead };
+        let s = State {
+            week: "2026-09-14".to_owned(),
+            pool: Some(Pool {
+                pool: "1".to_owned(),
+                hunters: 1,
+            }),
+            leaders: vec![Leader {
+                handle: "a".to_owned(),
+                points: 1,
+            }],
+            last_winner: None,
+        };
+        let status = b.status_text(&s).expect("a status");
+        assert_eq!(status, "Pool 1 ETH", "{status}");
+    }
+
+    #[test]
+    fn a_forbidden_word_inside_the_status_is_still_refused() {
+        // The lead is exempt from the check because it is the operator's own
+        // configuration; the status is not, because it is built from
+        // `choose`'s output and a leader's handle is attacker-controlled --
+        // it is whatever an X account named itself. A handle that trips
+        // `forbidden::check` must still refuse the write.
+        let b = Bio {
+            lead: "Hunting cabals. Exposing tokens. No mercy. Truth for you.".to_owned(),
+        };
+        let s = State {
+            week: "2026-09-14".to_owned(),
+            pool: None,
+            leaders: vec![Leader {
+                handle: "scammer".to_owned(),
+                points: 1,
+            }],
+            last_winner: None,
+        };
+        let status = b.status_text(&s).expect("a status");
+        assert!(status.contains("scammer"), "{status}");
+        assert!(check(&status, &s.authorised()).is_err(), "{status}");
+    }
+
+    #[test]
+    fn every_render_passes_the_two_checks_a_reply_passes() {
         // A bio is a public statement by the same account and is held to the
         // same standard. The fidelity check is the one that bites: it reads
         // every numeral in the text and refuses any the record does not carry.
         let b = bio();
-        for state in [
-            State::Leads {
-                week: "2026-09-07".to_owned(),
-                handle: "somebody".to_owned(),
-                points: 12,
+        for s in [
+            state(),
+            State {
+                leaders: Vec::new(),
+                ..state()
             },
-            won(),
-            State::Paid {
-                amount: "0.1234".to_owned(),
-                unit: "ETH",
+            State {
+                last_winner: None,
+                ..state()
             },
-            open(),
         ] {
-            let text = b.render(&state).expect("a bio");
-            assert_eq!(
-                check(&text, &state.authorised()),
-                Ok(()),
-                "{text} :: {:?}",
-                state.authorised()
-            );
+            let text = b.render(&s).expect("a bio");
+            assert_eq!(check(&text, &s.authorised()), Ok(()), "{text}");
         }
     }
 
     #[test]
     fn a_figure_the_record_does_not_carry_is_refused() {
-        // Re-apply by having `authorised` return an empty set for `Paid`: the
-        // amount becomes a number nothing measured, and this catches it.
-        let text = bio()
-            .render(&State::Paid {
-                amount: "0.1234".to_owned(),
-                unit: "ETH",
-            })
-            .expect("a bio");
+        let text = bio().render(&state()).expect("a bio");
         assert!(check(&text, &[]).is_err(), "{text}");
-        // And the number in the text has to be the number on the record.
-        assert!(
-            check(
-                &text,
-                &State::Paid {
-                    amount: "9.9999".to_owned(),
-                    unit: "ETH",
-                }
-                .authorised()
-            )
-            .is_err()
-        );
     }
 
     /// A closed week with a winner who has a handle.
@@ -620,7 +945,7 @@ mod tests {
     }
 
     #[test]
-    fn the_record_decides_the_state_and_a_voided_week_says_nothing() {
+    fn the_record_decides_the_last_winner_and_a_voided_week_says_nothing() {
         let closed = WEEK.closes_at();
 
         // A winner inside the window: the claim instruction.
@@ -633,15 +958,15 @@ mod tests {
         // Week 2958 opens Monday 2026-09-07 and closes 2026-09-14; the claim
         // window is seven days from the close.
         assert_eq!(
-            state_of(&record, closed + 60),
-            Some(State::Won {
+            last_winner_of(&record, closed + 60),
+            Some(LastWinner::Won {
                 week: "2026-09-07".to_owned(),
                 handle: "somebody".to_owned(),
                 until: "2026-09-21".to_owned(),
             })
         );
 
-        // Paid wins over everything: the money moved and that is the fact.
+        // Paid: the money moved and that is the fact.
         let mut paid = record_with_winner();
         paid.payout = Some(realorrug_contest::ledger::Payout {
             recipient: "R".to_owned(),
@@ -652,8 +977,8 @@ mod tests {
             at: closed + 120,
         });
         assert_eq!(
-            state_of(&paid, closed + 200),
-            Some(State::Paid {
+            last_winner_of(&paid, closed + 200),
+            Some(LastWinner::Paid {
                 amount: "0.1234".to_owned(),
                 unit: "SOL",
             })
@@ -667,18 +992,18 @@ mod tests {
             at: closed + 60,
             reason: "every point came from six accounts made that morning".to_owned(),
         });
-        assert_eq!(state_of(&voided, closed + 200), None);
+        assert_eq!(last_winner_of(&voided, closed + 200), None);
 
         // Past the claim window there is nothing for anybody to do.
         assert_eq!(
-            state_of(&record_with_winner(), record.claim_window_closes_at()),
+            last_winner_of(&record_with_winner(), record.claim_window_closes_at()),
             None
         );
 
         // A winner with no handle read is not named as a number.
         let mut nameless = record_with_winner();
         nameless.winner.as_mut().expect("winner").handle = None;
-        assert_eq!(state_of(&nameless, closed + 60), None);
+        assert_eq!(last_winner_of(&nameless, closed + 60), None);
     }
 
     fn vault(wei: u128, measured_at: u64) -> Vault {
@@ -693,86 +1018,66 @@ mod tests {
     }
 
     #[test]
-    fn the_open_week_line_quotes_a_fresh_eth_pool_and_the_hunters() {
+    fn choose_combines_the_pool_the_leaders_and_the_last_winner() {
         // Week 2959 opens Monday 2026-09-14.
         let now = Week(2959).opens_at() + 3_600;
         let fresh = vault(129_999_999_999_999_999, now - 60);
-        let state = open_state(Some(&fresh), 17, now).expect("a fresh pool");
-        assert_eq!(state, open());
-        let text = bio().render(&state).expect("a bio");
-        assert!(
-            text.ends_with("Week of 2026-09-14: 0.129 ETH prize pool, 17 hunters in"),
-            "{text}"
+        let record = record_with_winner();
+        let s = choose(Some(&record), Some(&fresh), 17, &leaders(), now).expect("a state");
+        assert_eq!(s.week, "2026-09-14");
+        assert_eq!(
+            s.pool,
+            Some(Pool {
+                pool: "0.129".to_owned(),
+                hunters: 17,
+            })
         );
-        assert_eq!(check(&text, &state.authorised()), Ok(()), "{text}");
-        let one = State::Open {
-            week: "2026-09-14".to_owned(),
-            pool: "0.129".to_owned(),
-            hunters: 1,
-        };
-        assert!(bio().render(&one).expect("a bio").ends_with("1 hunter in"));
+        assert_eq!(s.leaders, leaders());
+        assert!(s.last_winner.is_some());
+
+        // A claimable winner does not need a fresh pool reading to be shown --
+        // the pool and the last winner are each decided on their own evidence.
+        let no_pool = choose(Some(&record), None, 17, &leaders(), now).expect("a state");
+        assert_eq!(no_pool.pool, None);
+        assert!(no_pool.last_winner.is_some());
+
+        // No pool reading means no status at all only when nothing else has
+        // anything to say either -- unchanged from before this task.
+        assert_eq!(choose(None, None, 0, &[], now), None);
+
+        // More than `MAX_LEADERS` leaders offered: only the first are kept.
+        let many: Vec<Leader> = (0..10)
+            .map(|i| Leader {
+                handle: format!("h{i}"),
+                points: 100 - i,
+            })
+            .collect();
+        let s = choose(None, Some(&fresh), 0, &many, now).expect("a state");
+        assert_eq!(s.leaders.len(), MAX_LEADERS);
+        assert_eq!(s.leaders, many[..MAX_LEADERS]);
 
         // Exactly six hours old is still quoted; a second more is not, because
         // the line carries no time and a reader takes it as now.
         assert_eq!(POOL_FRESH_SECONDS, 21_600);
-        assert!(open_state(Some(&vault(1, now - POOL_FRESH_SECONDS)), 0, now).is_some());
+        assert!(choose(None, Some(&vault(1, now - POOL_FRESH_SECONDS)), 0, &[], now).is_some());
         assert_eq!(
-            open_state(Some(&vault(1, now - POOL_FRESH_SECONDS - 1)), 0, now),
+            choose(
+                None,
+                Some(&vault(1, now - POOL_FRESH_SECONDS - 1)),
+                0,
+                &[],
+                now
+            ),
             None
         );
         // A reading from the future is a clock fault, not a fresh reading.
-        assert_eq!(open_state(Some(&vault(1, now + 1)), 0, now), None);
+        assert_eq!(choose(None, Some(&vault(1, now + 1)), 0, &[], now), None);
         // No reading, or a Solana one, says nothing.
-        assert_eq!(open_state(None, 3, now), None);
+        assert_eq!(choose(None, None, 3, &[], now), None);
         let sol = Vault {
             balance: Balance::Sol { lamports: 5 },
             ..fresh
         };
-        assert_eq!(open_state(Some(&sol), 3, now), None);
-    }
-
-    #[test]
-    fn a_claimable_win_outranks_the_pool_and_the_pool_outranks_an_old_payout() {
-        let record = record_with_winner();
-        let closed = WEEK.closes_at();
-        let now = closed + 60;
-        let fresh = vault(2_000_000_000_000_000_000, now);
-
-        // The winner still has to act, so their line stands all week.
-        assert!(matches!(
-            choose(Some(&record), Some(&fresh), 4, now),
-            Some(State::Won { .. })
-        ));
-
-        // Paid in ETH: the pool line replaces it while the pool is fresh...
-        let mut paid = record_with_winner();
-        paid.payout = Some(realorrug_contest::ledger::Payout {
-            recipient: "R".to_owned(),
-            paid: realorrug_contest::Paid::Eth {
-                wei: realorrug_contest::Wei(123_456_789_000_000_000),
-                claim_tx: "c".to_owned(),
-                transfer_tx: "t".to_owned(),
-            },
-            at: closed + 30,
-        });
-        assert!(matches!(
-            choose(Some(&paid), Some(&fresh), 4, now),
-            Some(State::Open { hunters: 4, .. })
-        ));
-        // ...and the payout, in ETH to four places, stands in without one.
-        assert_eq!(
-            choose(Some(&paid), None, 4, now),
-            Some(State::Paid {
-                amount: "0.1234".to_owned(),
-                unit: "ETH",
-            })
-        );
-
-        // No record at all (the first week) still shows the pool.
-        assert!(matches!(
-            choose(None, Some(&fresh), 0, now),
-            Some(State::Open { .. })
-        ));
-        assert_eq!(choose(None, None, 0, now), None);
+        assert_eq!(choose(None, Some(&sol), 3, &[], now), None);
     }
 }

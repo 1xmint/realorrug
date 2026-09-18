@@ -144,8 +144,21 @@ pub enum Kind {
     RoundTripBar,
     /// The round trip for one position size.
     CostBand,
-    /// The note that this token's price is never stated.
-    SelfMintWithheld,
+    /// Quote-asset reserves currently sitting in the bonding curve.
+    ///
+    /// ADR 0033: a price or liquidity fact carries the block or time it was
+    /// read at, so this kind's clause states the read point rather than
+    /// leaving it to the sheet-wide line alone.
+    CurveLiquidity,
+    /// Of N launches shaped like this one, how many hit a stated multiple
+    /// within a stated window.
+    ///
+    /// ADR 0033 §3: a hedged upside/downside hint is allowed only when this
+    /// fact is on the sheet. No dossier produces it yet -- the creator-index
+    /// rebuild that measures it is later work -- so this variant exists as
+    /// the hook `forbidden::check_hint` gates on, empty in production until
+    /// then.
+    OutcomeRate,
     /// How long ago the token launched, on the reading chain's own clock.
     ///
     /// Design 0020 §4: the age is a different fact from the read point --
@@ -498,7 +511,7 @@ mod tests {
         let sheet = sheet_of(vec![
             selectable(Kind::LaunchRecipients, "recipients", "Six token accounts."),
             // No clause: on the sheet, never on the timeline.
-            Fact::exact(Kind::SelfMintWithheld, "withheld", 0.0, "n/a"),
+            Fact::exact(Kind::Graduated, "withheld", 0.0, "n/a"),
         ]);
 
         let on_offer = offered(&sheet);
@@ -518,7 +531,7 @@ mod tests {
         // no clause, so the third selectable fact is F2 and there is no F3.
         let sheet = sheet_of(vec![
             selectable(Kind::LaunchRecipients, "a", "A."),
-            Fact::exact(Kind::SelfMintWithheld, "gap", 0.0, "n/a"),
+            Fact::exact(Kind::Graduated, "gap", 0.0, "n/a"),
             selectable(Kind::LaunchTransactions, "b", "B."),
         ]);
 

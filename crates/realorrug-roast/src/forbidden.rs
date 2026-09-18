@@ -40,6 +40,7 @@
 //! to read negation would be a checker arguing about meaning, and the point of
 //! this one is that it does not argue.
 
+use crate::clause::Kind;
 use crate::fidelity;
 use crate::verdict::Level;
 
@@ -230,16 +231,12 @@ pub const RULES: &[Rule] = &[
         phrase: "dumping on",
         because: "a verdict about an identifiable project",
     },
-    Rule {
-        // The most-quoted number-shaped claim in the market, and it is a price
-        // prediction wearing a multiple.
-        phrase: "100x",
-        because: "a price prediction",
-    },
-    Rule {
-        phrase: "10x",
-        because: "a price prediction",
-    },
+    // "100x"/"10x" (and every other Nx multiple) used to live here as two
+    // fixed literals. ADR 0033 §3: a hedged, reasoned upside/downside hint is
+    // now allowed when the sheet carries a measured outcome rate for launches
+    // shaped like this one, so a magnitude claim can no longer be an
+    // unconditional ban -- it is [`check_hint`]'s job, which sees the sheet
+    // this list does not.
     Rule {
         phrase: "bullish",
         because: "a price prediction",
@@ -330,14 +327,17 @@ pub struct Violation {
 #[must_use]
 pub fn check(reply: &str) -> Vec<Violation> {
     let lower = masked(reply);
-    RULES
+    let mut violations: Vec<Violation> = RULES
         .iter()
         .filter(|r| lower.contains(r.phrase))
         .map(|r| Violation {
             phrase: r.phrase,
             because: r.because,
         })
-        .collect()
+        .collect();
+    // These callers have no sheet, so they cannot authorise an outcome hint.
+    violations.extend(hint_violations(reply, false));
+    violations
 }
 
 // ---------------------------------------------------------------------------
@@ -852,6 +852,86 @@ pub fn check_unconditional(reply: &str) -> Vec<Violation> {
             because: r.because,
         })
         .collect()
+}
+
+/// ADR 0033: a future-move hint needs a measured outcome rate, a hedge and
+/// reasoning in the same sentence. Production sheets do not yet carry the
+/// rate; only the later outcome-measurement pass may populate that kind.
+/// Advice and unconditional predictions remain forbidden even with a rate.
+#[must_use]
+pub fn check_hint(reply: &str, sheet: &crate::sheet::FactSheet) -> Vec<Violation> {
+    let has_rate = sheet.facts.iter().any(|fact| {
+        fact.kind == Kind::OutcomeRate
+            && !fact.rendered.trim().is_empty()
+            && !fact.values.is_empty()
+            && fact.values.iter().all(|value| value.is_finite())
+    });
+    hint_violations(reply, has_rate)
+}
+
+fn hint_violations(reply: &str, has_rate: bool) -> Vec<Violation> {
+    let lower = masked(reply).replace('\u{2019}', "'");
+    let mut violations = Vec::new();
+    for sentence in sentences(&lower) {
+        let words: Vec<&str> = sentence
+            .split(|c: char| !c.is_alphanumeric() && c != '\'')
+            .filter(|word| !word.is_empty())
+            .collect();
+        // Imperatives are advice; measured selling/buying and "holders can't
+        // sell" must remain sayable. Also catch advice after a conjunction.
+        let advice = words.iter().enumerate().any(|(at, word)| {
+            ["buy", "sell", "hold"].contains(word)
+                && (at == 0
+                    || ["and", "then", "please", "should", "must", "just", "to"]
+                        .contains(&words[at - 1])
+                    || words
+                        .get(at + 1)
+                        .is_some_and(|next| ["now", "this", "it", "your", "until"].contains(next)))
+        });
+        if advice {
+            violations.push(Violation {
+                phrase: "buy/sell/hold advice",
+                because: "advice, not commentary",
+            });
+        }
+        // Match any numeric multiple, including "10x'd" and "100X", not
+        // only the two magnitudes the old phrase list happened to name.
+        let multiple = words.iter().any(|word| {
+            word.split_once('x').is_some_and(|(number, suffix)| {
+                !number.is_empty()
+                    && number.bytes().all(|byte| byte.is_ascii_digit())
+                    && (suffix.is_empty() || suffix == "'d")
+            })
+        });
+        let movement = words.iter().any(|word| {
+            [
+                "pump", "dump", "moon", "moonshot", "rise", "fall", "rally", "crash", "recover",
+                "soar", "double", "triple", "upside", "downside",
+            ]
+            .contains(word)
+        });
+        if !multiple && !movement {
+            continue;
+        }
+        let hedged = sentence.contains("wouldn't be surprised if")
+            || word_occurs(sentence, "could")
+            || sentence.contains("if the trend holds");
+        let reasoned = ["because", "given", "since"]
+            .iter()
+            .any(|word| word_occurs(sentence, word));
+        let certain = word_occurs(sentence, "will")
+            || sentence.contains("'ll ")
+            || sentence.contains("going to")
+            || word_occurs(sentence, "moon")
+            || word_occurs(sentence, "moonshot");
+        if !has_rate || !hedged || !reasoned || certain {
+            violations.push(Violation {
+                phrase: "outcome hint",
+                because: "a hint needs a measured outcome rate, a hedge and reasoning; never certainty",
+            });
+        }
+    }
+    violations
 }
 
 /// Refuses a word above the ceiling the sheet's computed level earned,
@@ -1421,7 +1501,6 @@ mod tests {
             "classic honeypot",
             "you are the exit liquidity here",
             "the creator dumped on buyers",
-            "this is a 100x",
             "looks bullish to me",
             "bearish, obviously",
             "don\u{2019}t buy this one",
@@ -1710,8 +1789,9 @@ mod tests {
         // prediction at all -- neither function's vocabulary includes them.
         // Re-apply the gap by deleting this function's call in `voice.rs`
         // (or gutting `MIGRATED_TO_TARGET_OR_LEVEL` to exclude nothing): a
-        // reply saying "100x" or "should buy" would then publish.
-        for said in ["this is a 100x", "you should buy this one"] {
+        // reply saying "should buy" would then publish. "100x" moved to
+        // `check_hint`, which has its own coverage below.
+        for said in ["will pump", "you should buy this one"] {
             assert!(
                 !check_unconditional(said).is_empty(),
                 "{said:?} must be refused"
@@ -1906,6 +1986,174 @@ mod tests {
     fn unread_names_the_read_topic_without_sharing_its_stem() {
         // Pin the synonym-only boundary: "unread" cannot match "read" by stem.
         assert!(names_topic_word("unread", "read"));
+    }
+
+    /// A sheet carrying a measured `Kind::OutcomeRate` fact -- the shape
+    /// `check_hint` requires before it authorises a hedged hint (ADR 0033
+    /// §3). `required_sheet` is the ageless fixture every other test in this
+    /// file reuses; this adds the one fact that is new here.
+    fn sheet_with_outcome_rate() -> FactSheet {
+        let mut sheet = required_sheet(Vec::new());
+        sheet.facts.push(Fact::exact(
+            crate::clause::Kind::OutcomeRate,
+            "of 40 launches shaped like this one, 6 hit 10x within 24h",
+            15.0,
+            "15%",
+        ));
+        sheet
+    }
+
+    #[test]
+    fn price_and_market_cap_words_pass() {
+        // ADR 0033 rule 1: price, market cap and liquidity may now be stated.
+        // None of these sentences carries advice, a bare prediction or an
+        // outcome hint, so `check` must find nothing wrong with any of them.
+        assert!(check("The price is 0.00042 SOL, read at slot 444007820.").is_empty());
+        assert!(check("Market cap: 69000 USD, read at slot 444007820.").is_empty());
+        assert!(check(
+            "The quote asset held in the bonding curve now, read at slot 444007820, is 6.1861 SOL."
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn bare_predictions_and_advice_always_fail_even_with_a_rate() {
+        // ADR 0033 rule 3: a hedge and a rate unlock a hint, never certainty
+        // and never an instruction. `check` (no sheet, phrase list included)
+        // always denies every one of these.
+        for reply in [
+            "This will pump tonight.",
+            "It's going to 10x by tomorrow.",
+            "My price target is $1.",
+            "Buy now before it moons.",
+            "You should sell this coin.",
+            "Just hold this and you'll be fine.",
+            "This is going to the moon.",
+        ] {
+            assert!(!check(reply).is_empty(), "{reply}");
+        }
+
+        // The subset that names a magnitude or a movement word also fails
+        // `check_hint` on its own -- certainty ("will", "going to", "moon")
+        // or an un-hedged claim -- even once a measured rate exists.
+        let with_rate = sheet_with_outcome_rate();
+        for reply in [
+            "This will pump tonight.",
+            "It's going to 10x by tomorrow.",
+            "This is going to the moon.",
+        ] {
+            assert!(!check_hint(reply, &with_rate).is_empty(), "{reply}");
+        }
+    }
+
+    #[test]
+    fn a_hedged_hint_is_refused_without_the_outcome_rate_fact_and_allowed_with_it() {
+        // The hook ADR 0033 §3 asks for: the sheet holds no `OutcomeRate`
+        // fact in production yet, so a hedged, reasoned, non-certain hint
+        // must still be refused -- and once the fact exists (a later
+        // creator-index pass), the identical sentence is allowed.
+        let hint = "I wouldn't be surprised if this 10x'd tonight, because launches like this \
+                    one graduate fast.";
+
+        let without_rate = required_sheet(Vec::new());
+        assert!(
+            !check_hint(hint, &without_rate).is_empty(),
+            "a hedged hint passed with no outcome-rate fact on the sheet"
+        );
+
+        let with_rate = sheet_with_outcome_rate();
+        assert!(
+            check_hint(hint, &with_rate).is_empty(),
+            "a hedged, reasoned, non-certain hint with a measured rate was still refused"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // `hint_violations` internals `cargo mutants` found untested: the
+    // advice rule's conjunction/index arithmetic, the "Nx" suffix check,
+    // and the certainty/hedge disjunction chain. Each test below is
+    // shaped so exactly one survivor's mutation flips its answer -- the
+    // fastest re-application is calling `hint_violations` with the
+    // mutated operator swapped in by hand, which is what each comment
+    // below does.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn advice_fires_on_the_preceding_word_alone_when_the_next_word_does_not_qualify() {
+        // "just" (before "buy") is on the preceding-word list; "toast"
+        // (after "buy") is not on the following-word list. Only the
+        // preceding-word branch can be true here, so this sentence pins
+        // both `words[at - 1]` (mutated to `at + 1` or `at / 1`, either of
+        // which reads the wrong or a non-offsetting index and misses) and
+        // the `||` joining the two branches (mutated to `&&`, which needs
+        // both true and also misses).
+        assert!(!hint_violations("just buy toast.", false).is_empty());
+    }
+
+    #[test]
+    fn advice_fires_on_the_following_word_alone_when_the_preceding_word_does_not_qualify() {
+        // The mirror case: "consider" (before "sell") is not on the
+        // preceding-word list, "now" (after "sell") is on the
+        // following-word list. Pins `words[at + 1]` against `at - 1` or
+        // `at * 1`, either of which misses.
+        assert!(!hint_violations("consider sell now.", false).is_empty());
+    }
+
+    #[test]
+    fn a_word_that_merely_ends_in_x_is_not_an_nx_multiple() {
+        // "complex" splits on 'x' into ("comple", ""): the digits check
+        // fails, so this must not count as an "Nx" multiple, and with
+        // no movement word either, the sentence must clear `hint_violations`
+        // outright regardless of the outcome-rate flag. Pins the `&&`
+        // between the digits check and the suffix check -- mutated to
+        // `||`, the empty suffix alone would wrongly make a non-numeric
+        // word "complex" read as a multiple.
+        assert!(hint_violations("the trend looks complex.", false).is_empty());
+    }
+
+    #[test]
+    fn the_trend_holds_phrase_hedges_on_its_own() {
+        // Hedged only through "if the trend holds" -- not "wouldn't be
+        // surprised if", not "could" -- reasoned, rated and never certain,
+        // so this hint is authorised outright. Pins the `||` joining this
+        // phrase into `hedged`: mutated to `&&`, `hedged` requires all
+        // three hedge phrases at once and is never true, so the hint is
+        // wrongly refused.
+        assert!(
+            hint_violations(
+                "it might double if the trend holds, because launches like this one continue.",
+                true
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn each_certainty_word_alone_still_refuses_a_hedged_rated_hint() {
+        // Four sentences, each certain only through one specific word in
+        // the `will || 'll || going to || moon || moonshot` chain, with
+        // every other certainty word absent. Each pins the `||` before
+        // that word: mutated to `&&`, the chain needs every earlier
+        // disjunct true simultaneously and this one alone can never make
+        // `certain` true, so the sentence is wrongly authorised.
+        for reply in [
+            "it could double, and it'll happen too, because launches like this one continue.",
+            "it could double, and it is going to happen, because launches like this one continue.",
+            "it could double, heading to the moon, because launches like this one continue.",
+            "it could double, analysts call it a moonshot, because launches like this continue.",
+        ] {
+            assert!(!hint_violations(reply, true).is_empty(), "{reply}");
+        }
+    }
+
+    #[test]
+    fn a_hedge_alone_without_reasoning_is_still_refused() {
+        // Hedged and rated, but not reasoned and not certain -- refused
+        // for the missing reasoning. Pins both `||`s on the outer
+        // `!has_rate || !hedged || !reasoned || certain` gate: mutated to
+        // `&&` at either position, the missing-reasoning branch stops
+        // being enough on its own and the hint is wrongly authorised.
+        assert!(!hint_violations("it could double this week.", true).is_empty());
     }
 
     #[test]

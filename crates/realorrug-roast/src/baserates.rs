@@ -24,7 +24,7 @@
 //! It does **not** mean falling back on remembered numbers, which is how a
 //! superseded figure gets published long after the note correcting it.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::firstparty::Chain;
 
@@ -142,6 +142,42 @@ const fn chain_before_the_field_existed() -> Chain {
     Chain::Solana
 }
 
+/// A measured first-fill-to-peak distribution; never a return forecast.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct OutcomeRates {
+    /// Observation window since launch, in seconds.
+    pub window_seconds: u64,
+    /// Venue, price convention and exclusions that qualify these counts.
+    pub scope: String,
+    /// The same overlapping recipient bands as the launch-block distribution.
+    pub bands: Vec<OutcomeBand>,
+}
+
+/// Counts, rather than rounded probabilities, preserve the actual denominator.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct OutcomeBand {
+    /// The launch-shape band name.
+    pub name: String,
+    /// Inclusive recipient-count floor.
+    pub lo: u32,
+    /// Inclusive recipient-count ceiling.
+    pub hi: u32,
+    /// All launches in this band, including unmeasured ones.
+    pub launches: u64,
+    /// Launches with a full window and a usable first trade price.
+    pub measured: u64,
+    /// Launches whose window extends beyond the watermark.
+    pub incomplete: u64,
+    /// Complete windows with no usable price; never counted as failures.
+    pub unpriced: u64,
+    /// Measured launches reaching at least twice the first fill price.
+    pub reached_2x: u64,
+    /// Measured launches reaching at least five times the first fill price.
+    pub reached_5x: u64,
+    /// Measured launches reaching at least ten times the first fill price.
+    pub reached_10x: u64,
+}
+
 /// The published snapshot.
 #[derive(Clone, Debug)]
 pub struct BaseRates {
@@ -160,6 +196,8 @@ pub struct BaseRates {
     pub measured_on: String,
     /// Research 0011's aftermath figure, when the snapshot carries it.
     pub aftermath: Option<Aftermath>,
+    /// Optional measured outcomes, not yet exposed to the fact sheet.
+    pub outcomes_24h: Option<OutcomeRates>,
     /// Launches the distribution was measured over.
     pub launches: u64,
     /// Share of all launches that graduate at all.
@@ -188,6 +226,8 @@ struct Raw {
     /// that snapshot is still valid for everything else.
     #[serde(default)]
     aftermath: Option<RawAftermath>,
+    #[serde(default)]
+    outcomes_24h: Option<OutcomeRates>,
 }
 
 #[derive(Deserialize)]
@@ -300,6 +340,7 @@ impl BaseRates {
         Ok(Self {
             chain: raw.chain,
             measured_on: raw.measured_on,
+            outcomes_24h: raw.outcomes_24h,
             aftermath: raw.aftermath.map(|a| Aftermath {
                 measured_on: a.measured_on,
                 organic_median_bps: a.organic_median_bps,
@@ -406,6 +447,40 @@ mod tests {
     use super::*;
 
     const SNAPSHOT: &str = include_str!("../../../docs/research/data/0024-base-rates.json");
+
+    #[test]
+    fn old_snapshots_have_no_outcomes_and_measured_counts_survive_loading() {
+        // An absent observation is not a zero-percent success rate.
+        assert!(
+            BaseRates::parse(SNAPSHOT)
+                .expect("old snapshot")
+                .outcomes_24h
+                .is_none()
+        );
+        let mut json: serde_json::Value = serde_json::from_str(SNAPSHOT).expect("json");
+        json["outcomes_24h"] = serde_json::json!({
+            "window_seconds": 86400, "scope": "Pons curve fills only",
+            "bands": [{"name": "exactly six", "lo": 6, "hi": 6,
+                "launches": 15, "measured": 10, "incomplete": 3, "unpriced": 2,
+                "reached_2x": 7, "reached_5x": 4, "reached_10x": 1}],
+        });
+        let outcomes = BaseRates::parse(&json.to_string())
+            .expect("new snapshot")
+            .outcomes_24h
+            .expect("counts present");
+        assert_eq!(outcomes.window_seconds, 86_400);
+        assert_eq!(outcomes.bands[0].measured, 10);
+        assert_eq!(outcomes.bands[0].reached_10x, 1);
+        assert_eq!(
+            serde_json::to_value(outcomes).expect("serializes"),
+            json["outcomes_24h"]
+        );
+        json["outcomes_24h"]["bands"][0]
+            .as_object_mut()
+            .expect("band")
+            .remove("measured");
+        assert!(BaseRates::parse(&json.to_string()).is_err());
+    }
 
     #[test]
     fn the_published_snapshot_carries_the_band_shares_and_the_aftermath() {
@@ -533,6 +608,7 @@ mod tests {
             chain: Chain::Solana,
             measured_on: "2026-09-03".to_owned(),
             aftermath: None,
+            outcomes_24h: None,
             launches: 1,
             base_rate_graduates: 0.0,
             base_rate_instant: 0.0,
