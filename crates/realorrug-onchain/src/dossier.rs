@@ -251,6 +251,13 @@ pub struct Dossier {
     /// investigated"; a reader that tried and failed names "funding" in
     /// `unavailable`.
     pub funding: Option<crate::wallets::Funding>,
+    /// A dated market snapshot (`crate::market`, Robinhood only today).
+    /// `None` is "not read"; a reader that tried and failed names "market"
+    /// in `unavailable`. Its own price/cap always carry the wall-clock
+    /// moment they were read at (AGENTS.md §3 rule 5); its liquidity dollars
+    /// are never wired into `CurveFacts::quote_capacity` -- see
+    /// `crate::market`'s module doc.
+    pub market: Option<crate::market::MarketSnapshot>,
     /// Facts that could not be read, and why.
     pub unavailable: Vec<Unavailable>,
     /// RPC calls this dossier cost.
@@ -312,6 +319,7 @@ pub fn build(
         chain_launch: None,
         holders: None,
         funding: None,
+        market: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -739,6 +747,7 @@ mod tests {
             chain_launch: None,
             holders: None,
             funding: None,
+            market: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -1017,6 +1026,7 @@ mod tests {
                 chain_launch: None,
                 holders: None,
                 funding: None,
+                market: None,
                 unavailable: vec![Unavailable {
                     fact: "robinhood reads",
                     why: format!("fake reader, token {:?}", token.0),

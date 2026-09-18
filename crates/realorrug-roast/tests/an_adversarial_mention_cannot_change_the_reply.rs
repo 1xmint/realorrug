@@ -74,6 +74,7 @@ fn dossier_named(name: &str, symbol: &str) -> Dossier {
         chain_launch: None,
         holders: None,
         funding: None,
+        market: None,
         unavailable: Vec::new(),
         calls: 6,
         elapsed_ms: 1600,
@@ -390,6 +391,7 @@ fn a_fact_sheet_with_nothing_in_it_still_produces_a_reply() {
         chain_launch: None,
         holders: None,
         funding: None,
+        market: None,
         unavailable: Vec::new(),
         calls: 2,
         elapsed_ms: 300,
@@ -434,6 +436,7 @@ fn dossier_that_could_not_be_read() -> Dossier {
         chain_launch: None,
         holders: None,
         funding: None,
+        market: None,
         unavailable: vec![
             realorrug_onchain::Unavailable {
                 fact: "launch block",

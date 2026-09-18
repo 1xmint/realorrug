@@ -304,6 +304,52 @@ or no checked count, ranks it below concentration. Slices 5 and 6 build on
 `wallets::investigate`, `Funding`, `Candidate`, `Funder` and
 `Memory::funding_edges`.
 
+### Slice 4: started, not built (2026-09-18)
+
+Recording, not recommending, and recording a partial start honestly rather
+than marking row 4 built before it is. `crates/realorrug-onchain/src/
+roles.rs` adds the type this row's "only with proof" requirement needed:
+`Role`/`Proof`/`RoleClaim` name a pool, curve, factory, locker or the zero
+address, but only via a `Proof::VerifiedAddress` or `Proof::DecodedEvent` —
+there is no code path that assigns a `Role` from balance size or "looks
+like a contract." `concentration()` splits a balance list into proven
+infrastructure and everything else, states the non-infrastructure
+denominator, and flags anything at or over 5% of it as unresolved rather
+than naming a role for it. `robinhood.rs`'s `holders_from` now calls
+`roles::verified_infrastructure` for its curve/factory/zero exclusion
+instead of a bare address array, with the same output.
+
+`crates/realorrug-onchain/src/market.rs` adds `MarketSnapshot` (price,
+market cap with its basis, liquidity, pair address, source, and the
+wall-clock moment it was read, per ADR 0033) behind an `HttpGet` seam
+mirroring `rpc.rs`'s `Transport`, reading DexScreener first and
+GeckoTerminal on failure. `attach()` writes only `Dossier::market`; a
+regression test (`liquidity_dollars_never_reach_capacity`) asserts it
+cannot touch `Dossier::curve.quote_capacity`, which is this row's
+"liquidity dollars never become capacity" requirement made a running
+check rather than a reviewer's promise.
+
+**Not done, and left for the next slice-4 session:** neither module is
+wired into a live read path yet. `dispatch.rs`'s `robinhood()` arm needs
+a `Clients.market: Option<&dyn market::HttpGet>` field (deny-by-default,
+the same shape as `Clients.robinhood`'s "no endpoint configured" rule) so
+a real DexScreener call reaches `radar dossier` and the analyst daemon,
+with a named "market" gap when it is absent or fails. `crates/realorrug-roast/src/sheet.rs`
+does not yet publish the snapshot or a denominator-carrying concentration
+fact — `push_holders`'s existing wording (checked against `origin/main`,
+built by an earlier, different slice) already excludes curve/factory/zero
+by construction and already uses unresolved-role wording ("may be a pool
+or a contract rather than a person"), so this row's (a), (b) and (f) are
+largely already met by that prior work; what is missing is the market
+snapshot fact and its moment. Custody and admin-power facts
+(`isLocked(token)` etc.) are not implemented at all: `pons.rs`'s existing
+selector table is verified against deployed bytecode by a documented
+methodology, and no real locker contract's bytecode has been verified
+that way in this sandbox — inventing one would be introducing a fact
+AGENTS.md rule 2 forbids, not recording one. Row 4 stays open in the
+table above until a session with that verification, and the dispatch and
+sheet wiring, closes it.
+
 ## 4. Decisions pending the owner
 
 These are **not decided**. They are the concrete rule changes the build
