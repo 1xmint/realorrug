@@ -847,6 +847,7 @@ mod tests {
             signals: None,
             pointed_at: None,
             level: None,
+            leads: None,
             reply_id: reply_id.map(str::to_owned),
         }
     }
@@ -1301,6 +1302,7 @@ mod tests {
             &log,
             &Entry {
                 level: Some(Level::NothingUglyYet),
+                leads: None,
                 ..a_reply(200, Some("r-sol"))
             },
         )
@@ -1337,6 +1339,7 @@ mod tests {
             let id = format!("r{at}");
             let entry = Entry {
                 level: Some(Level::Sketchy),
+                leads: None,
                 ..a_reply(at, Some(&id))
             };
             realorrug_analyst::log::append(&log, &entry).expect("append");

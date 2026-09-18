@@ -259,6 +259,7 @@ mod tests {
             signals: None,
             pointed_at: None,
             level: None,
+            leads: None,
             reply_id: None,
         }
     }

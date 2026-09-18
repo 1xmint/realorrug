@@ -222,18 +222,26 @@ fn public_reason(fact: &crate::sheet::Fact) -> String {
         )
 }
 
-/// Facts the template leads with, in order, matched by a fragment of their
-/// label.
+/// Facts the template leads with, in order, matched by [`crate::clause::Kind`]
+/// -- never by a fragment of [`crate::sheet::Fact::label`].
 ///
 /// **Order is the product decision, not a formatting one.** The cost line
 /// leads: "six recipients" is insidery, while "a $50 position pays 4.6% to get
 /// in and out" is comprehensible to anyone, is measured, and is said nowhere
 /// else. The bundle line is second.
 ///
-/// Matched on a label fragment rather than an index because the sheet's
-/// contents vary with what could be read, and a positional template would
-/// silently print the wrong fact for a token whose curve was unreadable.
-const LEAD: &[&str] = &[
+/// **Matched by kind, not by label, since 2026-09-18.** This list used to be a
+/// list of label fragments, and the label list that mattered for Robinhood was
+/// solely responsible for the 529-holder/50.2%-top-holder failure the design
+/// doc's §1 refutation 8 records: renaming a label, or writing a new one for a
+/// fact that already existed, silently dropped it from this list, and `find`
+/// returning `None` for a fragment that no longer matches reads exactly like
+/// "this sheet has nothing to say here." `Kind` is the stable name a fact
+/// keeps across any rewording of its `label` -- it is what a selection, a log
+/// line and a receipt already refer to (`crate::clause::Kind`'s own doc
+/// comment) -- so matching on it here closes the same hole for the template
+/// that [`crate::salience`] closes for the headline and the model request.
+const LEAD: &[crate::clause::Kind] = &[
     // The creator's record first. Running the command against three real
     // launches on 2026-09-04 produced three **identical** replies: the cost
     // line is a constant and most launches sit in the same recipient band, so
@@ -242,8 +250,8 @@ const LEAD: &[&str] = &[
     // This is. "One hundred and fifty launches, none of which reached an AMM by
     // filling over time" is specific, checkable, and the thing Radar has that
     // nobody else does.
-    "tokens this creator has launched",
-    "how many reached an AMM by filling over time",
+    crate::clause::Kind::CreatorLaunches,
+    crate::clause::Kind::CreatorOrganic,
     // **Immediately after it, and this is the point of the ordering.** A count
     // with no denominator is a number the reader cannot weigh: "none of 150"
     // sounds damning to somebody who assumes half of them should have, and
@@ -261,15 +269,15 @@ const LEAD: &[&str] = &[
     // Radar has never seen, the launch block is nearly all it has. That is a
     // fact about the product, not about the wording, and the template should
     // show it rather than pad around it.
-    "distinct token accounts receiving",
-    "of every measured launch, how many graduated at all",
+    crate::clause::Kind::LaunchRecipients,
+    crate::clause::Kind::VenueGraduated,
     // The most quotable figure in the set, and one the published snapshot does
     // not carry at all: 23.0% of measured launches show almost no life.
-    "of every measured launch, how many showed almost no activity at all",
-    "share of INSTANT graduations",
-    "share of launches that NEVER graduated",
-    "SOL that can be bought before price moves",
-    "SOL the creator spent",
+    crate::clause::Kind::VenueStillborn,
+    crate::clause::Kind::BandInstant,
+    crate::clause::Kind::BandNeverGraduated,
+    crate::clause::Kind::Capacity,
+    crate::clause::Kind::DevBuy,
     // Everything above is a Solana label and everything below is a Robinhood
     // one, and **no label is on both lists**, so one array serves both chains:
     // a Solana sheet matches only the entries above, a Robinhood sheet only
@@ -289,17 +297,21 @@ const LEAD: &[&str] = &[
     // address's share is first because it is the one number that can make the
     // rest irrelevant: whatever else is true, one address that can sell half
     // the float decides what happens next.
-    "held by the single largest address",
-    "addresses holding the token now",
-    "has the token graduated off the bonding curve",
-    "ETH the launcher spent",
+    crate::clause::Kind::LargestHolderShare,
+    crate::clause::Kind::Holders,
+    crate::clause::Kind::Graduated,
+    // Robinhood's own dev-buy fact shares `Kind::DevBuy` with Solana's "SOL the
+    // creator spent" above -- one sheet only ever carries one of the two, so
+    // this entry is never reached when the Solana one already filled a slot,
+    // and it is what fills that slot on a Robinhood sheet instead.
+    //
     // The venue's own fee, read from its on-chain schedule -- and until
     // 2026-09-17 present on every sheet and printed on none, because this
     // array is the only gate a fact has to clear to reach a reader and this
     // one was never on it. It is the sharpest comparison the sheet carries:
     // the venue publishes a fee a fraction of the measured all-in cost, and
     // the gap between the two is most of what a trader pays.
-    "venue fee, round trip, read from the on-chain schedule",
+    crate::clause::Kind::VenueFee,
     // **The round trip is deliberately NOT here.** It led every reply until
     // 2026-09-05, and it is the same 456 bps every time, so every reply opened
     // with the same sentence -- an account that reads as a bot repeating itself
@@ -350,64 +362,19 @@ const MAX_FACTS: usize = 5;
 /// screenshotted without the rest.
 #[must_use]
 pub fn headline(sheet: &FactSheet) -> Option<String> {
-    let rendered = |wanted: &str| -> Option<&str> {
-        sheet
-            .facts
-            .iter()
-            .find(|f| f.label.contains(wanted) && !f.rendered.is_empty())
-            .map(|f| f.rendered.as_str())
-    };
-
-    // The creator's record: a count beside the count it should be weighed
-    // against, which is the whole shape the voice is asked for.
-    if let (Some(launched), Some(filled)) = (
-        rendered("tokens this creator has launched"),
-        rendered("how many reached an AMM by filling over time"),
-    ) {
-        let line = format!("{launched} launches by this creator. {filled} ever filled a curve.");
-        if line.chars().count() <= 100 {
-            return Some(line);
-        }
-    }
-
-    // Otherwise the launch block, which is about this coin even when the
-    // creator is new.
-    // Matched on the label `sheet.rs` actually emits -- "distinct token accounts
-    // receiving the token in its own launch block (token accounts, NOT owners,
-    // NOT people)". A first version matched a phrase that appears in `short`'s
-    // rendering rather than in the label, so this branch silently never fired
-    // and the fallback test caught it.
-    if let Some(recipients) = rendered("receiving the token in its own launch block") {
-        let line = format!("{recipients} token accounts were paid in the launch block.");
-        if line.chars().count() <= 100 {
-            return Some(line);
-        }
-    }
-
-    // Robinhood's version of the same shape: a count beside the number it has
-    // to be weighed against. "529 holders" alone sounds healthy; "529 holders,
-    // one of them holding half" is the same read and a different decision, and
-    // the two only mean anything together.
-    //
-    // Last of the branches, not because it matters least but because the ones
-    // above cannot fire on a sheet this one can -- the creator index answers
-    // for either chain, and when it has this launcher's record that record is
-    // the better opener. The word is "address" and never "whale" or "holder's
-    // wallet": what was read is a balance at an address, which may be a pool
-    // or a contract, and naming it a person is a claim nothing measured.
-    if let Some(holders) = rendered("addresses holding the token now") {
-        let line = match rendered("held by the single largest address") {
-            Some(share) => {
-                format!("{holders} addresses hold it. The biggest one holds {share}.")
-            }
-            None => format!("{holders} addresses hold it, not counting the bonding curve."),
-        };
-        if line.chars().count() <= 100 {
-            return Some(line);
-        }
-    }
-
-    None
+    // Drawn from [`crate::salience`], the one typed selection service --
+    // ranked by `Fact::kind`, never by a fragment of `Fact::label`. Until
+    // 2026-09-18 this matched label substrings directly, one branch per
+    // bundle, in a fixed order this function alone decided; a Solana-only
+    // label list is exactly how the 529-holder/50.2%-top-holder failure
+    // happened (verdict.rs's own [`LEAD`] doc comment), and headline
+    // selection had the same defect independently, one file over. Now the
+    // headline, [`template`]'s lead facts and [`crate::voice::request_for`]'s
+    // suggested lead all rank the same candidates, so a bundle promoted or
+    // demoted here moves for all three at once.
+    crate::salience::lead(sheet)
+        .map(|c| c.sentence)
+        .filter(|line| line.chars().count() <= 100)
 }
 
 /// The reply that ships when a model reply cannot be trusted or cannot be had.
@@ -434,14 +401,22 @@ pub fn template(sheet: &FactSheet) -> String {
     }
 
     let mut shown = 0;
+    // Kinds already printed, so a fact that legitimately shares its `Kind`
+    // with an earlier `LEAD` entry -- Robinhood's ETH dev buy and Solana's
+    // SOL dev buy both carry `Kind::DevBuy` -- is never printed twice from
+    // one sheet that happens to carry it once.
+    let mut printed = std::collections::HashSet::new();
     for wanted in LEAD {
         if shown >= MAX_FACTS {
             break;
         }
+        if !printed.insert(*wanted) {
+            continue;
+        }
         let Some(fact) = sheet
             .facts
             .iter()
-            .find(|f| f.label.contains(wanted) && !f.rendered.is_empty())
+            .find(|f| f.kind == *wanted && !f.rendered.is_empty())
         else {
             continue;
         };
@@ -879,9 +854,9 @@ mod tests {
         let mut s = sheet();
         s.facts = vec![Fact {
             about: About::Measurement,
-            kind: Kind::LaunchRecipients,
+            kind: wanted,
             clauses: Vec::new(),
-            label: wanted.to_owned(),
+            label: format!("a label for {wanted:?}"),
             rendered: String::new(),
             values: vec![],
         }];
@@ -912,7 +887,7 @@ mod tests {
         let mut s = sheet();
         s.facts = LEAD
             .iter()
-            .map(|wanted| Fact::exact(Kind::LaunchRecipients, (*wanted).to_owned(), 11.0, "11"))
+            .map(|wanted| Fact::exact(*wanted, format!("a label for {wanted:?}"), 11.0, "11"))
             .collect();
         // The unknowns are printed as `- ` lines too, and they are not what the
         // ceiling governs. Counting them made the first run of this read five
@@ -1269,6 +1244,26 @@ mod tests {
         FactSheet::build(&dossier, None, None, None, None)
     }
 
+    /// Renaming a fact's label must not change what the headline or the
+    /// template selects. This is the property the old `LEAD: &[&str]` did not
+    /// have: matching on `Kind` instead means a label rewrite changes only
+    /// what a reader sees a fact *called*, never whether it is said.
+    #[test]
+    fn renaming_a_facts_label_does_not_change_what_leads() {
+        let original = the_live_robinhood_sheet();
+        let mut renamed = original.clone();
+        for f in &mut renamed.facts {
+            f.label = format!("a completely rewritten label for {:?}", f.kind);
+        }
+
+        assert_eq!(headline(&original), headline(&renamed));
+
+        let original_reply = template(&original);
+        let renamed_reply = template(&renamed);
+        assert!(original_reply.contains("529") && original_reply.contains("50.2%"));
+        assert!(renamed_reply.contains("529") && renamed_reply.contains("50.2%"));
+    }
+
     #[test]
     fn a_robinhood_reply_prints_the_facts_the_sheet_measured() {
         // The bug this test exists for: every entry in `LEAD` was a Solana
@@ -1318,7 +1313,10 @@ mod tests {
         let sheet = the_live_robinhood_sheet();
         assert_eq!(
             headline(&sheet).as_deref(),
-            Some("529 addresses hold it. The biggest one holds 50.2%.")
+            Some(
+                "529 addresses hold it, but the biggest balance -- 50.2% of it -- is still \
+                 unidentified."
+            )
         );
         let reply = template(&sheet);
         let first = reply.lines().next().unwrap_or_default();
@@ -1342,6 +1340,30 @@ mod tests {
             headline(&dossier_sheet).as_deref(),
             Some("529 addresses hold it, not counting the bonding curve.")
         );
+    }
+
+    /// The Robinhood fixture from design doc §1 refutation 8 and §4: 529
+    /// holders and a 50.2% top-holder share whose owner is unknown must both
+    /// surface, bundled, ahead of the launch age and the block the sheet was
+    /// read at -- and never as "a whale" or "one wallet can dump."
+    #[test]
+    fn the_529_holder_fixture_surfaces_ahead_of_age_and_block() {
+        let sheet = the_live_robinhood_sheet();
+        let reply = template(&sheet);
+        let holders_line = reply
+            .lines()
+            .position(|l| l.contains("529") && l.contains("50.2%"))
+            .expect("the concentration bundle is somewhere in the reply");
+        let age_or_block_line = reply
+            .lines()
+            .position(|l| l.starts_with("Launched") || l.starts_with("Read at"))
+            .expect("the age or read-at line is somewhere in the reply");
+        assert!(
+            holders_line < age_or_block_line,
+            "concentration did not lead the age/block line: {reply}"
+        );
+        assert!(!reply.to_lowercase().contains("whale"));
+        assert!(!reply.to_lowercase().contains("one wallet can dump"));
     }
 
     #[test]

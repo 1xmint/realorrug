@@ -313,7 +313,15 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
             text: fallback,
             fellback: Some(Fellback::Empty),
             billed,
-            refused: None,
+            // The model's raw bytes, always -- even when they are `""`
+            // itself, same reason as the `Forbidden` and `Fabricated` arms
+            // below: an empty *cleaned* draft can still be a non-empty raw
+            // one (all invisibles, say), and that is exactly what an
+            // operator debugging "why does the model keep coming back
+            // empty" needs to see. A model that was actually asked always
+            // gets a `Some` here; only `NoProvider` and `Unreachable`, where
+            // no draft ever existed, keep `None`.
+            refused: Some(answer.text),
         };
     }
 
@@ -498,10 +506,21 @@ pub fn request_for(sheet: &FactSheet) -> Request {
     // fact appeared in. Kept anyway: `FactSheet::authorised` reads its
     // numerals out of this same rendering, so every figure shown here is one
     // the fidelity check already permits.
+    // The same ranked candidates [`crate::verdict::headline`] and the
+    // template's `LEAD` draw from ([`crate::salience`]), so the model is
+    // never asked a question the deterministic paths would have answered
+    // differently. This is a suggestion, not an instruction the model must
+    // take -- it may lead with something else, and `write` logs which one it
+    // picked (`Reply`/log.rs's `leads`) precisely so a different choice is
+    // visible rather than silent.
+    let suggested = crate::salience::lead(sheet)
+        .map(|c| format!("\n\nA lead worth considering, ranked highest by what it is (you may pick another): {}", c.sentence))
+        .unwrap_or_default();
     let question = format!(
-        "Token: {}\n\n{}\n\n{}",
+        "Token: {}\n\n{}{}\n\n{}",
         sheet.mint,
         sheet.render(),
+        suggested,
         verdict_brief(verdict::level(sheet))
     );
     let mut request = Request::new(SYSTEM, question);
@@ -863,6 +882,33 @@ mod tests {
         let reply = write(&sheet(), Some(&Says("\u{200b}\u{200b}")));
         assert!(reply.is_template());
         assert_eq!(reply.fellback, Some(Fellback::Empty));
+    }
+
+    #[test]
+    fn an_empty_draft_still_keeps_its_raw_bytes_for_the_log() {
+        // The bug this replaces: `render::for_publication` can clean a
+        // non-empty draft down to nothing (all invisible characters), and
+        // the `Empty` arm used to store `None` regardless -- an operator
+        // debugging "why does the model keep coming back empty" had no
+        // draft to read. The raw answer is not empty even though the
+        // cleaned text is, so it must survive into `refused`.
+        let raw = "\u{200b}\u{200b}";
+        let reply = write(&sheet(), Some(&Says(raw)));
+        assert!(reply.is_template());
+        assert_eq!(reply.fellback, Some(Fellback::Empty));
+        assert_eq!(reply.refused.as_deref(), Some(raw));
+    }
+
+    #[test]
+    fn a_whitespace_only_answer_still_logs_its_bytes() {
+        // The model was asked and answered, even though what it answered
+        // with cleans away to nothing -- that is a fact worth keeping, not
+        // the same as `NoProvider`/`Unreachable`, where no draft ever
+        // existed.
+        let reply = write(&sheet(), Some(&Says("   ")));
+        assert!(reply.is_template());
+        assert_eq!(reply.fellback, Some(Fellback::Empty));
+        assert_eq!(reply.refused.as_deref(), Some("   "));
     }
 
     #[test]

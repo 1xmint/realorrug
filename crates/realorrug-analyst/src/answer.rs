@@ -401,6 +401,11 @@ fn build_reply(
     // Kept whole for callers inspecting the answer, before `sheet.signals`
     // is moved into the log. The gate already holds any newly read sheet.
     let cached_sheet = Box::new((sheet.clone(), read_at));
+    // Every candidate [`realorrug_roast::salience::rank`] found, highest
+    // first, identified by kind rather than rendered sentence -- read before
+    // `sheet.signals` moves the sheet below, same reason `fact_sheet` is
+    // rendered first.
+    let leads = realorrug_roast::salience::candidate_log(&sheet);
 
     Answered::Reply {
         // Read before `reply.text` is moved below. `Billed` is `Copy`, so this
@@ -432,6 +437,10 @@ fn build_reply(
             // re-reading the chain; the sheet's unread list is not kept, so
             // the level could not be rebuilt from `signals` alone.
             level: Some(level),
+            // `None` only when nothing was ranked (`vec![]` here is a sheet
+            // that was ranked and found no candidate on it, which is a
+            // different fact than never having been ranked).
+            leads: Some(leads),
         }),
     }
 }

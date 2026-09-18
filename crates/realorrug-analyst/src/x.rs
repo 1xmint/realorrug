@@ -1067,6 +1067,7 @@ pub fn entry_for(mention: &Mention, at: u64) -> Entry {
         signals: None,
         pointed_at: None,
         level: None,
+        leads: None,
         reply_id: None,
     }
 }
