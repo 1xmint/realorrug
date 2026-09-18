@@ -1172,9 +1172,8 @@ mod tests {
     use super::{
         BlockTimeModel, DAY, LaunchInfo, LaunchMeasurement, Summary, TIME_SAMPLES, base_rates_json,
         count_stillborn, credit_graduation, disagreement, invalid_graduation, is_curve_buy,
-        note_curve_buy, note_recipient, now, number, range_is_backwards,
-        repeats_a_token_or_curve, run, sample, summary, timestamp_names_wrong_block,
-        trade_precedes_launch,
+        note_curve_buy, note_recipient, now, number, range_is_backwards, repeats_a_token_or_curve,
+        run, sample, summary, timestamp_names_wrong_block, trade_precedes_launch,
     };
 
     fn args(v: &[&str]) -> Vec<String> {
@@ -1558,8 +1557,8 @@ mod tests {
         // `idx == 0` branch specifically (block 0 would always land there
         // trivially). Flipping that check to `!=` sends this block to the
         // `anchors[idx - 1]` branch instead, which underflows and panics.
-        let model = BlockTimeModel::build(100, 200, (200, 2_000), |b| Ok((b, b * 10)))
-            .expect("build");
+        let model =
+            BlockTimeModel::build(100, 200, (200, 2_000), |b| Ok((b, b * 10))).expect("build");
         assert_eq!(model.estimate(50), 1_000);
     }
 
@@ -1571,7 +1570,14 @@ mod tests {
         // `anchors.len() - 2` picked something other than the last two.
         let times = [(0, 0), (1, 1_000), (2, 2_000), (3, 3_000)];
         let model = BlockTimeModel::build(0, 4, (4, 100_000), |b| {
-            Ok((b, times.iter().find(|&&(bb, _)| bb == b).expect("known block").1))
+            Ok((
+                b,
+                times
+                    .iter()
+                    .find(|&&(bb, _)| bb == b)
+                    .expect("known block")
+                    .1,
+            ))
         })
         .expect("build");
         assert_eq!(model.estimate(5), 197_000);
@@ -1589,6 +1595,19 @@ mod tests {
         assert_eq!(model.calls, 0);
         assert_eq!(model.estimate(5), 500);
         assert_eq!(model.estimate(999), 500);
+    }
+
+    #[test]
+    fn a_block_time_model_with_exactly_two_anchors_still_interpolates() {
+        // `anchors.len() < 2` must gate the "nothing to interpolate" early
+        // return precisely at fewer than two anchors. Widening it to `<= 2`
+        // would make a two-anchor model return the first anchor's time for
+        // every block instead of interpolating between the two. A block that
+        // is *not* the first anchor's own block is what tells the two apart:
+        // at the first anchor's block both branches agree.
+        let model = BlockTimeModel::build(0, 1, (1, 100), |b| Ok((b, b * 100))).expect("build");
+        assert_eq!(model.anchors, vec![(0, 0), (1, 100)]);
+        assert_eq!(model.estimate(1), 100);
     }
 
     #[test]
