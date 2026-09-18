@@ -2068,6 +2068,92 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------
+    // `hint_violations` internals `cargo mutants` found untested: the
+    // advice rule's conjunction/index arithmetic, the "Nx" suffix check,
+    // and the certainty/hedge disjunction chain. Each test below is
+    // shaped so exactly one survivor's mutation flips its answer -- the
+    // fastest re-application is calling `hint_violations` with the
+    // mutated operator swapped in by hand, which is what each comment
+    // below does.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn advice_fires_on_the_preceding_word_alone_when_the_next_word_does_not_qualify() {
+        // "just" (before "buy") is on the preceding-word list; "toast"
+        // (after "buy") is not on the following-word list. Only the
+        // preceding-word branch can be true here, so this sentence pins
+        // both `words[at - 1]` (mutated to `at + 1` or `at / 1`, either of
+        // which reads the wrong or a non-offsetting index and misses) and
+        // the `||` joining the two branches (mutated to `&&`, which needs
+        // both true and also misses).
+        assert!(!hint_violations("just buy toast.", false).is_empty());
+    }
+
+    #[test]
+    fn advice_fires_on_the_following_word_alone_when_the_preceding_word_does_not_qualify() {
+        // The mirror case: "consider" (before "sell") is not on the
+        // preceding-word list, "now" (after "sell") is on the
+        // following-word list. Pins `words[at + 1]` against `at - 1` or
+        // `at * 1`, either of which misses.
+        assert!(!hint_violations("consider sell now.", false).is_empty());
+    }
+
+    #[test]
+    fn a_word_that_merely_ends_in_x_is_not_an_nx_multiple() {
+        // "complex" splits on 'x' into ("comple", ""): the digits check
+        // fails, so this must not count as an "Nx" multiple, and with
+        // no movement word either, the sentence must clear `hint_violations`
+        // outright regardless of the outcome-rate flag. Pins the `&&`
+        // between the digits check and the suffix check -- mutated to
+        // `||`, the empty suffix alone would wrongly make a non-numeric
+        // word "complex" read as a multiple.
+        assert!(hint_violations("the trend looks complex.", false).is_empty());
+    }
+
+    #[test]
+    fn the_trend_holds_phrase_hedges_on_its_own() {
+        // Hedged only through "if the trend holds" -- not "wouldn't be
+        // surprised if", not "could" -- reasoned, rated and never certain,
+        // so this hint is authorised outright. Pins the `||` joining this
+        // phrase into `hedged`: mutated to `&&`, `hedged` requires all
+        // three hedge phrases at once and is never true, so the hint is
+        // wrongly refused.
+        assert!(hint_violations(
+            "it might double if the trend holds, because launches like this one continue.",
+            true
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn each_certainty_word_alone_still_refuses_a_hedged_rated_hint() {
+        // Four sentences, each certain only through one specific word in
+        // the `will || 'll || going to || moon || moonshot` chain, with
+        // every other certainty word absent. Each pins the `||` before
+        // that word: mutated to `&&`, the chain needs every earlier
+        // disjunct true simultaneously and this one alone can never make
+        // `certain` true, so the sentence is wrongly authorised.
+        for reply in [
+            "it could double, and it'll happen too, because launches like this one continue.",
+            "it could double, and it is going to happen, because launches like this one continue.",
+            "it could double, heading to the moon, because launches like this one continue.",
+            "it could double, analysts call it a moonshot, because launches like this continue.",
+        ] {
+            assert!(!hint_violations(reply, true).is_empty(), "{reply}");
+        }
+    }
+
+    #[test]
+    fn a_hedge_alone_without_reasoning_is_still_refused() {
+        // Hedged and rated, but not reasoned and not certain -- refused
+        // for the missing reasoning. Pins both `||`s on the outer
+        // `!has_rate || !hedged || !reasoned || certain` gate: mutated to
+        // `&&` at either position, the missing-reasoning branch stops
+        // being enough on its own and the hint is wrongly authorised.
+        assert!(!hint_violations("it could double this week.", true).is_empty());
+    }
+
     #[test]
     fn a_canttell_reply_naming_the_topic_without_the_article_passes() {
         // The live failure of 2026-09-17. `sheet::phrase_for` writes every
