@@ -1515,6 +1515,151 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_checkpoint_at_the_read_point_itself_walks_nothing_and_costs_nothing() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let memory = Memory::open_in_memory().expect("a memory");
+        let reader = RobinhoodReader {
+            memory: Some(&memory),
+        };
+        let key = token().to_string();
+        let client = Rpc::new(serve(full_bodies(&rec, "0x1")));
+        reader
+            .read(&client, &mut budget(), &token())
+            .expect("the first summon");
+
+        // Summoned again before the chain moved: the read point is the
+        // checkpoint, its hash is already in hand, and there is no block to
+        // walk. No transfers page is served, so a reader that walked anyway
+        // (or rolled back and re-read) would find nothing to answer it.
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies.truncate(9);
+        let client = Rpc::new(serve(bodies));
+        let again = reader
+            .read(&client, &mut budget(), &token())
+            .expect("the second summon");
+        assert_eq!(
+            again.holders,
+            Some(Holders {
+                count: 3,
+                largest_share_bps: Some(5_000),
+            })
+        );
+        assert_eq!(again.calls, 9);
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!((run.from_block, run.to_block), (0x65, 0x64));
+        assert_eq!(run.completeness, Completeness::Complete);
+        assert_eq!(run.calls, 0);
+    }
+
+    #[test]
+    fn a_checkpoint_one_block_behind_reads_exactly_that_one_block() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let memory = Memory::open_in_memory().expect("a memory");
+        let reader = RobinhoodReader {
+            memory: Some(&memory),
+        };
+        let key = token().to_string();
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[1] = block(0x63, 9_999);
+        reader
+            .read(&Rpc::new(serve(bodies)), &mut budget(), &token())
+            .expect("the first summon");
+
+        // The chain is one block on, and Alice gave Dave 100 in it. The
+        // walk must cover that single block, not skip it as already read.
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[9] = block(0x63, 9_999);
+        bodies.push(answer(&serde_json::json!([transfer_at(
+            &ALICE, &DAVE, 100, 0x64
+        )])));
+        let second = reader
+            .read(&Rpc::new(serve(bodies)), &mut budget(), &token())
+            .expect("the second summon");
+        // The launcher 100, Alice 100, Bob 100, Dave 100.
+        assert_eq!(
+            second.holders,
+            Some(Holders {
+                count: 4,
+                largest_share_bps: Some(2_500),
+            })
+        );
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!((run.from_block, run.to_block), (0x64, 0x64));
+    }
+
+    #[test]
+    fn a_walk_that_fails_is_recorded_failed_and_a_busy_one_truncated() {
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let key = token().to_string();
+
+        // The provider errors on the transfers page: not "nothing happened".
+        let memory = Memory::open_in_memory().expect("a memory");
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies[9] =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom"}}"#.to_owned();
+        let dossier = RobinhoodReader {
+            memory: Some(&memory),
+        }
+        .read(&Rpc::new(serve(bodies)), &mut budget(), &token())
+        .expect("a dossier");
+        assert!(dossier.unavailable.iter().any(|u| u.fact == "holders"));
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!(run.completeness, Completeness::Failed);
+        assert!(run.note.contains("boom"), "{}", run.note);
+        assert_eq!(
+            memory
+                .token_checkpoint(MEMORY_CHAIN, &key)
+                .expect("checkpoint"),
+            None,
+            "a failed walk leaves no checkpoint claiming the range was read"
+        );
+
+        // Every page over the cap until the window is one block: too busy,
+        // which is a truncated read and not a failed one.
+        let memory = Memory::open_in_memory().expect("a memory");
+        let mut bodies = full_bodies(&rec, "0x1");
+        bodies.truncate(9);
+        bodies.extend((0..20).map(|_| too_many_results_error()));
+        let dossier = RobinhoodReader {
+            memory: Some(&memory),
+        }
+        .read(&Rpc::new(serve(bodies)), &mut budget(), &token())
+        .expect("a dossier");
+        assert!(
+            dossier
+                .unavailable
+                .iter()
+                .any(|u| u.fact == "holders" && u.why == TOO_BUSY)
+        );
+        let run = memory
+            .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
+            .expect("read")
+            .expect("recorded");
+        assert_eq!(run.completeness, Completeness::Truncated);
+    }
+
+    #[test]
     fn a_checkpoint_the_chain_no_longer_has_is_rolled_back_and_re_read() {
         let rec = record(
             true,

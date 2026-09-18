@@ -1401,6 +1401,42 @@ mod tests {
     }
 
     #[test]
+    fn a_log_keeps_its_position_when_the_provider_sends_one_and_none_otherwise() {
+        let block_hash = format!("0x{}", "ab".repeat(32));
+        let mut json = serde_json::json!({
+            "address": Address([1; 20]).to_string(), "topics": [], "data": "0x",
+            "blockNumber": "0x10",
+            "transactionHash": Hash32([0; 32]).to_string(),
+            "blockHash": block_hash,
+            "transactionIndex": "0x3",
+            "logIndex": "0x7",
+        });
+        let log = Log::from_json(&json).expect("a log");
+        assert_eq!(
+            log.position,
+            Some(LogPosition {
+                block_hash: Hash32([0xab; 32]),
+                transaction_index: 3,
+                log_index: 7,
+            })
+        );
+        assert_eq!(
+            log.event_id(),
+            Some(EventId {
+                block: 16,
+                transaction_index: 3,
+                log_index: 7,
+                block_hash: Hash32([0xab; 32]),
+            })
+        );
+        // A hash with no index is not a position: all three or none.
+        json.as_object_mut().expect("log").remove("logIndex");
+        let log = Log::from_json(&json).expect("still a log");
+        assert_eq!(log.position, None);
+        assert_eq!(log.event_id(), None);
+    }
+
+    #[test]
     fn a_receipt_status_is_success_failure_or_malformed() {
         let base = serde_json::json!({
             "transactionHash": format!("0x{}", "11".repeat(32)),
