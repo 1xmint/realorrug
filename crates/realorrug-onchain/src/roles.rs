@@ -186,7 +186,10 @@ pub fn concentration(balances: &[(Address, u128)], proven: &[RoleClaim]) -> Conc
             .saturating_mul(10_000)
             .checked_div(denominator)
             .and_then(|bps| u16::try_from(bps).ok())
-            .unwrap_or(if denominator == 0 { 0 } else { u16::MAX })
+            // Every balance here is part of the denominator, so a share is at
+            // most 10,000 bps and always fits; the only `None` is an empty or
+            // all-zero denominator, where the honest share is zero.
+            .unwrap_or(0)
     };
 
     let mut ranked: Vec<RoleHolder> = rest
@@ -244,6 +247,25 @@ mod tests {
 
     fn addr(b: u8) -> Address {
         Address([b; 20])
+    }
+
+    /// The words the sheet may use for a proven role: each names a piece of
+    /// infrastructure, and none is a claim about a person.
+    #[test]
+    fn every_role_word_names_infrastructure_not_a_person() {
+        let words = [
+            (Role::Pool, "the pool"),
+            (Role::Curve, "the bonding curve"),
+            (Role::Factory, "the launch factory"),
+            (Role::Locker, "a locker"),
+            (Role::Zero, "the zero address"),
+        ];
+        for (role, expected) in words {
+            assert_eq!(role.word(), expected);
+            for person in ["whale", "team", "insider", "dev"] {
+                assert!(!role.word().contains(person), "{person}");
+            }
+        }
     }
 
     #[test]

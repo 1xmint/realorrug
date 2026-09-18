@@ -334,7 +334,7 @@ wired into a live read path yet. `dispatch.rs`'s `robinhood()` arm needs
 a `Clients.market: Option<&dyn market::HttpGet>` field (deny-by-default,
 the same shape as `Clients.robinhood`'s "no endpoint configured" rule) so
 a real DexScreener call reaches `radar dossier` and the analyst daemon,
-with a named "market" gap when it is absent or fails. `roast/src/sheet.rs`
+with a named "market" gap when it is absent or fails. `crates/realorrug-roast/src/sheet.rs`
 does not yet publish the snapshot or a denominator-carrying concentration
 fact — `push_holders`'s existing wording (checked against `origin/main`,
 built by an earlier, different slice) already excludes curve/factory/zero
