@@ -1508,6 +1508,7 @@ mod tests {
                 .map(|n| vec![realorrug_roast::sheet::Signal::CreatorBoughtOwnLaunch; n]),
             pointed_at: None,
             level: None,
+            leads: None,
         }
     }
 
@@ -1871,6 +1872,7 @@ mod tests {
             signals: None,
             pointed_at: None,
             level: None,
+            leads: None,
         }];
         let metrics: BTreeMap<String, Metrics> = [("r1".to_owned(), Metrics::default())]
             .into_iter()

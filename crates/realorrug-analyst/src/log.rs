@@ -123,6 +123,21 @@ pub struct Entry {
     /// carry it, rather than guessing a stamp for the older ones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<realorrug_roast::Level>,
+    /// Every lead candidate [`realorrug_roast::salience::rank`] found for
+    /// this sheet, highest-ranked first, identified by the typed
+    /// [`realorrug_roast::salience::CandidateId`] it was built from rather
+    /// than its rendered sentence -- the same reason selection itself moved
+    /// off `Fact::label` (golden-r3-astra §1 refutation 8). The first entry
+    /// is what the deterministic paths would have led with; when the
+    /// model's published reply led with something else, this is what makes
+    /// that visible instead of silent.
+    ///
+    /// `None` on a reply that judged nothing (a pointer, an off-topic joke,
+    /// a refusal) and on every line written before this field existed.
+    /// `Some(vec![])` is a sheet ranked with no candidates found, which is
+    /// unknown-but-checked, not the same as never having been ranked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leads: Option<Vec<String>>,
 }
 
 /// Appends to a log file.
@@ -233,6 +248,36 @@ mod tests {
     }
 
     #[test]
+    fn a_line_written_before_leads_existed_still_loads_with_it_none() {
+        // Same shape as `signals` above, for the field that carries which
+        // salience candidate led and which were passed over
+        // (golden-r3-astra §4): a line written before this field existed has
+        // no `leads` key, and it must load as `None`, not as `Some(vec![])`
+        // -- the two mean different things (never ranked vs. ranked and
+        // found nothing).
+        let old = r#"{"at":1,"mention_id":"m","summoner":"s","mint":null,"read_at_slot":null,"fact_sheet":"","reply":"","fellback":null,"reply_id":null}"#;
+        let entry: super::Entry = serde_json::from_str(old).expect("an old line still loads");
+        assert_eq!(entry.leads, None);
+    }
+
+    #[test]
+    fn the_ranked_candidate_ids_round_trip_through_the_log() {
+        // The selected and rejected lead candidates, in rank order, survive
+        // a write and a read back -- the record a Robinhood reply that led
+        // with the wrong fact needs to say *which other candidates existed
+        // and were passed over*, not only which one was picked.
+        let mut e = entry();
+        e.leads = Some(vec![
+            "Holders+LargestHolderShare".to_owned(),
+            "Age".to_owned(),
+        ]);
+        let json = serde_json::to_string(&e).expect("serializes");
+        assert!(json.contains("\"leads\":[\"Holders+LargestHolderShare\",\"Age\"]"));
+        let back: Entry = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back.leads, e.leads);
+    }
+
+    #[test]
     fn a_line_written_before_read_at_existed_still_loads_with_it_none() {
         // The fourth pinned line, in the same style as the three above and
         // for the same reason: a real line written before 2026-09-16 has no
@@ -267,6 +312,7 @@ mod tests {
             signals: None,
             pointed_at: None,
             level: None,
+            leads: None,
             reply_id: Some("r1".to_owned()),
         }
     }

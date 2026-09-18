@@ -1313,6 +1313,7 @@ mod tests {
             signals: Some(Vec::new()),
             pointed_at: None,
             level: None,
+            leads: None,
         }
     }
 

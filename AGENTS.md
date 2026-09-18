@@ -75,6 +75,15 @@ the failure. Say whether you are recommending or recording.
   the bug to see it fail; and when behaviour changes, updating the document
   that describes it in the same commit keeps the two from drifting apart. Use
   judgement on how far to take each of these — they are aids, not gates.
+- **What leads is selected by what a fact is, never by what it is called.**
+  `realorrug-roast/src/salience.rs` ranks candidates from `Fact::kind`
+  (chain-agnostic, stable) with their supporting bundle (a share travels with
+  its holder role and denominator); the headline, the template's `LEAD`
+  matching and the model's request all draw from the same ranking, so
+  renaming a fact's `label` cannot change what a reply leads with. An
+  unresolved role (a large balance with no identified holder) gets
+  unresolved-role wording, never a role the sheet did not establish
+  ([design 0027](docs/design/0027-the-three-layers.md)).
 
 ## 5. The machine and the repository
 

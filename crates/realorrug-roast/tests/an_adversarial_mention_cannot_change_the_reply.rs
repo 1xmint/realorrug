@@ -227,7 +227,11 @@ fn the_deterministic_template_is_always_publishable() {
             forbidden::check(&reply.text)
         );
         let fabricated = fidelity::check(&reply.text, &sheet.authorised());
-        assert!(fabricated.is_empty(), "{case}: {fabricated:?}");
+        assert!(
+            fabricated.is_empty(),
+            "{case}: {fabricated:?} in {}",
+            reply.text
+        );
     }
 }
 

@@ -428,6 +428,7 @@ pub fn publish_under(
             signals: None,
             pointed_at: None,
             level: None,
+            leads: None,
         };
         let text = match checked {
             Ok(text) => text,

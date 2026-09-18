@@ -1771,6 +1771,7 @@ pub fn tick(
                     signals: Some(Vec::new()),
                     pointed_at: None,
                     level: None,
+                    leads: None,
                 };
                 match crate::publish::publish(publisher, &paths.log, &mut journal, entry) {
                     Ok(written) => {
@@ -1834,6 +1835,7 @@ pub fn tick(
                     signals: Some(Vec::new()),
                     pointed_at: None,
                     level: None,
+                    leads: None,
                 };
                 match crate::publish::publish(publisher, &paths.log, &mut journal, entry) {
                     Ok(written) => {
@@ -1890,6 +1892,7 @@ pub fn tick(
                     signals: Some(Vec::new()),
                     pointed_at: None,
                     level: None,
+                    leads: None,
                 };
                 match crate::publish::publish(publisher, &paths.log, &mut journal, entry) {
                     Ok(written) => {
@@ -1956,6 +1959,7 @@ pub fn tick(
                         signals: Some(Vec::new()),
                         pointed_at: Some(reply_id.clone()),
                         level: None,
+                        leads: None,
                     };
                     match crate::publish::publish(publisher, &paths.log, &mut journal, entry) {
                         Ok(written) => {
@@ -2222,6 +2226,7 @@ mod tests {
             signals: None,
             pointed_at: None,
             level: None,
+            leads: None,
         };
         let open = week.opens_at();
         let entries = vec![
