@@ -884,9 +884,9 @@ fn hint_violations(reply: &str, has_rate: bool) -> Vec<Violation> {
                 && (at == 0
                     || ["and", "then", "please", "should", "must", "just", "to"]
                         .contains(&words[at - 1])
-                    || words.get(at + 1).is_some_and(|next| {
-                        ["now", "this", "it", "your", "until"].contains(next)
-                    }))
+                    || words
+                        .get(at + 1)
+                        .is_some_and(|next| ["now", "this", "it", "your", "until"].contains(next)))
         });
         if advice {
             violations.push(Violation {
@@ -905,8 +905,8 @@ fn hint_violations(reply: &str, has_rate: bool) -> Vec<Violation> {
         });
         let movement = words.iter().any(|word| {
             [
-                "pump", "dump", "moon", "moonshot", "rise", "fall", "rally", "crash",
-                "recover", "soar", "double", "triple", "upside", "downside",
+                "pump", "dump", "moon", "moonshot", "rise", "fall", "rally", "crash", "recover",
+                "soar", "double", "triple", "upside", "downside",
             ]
             .contains(word)
         });
@@ -1986,6 +1986,86 @@ mod tests {
     fn unread_names_the_read_topic_without_sharing_its_stem() {
         // Pin the synonym-only boundary: "unread" cannot match "read" by stem.
         assert!(names_topic_word("unread", "read"));
+    }
+
+    /// A sheet carrying a measured `Kind::OutcomeRate` fact -- the shape
+    /// `check_hint` requires before it authorises a hedged hint (ADR 0033
+    /// §3). `required_sheet` is the ageless fixture every other test in this
+    /// file reuses; this adds the one fact that is new here.
+    fn sheet_with_outcome_rate() -> FactSheet {
+        let mut sheet = required_sheet(Vec::new());
+        sheet.facts.push(Fact::exact(
+            crate::clause::Kind::OutcomeRate,
+            "of 40 launches shaped like this one, 6 hit 10x within 24h",
+            15.0,
+            "15%",
+        ));
+        sheet
+    }
+
+    #[test]
+    fn price_and_market_cap_words_pass() {
+        // ADR 0033 rule 1: price, market cap and liquidity may now be stated.
+        // None of these sentences carries advice, a bare prediction or an
+        // outcome hint, so `check` must find nothing wrong with any of them.
+        assert!(check("The price is 0.00042 SOL, read at slot 444007820.").is_empty());
+        assert!(check("Market cap: 69000 USD, read at slot 444007820.").is_empty());
+        assert!(check(
+            "The quote asset held in the bonding curve now, read at slot 444007820, is 6.1861 SOL."
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn bare_predictions_and_advice_always_fail_even_with_a_rate() {
+        // ADR 0033 rule 3: a hedge and a rate unlock a hint, never certainty
+        // and never an instruction. `check` (no sheet, phrase list included)
+        // always denies every one of these.
+        for reply in [
+            "This will pump tonight.",
+            "It's going to 10x by tomorrow.",
+            "My price target is $1.",
+            "Buy now before it moons.",
+            "You should sell this coin.",
+            "Just hold this and you'll be fine.",
+            "This is going to the moon.",
+        ] {
+            assert!(!check(reply).is_empty(), "{reply}");
+        }
+
+        // The subset that names a magnitude or a movement word also fails
+        // `check_hint` on its own -- certainty ("will", "going to", "moon")
+        // or an un-hedged claim -- even once a measured rate exists.
+        let with_rate = sheet_with_outcome_rate();
+        for reply in [
+            "This will pump tonight.",
+            "It's going to 10x by tomorrow.",
+            "This is going to the moon.",
+        ] {
+            assert!(!check_hint(reply, &with_rate).is_empty(), "{reply}");
+        }
+    }
+
+    #[test]
+    fn a_hedged_hint_is_refused_without_the_outcome_rate_fact_and_allowed_with_it() {
+        // The hook ADR 0033 §3 asks for: the sheet holds no `OutcomeRate`
+        // fact in production yet, so a hedged, reasoned, non-certain hint
+        // must still be refused -- and once the fact exists (a later
+        // creator-index pass), the identical sentence is allowed.
+        let hint = "I wouldn't be surprised if this 10x'd tonight, because launches like this \
+                    one graduate fast.";
+
+        let without_rate = required_sheet(Vec::new());
+        assert!(
+            !check_hint(hint, &without_rate).is_empty(),
+            "a hedged hint passed with no outcome-rate fact on the sheet"
+        );
+
+        let with_rate = sheet_with_outcome_rate();
+        assert!(
+            check_hint(hint, &with_rate).is_empty(),
+            "a hedged, reasoned, non-certain hint with a measured rate was still refused"
+        );
     }
 
     #[test]

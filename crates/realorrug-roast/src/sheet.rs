@@ -1638,12 +1638,19 @@ fn push_base_rates(facts: &mut Vec<Fact>, rates: &BaseRates) {
     );
 }
 
-fn push_curve(
-    facts: &mut Vec<Fact>,
-    unknown: &mut Vec<String>,
-    curve: &realorrug_onchain::CurveFacts,
-    read_at: Option<ReadAt>,
-) {
+/// Pushes the "has this token graduated" fact and, when it has, the AMM
+/// exit-capacity note, returning `true` so `push_curve` skips the curve-only
+/// facts that follow.
+///
+/// Split out of `push_curve` to keep that function under the line-count
+/// lint, not for reuse. A graduated coin has an empty curve *because it
+/// left*, and the two remaining curve facts are both false about it: the
+/// capacity is not zero, it is elsewhere, and the curve's fee schedule is not
+/// the fee the coin pays. "cannot size into this at all" about a coin trading
+/// on an AMM is rule 9 read backwards -- absent taken for zero -- and it is
+/// the worst line the sheet could carry, because a graduated coin is exactly
+/// the kind of coin people ask the bot about.
+fn push_graduation(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) -> bool {
     facts.push(
         Fact {
             about: About::Measurement,
@@ -1670,13 +1677,6 @@ fn push_curve(
             },
         ),
     );
-    // A graduated coin has an empty curve *because it left*, and the two
-    // remaining curve facts are both false about it: the capacity is not zero,
-    // it is elsewhere, and the curve's fee schedule is not the fee the coin
-    // pays. "cannot size into this at all" about a coin trading on an AMM is
-    // rule 9 read backwards -- absent taken for zero -- and it is the worst
-    // line the sheet could carry, because a graduated coin is exactly the kind
-    // of coin people ask the bot about.
     if curve.complete {
         facts.push(
             Fact {
@@ -1696,6 +1696,18 @@ fn push_curve(
             )
             .saying(Voice::Blunt, "Real or Rug cannot size the AMM it moved to."),
         );
+        return true;
+    }
+    false
+}
+
+fn push_curve(
+    facts: &mut Vec<Fact>,
+    unknown: &mut Vec<String>,
+    curve: &realorrug_onchain::CurveFacts,
+    read_at: Option<ReadAt>,
+) {
+    if push_graduation(facts, curve) {
         return;
     }
 
@@ -1724,7 +1736,10 @@ fn push_curve(
                 Voice::Plain,
                 format!("The curve holds {amount} right now, as of {moment}."),
             )
-            .saying(Voice::Blunt, format!("{amount} in the curve, as of {moment}.")),
+            .saying(
+                Voice::Blunt,
+                format!("{amount} in the curve, as of {moment}."),
+            ),
         );
     }
 
@@ -2871,7 +2886,12 @@ mod tests {
             quote_asset: Some(realorrug_onchain::QuoteAsset::sol()),
             fees: None,
         };
-        push_curve(&mut facts, &mut unknown, &curve, Some(ReadAt::Solana(Slot(444_007_820))));
+        push_curve(
+            &mut facts,
+            &mut unknown,
+            &curve,
+            Some(ReadAt::Solana(Slot(444_007_820))),
+        );
         let mut rendered = String::new();
         for fact in &facts {
             let _ = writeln!(rendered, "{}: {}", fact.label, fact.rendered);
@@ -2879,7 +2899,7 @@ mod tests {
         assert_eq!(
             rendered,
             "has the token graduated off the bonding curve: no\n\
-             quote asset held in the bonding curve now, read at slot 444007820: 6.1862 SOL\n\
+             quote asset held in the bonding curve now, read at slot 444007820: 6.1861 SOL\n\
              quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN \
              impact budget, NOT a ceiling the venue imposes (research 0022): 0.3030 SOL\n"
         );
@@ -3460,39 +3480,33 @@ mod tests {
     }
 
     #[test]
-    fn the_rule_applies_to_the_configured_mint_and_to_no_other() {
-        // Three sheets, one dossier. The comparison in `build` is the whole of
-        // "is this the analyst's own token", and it is one character from
-        // applying to every coin or to none.
+    fn the_self_mint_gets_no_special_treatment() {
+        // ADR 0033 rule 5 supersedes ADR 0013 constraint 5, which this test
+        // used to pin: the analyst's own token is now treated exactly like
+        // any other, hints included -- no special handling, no disclosure
+        // line. `self_mint` used to make `build` drop every `About::Price`
+        // fact and append a "never stated" note for that one address; that
+        // filter is gone (`sheet.rs` commit 4d3d1ff). Passing `self_mint`
+        // must not change what the sheet says about a dossier at all.
         let own = realorrug_types::Address::new([3u8; 32]);
         let other = realorrug_types::Address::new([4u8; 32]);
         let dossier = dossier_for([3u8; 32]);
 
-        let withheld = FactSheet::build(&dossier, None, None, Some(&own), None);
-        assert!(
-            withheld.render().contains("never stated"),
-            "the configured mint must be told apart: {}",
-            withheld.render()
-        );
+        let own_token = FactSheet::build(&dossier, None, None, Some(&own), None).render();
+        let stranger = FactSheet::build(&dossier, None, None, Some(&other), None).render();
+        let unconfigured = FactSheet::build(&dossier, None, None, None, None).render();
 
-        // Another coin is answered like any other, with no mention of the rule.
-        // A note on every sheet would make every reply about the analyst's own
-        // token, which is the opposite of constraint 6.
-        let stranger = FactSheet::build(&dossier, None, None, Some(&other), None);
-        assert!(
-            !stranger.render().contains("never stated"),
-            "{}",
-            stranger.render()
+        assert_eq!(
+            own_token, stranger,
+            "the analyst's own token must be judged on the same rule as any other coin"
         );
-
-        // No token configured: no token is special. Rule 8 is not touched --
-        // absence means the rule has nothing to apply to, not that a default
-        // mint is assumed.
-        let unconfigured = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            own_token, unconfigured,
+            "the analyst's own token must be judged on the same rule as any other coin"
+        );
         assert!(
-            !unconfigured.render().contains("never stated"),
-            "{}",
-            unconfigured.render()
+            !own_token.contains("never stated"),
+            "a disclosure line leaked back onto the analyst's own token: {own_token}"
         );
     }
 }
