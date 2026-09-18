@@ -474,7 +474,7 @@ impl FactSheet {
                 push_age(&mut facts, read_slot.saturating_since(launch.slot));
             }
         } else if let Some(launch) = &dossier.chain_launch {
-            push_chain_launch(&mut facts, &mut signals, launch);
+            push_chain_launch(&mut facts, &mut signals, &mut untrusted, launch);
         } else {
             unknown.push("the launch block could not be read".to_owned());
         }
@@ -997,8 +997,16 @@ fn push_age(facts: &mut Vec<Fact>, delta: SlotDelta) {
     });
 }
 
-/// A Robinhood launch: its age, and the launcher's own buy in the launch
-/// transaction.
+/// A Robinhood launch: its age, the launcher's own buy in the launch
+/// transaction, and what the token calls itself.
+///
+/// **The name and symbol are untrusted, and the parameter that carries them
+/// is the whole fix.** Until 2026-09-17 this function had no `untrusted`
+/// parameter at all, so the Robinhood path could not push a name even once
+/// the reader had one: the share card a link unfurls to on X drew the verdict
+/// over a blank where the token's name belongs. The Solana path
+/// ([`push_launch`]) pushed both strings from the day it was written, and the
+/// two paths now differ only in where the strings were read from.
 ///
 /// **The age is exact, and still rounded.** Both ends are block timestamps
 /// on the same chain, so nothing here is an estimate from a block time; the
@@ -1007,7 +1015,24 @@ fn push_age(facts: &mut Vec<Fact>, delta: SlotDelta) {
 /// the one a reader wants, and both are authorised. The block number itself
 /// is deliberately not a value: the age check refuses a reply that cites a
 /// block where an age belongs, and a block number is a block.
-fn push_chain_launch(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, launch: &ChainLaunch) {
+fn push_chain_launch(
+    facts: &mut Vec<Fact>,
+    signals: &mut Vec<Signal>,
+    untrusted: &mut Vec<(String, String)>,
+    launch: &ChainLaunch,
+) {
+    // Each pushed on its own, because one reading and the other not is a real
+    // outcome of two separate calls and the card already draws a name without
+    // a symbol. A pair that is only pushed when both read would throw away a
+    // name that did read (AGENTS.md rule 8: absent is not zero).
+    for (label, value) in [
+        ("token name", launch.name.as_ref()),
+        ("token symbol", launch.symbol.as_ref()),
+    ] {
+        if let Some(value) = value {
+            untrusted.push((label.to_owned(), value.clone()));
+        }
+    }
     if let Some(seconds) = launch.age_seconds {
         #[expect(
             clippy::cast_precision_loss,
@@ -2990,11 +3015,22 @@ mod tests {
     }
 
     fn robinhood_launched(age_seconds: Option<u64>, dev_buy_wei: Option<u128>) -> Dossier {
+        named_robinhood_launch(age_seconds, dev_buy_wei, None, None)
+    }
+
+    fn named_robinhood_launch(
+        age_seconds: Option<u64>,
+        dev_buy_wei: Option<u128>,
+        name: Option<&str>,
+        symbol: Option<&str>,
+    ) -> Dossier {
         let mut dossier = robinhood_dossier_for([1u8; 20]);
         dossier.chain_launch = Some(realorrug_onchain::ChainLaunch {
             block: 64,
             age_seconds,
             dev_buy_wei,
+            name: name.map(str::to_owned),
+            symbol: symbol.map(str::to_owned),
         });
         dossier
     }
@@ -3024,6 +3060,64 @@ mod tests {
             "{:?}",
             sheet.unknown
         );
+    }
+
+    /// The share card's whole source for the token's name.
+    ///
+    /// `check.rs` stashes `FactSheet::untrusted`'s "token name" and "token
+    /// symbol" entries for `card.rs` to draw, so a Robinhood token whose name
+    /// never reaches this list is a card with a blank where the name goes --
+    /// which is what shipped until 2026-09-17, because `push_chain_launch`
+    /// had no `untrusted` parameter at all. Re-apply the bug by dropping the
+    /// pushes and this fails on the first assertion.
+    #[test]
+    fn a_robinhood_token_name_reaches_the_untrusted_list_and_never_the_facts() {
+        let sheet = FactSheet::build(
+            &named_robinhood_launch(Some(5_400), Some(1), Some("Pepe Token"), Some("PEPE")),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            sheet.untrusted,
+            [
+                ("token name".to_owned(), "Pepe Token".to_owned()),
+                ("token symbol".to_owned(), "PEPE".to_owned()),
+            ]
+        );
+        assert!(
+            !sheet
+                .facts
+                .iter()
+                .any(|f| f.rendered.contains("Pepe") || f.label.contains("Pepe")),
+            "a launcher's chosen string became a fact the model may assert: {:?}",
+            sheet.facts
+        );
+    }
+
+    /// One call reading and the other not is two calls, not one.
+    #[test]
+    fn a_name_that_read_survives_a_symbol_that_did_not() {
+        let sheet = FactSheet::build(
+            &named_robinhood_launch(Some(5_400), Some(1), Some("Pepe Token"), None),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            sheet.untrusted,
+            [("token name".to_owned(), "Pepe Token".to_owned())]
+        );
+        let blank = FactSheet::build(
+            &named_robinhood_launch(Some(5_400), Some(1), None, None),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(blank.untrusted.is_empty(), "{:?}", blank.untrusted);
     }
 
     #[test]

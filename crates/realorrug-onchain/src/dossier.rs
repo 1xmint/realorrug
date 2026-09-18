@@ -176,6 +176,23 @@ pub struct ChainLaunch {
     /// transaction. `Some(0)` means the transaction was read and held no such
     /// buy; `None` means it could not be read, which is not zero (rule 8).
     pub dev_buy_wei: Option<u128>,
+    /// The token's `name()`, or `None` when the call could not be read.
+    ///
+    /// **Untrusted**: it is whatever string the launcher put in their
+    /// contract (AGENTS.md rule 3), and it reaches the reader fenced as such,
+    /// never as a fact. `None` means the call failed or answered with
+    /// something that is not one displayable string -- not that the token has
+    /// no name (rule 8).
+    ///
+    /// It sits on the launch rather than beside it because that is where the
+    /// Solana path keeps the same two strings (`LaunchBlock::metadata`), so
+    /// the fact sheet has one place per chain to look. It is read from the
+    /// token contract, though, not from the launch event: no Pons event or
+    /// factory record carries a name at all, which is why the share card drew
+    /// a blank where the name goes until 2026-09-17.
+    pub name: Option<String>,
+    /// The token's `symbol()`, on the same terms as [`ChainLaunch::name`].
+    pub symbol: Option<String>,
 }
 
 /// Who holds the token, summed from every `Transfer` it ever emitted.
