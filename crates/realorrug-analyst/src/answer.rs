@@ -551,8 +551,9 @@ mod tests {
             &mut metrics,
         );
         assert!(matches!(outcome, Answered::Reply { .. }));
-        // Two dossier reads plus the token-ownership read (design 0027 slice 6a).
-        assert_eq!(metrics.calls, 3);
+        // Two dossier reads, the token-ownership read (design 0027 slice 6a)
+        // and one page of the funding read (slice 6b).
+        assert_eq!(metrics.calls, 4);
         drop(first);
 
         // No `record` or publisher ran. The paid read must already be durable.
@@ -585,7 +586,8 @@ mod tests {
             &mut expired,
         );
         assert!(matches!(outcome, Answered::Reply { .. }));
-        assert_eq!(expired.calls, 3);
+        // The same four reads as the first answer: the cache expired.
+        assert_eq!(expired.calls, 4);
         std::fs::remove_file(path).expect("remove snapshot");
     }
 
