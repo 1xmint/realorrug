@@ -220,7 +220,7 @@ fn market(sheet: &FactSheet) -> Option<Candidate> {
     let facts: Vec<&Fact> = sheet
         .facts
         .iter()
-        .filter(|f| f.kind == Kind::Market && !f.rendered.is_empty())
+        .filter(|f| f.kind == Kind::Market)
         .collect();
     if facts.is_empty() {
         return None;

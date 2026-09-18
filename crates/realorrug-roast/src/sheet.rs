@@ -859,7 +859,6 @@ fn phrase_for(fact: &str) -> String {
         "funding" => "who funded the early buyers could not be read",
         "curve" => "the bonding curve could not be read",
         "creator history" => "the creator's history could not be read",
-        "market" => "the market price could not be read",
         _ => "part of this could not be read",
     }
     .to_owned()
@@ -1997,11 +1996,11 @@ fn render_observed_at(observed_at: std::time::SystemTime) -> String {
         )
 }
 
-/// Renders a USD figure with two decimal places for a normal price and full
-/// precision for a sub-cent one, so a fraction-of-a-cent token price does not
-/// round to "$0.00" and read as free.
+/// Renders a USD figure with two decimal places from a dollar up, and in full
+/// below it, so a token priced at a fraction of a cent does not round to
+/// "$0.00" and read as free, and a cheap one keeps the digits that matter.
 fn render_usd(value: f64) -> String {
-    if value.abs() < 0.01 && value != 0.0 {
+    if value.abs() < 1.0 && value != 0.0 {
         format!("{value}")
     } else {
         format!("{value:.2}")
@@ -3063,7 +3062,7 @@ mod tests {
             rendered.contains("unix time 1758000000"),
             "the rendered sheet must carry the snapshot's own read time: {rendered}"
         );
-        assert!(rendered.contains("$0.04"), "{rendered}");
+        assert!(rendered.contains("$0.0421"), "{rendered}");
         assert!(rendered.contains("$420000.00"), "{rendered}");
         assert!(
             rendered.contains("circulating, as DexScreener reports it"),
@@ -3127,7 +3126,7 @@ mod tests {
             liquidity_usd: None,
             pair_address: None,
             source: realorrug_onchain::market::Source::GeckoTerminal,
-            observed_at: std::time::SystemTime::now(),
+            observed_at: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_758_000_000),
         });
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         let ranked = crate::salience::rank(&sheet);
@@ -3143,6 +3142,21 @@ mod tests {
             market_rank > concentration_rank,
             "market must rank below concentration: {ranked:?}"
         );
+        // The market candidate carries only the market facts' plain clause:
+        // not another fact's words, and not the blunt voice.
+        assert_eq!(
+            ranked[market_rank].sentence,
+            "An aggregator priced it at $1.00 as of unix time 1758000000."
+        );
+    }
+
+    #[test]
+    fn a_price_under_a_dollar_keeps_its_digits_and_one_from_a_dollar_up_has_two() {
+        assert_eq!(render_usd(0.0421), "0.0421");
+        assert_eq!(render_usd(0.5), "0.5");
+        assert_eq!(render_usd(1.0), "1.00");
+        assert_eq!(render_usd(0.0), "0.00");
+        assert_eq!(render_usd(420_000.0), "420000.00");
     }
 
     #[test]
