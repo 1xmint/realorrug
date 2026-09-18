@@ -585,6 +585,16 @@ impl FactSheet {
             push_market(&mut facts, market);
         }
 
+        // Design 0027 row 6/7 slice 6a's "not done" note, closed here:
+        // `dossier.token_ownership` is `None` both when no read was
+        // configured (every chain but Solana today) and when one was
+        // attempted and failed (named "token ownership" on
+        // `dossier.unavailable`, skipped from `unknown` below the same way
+        // `market` is) -- nothing further to do here in either case.
+        if let Some(ownership) = &dossier.token_ownership {
+            push_token_ownership(&mut facts, ownership);
+        }
+
         if let Some(count) = dossier.creator_transactions {
             let rendered = format!("{count}");
             facts.push(
@@ -660,9 +670,15 @@ impl FactSheet {
             // curve does. The raw reason still lands on `Dossier::unavailable`
             // named `"market"` -- see `dispatch::robinhood` -- for the
             // operator; only the public verdict severity is unaffected.
+            // `token ownership` (design 0027 row 6/7 slice 6a) joins the same
+            // list: Solana's dossier never sets `holders` today (see the
+            // comment above `push_holders`), so no verdict currently depends
+            // on a holder-concentration read for that chain, and a failed
+            // sample of the largest accounts must not be the read that
+            // starts requiring one.
             if matches!(
                 miss.fact,
-                "capacity" | "fees" | "creator transactions" | "market"
+                "capacity" | "fees" | "creator transactions" | "market" | "token ownership"
             ) {
                 continue;
             }
@@ -2029,6 +2045,57 @@ fn render_usd(value: f64) -> String {
     }
 }
 
+/// The largest owner among the sampled top token accounts (design 0027 row
+/// 6/7 slice 6a: `realorrug_onchain::TokenOwnership`, Solana only).
+///
+/// **Excludes any owner proven to be the token's own bonding curve**, the
+/// one exclusion `dossier.rs`'s `token_ownership` reader can make without
+/// guessing (recomputing the pump.fun bonding curve's program-derived
+/// address and matching it). Every other owner stays
+/// `OwnerRole::Unresolved` regardless of its balance's size or shape, so
+/// this always writes the unresolved-role sentence -- "one unidentified
+/// wallet" -- and never a role the sheet did not establish (AGENTS.md §4's
+/// last bullet). If every sampled account belongs to the curve, or the
+/// sample is empty, there is no non-curve owner to report and this writes
+/// nothing rather than a fact about zero owners.
+fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::TokenOwnership) {
+    let Some(largest) = ownership
+        .owners
+        .iter()
+        .find(|o| o.role != realorrug_onchain::OwnerRole::BondingCurve)
+    else {
+        return;
+    };
+    // `share_bps` is `None` only when `getTokenSupply` reported zero (rule 9:
+    // never a share against nothing), which makes this owner's stake
+    // unmeasurable rather than zero -- so the fact is skipped entirely
+    // rather than printed as "0%".
+    let Some(bps) = largest.share_bps else {
+        return;
+    };
+    let share = Fact::share(
+        Kind::TokenOwnership,
+        "share of the total token supply held by the largest owner among the sampled \
+         largest accounts, excluding any address proven to be the bonding curve",
+        f64::from(bps) / 10_000.0,
+    );
+    let pct = share.rendered.clone();
+    facts.push(
+        share
+            .saying(
+                Voice::Plain,
+                format!(
+                    "Among the largest sampled token accounts, one unidentified wallet holds \
+                     {pct} of the total supply."
+                ),
+            )
+            .saying(
+                Voice::Blunt,
+                format!("One unidentified wallet: {pct} of supply."),
+            ),
+    );
+}
+
 /// The venue's own fee, which is not the cost of trading and says so.
 fn push_fee(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
     if let Some(fees) = &curve.fees {
@@ -3180,6 +3247,176 @@ mod tests {
         assert_eq!(render_usd(1.0), "1.00");
         assert_eq!(render_usd(0.0), "0.00");
         assert_eq!(render_usd(420_000.0), "420000.00");
+    }
+
+    /// Builds a `TokenOwner` for the token-ownership tests below.
+    fn token_owner(
+        owner: [u8; 32],
+        amount: u128,
+        share_bps: Option<u16>,
+        role: realorrug_onchain::OwnerRole,
+    ) -> realorrug_onchain::TokenOwner {
+        realorrug_onchain::TokenOwner {
+            owner: realorrug_types::Address::new(owner),
+            accounts: 1,
+            amount,
+            share_bps,
+            role,
+        }
+    }
+
+    #[test]
+    fn an_unresolved_owner_gets_unidentified_wording_never_a_role() {
+        // The only proof this reader can make is "this address is the
+        // bonding curve"; every other owner, however large, must render as
+        // "unidentified" -- never a role the sheet did not establish
+        // (AGENTS.md §4's last bullet).
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![token_owner(
+                [40u8; 32],
+                6_000,
+                Some(6_000),
+                realorrug_onchain::OwnerRole::Unresolved,
+            )],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::TokenOwnership).expect("a token-ownership fact");
+        assert_eq!(fact.rendered, "60.0%");
+        let plain = fact
+            .clauses
+            .iter()
+            .find(|c| c.voice == crate::clause::Voice::Plain)
+            .expect("a plain clause");
+        assert!(
+            plain.text.contains("one unidentified wallet holds 60.0%"),
+            "{}",
+            plain.text
+        );
+        let authorised: Vec<f64> = sheet.authorised().into_iter().map(|a| a.value).collect();
+        assert!(authorised.contains(&0.6));
+    }
+
+    #[test]
+    fn a_proven_curve_owner_is_skipped_for_the_next_largest_unresolved_one() {
+        // Requirement from design 0027 slice 6a: the bonding curve is the
+        // one owner this reader can exclude by proof. Excluding it must fall
+        // through to the next owner in the (already amount-sorted) list, not
+        // suppress the fact entirely.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![
+                token_owner(
+                    [41u8; 32],
+                    7_000,
+                    Some(7_000),
+                    realorrug_onchain::OwnerRole::BondingCurve,
+                ),
+                token_owner(
+                    [42u8; 32],
+                    2_000,
+                    Some(2_000),
+                    realorrug_onchain::OwnerRole::Unresolved,
+                ),
+            ],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::TokenOwnership).expect("a token-ownership fact");
+        assert_eq!(fact.rendered, "20.0%");
+    }
+
+    #[test]
+    fn every_sampled_owner_being_the_curve_writes_no_fact() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![token_owner(
+                [43u8; 32],
+                10_000,
+                Some(10_000),
+                realorrug_onchain::OwnerRole::BondingCurve,
+            )],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.facts.iter().any(|f| f.kind == Kind::TokenOwnership));
+    }
+
+    #[test]
+    fn no_token_ownership_read_means_no_fact_and_no_unknown_line() {
+        let dossier = dossier_for([3u8; 32]);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.facts.iter().any(|f| f.kind == Kind::TokenOwnership));
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("ownership")),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_failed_token_ownership_read_is_an_optional_gap_not_an_unknown_line() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "token ownership",
+            why: "rpc transport: http status: 429".to_owned(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("ownership")),
+            "a failed token-ownership read must not degrade verdict severity: {:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_token_ownership_candidate_never_outranks_concentration() {
+        // `concentration`'s `Holders` is Robinhood-only and `TokenOwnership`
+        // is Solana-only, so the two never fire on the same dossier today --
+        // but the priorities are still pinned so that if a future dossier
+        // ever carries both, `concentration` -- the fuller, non-sampled
+        // count -- wins the tie rather than whichever was considered first.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.holders = Some(realorrug_onchain::Holders {
+            count: 529,
+            largest_share_bps: Some(5020),
+        });
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![token_owner(
+                [44u8; 32],
+                6_000,
+                Some(6_000),
+                realorrug_onchain::OwnerRole::Unresolved,
+            )],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let ranked = crate::salience::rank(&sheet);
+        let ownership_rank = ranked
+            .iter()
+            .position(|c| c.id == crate::salience::CandidateId(vec![Kind::TokenOwnership]))
+            .expect("token-ownership candidate present");
+        let concentration_rank = ranked
+            .iter()
+            .position(|c| c.id.0.contains(&Kind::Holders))
+            .expect("concentration candidate present");
+        assert!(
+            ownership_rank > concentration_rank,
+            "token ownership must rank below concentration: {ranked:?}"
+        );
     }
 
     #[test]

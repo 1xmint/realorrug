@@ -67,8 +67,8 @@ pub mod wallets;
 pub use budget::{Budget, Count, Exhausted};
 pub use dispatch::{Clients as DispatchClients, Error as DispatchError, read as dispatch};
 pub use dossier::{
-    ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, QuoteAsset, SolanaReader, Unavailable,
-    build,
+    ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, OwnerRole, QuoteAsset, SolanaReader,
+    TokenOwner, TokenOwnership, Unavailable, build,
 };
 pub use launch::{LaunchBlock, Metadata, NotALaunch};
 pub use memory::{Error as MemoryError, Fact, Kind, Memory, Recorded};

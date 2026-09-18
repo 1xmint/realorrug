@@ -119,10 +119,14 @@ impl Subject {
             // Who funded the early buyers is about the wallets holding the
             // token, not about the creator: a sentence about the creator
             // may not cite it as their doing.
+            // `TokenOwnership` is a different reading of the same question
+            // -- who holds the supply -- so it belongs beside the other
+            // holder-subject kinds rather than under `Self::Token`.
             Kind::Holders
             | Kind::LargestHolderShare
             | Kind::FundingChecked
-            | Kind::SharedFunder => Self::Holders,
+            | Kind::SharedFunder
+            | Kind::TokenOwnership => Self::Holders,
             // `OutcomeRate` (ADR 0033) measures launches shaped like this one,
             // not this launch alone, but it is still a claim about the launch
             // population rather than the creator, holders or venue -- the

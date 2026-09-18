@@ -614,3 +614,42 @@ catalog, matcher and packet log (slice 7b), so nothing extra is built.
 
 Still pending from §4: model band choice stays shadow-only, contest
 weights, the honeypot and wallet-language gates, and age prose.
+
+### Slice 6a's sheet follow-up as built (2026-09-18)
+
+Recording, not recommending. Closes slice 6a's "not done" note: nothing in
+`realorrug-roast` read `Dossier::token_ownership`; now something does.
+
+`crates/realorrug-roast/src/clause.rs` gained `Kind::TokenOwnership`;
+`fidelity.rs` maps it to `Subject::Holders`, beside `Kind::Holders` and
+`Kind::LargestHolderShare` -- it is a different reading of the same
+question, who holds the supply, not a fact about the token as a thing.
+`sheet.rs`'s new `push_token_ownership` finds the largest owner among
+`TokenOwnership::owners` (already amount-sorted) whose role is not
+`OwnerRole::BondingCurve`, and renders its `share_bps` of the *total*
+`getTokenSupply` reading. Every such owner is `OwnerRole::Unresolved` by
+construction -- the reader in `dossier.rs` proves only the bonding curve,
+nothing else -- so the sentence always says "one unidentified wallet",
+never a role the sheet did not establish (AGENTS.md §4's last bullet). A
+sample where every owner is the curve, or an owner whose share is
+unmeasurable (`share_bps: None`, a zero supply), writes no fact rather than
+one about zero. A failed read joins the `capacity`/`fees`/`market`
+skip-list in `FactSheet::build()`, since Solana's dossier does not set
+`holders` today and so no verdict currently depends on a holder-
+concentration read for that chain.
+
+**This is a second, different concentration reading, not a restatement of
+`concentration()`'s `Holders`/`LargestHolderShare`.** That one is every
+circulating token account's share of the circulating supply, with the
+curve's own stock excluded from both sides -- and it is Robinhood-only
+today. `TokenOwnership` is a capped twenty-account sample's share of the
+*total* supply, with only the bonding curve's address proven-excluded --
+and it is Solana-only today. The two never fire on the same dossier as a
+result, but `salience.rs`'s new `token_ownership()` candidate is still
+ranked one step below `concentration` (85, not 90) rather than at an
+unrelated priority, so that property -- whichever fires, the fuller
+non-sampled reading would win the tie -- holds by construction rather than
+by the two chains happening to stay disjoint forever. Still above
+`launch_recipients` (70): an address-level concentration finding, even a
+sampled one, is more specific than a bare recipient count with nothing to
+weigh it against.

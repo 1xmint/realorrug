@@ -191,6 +191,22 @@ pub enum Kind {
     /// `MarketSnapshot::observed_at`'s own doc comment, not the block this
     /// dossier's chain read happened at.
     Market,
+    /// The largest owner among the sampled top token accounts
+    /// (`realorrug_onchain::Dossier::token_ownership`, Solana only,
+    /// design 0027 row 6/7 slice 6a), excluding any address proven to be
+    /// the token's own bonding curve.
+    ///
+    /// A different reading from [`Kind::LargestHolderShare`]: that one is
+    /// every circulating token account's share of the circulating supply
+    /// (curve stock excluded from both sides); this one is a capped
+    /// twenty-account sample's share of the *total* `getTokenSupply`, with
+    /// only the bonding curve's own address proven-excluded by recomputing
+    /// its program-derived address -- every other owner, however large,
+    /// stays unresolved the same way `realorrug_onchain::OwnerRole`'s own
+    /// doc comment insists. The two can and do disagree; this kind exists
+    /// because the sample identifies an *address*, which the circulating
+    /// count alone does not.
+    TokenOwnership,
 }
 
 /// Which register a clause is written in.
