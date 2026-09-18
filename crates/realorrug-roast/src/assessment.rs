@@ -387,6 +387,16 @@ mod tests {
         );
     }
 
+    /// A skipped optional read is still a read that did not happen: it
+    /// counts against coverage alongside every unknown, never offsetting one.
+    #[test]
+    fn a_skipped_read_and_an_unknown_both_lower_coverage() {
+        let mut sheet = sheet_with(&[Signal::RepeatLauncher], &["holders"]);
+        sheet.skipped = vec!["creator trade history".to_owned()];
+        let assessment = Assessment::from(&sheet);
+        assert_eq!(assessment.coverage.applicable, assessment.coverage.read + 2);
+    }
+
     #[test]
     fn critical_gap_survives_high_coverage() {
         let mut sheet = crate::verdict::tests::the_live_robinhood_sheet();
