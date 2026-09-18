@@ -1286,6 +1286,7 @@ pub(crate) mod tests {
             funding: None,
             market: None,
             token_ownership: None,
+            creator_cash_flow: None,
             unavailable: Vec::new(),
             calls: 10,
             elapsed_ms: 7_577,

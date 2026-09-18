@@ -729,6 +729,7 @@ pub fn build_with_memory(
         funding: None,
         market: None,
         token_ownership: None,
+        creator_cash_flow: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -835,6 +836,31 @@ pub fn build_with_memory(
         }
         _ => dossier.unavailable.push(Unavailable {
             fact: "funding",
+            why: "the launch window needs both the launch block and the read point".to_owned(),
+        }),
+    }
+
+    // 5c. The creator's own observed cash flow (design 0027 slice 5):
+    // every decoded buy/sell against the curve attributed to the deployer
+    // or fee recipient, and every other outgoing token transfer from
+    // either account. Needs the same launch window as step 5b; a window
+    // that could not be established is a named miss rather than a cash
+    // flow computed from block 0. `wallets::creator_cash_flow` never
+    // fails outright -- an unreadable half degrades to a named gap inside
+    // the result and `trades_complete = false` -- so there is no `Err`
+    // arm here to miss.
+    match (dossier.chain_launch.as_ref(), read.as_ref()) {
+        (Some(launch), Some(header)) => {
+            dossier.creator_cash_flow = Some(wallets::creator_cash_flow(
+                client,
+                budget,
+                &record,
+                launch.block,
+                header.number,
+            ));
+        }
+        _ => dossier.unavailable.push(Unavailable {
+            fact: "creator cash flow",
             why: "the launch window needs both the launch block and the read point".to_owned(),
         }),
     }
@@ -1443,12 +1469,15 @@ pub(crate) mod tests {
                 "{fact} read but was named unavailable"
             );
         }
-        // Ten, not the eight this read cost before 2026-09-17: `name()` and
-        // `symbol()` are two calls the reader now makes so the share card can
-        // say which token it is. Pinned rather than left loose because the
-        // default budget is sixty calls and a read that quietly grows is how
-        // a plan's daily quota goes without anyone choosing to spend it.
-        assert_eq!(dossier.calls, 11);
+        // Eleven before design 0027 slice 5 added two more: `name()` and
+        // `symbol()` calls the reader makes so the share card can say which
+        // token it is, plus `wallets::creator_cash_flow`'s own two
+        // `eth_getLogs` reads (the curve's trade log and the token's
+        // Transfer log) now that both the launch block and the read point
+        // are present. Pinned rather than left loose because the default
+        // budget is sixty calls and a read that quietly grows is how a
+        // plan's daily quota goes without anyone choosing to spend it.
+        assert_eq!(dossier.calls, 13);
     }
 
     // ---- slice 3: who funded the first buyers -------------------------
@@ -1566,8 +1595,9 @@ pub(crate) mod tests {
         );
         assert_eq!(
             dossier.calls,
-            10 + 1 + 4 * 3,
-            "the core reads, the window, three per candidate"
+            10 + 1 + 4 * 3 + 2,
+            "the core reads, the window, three per candidate, and \
+             creator_cash_flow's two eth_getLogs reads (design 0027 slice 5)"
         );
 
         let key = token().to_string();
@@ -1718,7 +1748,11 @@ pub(crate) mod tests {
             )]
         );
         assert!(funding.checked[1].funding_complete);
-        assert_eq!(dossier.calls, 10 + 1 + 4 + 3);
+        assert_eq!(
+            dossier.calls,
+            10 + 1 + 4 + 3 + 2,
+            "plus creator_cash_flow's two reads"
+        );
     }
 
     #[test]
@@ -1814,7 +1848,11 @@ pub(crate) mod tests {
                 largest_share_bps: Some(5_000),
             })
         );
-        assert_eq!(first.calls, 11, "remembering costs no extra call");
+        assert_eq!(
+            first.calls, 13,
+            "remembering costs no extra call; eleven core reads plus \
+             creator_cash_flow's two (design 0027 slice 5)"
+        );
         assert_eq!(
             memory
                 .token_checkpoint(MEMORY_CHAIN, &key)
@@ -1848,8 +1886,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            second.calls, 12,
-            "eleven as before plus the checkpoint's header; the walk itself is one page"
+            second.calls, 14,
+            "thirteen as before plus the checkpoint's header; the walk itself is one page"
         );
         assert_eq!(
             memory
@@ -1903,7 +1941,10 @@ pub(crate) mod tests {
                 largest_share_bps: Some(5_000),
             })
         );
-        assert_eq!(again.calls, 10);
+        assert_eq!(
+            again.calls, 12,
+            "ten as before plus creator_cash_flow's two reads"
+        );
         let run = memory
             .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
             .expect("read")
@@ -2067,7 +2108,7 @@ pub(crate) mod tests {
                 largest_share_bps: Some(5_000),
             })
         );
-        assert_eq!(dossier.calls, 12);
+        assert_eq!(dossier.calls, 14, "plus creator_cash_flow's two reads");
         assert_eq!(
             memory
                 .token_checkpoint(MEMORY_CHAIN, &key)
