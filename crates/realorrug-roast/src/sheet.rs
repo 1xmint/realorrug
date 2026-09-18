@@ -3793,6 +3793,42 @@ mod tests {
         );
     }
 
+    /// Breaking even is not a loss: a net of exactly zero carries no minus
+    /// sign, in its words or in its number.
+    #[test]
+    fn a_zero_net_renders_without_a_sign() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![
+                creator_trade(
+                    realorrug_robinhood::pons::CreatorRole::Deployer,
+                    realorrug_robinhood::pons::Side::Buy,
+                    100_000_000_000_000_000,
+                ),
+                creator_trade(
+                    realorrug_robinhood::pons::CreatorRole::Deployer,
+                    realorrug_robinhood::pons::Side::Sell,
+                    100_000_000_000_000_000,
+                ),
+            ],
+            transfers_out: 0,
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let net = sheet
+            .facts
+            .iter()
+            .find(|f| f.kind == Kind::CreatorCashFlow && f.label.starts_with("observed net"))
+            .expect("a net fact");
+        assert_eq!(net.rendered, "0.0000 ETH");
+        assert!(
+            net.values.iter().all(|v| !v.is_sign_negative()),
+            "{:?}",
+            net.values
+        );
+    }
+
     #[test]
     fn a_zero_transfer_count_writes_no_transfer_fact() {
         let mut dossier = dossier_for([3u8; 32]);

@@ -1913,10 +1913,11 @@ mod creator_cash_flow_tests {
             transfer_log(0xee, 0xaa, 0xcc, 40), // the sale's own token leg, to the curve
             transfer_log(0xee, 0xaa, 0xff, 15), // a real transfer out, not a sale
             transfer_log(0xee, 0xff, 0xaa, 5),  // inbound: not an outgoing count
+            transfer_log(0xee, 0xbb, 0xdd, 7),  // the fee recipient's own transfer out
         ];
         let out = count_transfers_out(&logs, &record, &record.curve);
         assert_eq!(
-            out, 1,
+            out, 2,
             "the curve-bound leg of the sale must not also count as a transfer"
         );
     }
@@ -1927,27 +1928,56 @@ mod creator_cash_flow_tests {
     #[test]
     fn an_incomplete_history_prints_no_profit_number() {
         let complete = CreatorCashFlow {
-            trades: vec![CreatorTrade {
-                role: CreatorRole::Deployer,
-                side: Side::Sell,
-                quote: 100,
-                tokens: 40,
-                block: 1,
-                transaction: Hash32([1; 32]),
-                unique_id: "0x01-0-0".to_owned(),
-            }],
+            trades: vec![
+                CreatorTrade {
+                    role: CreatorRole::Deployer,
+                    side: Side::Sell,
+                    quote: 100,
+                    tokens: 40,
+                    block: 1,
+                    transaction: Hash32([1; 32]),
+                    unique_id: "0x01-0-0".to_owned(),
+                },
+                CreatorTrade {
+                    role: CreatorRole::Deployer,
+                    side: Side::Buy,
+                    quote: 30,
+                    tokens: 50,
+                    block: 1,
+                    transaction: Hash32([3; 32]),
+                    unique_id: "0x03-0-0".to_owned(),
+                },
+            ],
             transfers_out: 0,
             trades_complete: true,
             gaps: Vec::new(),
         };
         assert_eq!(complete.proceeds_wei(), Some(100));
-        assert_eq!(complete.cost_basis_wei(), Some(0));
-        assert_eq!(complete.net_wei(), Some(100));
+        assert_eq!(complete.cost_basis_wei(), Some(30));
+        assert_eq!(complete.net_wei(), Some(70), "net is proceeds minus cost");
 
         let mut incomplete = complete.clone();
         incomplete.trades_complete = false;
         assert_eq!(incomplete.proceeds_wei(), None);
         assert_eq!(incomplete.cost_basis_wei(), None);
         assert_eq!(incomplete.net_wei(), None);
+    }
+
+    /// Rule (c) needs *both* reads: when the trade read succeeds but the
+    /// budget cannot afford the transfer read, the history is still
+    /// incomplete and no ETH number may come out of it.
+    #[test]
+    fn one_failed_read_of_two_leaves_the_history_incomplete() {
+        let record = record(0xaa, 0xbb, 0xcc);
+        let client = Rpc::new(crate::robinhood::tests::serve(vec![
+            r#"{"jsonrpc":"2.0","id":1,"result":[]}"#.to_owned(),
+        ]));
+        let mut budget =
+            Budget::with_compute_units(60, 60, std::time::Duration::from_secs(30), CU_GET_LOGS);
+        let flow = creator_cash_flow(&client, &mut budget, &record, 1, 10);
+        assert!(!flow.trades_complete, "gaps: {:?}", flow.gaps);
+        assert_eq!(flow.proceeds_wei(), None);
+        assert_eq!(flow.gaps.len(), 1, "gaps: {:?}", flow.gaps);
+        assert!(flow.gaps[0].starts_with("creator transfer history"));
     }
 }
