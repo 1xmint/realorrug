@@ -119,6 +119,80 @@ The daily "seven days later" post reads a day's file in `data/analyst/daily/`.
 Radar's join wrote those; nothing does now, so the post is silent until
 realorrug's own join writes a day's file from Robinhood Chain.
 
+### Rebuild the Robinhood creator index and base rates
+
+Install the CI-built `realorrug` CLI at
+`/home/guardian/realorrug/bin/realorrug` first. Run this on the box; systemd
+loads the existing RPC setting without printing it. The command uses the first
+configured endpoint so the reported RPC calls also count HTTP attempts (there
+is no endpoint failover in this invocation):
+
+```bash
+sudo systemd-run --wait --pipe --collect --uid=guardian \
+  -p WorkingDirectory=/home/guardian/realorrug \
+  -p EnvironmentFile=/etc/realorrug/analyst.env \
+  /bin/bash -c 'set +x; rpc=${REALORRUG_ROBINHOOD_RPC:-${RADAR_ROBINHOOD_RPC:-}}; : "${rpc:?Robinhood RPC is required}"; exec /home/guardian/realorrug/bin/realorrug creator-index --rpc "${rpc%%,*}" --from 0 --verify 20 --out docs/research/data/creator-index.json --base-rates-out docs/research/data/0051-robinhood-base-rates.json'
+```
+
+`--base-rates-out` defaults to `docs/research/data/0051-robinhood-base-rates.json`
+when omitted. This is an output path, not a checked-in measurement: the file
+does not exist until a successful run. Leave `--to` off for `--verify`; the
+head and its timestamp are pinned before walking. `--from`/`--to` can restrict
+a research run, and those bounds are recorded in the snapshot, but the command
+above covers the whole launch population. Every walk and verification must
+finish before files are written; the base-rate file is replaced by rename.
+
+The snapshot reuses the launch and graduation walks. Its histogram counts
+distinct nonzero recipients of positive token `Transfer`s in each launch's
+block, including the curve's mint and factory machinery. These are neither
+owners nor buyers. The four overlapping bands match the Solana snapshot:
+one to three, exactly six, five to seven, and ten to thirteen. Histogram
+counts include every launch, including counts outside those bands. Graduation
+means observed by the watermark; instant means within three blocks. Empty
+bands, and bands with undefined instant enrichment when no launch graduated
+instantly, are omitted from `launch_block.bands` rather than assigned invented
+conditional rates. No round-trip costs or aftermath figures are fabricated.
+
+`outcomes_24h` carries integer counts per band: all launches, measured launches,
+incomplete windows, unpriced complete windows, and measured launches reaching
+at least 2x, 5x and 10x. Its denominator is **complete, priced windows**.
+The expanded trade walk reads `CurveBuy` and `CurveSell` together, in block/log
+order, measuring peak `quote / tokens` relative to the first fill, from launch
+through exactly 86,400 seconds later. This is each launch's quote-asset
+execution-price multiple as logged, with no separate fee adjustment: not USD,
+not net profit, and **not post-graduation DEX performance**. Zero-sized fills
+make a launch unpriced rather than silently choosing another baseline. The
+field is optional for old snapshots and is not yet used by the fact sheet or
+reply rules. The analyst's existing default snapshot path remains unchanged;
+this command produces the Robinhood measurement, not a loader configuration
+change.
+
+RPC estimate from the code (2026-09-17, not a measured full rebuild): let
+`Qlaunch`, `Qgraduation`, `Qtrade`, and `Qtransfer` be each adaptive log walk's
+requests, including result-cap retries. The walker targets 8,000 logs per
+response, so each `Q` is roughly its matching log count divided by 8,000,
+plus startup/range-resizing requests; this is an estimate, not a quota bound.
+The trade and transfer queries match events across **all addresses**, even
+though only known launches contribute. Let `U` be distinct blocks needing
+timestamps: launch blocks plus known-curve trade blocks through the first
+trade beyond each 24-hour window, excluding the already-read head. The exact
+successful command total is:
+
+```text
+1 + Qlaunch + Qgraduation + Qtrade + Qtransfer + U + V
+V = min(20, graduated launches) + min(20, non-graduated launches)
+```
+
+The new separate passes cost `Qtransfer + U`; `Qtrade` replaces the old buy
+walk and includes the extra sell traffic. These counts, verification and the
+head read are all printed separately and totaled. Cached timestamps mean at
+most one read per relevant block, but the 531,581-launch run recorded above
+could still need up to 531,581 launch-block reads alone (fewer when launches
+share blocks), plus trade-block reads. Do not budget this as another 134-call
+launch-only rebuild. The actual full-history trade/transfer counts await the
+box run; multiple endpoints passed manually can add internal failover HTTP
+attempts beyond the logical RPC counts printed by the command.
+
 ## Moving off Radar's folders
 
 Plan 0001 step 7a, done once. Before it, the analyst ran in
