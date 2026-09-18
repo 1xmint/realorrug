@@ -766,13 +766,17 @@ mod tests {
 
     #[test]
     fn a_launch_whose_curve_never_saw_a_later_buy_is_stillborn_and_one_that_did_is_not() {
-        let quiet = addr(3);
-        let lively = addr(4);
+        // Two launchers, not one with two launches: a launcher who owns both
+        // curves is credited once either way, so dropping the `!` would count
+        // the *lively* curve and still land on one. The names have to come
+        // apart for the test to be able to tell the rule from its inverse.
+        let (quiet_launcher, lively_launcher) = (addr(1), addr(7));
+        let (quiet, lively) = (addr(3), addr(4));
         let mut launch_map = BTreeMap::new();
         launch_map.insert(
             addr(2),
             LaunchInfo {
-                deployer: addr(1),
+                deployer: quiet_launcher,
                 block: 10,
                 curve: quiet,
             },
@@ -780,7 +784,7 @@ mod tests {
         launch_map.insert(
             addr(5),
             LaunchInfo {
-                deployer: addr(1),
+                deployer: lively_launcher,
                 block: 11,
                 curve: lively,
             },
@@ -791,11 +795,16 @@ mod tests {
         count_stillborn(&launch_map, &bought, &mut creators);
         assert_eq!(
             creators
-                .get(&addr(1).to_string())
-                .expect("the launcher was credited")
+                .get(&quiet_launcher.to_string())
+                .expect("the launcher whose curve nobody bought was credited")
                 .stillborn,
             1,
-            "one of this launcher's two curves saw a buy, so exactly one is stillborn"
+            "a curve with no buy after its launch block is stillborn"
+        );
+        assert!(
+            !creators.contains_key(&lively_launcher.to_string()),
+            "a curve somebody bought was counted stillborn, and its launcher \
+             gained a record it should not have: {creators:?}"
         );
     }
 
