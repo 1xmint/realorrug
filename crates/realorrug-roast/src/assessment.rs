@@ -41,10 +41,18 @@ use crate::verdict::Level;
 /// evidence a signal is, not by guessing from its name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Group {
+    /// The launch's own shape: the recipient band a launch-block read fell
+    /// into.
     LaunchStructure,
+    /// Who holds or controls the token: concentration and live authority.
     Ownership,
+    /// What the creator has done, on this launch or across launches.
     CreatorActivity,
+    /// How the token's exit was observed: liquidity, a creator sale, buyers'
+    /// ability to sell.
     ExitMechanics,
+    /// Post-launch trading behaviour. No shipped signal reads this group yet
+    /// -- see [`group`]'s doc comment.
     TradingBehaviour,
 }
 
@@ -79,9 +87,7 @@ pub enum Episode {
 #[must_use]
 pub const fn episode(signal: Signal) -> Episode {
     match signal {
-        Signal::LaunchBlockInStrongestBand | Signal::CreatorBoughtOwnLaunch => {
-            Episode::LaunchBlock
-        }
+        Signal::LaunchBlockInStrongestBand | Signal::CreatorBoughtOwnLaunch => Episode::LaunchBlock,
         Signal::RepeatLauncher | Signal::CreatorNeverGraduatedOrganically => {
             Episode::CreatorHistory
         }
@@ -119,8 +125,11 @@ pub const fn group(signal: Signal) -> Group {
 /// One fired signal, with the group and episode it belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Finding {
+    /// The signal that fired.
     pub signal: Signal,
+    /// Which finding group the signal belongs to.
     pub group: Group,
+    /// Which causal episode the signal is evidence of.
     pub episode: Episode,
 }
 
@@ -323,7 +332,10 @@ mod tests {
             &[],
         );
         let assessment = Assessment::from(&sheet);
-        assert_eq!(assessment.risk_index, WEIGHT_LAUNCH_BLOCK as u8);
+        assert_eq!(
+            assessment.risk_index,
+            u8::try_from(WEIGHT_LAUNCH_BLOCK).unwrap()
+        );
         assert_eq!(assessment.findings.len(), 2);
         let distinct: std::collections::HashSet<Episode> =
             assessment.findings.iter().map(|f| f.episode).collect();
@@ -333,16 +345,13 @@ mod tests {
     #[test]
     fn two_episodes_add() {
         let sheet = sheet_with(
-            &[
-                Signal::LaunchBlockInStrongestBand,
-                Signal::RepeatLauncher,
-            ],
+            &[Signal::LaunchBlockInStrongestBand, Signal::RepeatLauncher],
             &[],
         );
         let assessment = Assessment::from(&sheet);
         assert_eq!(
             assessment.risk_index,
-            (WEIGHT_LAUNCH_BLOCK + WEIGHT_CREATOR_HISTORY) as u8
+            u8::try_from(WEIGHT_LAUNCH_BLOCK + WEIGHT_CREATOR_HISTORY).unwrap()
         );
     }
 
@@ -381,7 +390,9 @@ mod tests {
     #[test]
     fn critical_gap_survives_high_coverage() {
         let mut sheet = crate::verdict::tests::the_live_robinhood_sheet();
-        sheet.unknown.push("the bonding curve could not be read".to_owned());
+        sheet
+            .unknown
+            .push("the bonding curve could not be read".to_owned());
         let assessment = Assessment::from(&sheet);
         assert!(
             assessment

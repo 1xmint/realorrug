@@ -685,3 +685,33 @@ both a leap day that falls on a `/4` century boundary (2000) and one that
 does not (2100), plus the epoch itself. The day count is unsigned: a
 market moment is always after 1970, so the calendar has no branch for
 earlier dates.
+
+### Slice 7 unit 1 as built (2026-09-18)
+
+Recording, not recommending; the one behaviour change below is held for the
+owner's approval per ADR 0032.
+
+`crates/realorrug-roast/src/assessment.rs` (new) builds the shared
+assessment packet this slice's "Judgement" section describes: findings with
+a group and a causal episode, a risk_index that sums a hand-set weight once
+per distinct episode (not once per signal), a coverage fraction that never
+moves the index, critical_gaps restated beside it, and an admissible band
+list that nothing reads yet -- shadow only, per this section's "run it in
+shadow" line.
+
+The one published behaviour change: `verdict.rs`'s `level` function used to
+count raw live-risk signals toward its `RugMechanicsLive` threshold; it now
+counts distinct episodes among them, so two signals that are really one
+observation (a launch block's recipient band and the creator's own buy
+inside that same block) no longer clear the "two or more" bar on their own.
+A sheet with only that pair now reports Sketchy, not RugMechanicsLive. Every
+other rung of the ladder (the Rugged pairs, the CantTell precedence, the
+NothingUglyYet floor) is unchanged.
+
+This moved one existing verdict.rs test's fixture: the test asserting the
+template states a twin at RugMechanicsLive and none at Rugged had built its
+RugMechanicsLive case from that same one-episode pair, so under the new
+counting it would have reported Sketchy instead. Its fixture is now a
+genuine cross-episode pair (the launch-block buy signal plus a holder-
+concentration signal, two distinct episodes), and its twin assertions are
+unchanged. No other existing test's expected level changed.

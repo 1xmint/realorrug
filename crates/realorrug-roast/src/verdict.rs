@@ -1043,19 +1043,36 @@ pub(crate) mod tests {
 
     #[test]
     fn two_live_risk_signals_reach_rug_mechanics_live() {
-        // The positive case beside the negative one above: two signals that
-        // are not a `Rugged`-qualifying pair still clear the "two or more"
-        // bar. Catches a `>=` mutated to `>` (which would need three) as well
-        // as one mutated to `==` (which would stop counting past two).
+        // The positive case beside the negative one above: two signals from
+        // two distinct episodes (ADR 0032 -- `CreatorBoughtOwnLaunch` is
+        // `Episode::LaunchBlock`, `HolderConcentration` is `Episode::Holders`)
+        // that are not a `Rugged`-qualifying pair still clear the "two or
+        // more distinct episodes" bar. Catches a `>=` mutated to `>` (which
+        // would need three) as well as one mutated to `==` (which would stop
+        // counting past two).
+        let sheet = sheet_with(
+            vec![Signal::CreatorBoughtOwnLaunch, Signal::HolderConcentration],
+            Vec::new(),
+        );
+        assert_eq!(level(&sheet), Level::RugMechanicsLive);
+    }
+
+    #[test]
+    fn two_live_signals_in_one_episode_stay_sketchy() {
+        // ADR 0032's correlated-flags rule: `CreatorBoughtOwnLaunch` and
+        // `LaunchBlockInStrongestBand` are one launch-block read
+        // (`Episode::LaunchBlock`), so two signals from it count as one
+        // episode and must not clear the `>= 2` distinct-episode bar. If
+        // `level` reverted to counting raw signals, this would report
+        // `RugMechanicsLive` instead.
         let sheet = sheet_with(
             vec![
                 Signal::CreatorBoughtOwnLaunch,
                 Signal::LaunchBlockInStrongestBand,
-                Signal::HolderConcentration,
             ],
             Vec::new(),
         );
-        assert_eq!(level(&sheet), Level::RugMechanicsLive);
+        assert_eq!(level(&sheet), Level::Sketchy);
     }
 
     #[test]
@@ -1076,11 +1093,12 @@ pub(crate) mod tests {
 
     #[test]
     fn the_template_states_a_twin_at_rug_mechanics_live_and_none_at_rugged() {
+        // Cross-episode pair, not two signals from the same launch-block read
+        // (ADR 0032: `CreatorBoughtOwnLaunch` + `LaunchBlockInStrongestBand`
+        // are one episode and now stay `Sketchy` -- see
+        // `two_live_signals_in_one_episode_stay_sketchy`).
         let live = sheet_with(
-            vec![
-                Signal::CreatorBoughtOwnLaunch,
-                Signal::LaunchBlockInStrongestBand,
-            ],
+            vec![Signal::CreatorBoughtOwnLaunch, Signal::HolderConcentration],
             Vec::new(),
         );
         assert_eq!(level(&live), Level::RugMechanicsLive);
