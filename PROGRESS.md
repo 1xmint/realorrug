@@ -1,31 +1,27 @@
-# PROGRESS: the-analyst-stops-re-paying (PR #102)
+# PROGRESS: the-analyst-stops-re-paying (PR #102) — DONE, green, marked ready
 
-Done: Fixed the `fmt` and `lint` CI failures on Codex's draft commit
-(f3ba377) — three rustfmt diffs in admission.rs/answer.rs/dossier.rs test
-code, a clippy too-many-lines split of `answer_measured` into `sheet_for`
-and `build_reply` in answer.rs, and a clippy single-match-else fix in
-daemon.rs `open_memory`. Reviewed all five brief items against the diff:
-sheet cache persistence (admission.rs `load_sheets`/`cache_sheet`) has
-corrupt/missing-file and freshness-window tests already; memory.rs wiring
-into dossier.rs (`SolanaReader.memory`, `dispatch::read_with_memory`) has
-a round-trip test; dossier call-count/elapsed-time logging is in
-`answer.rs` (`DossierMetrics`) with tests; missing-provider-names logging
-is in `daemon.rs` `provider_notice` with tests; `daemon.rs::run` no longer
-`process::exit(1)`s on a data-dir failure (`wait_for_data_dir` retries
-instead) — the leading restart suspect. No env values are printed anywhere
-I found. Merged origin/main (three PRs landed since this branch's last
-merge) resolving conflicts in PROGRESS.md (kept this branch's notes) and
-`crates/realorrug-roast/src/sheet.rs` (kept this branch's `serde` derives
-on `About`, needed for the JSON sheet cache; took main's updated doc
-comment reflecting ADR 0033's price-fact support). Pushed.
+Done: CI is green on commit 82f1352 (run
+https://github.com/1xmint/realorrug/actions/runs/35307034551). Fixed
+Codex's uncompiled draft: fmt (3 diffs), clippy too-many-lines (split
+`answer_measured` into `sheet_for` + `build_reply` in answer.rs), clippy
+single-match-else (`open_memory` in daemon.rs), clippy err_expect (a test
+in daemon.rs), and merged origin/main twice as it moved forward during the
+run (conflicts in sheet.rs's `About` derives — kept this branch's `serde`
+derives needed for the JSON sheet cache, took main's ADR 0033 doc comment;
+PROGRESS.md — kept this branch's notes). Ran `gh pr ready 102`.
 
-Next: Watch `gh pr checks 102 --repo 1xmint/realorrug --watch --interval 60`
-for the pushed merge commit. If green, run `gh pr ready 102`. If mutants or
-tests fail, read the job log and fix narrowly — do not touch payout code or
-forbidden.rs' scope.
+Reviewed the five brief items against the diff — all present and tested:
+sheet cache persistence with corrupt/missing-file/freshness tests
+(admission.rs), memory.rs wired into dossier.rs with a round-trip test,
+dossier call-count/elapsed-time logging with tests (answer.rs
+`DossierMetrics`), missing-provider-name logging with tests (daemon.rs
+`provider_notice`), and the leading restart suspect (daemon.rs `run`
+`process::exit(1)`ing on a data-dir failure) fixed by `wait_for_data_dir`
+retrying instead. No env values, RPC URLs or keys are printed anywhere I
+found.
 
-Watch out for: do not push again while a run on this branch is in flight
-(the workflow cancels in-progress runs). Never run cargo locally. Main is
-merging frequently right now (3 PRs landed in the time this task ran) —
-check `gh pr view 102 --json mergeable` before assuming a red check is this
-branch's fault; it may need another merge from main first.
+Next: nothing required. If re-opened, re-check `gh pr view 102
+--json mergeable` first since main was merging every few minutes during
+this run.
+
+Watch out for: PR is not merged (only marked ready), per instructions.
