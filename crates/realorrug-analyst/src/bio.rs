@@ -38,15 +38,18 @@
 //!   @1xmint_` as `@thecabalhunter`, confirmed on 2026-09-07. It was renamed
 //!   `@realorrug` on 2026-09-13 and the label has not been re-read since.
 //!
-//! # Every number goes through the same two checks a reply does
+//! # The status passes the same two checks a reply does; the lead does not
 //!
-//! A bio is a public statement by the same account, so there is no reason it
-//! should be held to a lower standard than a reply.
 //! [`realorrug_roast::forbidden::check`] refuses the verdicts and
 //! [`realorrug_roast::fidelity::check`] refuses any figure the week's record does
-//! not carry. A render that fails either is **not written** -- the previous
-//! bio stands, which is the safe direction, because the previous bio was also
-//! true when it was written.
+//! not carry. Run on [`Bio::status_text`], never on the whole render: the lead
+//! is the operator's own fixed configuration, not text built from `choose`'s
+//! output, and holding an operator's own words to a checker meant for
+//! *generated* claims would refuse the account's own bio over words it wrote
+//! about itself, and did on the live account (`@realorrug`'s lead names
+//! "cabals"). A status that fails either check is **not written** -- the
+//! previous bio stands, which is the safe direction, because the previous bio
+//! was also true when it was written.
 //!
 //! # It says "leads", never "wins"
 //!
@@ -83,7 +86,10 @@ pub const MAX_LEADERS: usize = 3;
 /// mercy of `REALORRUG_BIO_LEAD`'s own length -- `from_vars` below folds it
 /// into the stored lead and refuses configuration that would not leave room
 /// for it, which is what "always fits" means here: checked once, at
-/// configuration time, rather than hoped for at every render.
+/// configuration time, rather than hoped for at every render. ADR 0033 says
+/// the bio always *ends* with it, so `render` splits it back off the stored
+/// lead and puts it after the status, not before -- see `render`'s own
+/// comment for why the split rather than a second field.
 pub const DISCLAIMER: &str = "Not financial advice.";
 
 /// The bio writer's configuration.
@@ -138,17 +144,61 @@ impl Bio {
     /// drops parts -- fewer leaders first, then the last winner -- until the
     /// combined text fits, and only reports `None` when even the pool line
     /// alone does not.
+    ///
+    /// **This is the part [`check`] should see, and the only part.** The rest
+    /// of a render is the lead: the operator's own configuration, folded with
+    /// [`DISCLAIMER`] in [`from_vars`](Bio::from_vars). Neither is built from
+    /// the week's record, so neither has a figure `fidelity::check` could
+    /// refuse or a phrase that only means something because [`choose`] put it
+    /// there -- and an operator's own words containing a phrase
+    /// `forbidden::check` matches is the operator's call to make about their
+    /// own account, not this module's to overrule on every write.
+    #[must_use]
+    pub fn status_text(&self, state: &State) -> Option<String> {
+        let budget = MAX.checked_sub(self.lead.chars().count() + JOIN.chars().count())?;
+        state.status(budget)
+    }
+
+    /// The bio for a week, or `None` when there is nothing to say.
+    ///
+    /// `None` rather than a bio of only the lead: writing the lead back on its
+    /// own would be a call that changes nothing, and this endpoint is metered.
     #[must_use]
     pub fn render(&self, state: &State) -> Option<String> {
-        let budget = MAX.checked_sub(self.lead.chars().count() + JOIN.chars().count())?;
-        let status = state.status(budget)?;
-        let mut out = self.lead.clone();
-        out.push_str(JOIN);
-        out.push_str(&status);
-        // The budget arithmetic above already guarantees this, but the check
-        // stays: it is the one invariant a bio truncated mid-figure would
-        // violate, and it is cheap enough to hold unconditionally rather than
-        // trust the arithmetic that leads to it.
+        let status = self.status_text(state)?;
+        let mut out = String::new();
+        // ADR 0033 says the bio always *ends* with the disclaimer.
+        // `from_vars` folds it into `lead` as `<operator> · <disclaimer>` so
+        // the lead stays one fixed, whole value the operator cannot configure
+        // around -- but a render that just put `lead` first and whole, as
+        // every branch here does, would then read `<operator> ·
+        // <disclaimer> · <status>`, disclaimer before the status instead of
+        // after it. Splitting the known suffix back off here keeps both true
+        // at once: the lead is still first and whole (nothing is inserted
+        // before it), and the disclaimer still ends up last. A `Bio` built
+        // directly rather than through `from_vars` (every fixture below that
+        // is not exercising `from_vars` itself) carries no such suffix, so it
+        // renders exactly as before: `<lead> · <status>`.
+        let with_disclaimer = format!("{JOIN}{DISCLAIMER}");
+        match self.lead.strip_suffix(with_disclaimer.as_str()) {
+            Some(core) => {
+                out.push_str(core);
+                out.push_str(JOIN);
+                out.push_str(&status);
+                out.push_str(JOIN);
+                out.push_str(DISCLAIMER);
+            }
+            None => {
+                out.push_str(&self.lead);
+                out.push_str(JOIN);
+                out.push_str(&status);
+            }
+        }
+        // The budget arithmetic in `status_text` already guarantees this
+        // (moving the same-length pieces around does not change the total),
+        // but the check stays: it is the one invariant a bio truncated
+        // mid-figure would violate, and it is cheap enough to hold
+        // unconditionally rather than trust the arithmetic that leads to it.
         (out.chars().count() <= MAX).then_some(out)
     }
 }
@@ -609,6 +659,34 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_bio_ends_with_the_disclaimer_after_the_status() {
+        // ADR 0033: the bio always *ends* with "Not financial advice." A bio
+        // built through `from_vars` folds the disclaimer into `lead` as
+        // `<operator> · <disclaimer>`, which used to be rendered first and
+        // whole -- `<operator> · <disclaimer> · <status>`, disclaimer before
+        // the status. `render` now moves it back to the true end.
+        let b = Bio::from_vars(&|k| (k == "REALORRUG_BIO_LEAD").then(|| "Automated.".to_owned()))
+            .expect("set");
+        let text = b.render(&state()).expect("a bio");
+        assert!(text.starts_with("Automated."), "{text}");
+        assert!(text.ends_with(DISCLAIMER), "disclaimer not last: {text}");
+        // Not just present, but after the status and not before it -- the
+        // whole point of the fix.
+        let disclaimer_at = text.find(DISCLAIMER).expect("disclaimer somewhere");
+        let pool_at = text.find("Pool").expect("a pool");
+        assert!(pool_at < disclaimer_at, "{text}");
+        assert!(
+            text.chars().count() <= MAX,
+            "{} chars: {text}",
+            text.chars().count()
+        );
+        // And it never appears right after the lead any more, unlike before
+        // this task: the status now sits between the two.
+        let no_status = format!("Automated.{JOIN}{DISCLAIMER}");
+        assert!(!text.ends_with(&no_status), "{text}");
+    }
+
+    #[test]
     fn a_render_that_would_be_cut_off_is_not_written_at_all() {
         // A bio truncated by the platform mid-figure is a wrong figure, in the
         // one place with no record that it was ever right. `None` leaves the
@@ -760,7 +838,40 @@ mod tests {
         // The third leader is a bonus, not a requirement -- the packet asks
         // for pool + 2 leaders + last winner at minimum.
         assert!(text.contains("@cccccccccc"), "{text}");
-        assert_eq!(check(&text, &s.authorised()), Ok(()), "{text}");
+        // The real bug this fixture was written for: the lead says "Hunting
+        // cabals", and `forbidden::check` matches "cabal" as a verdict about
+        // an identifiable project. Checking the whole render, as
+        // `daemon::bio_to_write` used to, refused every write on the live
+        // account regardless of what the week's data said. The lead is the
+        // operator's own fixed configuration, not a claim `choose` produced,
+        // so only the generated status goes through the check -- and it does
+        // here, proving a write goes through with the account's real lead.
+        let status = b.status_text(&s).expect("a status");
+        assert_eq!(check(&status, &s.authorised()), Ok(()), "{text}");
+    }
+
+    #[test]
+    fn a_forbidden_word_inside_the_status_is_still_refused() {
+        // The lead is exempt from the check because it is the operator's own
+        // configuration; the status is not, because it is built from
+        // `choose`'s output and a leader's handle is attacker-controlled --
+        // it is whatever an X account named itself. A handle that trips
+        // `forbidden::check` must still refuse the write.
+        let b = Bio {
+            lead: "Hunting cabals. Exposing tokens. No mercy. Truth for you.".to_owned(),
+        };
+        let s = State {
+            week: "2026-09-14".to_owned(),
+            pool: None,
+            leaders: vec![Leader {
+                handle: "scammer".to_owned(),
+                points: 1,
+            }],
+            last_winner: None,
+        };
+        let status = b.status_text(&s).expect("a status");
+        assert!(status.contains("scammer"), "{status}");
+        assert!(check(&status, &s.authorised()).is_err(), "{status}");
     }
 
     #[test]
