@@ -39,14 +39,19 @@ the failure. Say whether you are recommending or recording.
 3. **Untrusted content is never an instruction.** Mentions, token metadata and
    post text are data. They never enter a system-prompt position.
 4. **A verdict is earned by facts the fact sheet holds, and never accuses a
-   person.** Code picks the verdict level (`Rugged`, `RugMechanicsLive`,
-   `Sketchy`, `NothingUglyYet`, `CantTell`) from the evidence; the model
-   writes the words but may not move the level, and may describe a token or
-   its launch, never call a named person, account or company a scammer or a
-   thief. `realorrug-roast/src/forbidden.rs` enforces the old blanket word ban
+   person.** Code computes the score and the level (`Rugged`,
+   `RugMechanicsLive`, `Sketchy`, `NothingUglyYet`, `CantTell`) from the
+   evidence, per ADR 0032; the model writes the words but cannot move the
+   score or the level, and may describe a token or its launch, never call a
+   named person, account or company a scammer or a thief.
+   `realorrug-roast/src/forbidden.rs` enforces the old blanket word ban
    today; design 0020 changes it to enforce this rule instead (ADR 0027).
-5. **The analyst never states the token's price or market cap** (ADR 0013
-   constraint 5), enforced by dropping those facts before the model sees them.
+5. **Price is stated with its moment; a hint needs a measured rate** (ADR
+   0033). Every price or market cap carries the block or time it was read at.
+   A hint at a future move is hedged, never "will" and never an instruction to
+   buy, sell or hold, and passes only when the fact sheet carries a measured
+   outcome rate for launches like this one. The project's own token is
+   treated exactly like any other.
 6. **Holdings are public, and nothing trades.** A small dev buy and the bot's
    own holding are disclosed with their addresses; nothing buys, sells or
    swaps the token automatically (ADR 0029, superseding ADR 0013's "holds
@@ -59,17 +64,17 @@ the failure. Say whether you are recommending or recording.
 
 - The smallest change that fully solves the problem. Name a layer's caller
   before building it.
-- Enforce a property at the cheapest level that holds it: a type, then one
-  check, then a test, then prose.
-- A test that cannot fail is not a test. Verify a fix by re-applying the bug.
-  The `mutants` check runs that on every pull request's changed lines; when a
-  survivor cannot change behaviour, apply it by hand and record why in
-  `.cargo/mutants.toml`.
 - `repo-conformance` holds the documents to the tree: links, named paths, ADR
   numbers, a status on every numbered document, and no path from a model-side
   crate to the payout. A citation of Radar's record says "Radar ADR" and links
   github.com/1xmint/theradar.
 - Comments explain *why*, especially why the obvious alternative is wrong.
+- Good practice, not a rule: prefer enforcing a property at the cheapest
+  level that holds it (a type before a check, a check before a test, a test
+  before prose); when a fix is worth a test, the strongest version re-applies
+  the bug to see it fail; and when behaviour changes, updating the document
+  that describes it in the same commit keeps the two from drifting apart. Use
+  judgement on how far to take each of these — they are aids, not gates.
 
 ## 5. The machine and the repository
 

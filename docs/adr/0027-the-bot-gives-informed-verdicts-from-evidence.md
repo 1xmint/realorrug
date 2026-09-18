@@ -1,6 +1,13 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # ADR 0027 — the bot gives informed verdicts from evidence
 
+**Superseded in part by [ADR 0032](0032-the-verdict-is-a-score-with-its-coverage.md)
+(2026-09-17).** The five-level ladder (decision 3 below) becomes bands of a
+0–100 score and a coverage figure, and `CantTell` becomes "coverage too low
+to say" rather than "any required fact unread." Decisions 1, 2, 5 and 6 —
+earned by facts actually read, never a person-directed accusation, the price
+rule, and the model's inability to move the level — stand unchanged.
+
 **Date:** 2026-09-15
 **Status:** accepted. **Josh's decision, recorded**, in conversation
 2026-09-15: the bot needs a witty, meme-worthy personality that reaches a

@@ -2,6 +2,10 @@
 # ADR 0013 — A community token exists, and Radar holds none of it
 
 **Date:** 2026-09-04
+**Constraint 5 is superseded by
+[ADR 0033](0033-the-analyst-talks-price-and-hints-only-on-a-measured-rate.md)**
+(2026-09-17): the analyst states price with its block or time, and hints only
+on a measured rate.
 **Constraints 1 and 2 are superseded by
 [ADR 0029](0029-the-bot-holds-its-own-token-openly.md)** (2026-09-17): a small
 disclosed dev buy, and the bot's wallet may hold the token; nothing trades.
