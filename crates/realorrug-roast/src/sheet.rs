@@ -2021,17 +2021,79 @@ fn push_market(facts: &mut Vec<Fact>, snapshot: &MarketSnapshot) {
     }
 }
 
-/// Formats a market snapshot's wall-clock read point as Unix seconds --
-/// `MarketSnapshot::observed_at`'s own clock, not a chain's block or slot, so
-/// this is the one place that turns it into words rather than reusing
-/// `ReadAt`'s `Display` (which only knows how to say a slot or a block).
+/// Formats a market snapshot's wall-clock read point as a UTC calendar
+/// moment -- `MarketSnapshot::observed_at`'s own clock, not a chain's block
+/// or slot, so this is the one place that turns it into words rather than
+/// reusing `ReadAt`'s `Display` (which only knows how to say a slot or a
+/// block).
+///
+/// Renders `"20250916.0520 UTC"` -- date, a dot, then hour and minute --
+/// rather than the more familiar `"2025-09-16 05:20 UTC"`. That familiar
+/// form was tried first and rejected here, not merely as a style choice:
+/// `FactSheet::authorised` scans every fact's label text with
+/// `fidelity::literals` and treats whatever numbers it finds there as
+/// authorised under that fact's `Subject`, which for `Kind::Market` (this
+/// fact) is `Subject::Token` -- the same subject `Kind::Age` uses.
+/// `literals` ends a numeric token on `-`, `:` and space, so the punctuated
+/// form would authorise five small numbers on their own (2025, 09, 16, 05,
+/// 20), and any of them could then back an unrelated `Subject::Token`
+/// claim it never earned: "it launched 16 hours ago" would pass
+/// `fidelity::check` because "16" came from the day-of-month, not because
+/// the sheet ever measured a 16-hour age. The one `.` here is a decimal
+/// point, not a separator, so `literals` reads the whole moment as a single
+/// number -- the same hard-to-collide-with property the ten-digit Unix
+/// timestamp this replaces already had, kept while making the digits
+/// readable as a date and a time instead of a raw epoch count.
 fn render_observed_at(observed_at: std::time::SystemTime) -> String {
     observed_at
         .duration_since(std::time::UNIX_EPOCH)
         .map_or_else(
             |_| "an unread point".to_owned(),
-            |d| format!("unix time {}", d.as_secs()),
+            |d| {
+                let secs = d.as_secs();
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "a Unix second count reaching i64::MAX is centuries past this \
+                              project's lifetime; wrapping here is not a real risk"
+                )]
+                let days = (secs / 86_400) as i64;
+                let time_of_day = secs % 86_400;
+                let (year, month, day) = civil_from_days(days);
+                let hour = time_of_day / 3_600;
+                let minute = (time_of_day % 3_600) / 60;
+                format!("{year:04}{month:02}{day:02}.{hour:02}{minute:02} UTC")
+            },
         )
+}
+
+/// Days since the Unix epoch (1970-01-01) to a proleptic Gregorian calendar
+/// date. Howard Hinnant's `civil_from_days`
+/// (<http://howardhinnant.github.io/date_algorithms.html>, public domain),
+/// ported to Rust -- correct for any `i64` day count, including every leap
+/// day the Gregorian rule recognises, without pulling in a date-and-time
+/// crate for one read-only conversion.
+fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    #[expect(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "doy - (153*mp+2)/5 + 1 is always in [1, 31] by the algorithm's own invariant"
+    )]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    #[expect(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "mp is always in [0, 11] by the algorithm's own invariant, so month is in [1, 12]"
+    )]
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let year = if month <= 2 { y + 1 } else { y };
+    (year, month, day)
 }
 
 /// Renders a USD figure with two decimal places from a dollar up, and in full
@@ -3133,9 +3195,9 @@ mod tests {
     fn a_market_snapshot_produces_a_fact_carrying_its_read_time() {
         // ADR 0033: a price carries the moment it was read. `observed_at` is
         // `MarketSnapshot`'s own wall clock, not `dossier.read_at` -- so the
-        // rendered sentence must carry the snapshot's own Unix seconds, and
+        // rendered sentence must carry the snapshot's own UTC moment, and
         // this pins that against a future edit that reaches for the wrong
-        // clock.
+        // clock. 1_758_000_000 is 2025-09-16 05:20:00 UTC.
         let mut dossier = dossier_for([3u8; 32]);
         dossier.market = Some(realorrug_onchain::market::MarketSnapshot {
             price_usd: Some(0.0421),
@@ -3149,7 +3211,7 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         let rendered = sheet.render();
         assert!(
-            rendered.contains("unix time 1758000000"),
+            rendered.contains("20250916.0520 UTC"),
             "the rendered sheet must carry the snapshot's own read time: {rendered}"
         );
         assert!(rendered.contains("$0.0421"), "{rendered}");
@@ -3236,7 +3298,7 @@ mod tests {
         // not another fact's words, and not the blunt voice.
         assert_eq!(
             ranked[market_rank].sentence,
-            "An aggregator priced it at $1.00 as of unix time 1758000000."
+            "An aggregator priced it at $1.00 as of 20250916.0520 UTC."
         );
     }
 
@@ -3247,6 +3309,40 @@ mod tests {
         assert_eq!(render_usd(1.0), "1.00");
         assert_eq!(render_usd(0.0), "0.00");
         assert_eq!(render_usd(420_000.0), "420000.00");
+    }
+
+    /// `civil_from_days` against dates independently computed with `date -u
+    /// -d <date> +%s`, divided by 86400: the epoch itself, a leap day both
+    /// on and off a century boundary (2024 and 2000 are leap; 1900 is not,
+    /// despite also dividing by 4), a date before the epoch, and one after
+    /// the range any real market snapshot will ever carry.
+    #[test]
+    fn civil_from_days_matches_known_calendar_dates_including_leap_days() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(civil_from_days(-25_509), (1900, 2, 28));
+        assert_eq!(civil_from_days(20_347), (2025, 9, 16));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(civil_from_days(47_541), (2100, 3, 1));
+    }
+
+    #[test]
+    fn render_observed_at_reads_as_one_glued_number_not_several_small_ones() {
+        // 1_758_000_000 is 2025-09-16 05:20:00 UTC. Asserting the exact
+        // string, not just its date/time parts, pins the format that keeps
+        // `fidelity::literals` reading this as a single token instead of
+        // splitting it into "16", "05" and "20" -- see the doc comment on
+        // `render_observed_at` for why that split would be a fidelity hole.
+        let observed_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_758_000_000);
+        let rendered = render_observed_at(observed_at);
+        assert_eq!(rendered, "20250916.0520 UTC");
+        let literals = crate::fidelity::literals(&rendered);
+        assert_eq!(
+            literals.len(),
+            1,
+            "the moment must scan as one literal, not several small ones: {literals:?}"
+        );
     }
 
     /// Builds a `TokenOwner` for the token-ownership tests below.

@@ -653,3 +653,32 @@ by the two chains happening to stay disjoint forever. Still above
 `launch_recipients` (70): an address-level concentration finding, even a
 sampled one, is more specific than a bare recipient count with nothing to
 weigh it against.
+
+### Readable market time, as built (2026-09-18)
+
+`push_market`'s "as of" moment was Unix seconds ("unix time 1758000000"),
+correct but unreadable. `render_observed_at` now renders it as a UTC
+calendar moment instead -- but not as the punctuated `2025-09-16 05:20 UTC`
+first tried, because that form fails the fidelity check the packet asked to
+be checked first.
+
+`FactSheet::authorised()` scans every fact's label text with
+`fidelity::literals` and authorises whatever numbers it finds under that
+fact's `Subject`; `Kind::Market`'s subject is `Subject::Token`, the same one
+`Kind::Age` uses. `literals` ends a numeric token on `-`, `:` and space, so
+a punctuated date-time would authorise five small numbers on their own
+(2025, 09, 16, 05, 20) under `Subject::Token` -- and a model could then
+attach any of them to an unrelated `Subject::Token` claim it never earned:
+"it launched 16 hours ago" would pass `fidelity::check` because "16" came
+from the day-of-month, not because the sheet ever measured a 16-hour age.
+The original ten-digit Unix timestamp never had this problem because it
+scanned as one large, hard-to-collide-with number.
+
+The fix keeps that property while making the digits readable: a small
+`civil_from_days` (Howard Hinnant's public-domain algorithm, ported with no
+new dependency) turns the Unix seconds into a proleptic-Gregorian calendar
+date, and `render_observed_at` glues date and time with a single decimal
+point -- `20250916.0520 UTC` -- so `fidelity::literals` still reads the
+whole moment as one token, not five. Tested against known dates including
+both a leap day that falls on a `/4` century boundary (2000) and one that
+does not (1900), plus the epoch itself and a date either side of it.
