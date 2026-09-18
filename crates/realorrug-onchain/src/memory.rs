@@ -534,6 +534,35 @@ pub struct FundingEdge {
     pub material: bool,
 }
 
+/// One decoded creator buy or sell, design 0027 slice 5. An event, on the
+/// same terms [`FundingEdge`] is: identity is the log's own
+/// `unique_id`, never `(recipient, side, amount)`, so two distinct trades
+/// that happen to match on amount are never collapsed into one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatorTradeEvent {
+    /// The token this trade was against, in the chain's own canonical text
+    /// form.
+    pub token: String,
+    /// Which paid account was the beneficiary: `"deployer"` or
+    /// `"fee_recipient"`. A plain string, not an enum, so this table stays
+    /// chain-agnostic the way [`FundingEdge`] is -- a future chain's own
+    /// role names do not need a new column.
+    pub role: String,
+    /// `"buy"` or `"sell"`.
+    pub side: String,
+    /// Quote paid in (a buy) or received (a sell), in the chain's native
+    /// smallest unit.
+    pub quote: u128,
+    /// Tokens received (a buy) or given up (a sell).
+    pub tokens: u128,
+    /// The block (or slot) it landed in.
+    pub block: u64,
+    /// The transaction that carried it.
+    pub transaction: String,
+    /// The log's own identity, the dedupe key.
+    pub unique_id: String,
+}
+
 /// What [`Memory::extend_transfers`] did with the events it was handed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Extended {
@@ -664,7 +693,21 @@ impl Memory {
              CREATE INDEX IF NOT EXISTS funding_edges_by_token
                 ON funding_edges (chain, token, recipient);
              CREATE INDEX IF NOT EXISTS funding_edges_by_funder
-                ON funding_edges (chain, funder);",
+                ON funding_edges (chain, funder);
+             CREATE TABLE IF NOT EXISTS creator_trades (
+                chain     TEXT    NOT NULL,
+                token     TEXT    NOT NULL,
+                role      TEXT    NOT NULL,
+                side      TEXT    NOT NULL,
+                quote     TEXT    NOT NULL,
+                tokens    TEXT    NOT NULL,
+                block     INTEGER NOT NULL,
+                tx_hash   TEXT    NOT NULL,
+                unique_id TEXT    NOT NULL,
+                PRIMARY KEY (chain, unique_id)
+             );
+             CREATE INDEX IF NOT EXISTS creator_trades_by_token
+                ON creator_trades (chain, token);",
         )?;
         Ok(())
     }
@@ -756,6 +799,94 @@ impl Memory {
             });
         }
         Ok(edges)
+    }
+
+    /// Remembers creator trades as events, once each, the same
+    /// `INSERT OR IGNORE` idempotency [`Memory::record_funding_edges`] uses:
+    /// a retry that re-reads the same log range inserts nothing the second
+    /// time.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if a write fails.
+    pub fn record_creator_trades(
+        &self,
+        chain: &str,
+        trades: &[CreatorTradeEvent],
+    ) -> Result<u64, Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut inserted = 0u64;
+        for trade in trades {
+            let changed = tx.execute(
+                "INSERT OR IGNORE INTO creator_trades
+                 (chain, token, role, side, quote, tokens, block, tx_hash, unique_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    chain,
+                    trade.token,
+                    trade.role,
+                    trade.side,
+                    trade.quote.to_string(),
+                    trade.tokens.to_string(),
+                    to_i64(trade.block),
+                    trade.transaction,
+                    trade.unique_id,
+                ],
+            )?;
+            inserted += u64::try_from(changed).unwrap_or(0);
+        }
+        tx.commit()?;
+        Ok(inserted)
+    }
+
+    /// Every creator trade remembered for `(chain, token)`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails, or a stored amount no longer
+    /// parses.
+    pub fn creator_trades(
+        &self,
+        chain: &str,
+        token: &str,
+    ) -> Result<Vec<CreatorTradeEvent>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT role, side, quote, tokens, block, tx_hash, unique_id
+             FROM creator_trades WHERE chain = ?1 AND token = ?2
+             ORDER BY block, unique_id",
+        )?;
+        let rows = stmt.query_map(params![chain, token], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        let mut trades = Vec::new();
+        for row in rows {
+            let (role, side, quote, tokens, block, transaction, unique_id) = row?;
+            trades.push(CreatorTradeEvent {
+                token: token.to_owned(),
+                role,
+                side,
+                quote: quote.parse().map_err(|_| Error::Ledger {
+                    token: token.to_owned(),
+                    why: format!("creator trade quote {quote:?} does not parse"),
+                })?,
+                tokens: tokens.parse().map_err(|_| Error::Ledger {
+                    token: token.to_owned(),
+                    why: format!("creator trade tokens {tokens:?} does not parse"),
+                })?,
+                block: u64::try_from(block).unwrap_or(0),
+                transaction,
+                unique_id,
+            });
+        }
+        Ok(trades)
     }
 
     /// The block `token`'s transfer memory is complete through, or `None`
@@ -1733,5 +1864,33 @@ mod tests {
         assert!(back[0].material && !back[1].material);
         // Scoped to the token asked about.
         assert!(mem.funding_edges(CHAIN, "other").expect("read").is_empty());
+    }
+
+    #[test]
+    fn a_creator_trade_is_remembered_once_by_its_log_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mem = Memory::open(&dir.path().join("m.sqlite3")).expect("open");
+        let trade = |unique_id: &str, role: &str| CreatorTradeEvent {
+            token: TOKEN.to_owned(),
+            role: role.to_owned(),
+            side: "sell".to_owned(),
+            quote: 100,
+            tokens: 40,
+            block: 7,
+            transaction: "0xaa".to_owned(),
+            unique_id: unique_id.to_owned(),
+        };
+        // Two distinct log positions in the same transaction are two events;
+        // the same log identity read twice (a retried page) is one.
+        let first = [
+            trade("0xaa-0-0", "deployer"),
+            trade("0xaa-0-1", "fee_recipient"),
+        ];
+        assert_eq!(mem.record_creator_trades(CHAIN, &first).expect("record"), 2);
+        assert_eq!(mem.record_creator_trades(CHAIN, &first).expect("again"), 0);
+        let back = mem.creator_trades(CHAIN, TOKEN).expect("read");
+        assert_eq!(back, first.to_vec());
+        // Scoped to the token asked about.
+        assert!(mem.creator_trades(CHAIN, "other").expect("read").is_empty());
     }
 }

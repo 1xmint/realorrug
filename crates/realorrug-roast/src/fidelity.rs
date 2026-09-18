@@ -115,7 +115,11 @@ impl Subject {
             // The creator's own spending, so a sentence about the creator may
             // cite it and a sentence about holders may not.
             | Kind::DevBuy
-            | Kind::DevBuyUnseen => Self::Creator,
+            | Kind::DevBuyUnseen
+            // The creator's own observed sale proceeds, net and outgoing
+            // transfers -- the same actor `Kind::DevBuy` is about, just the
+            // other end of the same wallet's activity.
+            | Kind::CreatorCashFlow => Self::Creator,
             // Who funded the early buyers is about the wallets holding the
             // token, not about the creator: a sentence about the creator
             // may not cite it as their doing.

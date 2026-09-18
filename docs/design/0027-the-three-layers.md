@@ -247,7 +247,7 @@ tests already run.
 | 2. Snapshot and event memory | robinhood `lib.rs`; onchain `memory.rs`, `dispatch.rs`, `robinhood.rs`, `dossier.rs` | Explicit read block, durable ordered event identity, transactional suffix checkpoint; duplicate/reorg fixtures preserve balances; Robinhood receives memory | None |
 | 3. Bounded funding investigation — **built 2026-09-18**, see below | onchain `wallets.rs`, `budget.rs`, `robinhood.rs`, `memory.rs`; roast `sheet.rs`, `clause.rs`, `fidelity.rs` | Four selected buyers produce evidenced funding paths and sample coverage; dust/shared-service fixtures cannot become ownership claims; CU cap enforced | 2 |
 | 4. Roles, market and venue mechanics | onchain roles.rs (new), `market.rs` (new), `robinhood.rs`; robinhood `pons.rs`; roast `sheet.rs` | Pool/locker excluded only with proof; dated market snapshot, role-correct concentration, custody and verified admin facts available; liquidity dollars never become capacity | 2 |
-| 5. Creator cash-flow ledger | onchain wallets.rs, `memory.rs`; robinhood `pons.rs`; roast `sheet.rs` | Fee recipient differs from deployer in fixture; transfers cannot masquerade as sales; incomplete basis cannot print profit | 3, 4 |
+| 5. Creator cash-flow ledger — **built 2026-09-18 (sheet half), see below** | onchain wallets.rs, `memory.rs`; robinhood `pons.rs`; roast `sheet.rs` | Fee recipient differs from deployer in fixture; transfers cannot masquerade as sales; incomplete basis cannot print profit | 3, 4 |
 | 6. Solana owner/funding adapter — **built 2026-09-18 (slice 6a owner half, slice 6b funding half), see below** | onchain `rpc.rs`, `dossier.rs`, `wallets.rs` | Largest accounts aggregated by owner; paged funding preserves incomplete history; identical finding types across chains | 2, 3 |
 | 7. Assessment and judgement boundary | roast assessment.rs (new), `verdict.rs`, `voice.rs`; analyst `answer.rs`; serve `check.rs` | Correlated flags count once; critical gaps survive coverage; analyst/site share packet; model band choice shadowed pending approval | 3–6 |
 | 8. Outcome calibration | cli `creator_index.rs`; roast `baserates.rs`; `docs/research/data/` versioned outputs | Mature/censored outcomes separated; time/family-held-out evaluation; curve peaks never advertised as executable returns; scoped rates reach sheet only when eligible | 7 |
@@ -685,3 +685,30 @@ both a leap day that falls on a `/4` century boundary (2000) and one that
 does not (2100), plus the epoch itself. The day count is unsigned: a
 market moment is always after 1970, so the calendar has no branch for
 earlier dates.
+
+### Slice 5 as built (2026-09-18)
+
+Recording, not recommending, and the sheet half only: `Dossier::creator_cash_flow`
+already carried `CreatorCashFlow` (trades from both the deployer and the fee
+recipient, an outgoing-transfer count, and `trades_complete`); nothing in
+`realorrug-roast` read it. Now `sheet.rs`'s new `push_creator_cash_flow` does,
+gated on `CreatorCashFlow::proceeds_wei` returning `Some` -- the type's own
+`trades_complete` check -- so an incomplete read publishes no ETH number at
+all, transfers included, rather than a total built from a partial trade list.
+
+Three facts, one new `Kind::CreatorCashFlow` (`clause.rs`; `fidelity.rs` maps
+it to `Subject::Creator`, beside `Kind::DevBuy`): sale proceeds, an observed
+net figure (proceeds minus quote spent buying in, rendered with its sign when
+negative, e.g. `-0.4000 ETH`), and -- only when greater than zero -- a count
+of outgoing token transfers, worded as transfers throughout and never as
+sales. The net figure is never called profit: the label and both clauses say
+only what it excludes -- gas, fees, anything still held but not sold. A named
+gap on `CreatorCashFlow::gaps` is left unpublished the same way a failed
+`capacity`/`fees`/`token ownership` read already is in `FactSheet::build` --
+an optional miss, never turned into an `unknown` line that would force
+`CantTell`.
+
+Robinhood only: `dossier.rs`'s Solana path sets `creator_cash_flow` to `None`
+with a named gap, since Solana has no `wallets::creator_cash_flow` equivalent
+yet. No `salience.rs` candidate yet either -- this PR wires the fact onto the
+sheet and no further.

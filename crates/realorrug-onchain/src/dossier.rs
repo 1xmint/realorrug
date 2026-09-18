@@ -329,6 +329,12 @@ pub struct Dossier {
     /// investigated"; a reader that tried and failed names "token ownership"
     /// in `unavailable`.
     pub token_ownership: Option<TokenOwnership>,
+    /// The creator's observed on-chain cash flow (`crate::wallets`, design
+    /// 0027 slice 5, Robinhood only today). `None` is "not investigated"; a
+    /// reader that tried and failed names "creator cash flow" in
+    /// `unavailable`. Solana has no reader for this yet -- see
+    /// `SolanaReader`'s own doc on `creator_cash_flow` below.
+    pub creator_cash_flow: Option<crate::wallets::CreatorCashFlow>,
     /// Facts that could not be read, and why.
     pub unavailable: Vec<Unavailable>,
     /// RPC calls this dossier cost.
@@ -392,10 +398,16 @@ pub fn build(
         funding: None,
         market: None,
         token_ownership: None,
+        creator_cash_flow: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
     };
+    dossier.miss(
+        "creator cash flow",
+        "Solana not built: design 0027 slice 5 has no `wallets::creator_cash_flow` equivalent \
+         for Solana yet",
+    );
 
     // 1. The launch block, from the oldest signature the mint has, or from
     // the read memory ahead of it (packet 0039 §1). `Kind::Forever`: a past
@@ -1032,6 +1044,7 @@ mod tests {
             funding: None,
             market: None,
             token_ownership: None,
+            creator_cash_flow: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -1312,6 +1325,7 @@ mod tests {
                 funding: None,
                 market: None,
                 token_ownership: None,
+                creator_cash_flow: None,
                 unavailable: vec![Unavailable {
                     fact: "robinhood reads",
                     why: format!("fake reader, token {:?}", token.0),
