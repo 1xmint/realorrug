@@ -1,17 +1,19 @@
-# PROGRESS: finish PR #100 (robinhood-counts-its-own-population)
+# PROGRESS: the-bio-shows-the-whole-week
 
-Done:
-- Fixed the `needless_pass_by_value` clippy failure in `crates/realorrug-robinhood/src/lib.rs` (`logs_range_filter` takes `&serde_json::Value`).
-- Replaced the O(launch-count) per-block RPC timestamp design with `BlockTimeModel` in `crates/realorrug-cli/src/creator_index.rs`: reads the head plus up to `TIME_SAMPLES` (32) evenly-spaced exact timestamps, then interpolates/extrapolates linearly. Rebuilt `run()`'s `--to`/watermark ordering so the backwards-range check still fires before any RPC call (regression caught and fixed against `a_range_that_runs_backwards_is_refused_before_anything_is_written`).
-- Extracted and unit-tested pure predicates to close CI's mutation-testing gaps: `repeats_a_token_or_curve`, `invalid_graduation`, `is_curve_buy`, `trade_precedes_launch`; added a `run()` test for the `base_out` collision check; added `base_rates_json` tests for the both-empty guard, an isolated `reached_5x` boundary, and the `measured_on` value.
-- Rewrote `deploy/README.md`'s RPC-estimate section for the new bounded (`1 + TIME_SAMPLES + ...`) design, replacing the old up-to-531,581-launch-block-reads warning.
-- Confirmed `crates/realorrug-roast/src/baserates.rs`'s `outcomes_24h: Option<OutcomeRates>` is `#[serde(default)]`, so old snapshots (no `outcomes_24h` key) still parse.
+Done: Rewrote `State::render_parts` in `crates/realorrug-analyst/src/bio.rs`
+to the compact "Pool <n> ETH · Leads @a @b @c · Last won @h" format (was
+verbose sentences that busted the ~76-char live-lead budget and failed
+`fmt`/`lint`/`tests` in CI). Fixed the fmt/clippy issues CI flagged in the
+same three files. Added a new test with the live lead + 3 ten-char handles.
+Confirmed render_sol/last_winner_of already convert SOL lamports correctly
+(no unit bug). Confirmed no live leaderboard source feeds daemon.rs yet
+(`realorrug_contest::score::rank` has no callers outside its own tests) --
+daemon.rs's empty leaders vec is left as-is per the packet's fallback.
+Committed bdad9fa and pushed. Next: `gh pr checks 103` once (do not
+--watch/block), read the failing job's log if red, fix and push again.
+If green, done -- do not merge, just report.
 
-Next:
-- Push this branch, then `gh pr checks 100 --watch --interval 60` (never run cargo/tests locally per the packet). Fix anything CI still reports.
-- If green, `gh pr ready 100` (never merge).
-
-Watch out for:
-- Do not push again while a CI run is in flight.
-- No RPC mock exists in `creator_index.rs`'s test module; walk functions (`walk_token_launched`, `walk_graduated`, `walk_curve_trades`) are still only exercised indirectly through their extracted pure predicates, not directly.
-- `crates/realorrug-cli/src/creator_index.rs` has never compiled locally (cargo is disallowed here); the first CI `build`/`tests` run is the first real compile check.
+Watch out for: do not run cargo/tests locally per this packet (stricter
+than AGENTS.md's usual scoped-cargo allowance). Do not push again while a
+CI run is in flight. PR body still needs the 3 hand-computed sample bios
+added via `gh pr edit 103 --body`.

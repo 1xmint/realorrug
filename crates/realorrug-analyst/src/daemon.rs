@@ -1119,26 +1119,39 @@ impl BioMarker {
 ///   platform cuts mid-figure is a wrong figure with no record it was right;
 /// - it was written less than an hour ago;
 /// - the text has not changed;
-/// - the render fails the checks a reply passes.
+/// - the generated status fails the checks a reply passes.
 ///
-/// The last is worth its own note. A refused reply falls back to the template;
-/// a refused **bio** falls back to the bio that is already there, which was
-/// checked when it was written. So refusing is strictly safe here, in a way it
-/// is not for a reply.
+/// The last is worth its own note, twice over. A refused reply falls back to
+/// the template; a refused **bio** falls back to the bio that is already
+/// there, which was checked when it was written. So refusing is strictly safe
+/// here, in a way it is not for a reply. And what gets checked is narrower
+/// than a reply's: only the status `crate::bio::choose` built from the
+/// record, never the lead, which is the operator's own fixed configuration
+/// and carries no figure from the record to get wrong -- checking the whole
+/// render here once refused every write on the live account, because its
+/// lead names "cabals" and `forbidden::check` does not know the difference
+/// between an operator's own words and a generated claim.
 fn bio_to_write(
     bio: &crate::bio::Bio,
     record: Option<&realorrug_contest::Record>,
     vault: Option<&realorrug_contest::Vault>,
     hunters: usize,
+    leaders: &[crate::bio::Leader],
     marker: Option<&BioMarker>,
     now: u64,
 ) -> Option<String> {
-    let state = crate::bio::choose(record, vault, hunters, now)?;
+    let state = crate::bio::choose(record, vault, hunters, leaders, now)?;
+    // The check runs on the status alone, never on the full render: the lead
+    // is the operator's own fixed configuration (`REALORRUG_BIO_LEAD` plus
+    // the disclaimer), not text `choose` produced, and checking it here
+    // refused every write on the live account, whose lead names "cabals" --
+    // see `crate::bio`'s module doc for the fuller version.
+    let status = bio.status_text(&state)?;
     let text = bio.render(&state)?;
     if !bio_write_due(now, marker, &text) {
         return None;
     }
-    match crate::bio::check(&text, &state.authorised()) {
+    match crate::bio::check(&status, &state.authorised()) {
         Ok(()) => Some(text),
         Err(why) => {
             eprintln!(
@@ -1206,9 +1219,11 @@ pub fn bio_write_due(now: u64, marker: Option<&BioMarker>, text: &str) -> bool {
 /// 2. **The same text.** Compared against the marker's contents, so an
 ///    unchanged week costs nothing. This is the ordinary case: the bio changes
 ///    at most three times a week.
-/// 3. **A failed check.** `bio::check` is the two checks a reply passes. A
-///    render that fails is recorded and not written -- and *not written* is the
-///    safe direction here in a way it is not for a reply, because there is no
+/// 3. **A failed check.** `bio::check` is the two checks a reply passes, run
+///    on the generated status alone -- never on the operator's lead, which is
+///    fixed configuration, not a claim the record produced. A status that
+///    fails is recorded and not written -- and *not written* is the safe
+///    direction here in a way it is not for a reply, because there is no
 ///    previous reply to fall back to and there is always a previous bio.
 fn write_bio_if_changed(x: Option<&X>, bio: &crate::bio::Bio, spend: &mut Spend, paths: &Paths) {
     let Some(x) = x else {
@@ -1230,11 +1245,19 @@ fn write_bio_if_changed(x: Option<&X>, bio: &crate::bio::Bio, spend: &mut Spend,
         .and_then(|text| realorrug_contest::Vault::from_json(&text).ok());
     let replies = crate::log::latest(&paths.log).unwrap_or_default();
     let hunters = hunters_in_week(&replies, at);
+    // No leaders yet: the mid-week leaderboard is raw platform engagement
+    // (reposts, quotes), and nothing this daemon reads today carries that --
+    // the reply log has who summoned, not what the post earned. Empty, not
+    // fabricated: rule 8 says absent is not zero, so this stays an honest
+    // "none known" until a live-engagement read is wired in, at which point
+    // this is the one line that changes.
+    let leaders: Vec<crate::bio::Leader> = Vec::new();
     let Some(text) = bio_to_write(
         bio,
         record.as_ref(),
         vault.as_ref(),
         hunters,
+        &leaders,
         marker.as_ref(),
         at,
     ) else {
@@ -1985,10 +2008,16 @@ mod tests {
         let closed = realorrug_contest::Week(2958).closes_at();
 
         // Nothing written yet: write it, and it says what the record says.
-        let first = bio_to_write(&bio, Some(&record), None, 0, None, closed + 60).expect("a bio");
+        let first =
+            bio_to_write(&bio, Some(&record), None, 0, &[], None, closed + 60).expect("a bio");
         assert!(first.starts_with("Automated."), "{first}");
         assert!(first.contains("@somebody"), "{first}");
-        assert!(first.contains("2026-09-21"), "{first}");
+        // The compact format (2026-09-17) says "Last won @handle" and drops
+        // the claim-by date -- there is no room to carry it alongside the
+        // pool and the leaders, and the date was never the point here. The
+        // point this assertion makes still holds: the bio writes what the
+        // record says.
+        assert!(first.contains("Last won @somebody"), "{first}");
 
         // The same text an hour later is not a write.
         let marker = BioMarker {
@@ -2001,6 +2030,7 @@ mod tests {
                 Some(&record),
                 None,
                 0,
+                &[],
                 Some(&marker),
                 closed + 60 + 7_200
             ),
@@ -2014,7 +2044,15 @@ mod tests {
             text: "something else".to_owned(),
         };
         assert_eq!(
-            bio_to_write(&bio, Some(&record), None, 0, Some(&stale), closed + 60 + 60),
+            bio_to_write(
+                &bio,
+                Some(&record),
+                None,
+                0,
+                &[],
+                Some(&stale),
+                closed + 60 + 60
+            ),
             None,
             "59 minutes"
         );
@@ -2024,6 +2062,7 @@ mod tests {
                 Some(&record),
                 None,
                 0,
+                &[],
                 Some(&stale),
                 closed + 60 + 3_600
             )
@@ -2038,7 +2077,7 @@ mod tests {
             reason: "bought".to_owned(),
         });
         assert_eq!(
-            bio_to_write(&bio, Some(&voided), None, 0, None, closed + 60),
+            bio_to_write(&bio, Some(&voided), None, 0, &[], None, closed + 60),
             None
         );
 
@@ -2048,9 +2087,31 @@ mod tests {
             lead: "x".repeat(crate::bio::MAX - 10),
         };
         assert_eq!(
-            bio_to_write(&long, Some(&record), None, 0, None, closed + 60),
+            bio_to_write(&long, Some(&record), None, 0, &[], None, closed + 60),
             None
         );
+    }
+
+    #[test]
+    fn the_live_operator_lead_still_writes_because_only_the_status_is_checked() {
+        // The bug this task was opened for: `@realorrug`'s real
+        // `REALORRUG_BIO_LEAD` is "Hunting cabals. Exposing tokens. No mercy.
+        // Truth for you.", and `forbidden::check` matches "cabal" as a
+        // verdict about an identifiable project. Checking the whole render,
+        // as `bio_to_write` used to, refused every write on the live account
+        // no matter what the week's record said. The lead is the operator's
+        // own fixed configuration, not a claim built from the record, so it
+        // is not checked -- only the generated status is, and this proves a
+        // write still goes through with the account's actual lead.
+        let bio = crate::bio::Bio {
+            lead: "Hunting cabals. Exposing tokens. No mercy. Truth for you.".to_owned(),
+        };
+        let record = bio_record();
+        let closed = realorrug_contest::Week(2958).closes_at();
+        let text = bio_to_write(&bio, Some(&record), None, 0, &[], None, closed + 60)
+            .expect("a write goes through despite the lead's own wording");
+        assert!(text.starts_with(&bio.lead), "{text}");
+        assert!(text.contains("Last won @somebody"), "{text}");
     }
 
     #[test]

@@ -7,6 +7,7 @@
 
 mod analyst;
 mod audit;
+mod bio;
 mod contest;
 mod creator_index;
 mod dossier;
@@ -66,6 +67,11 @@ commands:
                                  walk the chain: intact, torn, or broken
   audit export --week <week> [--journal <file>]
                                  that week's events as JSON
+  bio --preview [--lead TEXT] [--pool AMOUNT] [--hunters N]
+      [--leader HANDLE]... [--last-winner HANDLE]
+                                 the exact bio text `write_bio_if_changed`
+                                 would post for a sample, and its length.
+                                 Writes nothing
 ";
 
 fn usage() -> &'static str {
@@ -92,6 +98,7 @@ fn main() -> ExitCode {
     };
 
     let result = match command.as_str() {
+        "bio" => bio::run(&args),
         "contest" => contest::run(&args),
         "dossier" => dossier::run(&args),
         "roast" => roast::run(&args),
