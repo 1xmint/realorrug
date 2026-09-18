@@ -20,16 +20,16 @@ signals must land in first.
 ## Context
 
 `crates/realorrug-roast/src/verdict.rs:11` opens: *"It is deliberately not a
-score. `GOAL.md` refuses a single safety score... So `Verdict` carries
+score. `theradar:GOAL.md` refuses a single safety score... So `Verdict` carries
 **reasons**, and a reply renders the reasons rather than the label."*
-`forbidden.rs:19` repeats the same refusal (*"`GOAL.md` refuses a single
+`forbidden.rs:19` repeats the same refusal (*"`theradar:GOAL.md` refuses a single
 safety score for exactly this reason: 'a green shield is unknown rendered as
 safe'"*), and its test at `forbidden.rs:1322` exercises it. `docs/design/0020`
-line 53 and `docs/research/0042` line 36 both cite the identical `GOAL.md`
+line 53 and `docs/research/0042` line 36 both cite the identical `theradar:GOAL.md`
 sentence to justify "no composite risk score, in either repo, on purpose."
 
-All four citations trace to one place: `theradar`'s `GOAL.md`, Radar's own
-goal document, not this repository's. There is no `GOAL.md` in `realorrug`.
+All four citations trace to one place: `theradar`'s `theradar:GOAL.md`, Radar's own
+goal document, not this repository's. There is no `theradar:GOAL.md` in `realorrug`.
 The no-score rule was inherited wholesale from the sister project rather than
 decided here, and nobody has re-asked whether Radar's reason for refusing a
 score still holds once the analyst discloses how much of the evidence it
@@ -143,7 +143,7 @@ weights should be *measured against outcomes*, not asserted from intuition
   that code "picks one of five levels."
 - **`verdict.rs`'s "not a score" framing (its module doc, lines 11–24) is now
   wrong** and needs rewriting when the implementation lands — not in this
-  PR, which is docs-only, but the doc comment's citation of `GOAL.md` should
+  PR, which is docs-only, but the doc comment's citation of `theradar:GOAL.md` should
   not survive past that point since it is Radar's document, not this
   project's decision.
 - **The four unraised `Signal` variants and the never-computed
