@@ -522,7 +522,11 @@ export function CheckBox() {
             setText(e.target.value);
             setWrong(false);
           }}
-          placeholder="0x…"
+          // Both chains, because `submit` above accepts both. A bare `0x…`
+          // here was a sign on the door saying Robinhood only, while the box
+          // behind it read a pump.fun mint perfectly well and the checker
+          // answered about it -- traffic turned away by a placeholder.
+          placeholder="0x… or a Solana mint"
           autoComplete="off"
           spellCheck={false}
           aria-invalid={wrong}
@@ -541,8 +545,9 @@ export function CheckBox() {
           id="check-address-error"
           className="mt-2 text-sm text-[var(--color-danger)]"
         >
-          That is not a contract address. It should start with 0x and be 42
-          characters long.
+          That is not a contract address. A Robinhood Chain one starts with 0x
+          and is 42 characters long; a Solana mint is 32 to 44 letters and
+          digits with no 0, O, I or l in it.
         </p>
       )}
     </form>
