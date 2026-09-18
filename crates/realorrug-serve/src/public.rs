@@ -239,10 +239,13 @@ pub fn stats_in(paths: &Paths) -> Option<Value> {
                 "x_base_instant": b.x_base_instant,
             })).collect::<Vec<_>>(),
         },
-        "cost": {
+        // Absent, not zero, when this chain has no round-trip measurement
+        // (Robinhood Chain, as of this snapshot's writing) -- rule 8. A `null`
+        // here is what tells the page to say nothing rather than "$0".
+        "cost": rates.round_trip.as_ref().map(|rt| json!({
             "band": "$20-$200",
-            "round_trip_bps": rates.round_trip_bar,
-        },
+            "round_trip_bps": rt.bar,
+        })),
         "aftermath": {
             "measured_on": aftermath.measured_on,
             "organic_median_bps": aftermath.organic_median_bps,

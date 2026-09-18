@@ -439,6 +439,14 @@ impl FactSheet {
         // `None` publishes nothing, which is what an unchecked question is.
         let chain = crate::firstparty::Chain::of(&dossier.mint);
         let creators = creators.filter(|index| index.chain == chain);
+        // A base-rate snapshot describes one chain's launches, the same as a
+        // creator index (`CreatorIndex::chain`, filtered just above). Until
+        // 2026-09-17 `rates` carried no chain of its own, so `push_population`
+        // and `Signal::LaunchBlockInStrongestBand` ran for any chain whenever
+        // *any* snapshot was loaded -- on a Robinhood Chain sheet that printed
+        // Solana/pump.fun's recipient distribution as though it were measured
+        // here. Filtering here, once, is what keeps both readers below honest.
+        let rates = rates.filter(|r| r.chain == chain);
 
         if let Some(launch) = &dossier.launch {
             push_launch(&mut facts, &mut untrusted, launch);
@@ -588,19 +596,21 @@ impl FactSheet {
         // describes, and would have gone on suppressing it after that index
         // was built, while still printing pump.fun's totals for pump.fun
         // whatever file happened to be at the path.
-        let robinhood = matches!(dossier.mint, realorrug_types::ChainAddress::Robinhood(_));
         if let Some(population) = creators.and_then(|c| c.population) {
             push_measured_population(&mut facts, &population);
         }
 
-        // **Solana-only base rates.** `rates` (`BaseRates`) is Radar's kernel
-        // measured against Solana/pump.fun fresh launches (`push_cost`'s own
-        // "850 bps" line, "round trip Radar's kernel assumes, on fresh
-        // launches"); Robinhood Chain has no such measurement yet, so stating
-        // it on a Robinhood sheet is a wrong-chain fact, not a conservative
-        // estimate.
-        if !robinhood && let Some(rates) = rates {
-            push_cost(&mut facts, rates);
+        // **Gated on the snapshot's own chain, filtered at the top of this
+        // function, and again on whether that chain has a round-trip cost
+        // measurement at all.** Research 0024 measured Solana/pump.fun fresh
+        // launches (`push_cost`'s "850 bps" line, "round trip Real or Rug's
+        // kernel assumes"); Robinhood Chain has no such measurement yet, so
+        // `BaseRates::round_trip` is `None` for it -- absent, not a
+        // conservative estimate borrowed from a different chain.
+        if let Some(rates) = rates
+            && let Some(round_trip) = &rates.round_trip
+        {
+            push_cost(&mut facts, round_trip);
         }
 
         for miss in &dossier.unavailable {
@@ -1614,17 +1624,26 @@ fn push_band(facts: &mut Vec<Fact>, exact: u32, band: &crate::baserates::Band) {
 }
 
 /// The whole field, which is what makes a band figure mean anything.
+///
+/// Carries `measured_on` into the Plain-voice line ("as of `<date>`") rather
+/// than only into a log line the reader never sees. This snapshot is kept and
+/// quoted up to `STALE_AFTER_DAYS` (`baserates.rs`) rather than dropped after a
+/// short fixed window, so the date travelling with the fact -- not a silent
+/// cutoff -- is what tells a reader how current the figure is.
 fn push_base_rates(facts: &mut Vec<Fact>, rates: &BaseRates) {
+    let as_of = &rates.measured_on;
     let f = Fact::share(
         Kind::BaseInstant,
-        "population rate: share of all launches that graduate instantly",
+        format!("population rate (as of {as_of}): share of all launches that graduate instantly"),
         rates.base_rate_instant,
     );
     let r = f.rendered.clone();
     facts.push(
         f.saying(
             Voice::Plain,
-            format!("Across every launch in the snapshot, {r} graduated instantly."),
+            format!(
+                "Across every launch in the snapshot (as of {as_of}), {r} graduated instantly."
+            ),
         )
         .saying(
             Voice::Blunt,
@@ -1633,7 +1652,7 @@ fn push_base_rates(facts: &mut Vec<Fact>, rates: &BaseRates) {
     );
     let f = Fact::share(
         Kind::BaseGraduates,
-        "population rate: share of all launches that graduate at all",
+        format!("population rate (as of {as_of}): share of all launches that graduate at all"),
         rates.base_rate_graduates,
     );
     let r = f.rendered.clone();
@@ -1800,13 +1819,13 @@ fn push_fee(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
     }
 }
 
-fn push_cost(facts: &mut Vec<Fact>, rates: &BaseRates) {
-    let kernel = format!("{} bps", rates.round_trip_kernel);
+fn push_cost(facts: &mut Vec<Fact>, round_trip: &crate::baserates::RoundTrip) {
+    let kernel = format!("{} bps", round_trip.kernel);
     facts.push(
         Fact::exact(
             Kind::RoundTripKernel,
             "measured all-in round trip Real or Rug's kernel assumes, on fresh launches",
-            rates.round_trip_kernel,
+            round_trip.kernel,
             kernel.clone(),
         )
         .saying(
@@ -1815,12 +1834,12 @@ fn push_cost(facts: &mut Vec<Fact>, rates: &BaseRates) {
         )
         .saying(Voice::Blunt, format!("{kernel} to get in and out, all in.")),
     );
-    let bar = format!("{} bps", rates.round_trip_bar);
+    let bar = format!("{} bps", round_trip.bar);
     facts.push(
         Fact::exact(
             Kind::RoundTripBar,
             "expected edge a strategy must clear before one trade is worth making",
-            rates.round_trip_bar,
+            round_trip.bar,
             bar.clone(),
         )
         .saying(
@@ -1834,7 +1853,7 @@ fn push_cost(facts: &mut Vec<Fact>, rates: &BaseRates) {
             format!("Clear {bar} of edge or do not trade."),
         ),
     );
-    for band in &rates.cost_bands {
+    for band in &round_trip.cost_bands {
         let size = &band.band;
         let rendered = format!("{} bps ({:.1}%)", band.round_trip, band.round_trip / 100.0);
         facts.push(
@@ -2315,6 +2334,7 @@ mod tests {
             x_base_instant: x,
         };
         BaseRates {
+            chain: crate::firstparty::Chain::Solana,
             measured_on: "2026-09-03".to_owned(),
             aftermath: None,
             launches: 1,
@@ -2324,9 +2344,7 @@ mod tests {
                 band("one to three", 1, 3, 0.0),
                 band("strong", lo, hi, 10.1),
             ],
-            round_trip_kernel: 0.0,
-            round_trip_bar: 0.0,
-            cost_bands: Vec::new(),
+            round_trip: None,
         }
     }
 
@@ -3256,6 +3274,71 @@ mod tests {
         assert!(
             solana_rendered.contains("round trip Real or Rug's kernel assumes"),
             "{solana_rendered}"
+        );
+    }
+
+    #[test]
+    fn a_robinhood_base_rates_snapshot_produces_the_band_line_on_a_robinhood_sheet() {
+        // The mirror of `a_robinhood_sheet_carries_no_base_rate_cost_line`: a
+        // Robinhood-chain snapshot's population figures belong on a Robinhood
+        // sheet, the same way a Pons v2 creator index's totals do
+        // (`a_population_line_is_printed_by_the_index_chain_not_the_token_chain`).
+        // `LaunchBlock` itself carries no chain tag -- `Chain::of` reads it off
+        // `dossier.mint` -- so this constructs a Robinhood dossier with a
+        // launch block directly, which is what `push_population`'s chain gate
+        // has to get right regardless of how that block was read.
+        let band = |name: &str, lo, hi, x| crate::baserates::Band {
+            name: name.to_owned(),
+            lo,
+            hi,
+            fires_on: 0.0,
+            never_graduated: 0.0,
+            organic: 0.0,
+            instant: 0.0,
+            p_instant: 0.0,
+            x_base_instant: x,
+        };
+        let robinhood_rates = BaseRates {
+            chain: crate::firstparty::Chain::Robinhood,
+            measured_on: "2026-09-16".to_owned(),
+            aftermath: None,
+            launches: 1,
+            base_rate_graduates: 0.0,
+            base_rate_instant: 0.0,
+            bands: vec![band("ten to thirteen", 10, 13, 10.1)],
+            round_trip: None,
+        };
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(11), None));
+
+        let sheet = FactSheet::build(&dossier, Some(&robinhood_rates), None, None, None);
+        let rendered = sheet.render();
+        assert!(
+            rendered.contains("ten to thirteen"),
+            "a Robinhood snapshot's own band was withheld from a Robinhood sheet: {rendered}"
+        );
+        assert!(
+            rendered.contains("as of 2026-09-16"),
+            "the band line must carry the snapshot's measurement date: {rendered}"
+        );
+        assert!(
+            sheet.signals.contains(&Signal::LaunchBlockInStrongestBand),
+            "{:?}",
+            sheet.signals
+        );
+
+        // And the mirror: a Solana snapshot says nothing on this same
+        // Robinhood dossier -- the chain gate runs on the snapshot, not on
+        // whether a snapshot was supplied at all.
+        let solana_rates = BaseRates {
+            chain: crate::firstparty::Chain::Solana,
+            ..robinhood_rates
+        };
+        let wrong_chain =
+            FactSheet::build(&dossier, Some(&solana_rates), None, None, None).render();
+        assert!(
+            !wrong_chain.contains("ten to thirteen"),
+            "a Solana snapshot's band leaked onto a Robinhood sheet: {wrong_chain}"
         );
     }
 
