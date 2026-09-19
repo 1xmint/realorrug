@@ -57,7 +57,7 @@ pub use baserates::BaseRates;
 pub use clause::{Clause, Kind, Selection, Voice};
 pub use creator::{CreatorIndex, Population};
 pub use sheet::{About, Fact, FactSheet};
-pub use verdict::{Level, Verdict, level, template};
+pub use verdict::{Level, Verdict, level, level_from_score, template};
 pub use voice::{Billed, Fellback, Reply, write};
 
 use realorrug_model::Provider;

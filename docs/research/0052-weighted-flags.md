@@ -313,6 +313,38 @@ is intended (a 0.001 ETH dev buy plus a second launch is not two live rug
 mechanics), and it is the one fixture-visible change (§8, M-D-0005
 stop-and-ask).
 
+**M-D-0005 built, shadow only (2026-09-18).**
+`crates/realorrug-roast/src/verdict.rs::level_from_score` computes this
+table's rule beside `level`, sharing its `Rugged` and `CantTell` gates
+exactly (a private `rugged_pair` helper the two now call, so they cannot
+drift apart) plus one this document adds: coverage under 6,000 bps of
+`crate::assessment::Coverage` also forces `CantTell`. It is exposed on
+`Assessment::score_level` (a new JSON key, `score_bps`'s neighbour) and on
+`realorrug roast --sheet`'s printed "provisional" line; **`level` itself is
+still what publishes**, per §9's "the level should still come from
+`verdict::level`" -- nothing reads `score_level` to decide anything yet.
+`Assessment::admissible` was left alone rather than rebuilt from bands: the
+band set it offers today already brackets `level`, and rebuilding it from
+`score_level` while `level` stays the published one would let a model reach
+for a band the shadow score chose over the one the ladder chose, which is a
+behaviour change this slice does not need to make.
+
+One number in this section does not survive contact with the shipped
+episode map: S1 (`CreatorBoughtOwnLaunch`) and S2
+(`LaunchBlockInStrongestBand`) are the *same* `Episode::LaunchBlock`
+(`assessment.rs`'s own `episode` function, predating this document --
+"the recipient band and a creator buy inside that same block are the same
+observation seen through two signals"), so a real sheet folds them to that
+episode's maximum (1,500) before `noisy_or` ever runs, never reaching the
+2,520 above. The worked S1+S3 case two paragraphs up is unaffected (S1 and
+S3 sit in different episodes: `LaunchBlock` and `CreatorHistory`), and the
+2,500 boundary itself is still exercised directly in
+`verdict.rs`'s test suite. Left as a documentation defect rather than a code
+change: fixing it means either moving S1 or S2 to its own episode (a
+`risk_index` and `level` behaviour change, out of this slice's allowed
+files) or accepting that this one illustrative number was never reachable.
+Flagged for Josh rather than resolved either way.
+
 ### 4.3 Score to the daily-five odds q
 
 Design 0028's zero-average proof needs only that `q` for a class of launch
