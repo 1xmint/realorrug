@@ -38,7 +38,9 @@ use crate::budget::{Budget, Exhausted};
 use crate::dossier::{
     ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, QuoteAsset, Unavailable,
 };
-use crate::memory::{CheckRun, Checkpoint, Completeness, Kind as MemoryKind, Memory, REORG_DEPTH, TransferEvent};
+use crate::memory::{
+    CheckRun, Checkpoint, Completeness, Kind as MemoryKind, Memory, REORG_DEPTH, TransferEvent,
+};
 use crate::wallets;
 
 /// Why a Robinhood dossier could not be built at all.
@@ -285,8 +287,9 @@ fn pair_quote_asset(
     })?;
 
     let decimals_data = call(budget, client, pair, &erc20::DECIMALS, at)?;
-    let decimals = erc20::decimals_from_return(&decimals_data)
-        .ok_or_else(|| "decimals(): the pair's return was not a plausible decimals value".to_owned())?;
+    let decimals = erc20::decimals_from_return(&decimals_data).ok_or_else(|| {
+        "decimals(): the pair's return was not a plausible decimals value".to_owned()
+    })?;
 
     if let Some(memory) = memory {
         let value = format!("{symbol}\u{1}{decimals}");
@@ -2933,7 +2936,7 @@ pub(crate) mod tests {
         let deployer = RobinhoodAddress([0x71; 20]);
         let rec = record(true, curve, deployer);
         let client = Rpc::new(serve(vec![
-            answer(&hex(&word_bool(false))), // graduated()
+            answer(&hex(&word_bool(false))),    // graduated()
             answer(&hex(&encoded_decimals(0))), // realQuoteReserve()
         ]));
         let mut b = budget();

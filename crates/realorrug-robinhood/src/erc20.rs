@@ -186,7 +186,10 @@ mod tests {
     fn a_plain_decimals_return_decodes() {
         assert_eq!(decimals_from_return(&word_u128(18)), Some(18));
         assert_eq!(decimals_from_return(&word_u128(6)), Some(6));
-        assert_eq!(decimals_from_return(&word_u128(u128::from(MAX_DECIMALS))), Some(MAX_DECIMALS));
+        assert_eq!(
+            decimals_from_return(&word_u128(u128::from(MAX_DECIMALS))),
+            Some(MAX_DECIMALS)
+        );
     }
 
     /// Past the sanity ceiling is refused rather than clamped -- a value this
