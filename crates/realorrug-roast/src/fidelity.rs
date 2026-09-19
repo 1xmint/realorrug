@@ -135,6 +135,10 @@ impl Subject {
             // wallet. It is not `Self::Launch` either -- the window it reads
             // is the launch window, but what it measures is who sold, the
             // same question `Kind::Holders` answers about who holds.
+            // S2's three buyer-derived raise factors (research 0052 §3.1)
+            // read the same launch-window buyers `Kind::FundingChecked`
+            // does, not the creator or the venue: a sentence about the
+            // creator may not cite them.
             Kind::Holders
             | Kind::LargestHolderShare
             | Kind::FundingChecked
@@ -142,7 +146,10 @@ impl Subject {
             | Kind::TokenOwnership
             | Kind::CorrelatedSellWallets
             | Kind::CorrelatedSellVolumeBps
-            | Kind::CorrelatedSellSpreadSeconds => Self::Holders,
+            | Kind::CorrelatedSellSpreadSeconds
+            | Kind::WindowBuyersLinkedHoldingsBps
+            | Kind::FreshWindowBuyers
+            | Kind::WindowBuySizesWithinTenPercent => Self::Holders,
             // `OutcomeRate` (ADR 0033) measures launches shaped like this one,
             // not this launch alone, but it is still a claim about the launch
             // population rather than the creator, holders or venue -- the
@@ -169,7 +176,11 @@ impl Subject {
             | Kind::VenueFee
             | Kind::RoundTripKernel
             | Kind::RoundTripBar
-            | Kind::CostBand => Self::Venue,
+            | Kind::CostBand
+            // The band's own sample size (research 0052 §3.1's S2
+            // thin-sample lower) is a fact about the band, the same subject
+            // as the rest of this arm, not about this token.
+            | Kind::BandLaunches => Self::Venue,
             Kind::Capacity
             | Kind::CapacityNone
             | Kind::CapacityAfterGraduation
@@ -189,7 +200,13 @@ impl Subject {
             | Kind::QuotePair
             | Kind::CreatorTaxBps
             | Kind::PendingCreatorFeeRecipientSet
-            | Kind::UndeclaredExemptions => Self::Token,
+            | Kind::UndeclaredExemptions
+            // Whether every launch-window buyer is on the declared
+            // exemption list (research 0052 §3.1's S2 row) is a reading of
+            // the launch's own declared exemption list, the same subject
+            // `Kind::UndeclaredExemptions` already carries, not a claim
+            // about the holders themselves.
+            | Kind::AllWindowBuyersDeclaredExempt => Self::Token,
         }
     }
 }

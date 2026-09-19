@@ -257,6 +257,63 @@ pub enum Kind {
     /// when any exemption sub-read failed, because an unconfirmed candidate
     /// would make this an undercount rather than a measurement.
     UndeclaredExemptions,
+    /// Same-window buyers' combined holding, in basis points, from the
+    /// checked candidates alone (research 0052 §3.1's S2 row; S2's raise is
+    /// a raw, unweighted sum -- `confidence_bps = 10,000` for every
+    /// candidate -- unlike S1's linked-holdings raise, which discounts by
+    /// `link_confidence` instead). Computed with
+    /// `realorrug_onchain::wallets::linked_holdings_bps` over the checked
+    /// candidates' shares of `ChainLaunch::supply`.
+    ///
+    /// **Known approximation:** `Funding.checked` is a cost-limited sample
+    /// of at most `MAX_CANDIDATES` (4) candidates, never every buyer in the
+    /// launch window -- this sums only what was checked, so it is a floor
+    /// on the true same-window total, never the total itself. A candidate
+    /// with `bought_tokens: None` (Solana's investigation never reads a
+    /// token amount) is excluded from the sum, not counted as a zero share
+    /// (AGENTS.md §3 rule 8).
+    WindowBuyersLinkedHoldingsBps,
+    /// How many of the checked launch-window buyers are fresh
+    /// (`Candidate::nonce_before_launch == Some(0)`, research 0052 §3.1's
+    /// S2 row). Never pushed when any checked candidate's nonce read
+    /// failed: an undercount here could wrongly miss the `>= 3` raise, so
+    /// the whole count stays absent rather than being taken over the
+    /// readable subset (rule 8).
+    ///
+    /// Same sampling caveat as [`Kind::WindowBuyersLinkedHoldingsBps`]: at
+    /// most four candidates are ever checked, so this counts fresh buyers
+    /// among the sample, not the launch window's full buyer list.
+    FreshWindowBuyers,
+    /// Whether the checked launch-window buyers' spends (`Candidate::bought_wei`)
+    /// are all within 10% of each other
+    /// (`realorrug_onchain::wallets::sizes_within_ten_percent` applied to
+    /// the sample's smallest and largest spend, research 0052 §3.1's S2
+    /// row). `1.0` when within 10%, `0.0` when not; never pushed with fewer
+    /// than two checked candidates, since "within 10% of each other" has no
+    /// meaning for a sample of one.
+    ///
+    /// Same sampling caveat as [`Kind::WindowBuyersLinkedHoldingsBps`]: the
+    /// comparison is over the checked sample only, at most four buyers.
+    WindowBuySizesWithinTenPercent,
+    /// Whether every launch-window buyer is on the declared snipe-tax
+    /// exemption list (`ExemptionSource::Declared`, research 0052 §3.1's S2
+    /// row). `1.0` when every buyer is declared-exempt, `0.0` otherwise.
+    ///
+    /// **Only pushed when the full launch-window buyer list is known** --
+    /// `Funding::checked.len() as u32 == Funding::buyers` -- because
+    /// `Funding.checked` is normally a cost-limited sample
+    /// (see [`Kind::WindowBuyersLinkedHoldingsBps`]'s doc comment) and
+    /// "every buyer declared" checked against a partial sample would be an
+    /// overclaim the moment an unchecked buyer is not declared. When only
+    /// the sample exists, this stays absent rather than answering for
+    /// buyers nothing here read.
+    AllWindowBuyersDeclaredExempt,
+    /// How many launches a recipient-count band was measured on
+    /// (`realorrug_roast::baserates::Band::launches`, research 0052 §3.1's
+    /// S2 row's thin-sample lower). Free -- already on the base-rate
+    /// snapshot -- so this is always pushed alongside the band's own
+    /// membership fact.
+    BandLaunches,
 }
 
 /// Which register a clause is written in.

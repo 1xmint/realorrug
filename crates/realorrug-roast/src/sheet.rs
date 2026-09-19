@@ -427,11 +427,10 @@ fn fact_value(sheet: &FactSheet, kind: crate::clause::Kind) -> Option<f64> {
 /// Research 0052 §3.1's catalogue, wired to the facts a [`FactSheet`]
 /// already carries.
 ///
-/// **Four rows are wired today.** Most of the catalogue's raise and lower
-/// factors still need an input this sheet does not hold yet -- a
-/// linked-wallet sum, a fresh-wallet count, a declared-exemption list, a
-/// band's own sample size, a role-proven holder. None of those are invented
-/// here (AGENTS.md §3 rule 2). What is already on the sheet:
+/// **Five rows are wired today.** Most of the catalogue's remaining raise
+/// and lower factors still need an input this sheet does not hold yet -- a
+/// role-proven holder, a `Proof`. None of those are invented here (AGENTS.md
+/// §3 rule 2). What is already on the sheet:
 ///
 /// - [`Signal::RepeatLauncher`]'s `+800` (>= 10 lifetime launches, M),
 ///   read from `Kind::CreatorLaunches`.
@@ -458,8 +457,17 @@ fn fact_value(sheet: &FactSheet, kind: crate::clause::Kind) -> Option<f64> {
 ///   needs a `Proof` this sheet does not carry) is the only piece left out.
 ///   The row's third raise (`+800` for a top-10 share) is also left out:
 ///   nothing here computes a top-10 sum, only the single largest address.
+/// - [`Signal::LaunchBlockInStrongestBand`]'s five factors (research 0052
+///   §3.1's S2 row): `+1,000` if checked same-window buyers hold `>= 1,000`
+///   bps together (M, raw/unweighted), `+800` if `>= 3` are fresh (M),
+///   `+500` if their spends are within 10% of each other (I), `-500` if
+///   every launch-window buyer is declared-exempt (M, only when the full
+///   buyer list -- not a sample -- is known) and `-300` if the recipient
+///   band was measured on `< 200` launches (I, thin sample). See
+///   [`launch_block_band_factors`]'s own doc comment for the sampling
+///   caveat this row's raises carry.
 ///
-/// All four fire only when the signal itself already fired -- a factor
+/// All five fire only when the signal itself already fired -- a factor
 /// with no signal to adjust would have nothing to attach to on the sheet
 /// the model reads. [`Signal::HolderConcentration`] is declared but not yet
 /// pushed by [`FactSheet::build`] on any chain (its own threshold is not
@@ -571,7 +579,124 @@ pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
         owner_powers_factors(sheet, &mut factors);
     }
 
+    if sheet.signals.contains(&Signal::LaunchBlockInStrongestBand) {
+        launch_block_band_factors(sheet, &mut factors);
+    }
+
     factors
+}
+
+/// S2's five raise/lower factors (research 0052 §3.1's
+/// `LaunchBlockInStrongestBand` row), split out of [`factors`] itself so
+/// that function stays under clippy's line count -- the same split
+/// [`holder_concentration_factors`] and [`owner_powers_factors`] already
+/// use.
+///
+/// Each of the five reads one `Kind` [`push_window_buyer_factors`] or
+/// [`push_band`] may or may not have pushed; a `Kind` this sheet never got
+/// (rule 8: absent is not zero) simply finds nothing here and adds no
+/// factor, the same "gap shows in coverage, never a zero" discipline the
+/// other `factors` sub-functions already follow.
+///
+/// **[`Signal::LaunchBlockInStrongestBand`] fires only on Solana today**
+/// (`FactSheet::build`'s `dossier.launch` arm), while the four
+/// buyer-derived `Kind`s these factors mostly read come only from
+/// `dossier.funding`/`dossier.powers`/`ChainLaunch::supply`, which are
+/// Robinhood-only in practice today. The two never co-occur on a real
+/// dossier yet -- the same situation [`holder_concentration_factors`]'s own
+/// doc comment already describes for `Signal::HolderConcentration` -- so
+/// this is exercised by a sheet built directly in a test, not by a live
+/// build, until one side crosses over to the other chain.
+fn launch_block_band_factors(sheet: &FactSheet, factors: &mut Vec<Factor>) {
+    if let Some(bps_f64) = fact_value(sheet, Kind::WindowBuyersLinkedHoldingsBps) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "WindowBuyersLinkedHoldingsBps is pushed from a u16, far inside i64's \
+                      range"
+        )]
+        let bps = bps_f64.round() as i64;
+        if let 1_000..=i64::MAX = bps {
+            factors.push(Factor {
+                signal: Signal::LaunchBlockInStrongestBand,
+                name: "same-window buyers hold >= 1,000 bps together".to_owned(),
+                delta_bps: 1_000,
+                grade: Grade::Measured,
+                evidence: format!(
+                    "checked same-window buyers together hold {:.2}% of supply, raw (unweighted \
+                     by link confidence)",
+                    bps_f64 / 100.0
+                ),
+            });
+        }
+    }
+
+    if let Some(fresh_f64) = fact_value(sheet, Kind::FreshWindowBuyers) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "FreshWindowBuyers is a count of at most MAX_CANDIDATES (4), far inside \
+                      i64's range"
+        )]
+        let fresh = fresh_f64.round() as i64;
+        if let 3..=i64::MAX = fresh {
+            factors.push(Factor {
+                signal: Signal::LaunchBlockInStrongestBand,
+                name: ">= 3 checked same-window buyers are fresh".to_owned(),
+                delta_bps: 800,
+                grade: Grade::Measured,
+                evidence: format!("{fresh} of the checked same-window buyers are fresh wallets"),
+            });
+        }
+    }
+
+    // `>= 0.5`, not `== 1.0`: the fact is only ever pushed as exactly 0.0 or
+    // 1.0, but clippy's `float_cmp` forbids strict equality on floats.
+    if let Some(within) = fact_value(sheet, Kind::WindowBuySizesWithinTenPercent)
+        && within >= 0.5
+    {
+        factors.push(Factor {
+            signal: Signal::LaunchBlockInStrongestBand,
+            name: "checked same-window buy sizes within 10% of each other".to_owned(),
+            delta_bps: 500,
+            grade: Grade::Inferred,
+            evidence: "the checked same-window buyers' spends are all within 10% of each other"
+                .to_owned(),
+        });
+    }
+
+    // `>= 0.5`, not `== 1.0`: same clippy note as above.
+    if let Some(declared) = fact_value(sheet, Kind::AllWindowBuyersDeclaredExempt)
+        && declared >= 0.5
+    {
+        factors.push(Factor {
+            signal: Signal::LaunchBlockInStrongestBand,
+            name: "every launch-window buyer is declared-exempt".to_owned(),
+            delta_bps: -500,
+            grade: Grade::Measured,
+            evidence: "every buyer in the launch window is on this launch's declared \
+                       snipe-tax exemption list"
+                .to_owned(),
+        });
+    }
+
+    if let Some(launches_f64) = fact_value(sheet, Kind::BandLaunches) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "BandLaunches is pushed from a u64 count of measured launches, far inside \
+                      i64's range for any sample this project will ever measure"
+        )]
+        let launches = launches_f64.round() as i64;
+        if let i64::MIN..=199 = launches {
+            factors.push(Factor {
+                signal: Signal::LaunchBlockInStrongestBand,
+                name: "band measured on < 200 launches, thin sample".to_owned(),
+                delta_bps: -300,
+                grade: Grade::Inferred,
+                evidence: format!(
+                    "this recipient band has only been measured on {launches} launches"
+                ),
+            });
+        }
+    }
 }
 
 /// S13's raise/lower factors (research 0052 §3.1's row, ADR 0035), split out
@@ -937,6 +1062,18 @@ impl FactSheet {
         // gap in `unknown` beside the facts it did get.
         if let Some(funding) = &dossier.funding {
             push_funding(&mut facts, &mut unknown, funding);
+            // Research 0052 §3.1's S2 row's four buyer-derived factors --
+            // split out because they read `dossier.powers` and
+            // `dossier.chain_launch`'s supply too, neither of which
+            // `push_funding` itself touches.
+            let supply = dossier.chain_launch.as_ref().and_then(|l| l.supply);
+            push_window_buyer_factors(
+                &mut facts,
+                &mut skipped,
+                funding,
+                supply,
+                dossier.powers.as_ref(),
+            );
         }
 
         // **The fact that makes one reply differ from another.** The launch
@@ -2054,6 +2191,218 @@ fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Fund
     }
 }
 
+/// S2's four buyer-derived raise/lower factors (research 0052 §3.1's
+/// `LaunchBlockInStrongestBand` row), split out of [`FactSheet::build`]
+/// itself.
+///
+/// **`funding.checked` is a cost-limited sample**, at most
+/// `wallets::MAX_CANDIDATES` (4) candidates, never every buyer in the
+/// launch window -- every fact this function pushes says so in its
+/// rendering or label, and the two counting facts (fresh buyers, linked
+/// holdings) sum only what was checked, never claiming the full window.
+///
+/// Each of the four inputs is independent, per rule 8 (absent is not
+/// zero): a read this function cannot complete registers a `skipped`
+/// coverage gap and leaves that one `Kind` off the sheet, without
+/// stopping the other three.
+fn push_window_buyer_factors(
+    facts: &mut Vec<Fact>,
+    skipped: &mut Vec<String>,
+    funding: &Funding,
+    supply: Option<u128>,
+    powers: Option<&Powers>,
+) {
+    push_window_holdings_and_freshness(facts, skipped, funding, supply);
+    push_window_sizes_and_exemption(facts, skipped, funding, powers);
+}
+
+/// The +1,000 linked-holdings and +800 fresh-buyer factors of research
+/// 0052 §3.1's S2 row -- split from the sizes/exemption pair below only to
+/// stay under clippy's line-count cap, not because the four facts differ in
+/// kind.
+fn push_window_holdings_and_freshness(
+    facts: &mut Vec<Fact>,
+    skipped: &mut Vec<String>,
+    funding: &Funding,
+    supply: Option<u128>,
+) {
+    // +1,000: same-window buyers hold >= 1,000 bps together (M), read from
+    // the checked candidates' raw (unweighted) shares of total supply --
+    // `confidence_bps = 10,000` for every one, which is what makes this a
+    // raw sum rather than S1's confidence-discounted "effective" sum.
+    match supply {
+        None | Some(0) => skipped
+            .push("same-window buyers' linked holdings needs the launch's total supply".to_owned()),
+        Some(supply) => {
+            let mut excluded = 0u32;
+            let mut holdings = Vec::new();
+            for candidate in &funding.checked {
+                // A candidate with no token amount read is unknown, not a
+                // zero share -- excluded from the sum, not counted against
+                // it (AGENTS.md §3 rule 8).
+                let Some(tokens) = candidate.bought_tokens else {
+                    excluded += 1;
+                    continue;
+                };
+                let Ok(address) = candidate.address.parse() else {
+                    excluded += 1;
+                    continue;
+                };
+                let share_bps =
+                    u16::try_from(tokens.saturating_mul(10_000) / supply).unwrap_or(u16::MAX);
+                holdings.push((address, share_bps, 10_000u16));
+            }
+            if holdings.is_empty() {
+                skipped.push(
+                    "same-window buyers' linked holdings needs a checked candidate's token \
+                     amount, and none were read"
+                        .to_owned(),
+                );
+            } else {
+                let bps = realorrug_onchain::wallets::linked_holdings_bps(&holdings);
+                let bps_f64 = f64::from(bps);
+                let note = if excluded > 0 {
+                    format!(
+                        ", {excluded} of {} checked candidates excluded (no token amount read)",
+                        funding.checked.len()
+                    )
+                } else {
+                    String::new()
+                };
+                facts.push(Fact::exact(
+                    Kind::WindowBuyersLinkedHoldingsBps,
+                    "same-window buyers' combined holding, in basis points, from the checked \
+                     candidates alone (a cost-limited sample, never every buyer in the launch \
+                     window)",
+                    bps_f64,
+                    format!("{:.2}%{note}", bps_f64 / 100.0),
+                ));
+            }
+        }
+    }
+
+    // +800: >= 3 of the checked buyers are fresh (M), i.e.
+    // `nonce_before_launch == Some(0)`. Any unread nonce makes the whole
+    // count an undercount that could wrongly miss the raise, so the fact
+    // stays absent rather than being taken over the readable subset.
+    if !funding.checked.is_empty() {
+        if funding
+            .checked
+            .iter()
+            .any(|candidate| candidate.nonce_before_launch.is_none())
+        {
+            skipped.push(
+                "how many same-window buyers are fresh needs every checked candidate's \
+                 pre-launch transaction count, and at least one was not read"
+                    .to_owned(),
+            );
+        } else {
+            let fresh = funding
+                .checked
+                .iter()
+                .filter(|candidate| candidate.nonce_before_launch == Some(0))
+                .count();
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a count of checked candidates is at most MAX_CANDIDATES (4), far \
+                          inside f64's exact integer range"
+            )]
+            let fresh_f64 = fresh as f64;
+            facts.push(Fact::exact(
+                Kind::FreshWindowBuyers,
+                "checked same-window buyers with no transactions before the launch block (a \
+                 cost-limited sample, never every buyer in the launch window)",
+                fresh_f64,
+                format!("{fresh} of {}", funding.checked.len()),
+            ));
+        }
+    }
+}
+
+/// The +500 size-spread and -500 exemption factors of research 0052 §3.1's
+/// S2 row -- see `push_window_holdings_and_freshness`'s doc comment for why
+/// this is split out.
+fn push_window_sizes_and_exemption(
+    facts: &mut Vec<Fact>,
+    skipped: &mut Vec<String>,
+    funding: &Funding,
+    powers: Option<&Powers>,
+) {
+    // +500: checked buy sizes are within 10% of each other (I), compared by
+    // spend (`bought_wei`, always read) rather than token amount (which a
+    // candidate may lack, see the holdings block above).
+    if funding.checked.len() < 2 {
+        skipped.push(
+            "whether same-window buy sizes are within 10% of each other needs at least two \
+             checked candidates"
+                .to_owned(),
+        );
+    } else {
+        let smallest = funding
+            .checked
+            .iter()
+            .map(|candidate| candidate.bought_wei)
+            .min()
+            .unwrap_or(0);
+        let largest = funding
+            .checked
+            .iter()
+            .map(|candidate| candidate.bought_wei)
+            .max()
+            .unwrap_or(0);
+        let within = realorrug_onchain::wallets::sizes_within_ten_percent(smallest, largest);
+        facts.push(Fact::exact(
+            Kind::WindowBuySizesWithinTenPercent,
+            "whether the checked same-window buyers' spends are all within 10% of each other \
+             (a cost-limited sample, never every buyer in the launch window)",
+            if within { 1.0 } else { 0.0 },
+            if within {
+                "within 10%".to_owned()
+            } else {
+                "not within 10%".to_owned()
+            },
+        ));
+    }
+
+    // -500: every launch-window buyer is on the declared exemption list
+    // (M). Only when `funding.checked` is the *full* buyer list, never a
+    // sample -- see `Kind::AllWindowBuyersDeclaredExempt`'s doc comment.
+    let checked_count = u32::try_from(funding.checked.len()).unwrap_or(u32::MAX);
+    if checked_count == funding.buyers && !funding.checked.is_empty() {
+        if let Some(powers) = powers {
+            let all_declared = funding.checked.iter().all(|candidate| {
+                let Ok(address) = candidate.address.parse::<realorrug_types::ChainAddress>() else {
+                    return false;
+                };
+                powers.exemptions.iter().any(|exemption| {
+                    exemption.address == address && exemption.source == ExemptionSource::Declared
+                })
+            });
+            facts.push(Fact::exact(
+                Kind::AllWindowBuyersDeclaredExempt,
+                "whether every launch-window buyer is on this launch's declared snipe-tax \
+                 exemption list",
+                if all_declared { 1.0 } else { 0.0 },
+                if all_declared {
+                    "all declared-exempt".to_owned()
+                } else {
+                    "not all declared-exempt".to_owned()
+                },
+            ));
+        } else {
+            skipped.push(
+                "whether every launch-window buyer is declared-exempt needs this launch's \
+                 exemption list"
+                    .to_owned(),
+            );
+        }
+    }
+    // Else: `funding.checked` is a sample, not the full window -- not a
+    // read failure, so not a coverage gap (the sampling limit itself is
+    // documented on `Kind::AllWindowBuyersDeclaredExempt`, not repeated as
+    // a gap on every sheet that hits it).
+}
+
 /// What this creator's other tokens did.
 ///
 /// # Counts, never a rate
@@ -2395,12 +2744,17 @@ fn push_population(facts: &mut Vec<Fact>, recipients: Count, rates: &BaseRates) 
     let Some(band) = rates.band_for(exact) else {
         return;
     };
-    push_band(facts, exact, band);
+    push_band(facts, exact, band, rates.launches);
     push_base_rates(facts, rates);
 }
 
 /// This launch's own band, as a distribution it sits inside.
-fn push_band(facts: &mut Vec<Fact>, exact: u32, band: &crate::baserates::Band) {
+fn push_band(
+    facts: &mut Vec<Fact>,
+    exact: u32,
+    band: &crate::baserates::Band,
+    total_launches: u64,
+) {
     // `band.name` is Radar's own label for a range and it contains digits --
     // "10-13 recipients". Those digits are on the sheet because the band's own
     // facts authorise them, and they are inside the clause for the same reason
@@ -2491,6 +2845,36 @@ fn push_band(facts: &mut Vec<Fact>, exact: u32, band: &crate::baserates::Band) {
         )
         .saying(Voice::Blunt, format!("{times} the rate of the field.")),
     );
+    let (launches_f64, launches) = band_launches(band, total_launches);
+    facts.push(Fact::exact(
+        Kind::BandLaunches,
+        format!("launches this project has measured with {exact} recipients ({name})"),
+        launches_f64,
+        launches.to_string(),
+    ));
+}
+
+/// The band's own sample size (research 0052 §3.1's S2 row's thin-sample
+/// lower). `Band` itself carries no raw count -- only `fires_on`, its share of
+/// *all* launches -- so this derives the count from that share and the
+/// snapshot's own total, both already measured; it is a computation over two
+/// read numbers, not an invented one.
+fn band_launches(band: &crate::baserates::Band, total_launches: u64) -> (f64, u64) {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a count of launches across the whole snapshot is far inside f64's exact \
+                  integer range for any sample this project will ever measure"
+    )]
+    let total_f64 = total_launches as f64;
+    let launches_f64 = (band.fires_on * total_f64).round();
+    #[expect(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "fires_on is a share in [0, 1] and total_launches is non-negative, so the \
+                  product rounds to a non-negative count far inside u64's range"
+    )]
+    let launches = launches_f64 as u64;
+    (launches_f64, launches)
 }
 
 /// The whole field, which is what makes a band figure mean anything.
@@ -6478,5 +6862,391 @@ mod tests {
             !own_token.contains("never stated"),
             "a disclosure line leaked back onto the analyst's own token: {own_token}"
         );
+    }
+
+    // --- Research 0052 §3.1's S2 row (`Signal::LaunchBlockInStrongestBand`) ---
+
+    /// A sheet built directly with one of S2's five facts already on it and
+    /// the signal already fired -- the same "built directly" pattern
+    /// [`sheet_with_largest_holder_share`] uses for S5, since
+    /// [`FactSheet::build`] never fires this signal on a Robinhood dossier
+    /// (no `dossier.launch` recipient band there) or this fact on a Solana
+    /// one (no `dossier.funding` there).
+    fn sheet_with_s2_fact(kind: Kind, value: f64) -> FactSheet {
+        FactSheet {
+            mint: "MintOne".to_owned(),
+            read_at: None,
+            facts: vec![Fact::exact(kind, "x", value, value.to_string())],
+            untrusted: Vec::new(),
+            unknown: Vec::new(),
+            signals: vec![Signal::LaunchBlockInStrongestBand],
+            twins: vec![String::new()],
+            skipped: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn linked_holdings_of_999_bps_fires_no_factor() {
+        let sheet = sheet_with_s2_fact(Kind::WindowBuyersLinkedHoldingsBps, 999.0);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    #[test]
+    fn linked_holdings_of_1000_bps_raises_by_1000() {
+        let sheet = sheet_with_s2_fact(Kind::WindowBuyersLinkedHoldingsBps, 1_000.0);
+        let found = factors(&sheet);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].delta_bps, 1_000);
+        assert_eq!(found[0].grade, Grade::Measured);
+    }
+
+    #[test]
+    fn linked_holdings_of_1001_bps_also_raises_by_1000() {
+        let sheet = sheet_with_s2_fact(Kind::WindowBuyersLinkedHoldingsBps, 1_001.0);
+        assert_eq!(factors(&sheet)[0].delta_bps, 1_000);
+    }
+
+    #[test]
+    fn two_fresh_buyers_fires_no_factor() {
+        let sheet = sheet_with_s2_fact(Kind::FreshWindowBuyers, 2.0);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    #[test]
+    fn three_fresh_buyers_raises_by_800() {
+        let sheet = sheet_with_s2_fact(Kind::FreshWindowBuyers, 3.0);
+        let found = factors(&sheet);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].delta_bps, 800);
+        assert_eq!(found[0].grade, Grade::Measured);
+    }
+
+    #[test]
+    fn sizes_within_ten_percent_raises_by_500() {
+        let sheet = sheet_with_s2_fact(Kind::WindowBuySizesWithinTenPercent, 1.0);
+        let found = factors(&sheet);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].delta_bps, 500);
+        assert_eq!(found[0].grade, Grade::Inferred);
+    }
+
+    #[test]
+    fn sizes_not_within_ten_percent_fires_no_factor() {
+        let sheet = sheet_with_s2_fact(Kind::WindowBuySizesWithinTenPercent, 0.0);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    #[test]
+    fn all_declared_exempt_lowers_by_500() {
+        let sheet = sheet_with_s2_fact(Kind::AllWindowBuyersDeclaredExempt, 1.0);
+        let found = factors(&sheet);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].delta_bps, -500);
+        assert_eq!(found[0].grade, Grade::Measured);
+    }
+
+    #[test]
+    fn not_all_declared_exempt_fires_no_factor() {
+        let sheet = sheet_with_s2_fact(Kind::AllWindowBuyersDeclaredExempt, 0.0);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    #[test]
+    fn band_measured_on_199_launches_lowers_by_300() {
+        let sheet = sheet_with_s2_fact(Kind::BandLaunches, 199.0);
+        let found = factors(&sheet);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].delta_bps, -300);
+        assert_eq!(found[0].grade, Grade::Inferred);
+    }
+
+    #[test]
+    fn band_measured_on_200_launches_fires_no_factor() {
+        let sheet = sheet_with_s2_fact(Kind::BandLaunches, 200.0);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    #[test]
+    fn band_launches_derives_from_fires_on_times_total() {
+        let band = crate::baserates::Band {
+            name: "1-3".to_owned(),
+            lo: 1,
+            hi: 3,
+            fires_on: 0.2,
+            never_graduated: 0.0,
+            organic: 0.0,
+            instant: 0.0,
+            p_instant: 0.0,
+            x_base_instant: 0.0,
+        };
+        assert_eq!(band_launches(&band, 1_000), (200.0, 200));
+        assert_eq!(band_launches(&band, 995), (199.0, 199));
+    }
+
+    /// A candidate whose fields the S2 buyer-derived facts read: an address,
+    /// how much it spent (always read) and bought in tokens (may be
+    /// unread), and whether it was fresh (may be unread).
+    fn s2_candidate(
+        i: u8,
+        bought_wei: u128,
+        bought_tokens: Option<u128>,
+        nonce_before_launch: Option<u64>,
+    ) -> realorrug_onchain::Candidate {
+        realorrug_onchain::Candidate {
+            address: realorrug_robinhood::Address([i; 20]).to_string(),
+            bought_wei,
+            bought_tokens,
+            first_purchase_block: 64,
+            is_contract: Some(false),
+            nonce_before_launch,
+            funders: Vec::new(),
+            funding_complete: true,
+        }
+    }
+
+    fn funding_with(buyers: u32, checked: Vec<realorrug_onchain::Candidate>) -> Funding {
+        Funding {
+            buyers,
+            selected: u32::try_from(checked.len()).unwrap_or(0),
+            coverage_bps: Some(7_500),
+            rule: "test",
+            checked,
+            shared: Vec::new(),
+            gaps: Vec::new(),
+            cu_spent: 0,
+        }
+    }
+
+    #[test]
+    fn missing_supply_is_a_coverage_gap_and_leaves_the_holdings_fact_absent() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(1, vec![s2_candidate(1, 1, Some(1), Some(0))]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::WindowBuyersLinkedHoldingsBps).is_none());
+        assert!(
+            sheet
+                .skipped
+                .iter()
+                .any(|s| s.contains("linked holdings needs the launch's total supply")),
+            "{:?}",
+            sheet.skipped
+        );
+    }
+
+    #[test]
+    fn a_candidate_with_no_token_amount_is_excluded_from_the_holdings_sum() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.chain_launch = Some(realorrug_onchain::ChainLaunch {
+            block: 64,
+            age_seconds: None,
+            dev_buy_wei: None,
+            dev_buy_tokens: None,
+            supply: Some(10_000),
+            name: None,
+            symbol: None,
+            correlated_selling: None,
+        });
+        dossier.funding = Some(funding_with(
+            2,
+            vec![
+                s2_candidate(1, 1, Some(1_000), Some(0)),
+                s2_candidate(2, 1, None, Some(0)),
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let bps = fact_of(&sheet, Kind::WindowBuyersLinkedHoldingsBps)
+            .expect("one readable candidate is enough to publish a sum");
+        assert_eq!(
+            bps.values,
+            [1_000.0],
+            "candidate 2's unread amount counted as zero"
+        );
+        assert!(bps.rendered.contains("1 of 2 checked candidates excluded"));
+    }
+
+    #[test]
+    fn no_readable_token_amount_at_all_is_a_coverage_gap() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.chain_launch = Some(realorrug_onchain::ChainLaunch {
+            block: 64,
+            age_seconds: None,
+            dev_buy_wei: None,
+            dev_buy_tokens: None,
+            supply: Some(10_000),
+            name: None,
+            symbol: None,
+            correlated_selling: None,
+        });
+        dossier.funding = Some(funding_with(1, vec![s2_candidate(1, 1, None, Some(0))]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::WindowBuyersLinkedHoldingsBps).is_none());
+        assert!(
+            sheet.skipped.iter().any(|s| s.contains("none were read")),
+            "{:?}",
+            sheet.skipped
+        );
+    }
+
+    #[test]
+    fn an_unread_nonce_is_a_coverage_gap_for_the_fresh_count() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(
+            2,
+            vec![
+                s2_candidate(1, 1, Some(1), Some(0)),
+                s2_candidate(2, 1, Some(1), None),
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::FreshWindowBuyers).is_none());
+        assert!(
+            sheet
+                .skipped
+                .iter()
+                .any(|s| s.contains("at least one was not read")),
+            "{:?}",
+            sheet.skipped
+        );
+    }
+
+    #[test]
+    fn buy_sizes_exactly_ten_percent_apart_are_within() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        // 90 vs 100: smallest >= largest - largest/10, closed at exactly 10%
+        // (mirrors `sizes_within_ten_percent`'s own boundary test in
+        // `realorrug-onchain/src/wallets.rs`).
+        dossier.funding = Some(funding_with(
+            2,
+            vec![
+                s2_candidate(1, 90, Some(1), Some(0)),
+                s2_candidate(2, 100, Some(1), Some(0)),
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let f = fact_of(&sheet, Kind::WindowBuySizesWithinTenPercent).expect("two candidates");
+        assert_eq!(f.rendered, "within 10%");
+    }
+
+    #[test]
+    fn buy_sizes_just_over_ten_percent_apart_are_not_within() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(
+            2,
+            vec![
+                s2_candidate(1, 89, Some(1), Some(0)),
+                s2_candidate(2, 100, Some(1), Some(0)),
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let f = fact_of(&sheet, Kind::WindowBuySizesWithinTenPercent).expect("two candidates");
+        assert_eq!(f.rendered, "not within 10%");
+    }
+
+    /// An exemption for the same address [`s2_candidate`] builds -- all 20
+    /// bytes set to `i`, not [`robinhood_address`]'s "zeros but the last
+    /// byte" scheme, so a test pairing the two actually names the same
+    /// address.
+    fn s2_exemption(i: u8, source: ExemptionSource) -> Exemption {
+        Exemption {
+            address: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
+                [i; 20],
+            )),
+            source,
+        }
+    }
+
+    #[test]
+    fn every_full_window_buyer_declared_exempt_publishes_the_fact() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(
+            2,
+            vec![
+                s2_candidate(1, 1, Some(1), Some(0)),
+                s2_candidate(2, 1, Some(1), Some(0)),
+            ],
+        ));
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![
+                s2_exemption(1, ExemptionSource::Declared),
+                s2_exemption(2, ExemptionSource::Declared),
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let f = fact_of(&sheet, Kind::AllWindowBuyersDeclaredExempt).expect("full window known");
+        assert_eq!(f.rendered, "all declared-exempt");
+    }
+
+    #[test]
+    fn one_undeclared_buyer_means_not_all_declared_exempt() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(
+            2,
+            vec![
+                s2_candidate(1, 1, Some(1), Some(0)),
+                s2_candidate(2, 1, Some(1), Some(0)),
+            ],
+        ));
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![s2_exemption(1, ExemptionSource::Declared)],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let f = fact_of(&sheet, Kind::AllWindowBuyersDeclaredExempt).expect("full window known");
+        assert_eq!(f.rendered, "not all declared-exempt");
+    }
+
+    #[test]
+    fn missing_exemption_list_is_a_coverage_gap_when_the_full_window_is_known() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(1, vec![s2_candidate(1, 1, Some(1), Some(0))]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::AllWindowBuyersDeclaredExempt).is_none());
+        assert!(
+            sheet
+                .skipped
+                .iter()
+                .any(|s| s.contains("needs this launch's exemption list")),
+            "{:?}",
+            sheet.skipped
+        );
+    }
+
+    #[test]
+    fn a_sample_short_of_the_full_window_never_fires_the_exemption_fact_or_a_gap() {
+        // Two buyers total, one checked (a sample, not the full window): the
+        // exemption fact must not fire even with an exemption list present,
+        // and this is not a read failure, so it is not a coverage gap
+        // either -- see `Kind::AllWindowBuyersDeclaredExempt`'s doc comment.
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(2, vec![s2_candidate(1, 1, Some(1), Some(0))]));
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![s2_exemption(1, ExemptionSource::Declared)],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::AllWindowBuyersDeclaredExempt).is_none());
+        assert!(
+            !sheet.skipped.iter().any(|s| s.contains("declared-exempt")),
+            "a sample, not a read failure, must not be logged as a gap: {:?}",
+            sheet.skipped
+        );
+    }
+
+    #[test]
+    fn an_empty_checked_list_fires_none_of_the_four_buyer_facts_or_gaps() {
+        // `funding.buyers == 0 == checked.len()` satisfies the exemption
+        // gate's equality on its own; the `!is_empty()` operand is what
+        // keeps an empty window from publishing a vacuous "all declared".
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(0, Vec::new()));
+        dossier.powers = Some(powers_with(0, None, Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::AllWindowBuyersDeclaredExempt).is_none());
+        assert!(fact_of(&sheet, Kind::FreshWindowBuyers).is_none());
+        assert!(fact_of(&sheet, Kind::WindowBuySizesWithinTenPercent).is_none());
     }
 }
