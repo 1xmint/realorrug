@@ -538,6 +538,8 @@ Tracer bullet: **0001 → 0002 → 0005 (shadow)** is the thinnest slice that
 scores a real sheet end to end and prints the number beside today's level.
 0003, 0004, 0009 run alongside. 0006 then 0007 widen it into the daily five.
 
+**Published level stays on the flag rules until calibration (owner, 2026-09-19).** The score runs in shadow; the published level is not switched to the score level until M-D-0006 has enough labelled launches to check the weights. Switching would move four pairs from `RugMechanicsLive` to `Sketchy` (S1+S3 2,080; S1+S5 2,256; S3+S5 2,080; S2+S3 2,350).
+
 **M-D-0009 built (2026-09-19).** `crates/realorrug-onchain/src/memory.rs`
 gained the `buyer_index` table (`Forever` in spirit, keyed `(chain, buyer,
 token)`, `INSERT OR IGNORE` idempotent), `Memory::record_buy` and
