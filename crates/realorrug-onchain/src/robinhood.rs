@@ -1770,6 +1770,10 @@ pub(crate) mod tests {
     const DAVE: RobinhoodAddress = RobinhoodAddress([0xd0; 20]);
     const DEV_BUY: u128 = 500_000_000_000_000_000;
 
+    /// Where the holders read sits in [`full_bodies`]'s script: after the
+    /// launch reads, the name and symbol, and the two token-powers reads.
+    const HOLDERS: usize = 11;
+
     /// Every answer a full read of `rec` takes, in order, with the launch
     /// transaction's status `status`.
     pub(crate) fn full_bodies(rec: &LaunchedToken, status: &str) -> Vec<String> {
@@ -1808,6 +1812,10 @@ pub(crate) mod tests {
             answer(&receipt),
             answer(&hex(&abi_string(b"Pepe Token"))),
             answer(&hex(&abi_string(b"PEPE"))),
+            // The token-powers reads: nothing pending on the creator fee,
+            // and a launch that declared no exempt wallets.
+            answer(&hex(&[0u8; 32])),
+            answer(&transaction_json(&launch_token_calldata(&[]))),
             answer(&transfers),
         ]
     }
@@ -1870,7 +1878,8 @@ pub(crate) mod tests {
         // are present. Pinned rather than left loose because the default
         // budget is sixty calls and a read that quietly grows is how a
         // plan's daily quota goes without anyone choosing to spend it.
-        assert_eq!(dossier.calls, 13);
+        // Plus the two token-powers reads (M-D-0004).
+        assert_eq!(dossier.calls, 15);
     }
 
     // ---- slice 3: who funded the first buyers -------------------------
@@ -1988,8 +1997,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             dossier.calls,
-            10 + 1 + 4 * 3 + 2,
-            "the core reads, the window, three per candidate, and \
+            12 + 1 + 4 * 3 + 2,
+            "the core reads (two of them token powers), the window, three per candidate, and \
              creator_cash_flow's two eth_getLogs reads (design 0027 slice 5)"
         );
 
@@ -2143,8 +2152,8 @@ pub(crate) mod tests {
         assert!(funding.checked[1].funding_complete);
         assert_eq!(
             dossier.calls,
-            10 + 1 + 4 + 3 + 2,
-            "plus creator_cash_flow's two reads"
+            12 + 1 + 4 + 3 + 2,
+            "the core reads, two of them token powers, plus creator_cash_flow's two reads"
         );
     }
 
@@ -2208,9 +2217,10 @@ pub(crate) mod tests {
             .filter(|r: &serde_json::Value| r["method"] == "eth_call")
             .collect();
         // The factory record is read before the read point exists, so it is
-        // the one unpinned call; the curve's two reads and the token's name
-        // and symbol all name the read point's block.
-        assert_eq!(calls.len(), 5, "{calls:?}");
+        // the one unpinned call; the curve's two reads, the token's name
+        // and symbol, and the pending creator-fee recipient all name the
+        // read point's block.
+        assert_eq!(calls.len(), 6, "{calls:?}");
         assert_eq!(calls[0]["params"][1], "latest");
         for call in &calls[1..] {
             assert_eq!(call["params"][1], "0x64", "{call}");
@@ -2242,8 +2252,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            first.calls, 13,
-            "remembering costs no extra call; eleven core reads plus \
+            first.calls, 15,
+            "remembering costs no extra call; thirteen core reads (two of them token powers) plus \
              creator_cash_flow's two (design 0027 slice 5)"
         );
         assert_eq!(
@@ -2262,7 +2272,7 @@ pub(crate) mod tests {
         // what it never saw him receive and refuse the count.
         let mut bodies = full_bodies(&rec, "0x1");
         bodies[1] = block(0x70, 10_600);
-        bodies[9] = block(0x64, 10_000);
+        bodies[HOLDERS] = block(0x64, 10_000);
         bodies.push(answer(&serde_json::json!([transfer_at(
             &BOB, &ALICE, 100, 0x68
         )])));
@@ -2279,8 +2289,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            second.calls, 14,
-            "thirteen as before plus the checkpoint's header; the walk itself is one page"
+            second.calls, 16,
+            "fifteen as before plus the checkpoint's header; the walk itself is one page"
         );
         assert_eq!(
             memory
@@ -2322,7 +2332,7 @@ pub(crate) mod tests {
         // walk. No transfers page is served, so a reader that walked anyway
         // (or rolled back and re-read) would find nothing to answer it.
         let mut bodies = full_bodies(&rec, "0x1");
-        bodies.truncate(9);
+        bodies.truncate(HOLDERS);
         let client = Rpc::new(serve(bodies));
         let again = reader
             .read(&client, &mut budget(), &token())
@@ -2335,8 +2345,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            again.calls, 12,
-            "ten as before plus creator_cash_flow's two reads"
+            again.calls, 14,
+            "ten as before, the two token-powers reads, plus creator_cash_flow's two reads"
         );
         let run = memory
             .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
@@ -2368,7 +2378,7 @@ pub(crate) mod tests {
         // The chain is one block on, and Alice gave Dave 100 in it. The
         // walk must cover that single block, not skip it as already read.
         let mut bodies = full_bodies(&rec, "0x1");
-        bodies[9] = block(0x63, 9_999);
+        bodies[HOLDERS] = block(0x63, 9_999);
         bodies.push(answer(&serde_json::json!([transfer_at(
             &ALICE, &DAVE, 100, 0x64
         )])));
@@ -2402,7 +2412,7 @@ pub(crate) mod tests {
         // The provider errors on the transfers page: not "nothing happened".
         let memory = Memory::open_in_memory().expect("a memory");
         let mut bodies = full_bodies(&rec, "0x1");
-        bodies[9] =
+        bodies[HOLDERS] =
             r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom"}}"#.to_owned();
         let dossier = RobinhoodReader {
             memory: Some(&memory),
@@ -2428,7 +2438,7 @@ pub(crate) mod tests {
         // which is a truncated read and not a failed one.
         let memory = Memory::open_in_memory().expect("a memory");
         let mut bodies = full_bodies(&rec, "0x1");
-        bodies.truncate(9);
+        bodies.truncate(HOLDERS);
         bodies.extend((0..20).map(|_| too_many_results_error()));
         let dossier = RobinhoodReader {
             memory: Some(&memory),
@@ -2483,7 +2493,7 @@ pub(crate) mod tests {
 
         let mut bodies = full_bodies(&rec, "0x1");
         bodies[1] = block(0x70, 10_600);
-        let transfers = bodies.remove(9);
+        let transfers = bodies.remove(HOLDERS);
         bodies.push(block(0x64, 10_000)); // the canonical 0x64: another hash
         bodies.push(transfers);
         let client = Rpc::new(serve(bodies));
@@ -2501,7 +2511,10 @@ pub(crate) mod tests {
                 largest_share_bps: Some(5_000),
             })
         );
-        assert_eq!(dossier.calls, 14, "plus creator_cash_flow's two reads");
+        assert_eq!(
+            dossier.calls, 16,
+            "plus the two token-powers reads and creator_cash_flow's two reads"
+        );
         assert_eq!(
             memory
                 .token_checkpoint(MEMORY_CHAIN, &key)
