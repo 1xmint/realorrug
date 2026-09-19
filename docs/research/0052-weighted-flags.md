@@ -306,12 +306,22 @@ Robinhood today), which are named in the reply instead. Between the gates:
 | `Sketchy` | at least one signal fired and score < 2,500 |
 | `NothingUglyYet` | no signal fired, every required fact read; the reply carries the age and the "yet" |
 
-Two no-factor launch-shape signals (S1 1,200 + S2 1,500) give 2,520 →
-`RugMechanicsLive`, matching today's "two episodes" rung. S1 + S3 with no
-factors gives 2,080 → `Sketchy`, which today reads `RugMechanicsLive`; that
-is intended (a 0.001 ETH dev buy plus a second launch is not two live rug
-mechanics), and it is the one fixture-visible change (§8, M-D-0005
-stop-and-ask).
+Two no-factor launch-shape signals in different episodes (S2
+`LaunchBlockInStrongestBand` 1,500 + S5 `HolderConcentration` 1,200) give
+2,520 → `RugMechanicsLive`, matching today's "two episodes" rung. S1 + S3
+with no factors gives 2,080 → `Sketchy`, which today reads
+`RugMechanicsLive`; that is intended (a 0.001 ETH dev buy plus a second
+launch is not two live rug mechanics). It is one of several pairs this flag
+moves from `RugMechanicsLive` to `Sketchy` once it publishes -- every pair
+below is a no-factor noisy-OR that clears today's 2,500 line but not this
+one (verified against `assessment.rs`'s `noisy_or`, §8, M-D-0005
+stop-and-ask):
+
+- S1 `CreatorBoughtOwnLaunch` 1,200 + S3 `RepeatLauncher` 1,000 → 2,080
+- S1 1,200 + S5 `HolderConcentration` 1,200 → 2,256 (the sheet in
+  `the_template_states_a_twin_at_rug_mechanics_live_and_none_at_rugged`)
+- S3 1,000 + S5 1,200 → 2,080
+- S2 `LaunchBlockInStrongestBand` 1,500 + S3 1,000 → 2,350
 
 **M-D-0005 built, shadow only (2026-09-18).**
 `crates/realorrug-roast/src/verdict.rs::level_from_score` computes this
@@ -329,21 +339,10 @@ band set it offers today already brackets `level`, and rebuilding it from
 for a band the shadow score chose over the one the ladder chose, which is a
 behaviour change this slice does not need to make.
 
-One number in this section does not survive contact with the shipped
-episode map: S1 (`CreatorBoughtOwnLaunch`) and S2
-(`LaunchBlockInStrongestBand`) are the *same* `Episode::LaunchBlock`
-(`assessment.rs`'s own `episode` function, predating this document --
-"the recipient band and a creator buy inside that same block are the same
-observation seen through two signals"), so a real sheet folds them to that
-episode's maximum (1,500) before `noisy_or` ever runs, never reaching the
-2,520 above. The worked S1+S3 case two paragraphs up is unaffected (S1 and
-S3 sit in different episodes: `LaunchBlock` and `CreatorHistory`), and the
-2,500 boundary itself is still exercised directly in
-`verdict.rs`'s test suite. Left as a documentation defect rather than a code
-change: fixing it means either moving S1 or S2 to its own episode (a
-`risk_index` and `level` behaviour change, out of this slice's allowed
-files) or accepting that this one illustrative number was never reachable.
-Flagged for Josh rather than resolved either way.
+S1 (`CreatorBoughtOwnLaunch`) and S2 (`LaunchBlockInStrongestBand`) are one
+episode per ADR 0032 (`assessment.rs`'s `episode` function) and read
+`Sketchy` on both the `level` and `level_from_score` paths -- not the S2+S5
+pair used above.
 
 ### 4.3 Score to the daily-five odds q
 

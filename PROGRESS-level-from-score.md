@@ -1,19 +1,29 @@
-Done: `level_from_score` added to `verdict.rs` (shares `level`'s gates via a
-new `rugged_pair` helper, adds the coverage-below-6000-bps gate), wired into
-`Assessment` as a new `score_level` field (shadow only, published `level`
-untouched), printed on `realorrug roast --sheet` as a "provisional" line, all
-named/boundary tests passing, `cargo check`/`clippy -D warnings`/`fmt` clean
-for `realorrug-roast` and `realorrug-cli`, docs/research/0052 updated with an
-implementation note and a flagged discrepancy (S1+S2 share an episode in the
-shipped code so never actually noisy-OR to 2,520 as the doc's own example
-assumes -- test uses the two base weights directly instead, see the doc note
-above §4.2's "M-D-0005 built, shadow only").
+Done: PR #126 review-FAIL items fixed on `m-d-0005-level-from-score`.
+`level_from_score`'s match now checks `sheet.signals.is_empty()` before the
+score-range arm (no-signal sheets read `NothingUglyYet` at any score,
+including >=2500), and the redundant `coverage.applicable > 0 &&` guard is
+removed. `two_no_factor_launch_signals_reach_rug_mechanics_live` rebuilt on
+S2 (`LaunchBlockInStrongestBand`) + S5 (`HolderConcentration`) through
+`Assessment::from` (2,520 bps, two distinct episodes, no workaround needed).
+`s1_and_s3_no_factors_score_2080_is_sketchy` now also asserts
+`level(&sheet) == RugMechanicsLive`. `no_signal_reads_nothing_ugly_yet_regardless_of_score`
+loops over ZERO/2499/2500/MAX. New test
+`rugged_wins_over_the_low_coverage_gate` proves gate order (Rugged checked
+before the coverage gate). docs/research/0052-weighted-flags.md §4.2
+corrected: worked example is now S2+S5=2,520; the old "flagged for Josh"
+paragraph replaced with a one-line note that S1+S2 share an episode per ADR
+0032 and read Sketchy on both paths; "one fixture-visible change" replaced
+with the full list of four pairs that flip RugMechanicsLive->Sketchy
+(S1+S3=2080, S1+S5=2256, S3+S5=2080, S2+S3=2350), each verified against the
+code's `noisy_or` before writing. `check`, `clippy --all-targets -D
+warnings`, `fmt --check`, and all 10 named/boundary tests pass for
+`realorrug-roast`.
 
-Next: push branch `m-d-0005-level-from-score`, open the PR, then stop --
-nothing else in scope is outstanding.
+Next: commit this fix, push `m-d-0005-level-from-score`, update PR #126's
+body to match the corrected doc content via `gh pr edit`, report the new
+head sha. Nothing else in scope is outstanding.
 
-Watch out for: the S1+S2 episode-collision noted above needs Josh's call (fix
-the episode map, or accept the doc's example was never reachable); admissible
-was deliberately left unchanged (still built from published `level`, not
-`score_level`) since M-D-0005's scope says "shadow first" and rebuilding it
-would let a model reach for a score-chosen band the ladder didn't choose.
+Watch out for: only verdict.rs and the research doc changed in this round
+(no assessment.rs/lib.rs/roast.rs changes needed) -- confirm `git diff
+--stat` still shows just those two files before pushing. Do not touch
+contest/payout crates or assessment-packet/codex/golden folders.

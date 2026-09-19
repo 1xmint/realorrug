@@ -216,17 +216,16 @@ pub fn level_from_score(
         return Level::CantTell;
     }
 
-    // `applicable == 0` means nothing was even checked, not that everything
-    // was: treated as full coverage rather than divided by zero. Compared as
-    // a cross-multiplication (`read * 10_000` against `6_000 * applicable`)
-    // rather than a division, so there is no rounding step to second-guess.
-    if coverage.applicable > 0 && coverage.read * 10_000 < MIN_COVERAGE_BPS * coverage.applicable {
+    // Compared as a cross-multiplication (`read * 10_000` against
+    // `6_000 * applicable`) rather than a division, so there is no rounding
+    // step to second-guess.
+    if coverage.read * 10_000 < MIN_COVERAGE_BPS * coverage.applicable {
         return Level::CantTell;
     }
 
     match score_bps.bps() {
-        SCORE_RUG_MECHANICS_LIVE_BPS..=u32::MAX => Level::RugMechanicsLive,
         _ if sheet.signals.is_empty() => Level::NothingUglyYet,
+        SCORE_RUG_MECHANICS_LIVE_BPS..=u32::MAX => Level::RugMechanicsLive,
         _ => Level::Sketchy,
     }
 }
@@ -1325,48 +1324,37 @@ pub(crate) mod tests {
 
     #[test]
     fn two_no_factor_launch_signals_reach_rug_mechanics_live() {
-        // Research 0052 §4.2: S1 (`CreatorBoughtOwnLaunch`, base 1,200) and
-        // S2 (`LaunchBlockInStrongestBand`, base 1,500), no factors, noisy-OR
-        // to 2,520 bps -- above the 2,500 line.
-        //
-        // **Computed from the two base weights directly, not through
-        // `Assessment::from`.** S1 and S2 share `Episode::LaunchBlock` in
-        // the episode map already shipped (`assessment.rs`'s own `episode`
-        // doc comment: "the recipient band and a creator buy inside that
-        // same block are the same observation seen through two signals"),
-        // so a real sheet folds them to that episode's *maximum* (1,500)
-        // before `noisy_or` ever runs on them -- §4.1's own dedup rule,
-        // applied to exactly this pair, never produces 2,520 from a live
-        // sheet. The document's arithmetic and the shipped episode grouping
-        // disagree on this one pair; flagged in the PR rather than silently
-        // resolved. This test keeps the packet's named boundary case (the
-        // 2,500 line at the exact number research 0052 §4.2 names) without
-        // asserting a sheet-level number the code cannot produce.
-        let score = crate::assessment::noisy_or(&[
-            crate::assessment::Weight::from_bps(1_200),
-            crate::assessment::Weight::from_bps(1_500),
-        ]);
-        assert_eq!(score.bps(), 2_520);
+        // Research 0052 §4.2: S2 (`LaunchBlockInStrongestBand`, base 1,500)
+        // and S5 (`HolderConcentration`, base 1,200), no factors, noisy-OR
+        // to 2,520 bps -- above the 2,500 line. These are two distinct
+        // episodes (`LaunchBlock` and `Holders`), so `Assessment::from`'s
+        // per-episode-max fold never collapses them -- unlike S1 + S2, which
+        // share `Episode::LaunchBlock` and stay `Sketchy` on both paths
+        // (ADR 0032; see `two_live_signals_in_one_episode_stay_sketchy`).
         let sheet = sheet_with(
             vec![
-                Signal::CreatorBoughtOwnLaunch,
                 Signal::LaunchBlockInStrongestBand,
+                Signal::HolderConcentration,
             ],
             Vec::new(),
         );
+        let assessment = crate::assessment::Assessment::from(&sheet);
+        assert_eq!(assessment.score_bps.bps(), 2_520);
         assert_eq!(
-            level_from_score(&sheet, score, full_coverage()),
+            level_from_score(&sheet, assessment.score_bps, assessment.coverage),
             Level::RugMechanicsLive
         );
+        assert_eq!(level(&sheet), Level::RugMechanicsLive);
     }
 
     #[test]
     fn s1_and_s3_no_factors_score_2080_is_sketchy() {
-        // Research 0052 §4.2's one fixture-visible change (M-D-0005
-        // stop-and-ask): S1 (1,200) + S3 `RepeatLauncher` (1,000), no
-        // factors, noisy-OR to 2,080 bps -- below the 2,500 line, so the
-        // score path reads `Sketchy` where today's `level` reads
-        // `RugMechanicsLive`. Shadow only: `level` itself is untouched.
+        // Research 0052 §4.2: S1 `CreatorBoughtOwnLaunch` (1,200) + S3
+        // `RepeatLauncher` (1,000), no factors, noisy-OR to 2,080 bps --
+        // below the 2,500 line, so the score path reads `Sketchy` where
+        // today's `level` reads `RugMechanicsLive` (two distinct episodes,
+        // so `level`'s episode-count gate still fires). Shadow only:
+        // `level` itself is untouched.
         let sheet = sheet_with(
             vec![Signal::CreatorBoughtOwnLaunch, Signal::RepeatLauncher],
             Vec::new(),
@@ -1377,6 +1365,7 @@ pub(crate) mod tests {
             level_from_score(&sheet, assessment.score_bps, assessment.coverage),
             Level::Sketchy
         );
+        assert_eq!(level(&sheet), Level::RugMechanicsLive);
     }
 
     #[test]
@@ -1406,14 +1395,24 @@ pub(crate) mod tests {
 
     #[test]
     fn no_signal_reads_nothing_ugly_yet_regardless_of_score() {
-        // A score of 0 is the only way `noisy_or` returns 0 given no signal
-        // fired, but this checks the level function's own "no signal" arm
-        // directly rather than trusting that pairing.
+        // The "no signal fired" arm must win even when the caller hands in
+        // a high score (a mismatched or synthetic caller, not one derived
+        // from `sheet.signals`) -- checked at both boundary values and the
+        // extremes so a match-arm-order mutant cannot hide behind a single
+        // low score.
         let sheet = sheet_with(Vec::new(), Vec::new());
-        assert_eq!(
-            level_from_score(&sheet, crate::assessment::Weight::ZERO, full_coverage()),
-            Level::NothingUglyYet
-        );
+        for score in [
+            Weight::ZERO,
+            Weight::from_bps(2_499),
+            Weight::from_bps(2_500),
+            Weight::MAX,
+        ] {
+            assert_eq!(
+                level_from_score(&sheet, score, full_coverage()),
+                Level::NothingUglyYet,
+                "{score:?}"
+            );
+        }
     }
 
     #[test]
@@ -1473,6 +1472,22 @@ pub(crate) mod tests {
             level_from_score(&sheet, Weight::ZERO, at),
             Level::NothingUglyYet
         );
+    }
+
+    #[test]
+    fn rugged_wins_over_the_low_coverage_gate() {
+        // Gate order matters: `rugged_pair` is checked before the coverage
+        // gate, so an observed completed rug still reads `Rugged` even when
+        // coverage is too thin to trust anything else on the sheet.
+        let sheet = sheet_with(
+            vec![Signal::LiquidityGone, Signal::HolderConcentration],
+            Vec::new(),
+        );
+        let below = crate::assessment::Coverage {
+            read: 5_999,
+            applicable: 10_000,
+        };
+        assert_eq!(level_from_score(&sheet, Weight::ZERO, below), Level::Rugged);
     }
 
     /// The sheet the box actually produced for
