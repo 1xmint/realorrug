@@ -3294,4 +3294,554 @@ pub(crate) mod tests {
         assert_eq!(asset.decimals, 18);
         assert_eq!(b.calls_made(), 0);
     }
+
+    // -- S13 "owner powers live" (task packet M-D-0004, part 2) -----------
+
+    /// A `getLaunchedToken` record plus a curve address distinct from the
+    /// deployer, so a `SnipeTaxExempted` log's `address` and a launch
+    /// event's own topics are never confused with each other in these
+    /// tests.
+    fn powers_record() -> LaunchedToken {
+        record(
+            true,
+            RobinhoodAddress([0x61; 20]),
+            RobinhoodAddress([0x62; 20]),
+        )
+    }
+
+    fn powers_transaction() -> Hash32 {
+        LAUNCH_TX.parse().expect("a valid hash")
+    }
+
+    /// A synthetic `launchToken` calldata declaring exactly the given
+    /// wallets, in the confirmed shape [`powers::declared_exemptions`]
+    /// decodes: four head words (only the fourth used, an offset to the
+    /// dynamic array), then the array's length and its addresses.
+    fn launch_token_calldata(declared: &[RobinhoodAddress]) -> Vec<u8> {
+        let mut input = powers::LAUNCH_TOKEN.to_vec();
+        input.extend(word_u(0));
+        input.extend(word_u(0));
+        input.extend(word_u(0));
+        input.extend(word_u(128)); // offset to the length word, in bytes
+        input.extend(word_u(declared.len() as u128));
+        for address in declared {
+            input.extend(word_addr(address));
+        }
+        input
+    }
+
+    fn transaction_json(input: &[u8]) -> serde_json::Value {
+        serde_json::json!({
+            "hash": LAUNCH_TX,
+            "from": powers_record().deployer.to_string(),
+            "to": FACTORY.to_string(),
+            "value": "0x0",
+            "input": realorrug_robinhood::to_hex(input),
+            "nonce": "0x0",
+            "blockNumber": format!("{LAUNCH_BLOCK:#x}"),
+        })
+    }
+
+    fn snipe_tax_exempted_log(curve: &RobinhoodAddress, exempt: &RobinhoodAddress) -> Value {
+        log_json(
+            curve,
+            &[topic::SNIPE_TAX_EXEMPTED, topic_of(exempt)],
+            &[],
+            LAUNCH_BLOCK,
+        )
+    }
+
+    fn receipt_with_logs(logs: &[Value]) -> Receipt {
+        let json = serde_json::json!({
+            "status": "0x1",
+            "transactionHash": LAUNCH_TX,
+            "blockNumber": format!("{LAUNCH_BLOCK:#x}"),
+            "from": powers_record().deployer.to_string(),
+            "to": FACTORY.to_string(),
+            "logs": logs,
+        });
+        Receipt::from_json(&json).expect("a valid receipt")
+    }
+
+    use serde_json::Value;
+
+    /// `pendingCreatorFeeRecipient` returning the zero address means
+    /// nothing is pending, not a recipient of `0x0…0` -- catches a mutant
+    /// that drops the zero check in [`pending_creator_fee_recipient`].
+    #[test]
+    fn pending_creator_fee_recipient_reads_zero_as_nothing_pending() {
+        let client = Rpc::new(serve(vec![answer(&hex(&word_addr(
+            &RobinhoodAddress::ZERO,
+        )))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result =
+            pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
+        assert_eq!(result, None);
+        assert!(unavailable.is_empty());
+    }
+
+    /// A genuinely pending recipient reads back as that address, not as
+    /// nothing.
+    #[test]
+    fn pending_creator_fee_recipient_reads_a_nonzero_pending_recipient() {
+        let pending = RobinhoodAddress([0x77; 20]);
+        let client = Rpc::new(serve(vec![answer(&hex(&word_addr(&pending)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result =
+            pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
+        assert_eq!(result, Some(pending));
+        assert!(unavailable.is_empty());
+    }
+
+    /// A malformed return (not exactly one word) is refused outright, not
+    /// defaulted to "nothing pending" (AGENTS.md §3 rule 8).
+    #[test]
+    fn pending_creator_fee_recipient_names_a_malformed_return() {
+        let client = Rpc::new(serve(vec![answer(&hex(&[0u8; 16]))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result =
+            pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
+        assert_eq!(result, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "pending creator fee recipient")
+        );
+    }
+
+    /// A transport failure is named too, not silently treated as "nothing
+    /// pending".
+    #[test]
+    fn pending_creator_fee_recipient_names_a_transport_failure() {
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result =
+            pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
+        assert_eq!(result, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "pending creator fee recipient")
+        );
+    }
+
+    /// A launch that declared no bundle wallets -- the same shape
+    /// `pons::powers_tests` decodes directly from the real capture
+    /// (`docs/research/data/0036-pons-v2-clean-launch.json`) -- now read
+    /// the way [`declared_exemptions`] actually reads it: over the wire,
+    /// through `Rpc::transaction`.
+    #[test]
+    fn declared_exemptions_reads_a_clean_launch_as_empty() {
+        let input = launch_token_calldata(&[]);
+        let client = Rpc::new(serve(vec![answer(&transaction_json(&input))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, Some(Vec::new()));
+        assert!(unavailable.is_empty());
+    }
+
+    /// A launch that declared two wallets decodes to exactly those two, in
+    /// order.
+    #[test]
+    fn declared_exemptions_reads_two_declared_wallets() {
+        let one = RobinhoodAddress([0x81; 20]);
+        let two = RobinhoodAddress([0x82; 20]);
+        let input = launch_token_calldata(&[one, two]);
+        let client = Rpc::new(serve(vec![answer(&transaction_json(&input))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, Some(vec![one, two]));
+        assert!(unavailable.is_empty());
+    }
+
+    /// Calldata that does not decode under `launchToken`'s confirmed shape
+    /// (research 0048 §3) is refused outright, not read as "declared
+    /// nothing" -- the exact failure a mutant flipping `is_none()` to
+    /// `is_some()` would hide.
+    #[test]
+    fn declared_exemptions_names_calldata_that_does_not_decode() {
+        let mut input = launch_token_calldata(&[]);
+        input[0] = 0xff; // not launchToken's selector
+        let client = Rpc::new(serve(vec![answer(&transaction_json(&input))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "declared snipe-tax exemptions"
+                    && u.why.contains("did not decode"))
+        );
+    }
+
+    /// A transaction the node does not know about is named as unread, not
+    /// as an empty declared list.
+    #[test]
+    fn declared_exemptions_names_a_transaction_the_node_does_not_know() {
+        let client = Rpc::new(serve(vec![answer(&Value::Null)]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "declared snipe-tax exemptions"
+                    && u.why.contains("could not be found"))
+        );
+    }
+
+    /// A transport failure reading the transaction is named with its own
+    /// reason, distinct from "not found".
+    #[test]
+    fn declared_exemptions_names_a_transport_failure() {
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, None);
+        assert_eq!(
+            unavailable
+                .iter()
+                .filter(|u| u.fact == "declared snipe-tax exemptions")
+                .count(),
+            1
+        );
+    }
+
+    /// A `SnipeTaxExempted` log naming a first-party address (research 0047
+    /// §3) is confirmed and classified `FirstParty`, even though it is not
+    /// on the declared list either -- `classify` checks first-party first.
+    #[test]
+    fn confirmed_exemptions_classifies_a_first_party_address() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert_eq!(exemptions.len(), 1);
+        assert_eq!(exemptions[0].source, powers::Source::FirstParty);
+        assert!(unavailable.is_empty());
+    }
+
+    /// An address the launcher declared, and that is not first-party
+    /// infrastructure, is classified `Declared`.
+    #[test]
+    fn confirmed_exemptions_classifies_a_declared_address() {
+        let rec = powers_record();
+        let address = RobinhoodAddress([0x83; 20]);
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let declared = vec![address];
+        let exemptions = confirmed_snipe_tax_exemptions(
+            &mut b,
+            &client,
+            &launch,
+            Some(&declared),
+            None,
+            &mut unavailable,
+        );
+        assert_eq!(exemptions.len(), 1);
+        assert_eq!(exemptions[0].source, powers::Source::Declared);
+        assert!(unavailable.is_empty());
+    }
+
+    /// An exempt address on neither list, with a fully read declared list,
+    /// is classified `Undeclared` -- research 0052 §1's heaviest-weighted
+    /// case.
+    #[test]
+    fn confirmed_exemptions_classifies_an_undeclared_address() {
+        let rec = powers_record();
+        let address = RobinhoodAddress([0x84; 20]);
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let declared = Vec::new();
+        let exemptions = confirmed_snipe_tax_exemptions(
+            &mut b,
+            &client,
+            &launch,
+            Some(&declared),
+            None,
+            &mut unavailable,
+        );
+        assert_eq!(exemptions.len(), 1);
+        assert_eq!(exemptions[0].source, powers::Source::Undeclared);
+        assert!(unavailable.is_empty());
+    }
+
+    /// When the declared list itself could not be read, a non-first-party
+    /// exempt address cannot be told apart from declared vs. undeclared, so
+    /// it is named rather than guessed either way (rule 8) -- and not
+    /// silently added as an exemption with an invented source.
+    #[test]
+    fn confirmed_exemptions_names_a_non_first_party_address_when_declared_list_is_unknown() {
+        let rec = powers_record();
+        let address = RobinhoodAddress([0x85; 20]);
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "snipe tax exemption classification")
+        );
+    }
+
+    /// `snipeTaxExempt` confirming `false` for a candidate the launch event
+    /// once named is not an exemption -- an event at launch is not proof
+    /// nothing has revoked it since. Catches a mutant that flips this
+    /// `Some(true)`/`Some(false)` match.
+    #[test]
+    fn confirmed_exemptions_drops_a_candidate_no_longer_exempt() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(false)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.is_empty());
+    }
+
+    /// A confirmation call that fails at the transport is named, not
+    /// treated as "not exempt".
+    #[test]
+    fn confirmed_exemptions_names_a_failed_confirmation() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.iter().any(|u| u.fact == "snipe tax exemption"));
+    }
+
+    /// The same address named twice in one receipt (two events, or one
+    /// event this test double-counts on purpose) is confirmed once, not
+    /// twice -- catches a mutant that drops the `seen` de-duplication.
+    #[test]
+    fn confirmed_exemptions_confirms_a_repeated_address_only_once() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[
+            snipe_tax_exempted_log(&rec.curve, &address),
+            snipe_tax_exempted_log(&rec.curve, &address),
+        ]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        // Only one answer queued: a second confirmation call would find no
+        // server and fail.
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert_eq!(exemptions.len(), 1);
+        assert!(unavailable.is_empty());
+        assert_eq!(b.calls_made(), 1);
+    }
+
+    /// A `SnipeTaxExempted` log from a contract that is not this launch's
+    /// curve is not a candidate -- catches a mutant that drops the address
+    /// half of the log filter's `||`.
+    #[test]
+    fn confirmed_exemptions_ignores_a_log_from_a_different_contract() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let not_the_curve = RobinhoodAddress([0x99; 20]);
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&not_the_curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        // No answers queued: a candidate would try to confirm and fail at
+        // the transport, so an empty `unavailable` also proves no call was
+        // attempted.
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.is_empty());
+        assert_eq!(b.calls_made(), 0);
+    }
+
+    /// A log on this launch's curve, but for some other event entirely, is
+    /// not a candidate -- catches a mutant that drops the topic half of the
+    /// log filter's `||`.
+    #[test]
+    fn confirmed_exemptions_ignores_a_log_with_a_different_topic() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let other_event = log_json(
+            &rec.curve,
+            &[topic::TRANSFER, topic_of(&address)],
+            &[],
+            LAUNCH_BLOCK,
+        );
+        let receipt = receipt_with_logs(&[other_event]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.is_empty());
+        assert_eq!(b.calls_made(), 0);
+    }
+
+    /// No receipt at all (the launch transaction's receipt could not be
+    /// read) means no candidates, not a failure of its own -- the missing
+    /// receipt is already named where it was read.
+    #[test]
+    fn confirmed_exemptions_with_no_receipt_finds_nothing() {
+        let rec = powers_record();
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: None,
+        };
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.is_empty());
+    }
+
+    /// `powers_facts` end to end: creator tax comes straight off the launch
+    /// record, the pending recipient and the classified exemption both
+    /// read through their own sub-calls, in one `Powers`.
+    #[test]
+    fn powers_facts_reads_every_field_end_to_end() {
+        let rec = powers_record();
+        let pending = RobinhoodAddress([0x86; 20]);
+        let exempt = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &exempt)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![
+            answer(&hex(&word_addr(&pending))),
+            answer(&transaction_json(&launch_token_calldata(&[]))),
+            answer(&hex(&word_bool(true))),
+        ]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let powers = powers_facts(&mut b, &client, &launch, None, &mut unavailable);
+        assert_eq!(powers.creator_tax_bps, rec.creator_tax_bps);
+        assert_eq!(
+            powers.pending_creator_fee_recipient,
+            Some(ChainAddress::Robinhood(pending))
+        );
+        assert_eq!(powers.exemptions.len(), 1);
+        assert_eq!(powers.exemptions[0].source, powers::Source::FirstParty);
+        assert!(unavailable.is_empty());
+    }
+
+    /// A failed sub-read does not erase the rest: the pending recipient
+    /// read failing still leaves the creator tax and any exemptions
+    /// [`powers_facts`] could read (AGENTS.md §3 rule 8).
+    #[test]
+    fn powers_facts_keeps_what_read_when_one_sub_read_fails() {
+        let rec = powers_record();
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: None,
+        };
+        // The pending-recipient call fails at the transport; the
+        // transaction read (empty declared list) still succeeds.
+        let client = Rpc::new(serve(vec![answer(&transaction_json(
+            &launch_token_calldata(&[]),
+        ))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let powers = powers_facts(&mut b, &client, &launch, None, &mut unavailable);
+        assert_eq!(powers.creator_tax_bps, rec.creator_tax_bps);
+        assert_eq!(powers.pending_creator_fee_recipient, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "pending creator fee recipient")
+        );
+    }
 }
