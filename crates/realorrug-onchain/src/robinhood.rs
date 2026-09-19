@@ -30,13 +30,16 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use realorrug_robinhood::erc20;
-use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, topic};
-use realorrug_robinhood::{Address as RobinhoodAddress, BlockHeader, Hash32, Log, LogsError, Rpc};
+use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, powers, topic};
+use realorrug_robinhood::{
+    Address as RobinhoodAddress, BlockHeader, Hash32, Log, LogsError, Receipt, Rpc,
+};
 use realorrug_types::{ChainAddress, ReadAt};
 
 use crate::budget::{Budget, Exhausted};
 use crate::dossier::{
-    ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, QuoteAsset, Unavailable,
+    ChainLaunch, ChainReader, CurveFacts, Dossier, Exemption, Holders, Powers, QuoteAsset,
+    Unavailable,
 };
 use crate::memory::{
     CheckRun, Checkpoint, Completeness, Kind as MemoryKind, Memory, REORG_DEPTH, TransferEvent,
@@ -139,13 +142,19 @@ fn address_topic(address: &RobinhoodAddress) -> Hash32 {
 /// and an unreadable receipt leaves the buy `None`, each "could not see", and
 /// the launch is still returned: dropping a block that did read because a
 /// second read failed would report less than was known.
+///
+/// Also hands back the launch transaction's hash and its receipt (already
+/// paid for above, to compute `dev_buy_wei`): [`powers_facts`] needs the
+/// same receipt's `SnipeTaxExempted` events and the same transaction's
+/// calldata, and re-fetching either there would spend budget this read
+/// already spent.
 fn launch_facts(
     budget: &mut Budget,
     client: &Rpc,
     token: &RobinhoodAddress,
     record: &LaunchedToken,
     read: Option<&BlockHeader>,
-) -> Result<ChainLaunch, String> {
+) -> Result<(ChainLaunch, Hash32, Option<Receipt>), String> {
     let read_time = read.map(|r| r.timestamp);
     let at = read.map(|r| r.number);
     take(budget)?;
@@ -160,26 +169,194 @@ fn launch_facts(
         .zip(read_time)
         .and_then(|((_, launched_at), read_at)| read_at.checked_sub(launched_at));
 
-    let dev_buy_wei = take(budget)
+    let receipt = take(budget)
         .and_then(|()| client.receipt(&log.transaction))
         .ok()
-        .flatten()
-        .map(|receipt| {
-            // A reverted transaction's logs never happened.
-            if receipt.succeeded {
-                launcher_buy(&receipt.logs, record)
-            } else {
-                0
-            }
-        });
+        .flatten();
 
-    Ok(ChainLaunch {
-        block: log.block,
-        age_seconds,
-        dev_buy_wei,
-        name: text_field(budget, client, token, erc20::NAME, at),
-        symbol: text_field(budget, client, token, erc20::SYMBOL, at),
-    })
+    let dev_buy_wei = receipt.as_ref().map(|receipt| {
+        // A reverted transaction's logs never happened.
+        if receipt.succeeded {
+            launcher_buy(&receipt.logs, record)
+        } else {
+            0
+        }
+    });
+
+    Ok((
+        ChainLaunch {
+            block: log.block,
+            age_seconds,
+            dev_buy_wei,
+            name: text_field(budget, client, token, erc20::NAME, at),
+            symbol: text_field(budget, client, token, erc20::SYMBOL, at),
+        },
+        log.transaction,
+        receipt,
+    ))
+}
+
+/// S13's "owner powers live" (research 0052 §3; task packet M-D-0004):
+/// creator tax (free -- already on `record`, from the same `getLaunchedToken`
+/// call every dossier already pays for), the pending creator-fee timelock,
+/// and every address the curve holds exempt from the snipe tax, classified
+/// against research 0047 §3's first-party list and the launch's own declared
+/// list (research 0048 §3).
+///
+/// Never fails outright, the same shape `wallets::creator_cash_flow` uses: a
+/// sub-read that fails is named in `unavailable` and the rest of `Powers`
+/// still returned, rather than a single failure erasing every field that did
+/// read (AGENTS.md §3 rule 8).
+///
+/// # Extra RPC calls
+///
+/// Two fixed, beyond what `launch_facts` already paid for: one
+/// `pendingCreatorFeeRecipient` `eth_call`, and one
+/// `eth_getTransactionByHash` for the launch transaction's calldata (the
+/// declared list). Then one `snipeTaxExempt` `eth_call` per *distinct*
+/// candidate address the launch receipt's `SnipeTaxExempted` events name --
+/// confirmed rather than assumed, because an event at launch is not proof
+/// nothing has revoked the exemption since. Candidates are found for free:
+/// the receipt is the one `launch_facts` already fetched.
+fn powers_facts(
+    budget: &mut Budget,
+    client: &Rpc,
+    token: &RobinhoodAddress,
+    record: &LaunchedToken,
+    transaction: &Hash32,
+    receipt: Option<&Receipt>,
+    at: Option<u64>,
+    unavailable: &mut Vec<Unavailable>,
+) -> Powers {
+    let mut pending_creator_fee_recipient = None;
+    match call(
+        budget,
+        client,
+        &FACTORY,
+        &powers::pending_creator_fee_recipient_call_data(token),
+        at,
+    ) {
+        Ok(data) => match powers::pending_recipient_from_return(&data) {
+            Some(value) => pending_creator_fee_recipient = value,
+            None => unavailable.push(Unavailable {
+                fact: "pending creator fee recipient",
+                why: "pendingCreatorFeeRecipient returned a malformed word".to_owned(),
+            }),
+        },
+        Err(why) => unavailable.push(Unavailable {
+            fact: "pending creator fee recipient",
+            why,
+        }),
+    }
+
+    let declared = match take(budget).and_then(|()| client.transaction(transaction)) {
+        Ok(Some(tx)) => match powers::declared_exemptions(&tx.input) {
+            Some(list) => Some(list),
+            None => {
+                unavailable.push(Unavailable {
+                    fact: "declared snipe-tax exemptions",
+                    why: "the launch transaction's calldata did not decode under \
+                          launchToken's confirmed shape (research 0048 §3)"
+                        .to_owned(),
+                });
+                None
+            }
+        },
+        Ok(None) => {
+            unavailable.push(Unavailable {
+                fact: "declared snipe-tax exemptions",
+                why: "the launch transaction could not be found".to_owned(),
+            });
+            None
+        }
+        Err(why) => {
+            unavailable.push(Unavailable {
+                fact: "declared snipe-tax exemptions",
+                why,
+            });
+            None
+        }
+    };
+
+    let mut exemptions = Vec::new();
+    let mut seen: Vec<RobinhoodAddress> = Vec::new();
+    if let Some(receipt) = receipt {
+        for log in &receipt.logs {
+            if log.address != record.curve
+                || log.topics.first().copied() != Some(topic::SNIPE_TAX_EXEMPTED)
+            {
+                continue;
+            }
+            let Some(address) = log.topic_address(1) else {
+                unavailable.push(Unavailable {
+                    fact: "snipe tax exemption",
+                    why: "a SnipeTaxExempted event carried no address topic".to_owned(),
+                });
+                continue;
+            };
+            if seen.contains(&address) {
+                // Already confirmed and classified this address from an
+                // earlier event in the same receipt -- a second confirmation
+                // call would answer the same question again.
+                continue;
+            }
+            seen.push(address);
+
+            let confirmed = call(
+                budget,
+                client,
+                &record.curve,
+                &curve::call_data_for(curve::SNIPE_TAX_EXEMPT, &address),
+                at,
+            )
+            .ok()
+            .as_deref()
+            .and_then(curve::bool_return);
+
+            match confirmed {
+                Some(true) => {
+                    // `classify` already checks the first-party list before
+                    // the declared one; when the declared list itself could
+                    // not be read, a non-first-party address cannot be told
+                    // apart from declared vs. undeclared, so it is named
+                    // rather than guessed either way (rule 8).
+                    let source = match &declared {
+                        Some(list) => Some(powers::classify(&address, list)),
+                        None if powers::FIRST_PARTY.contains(&address) => {
+                            Some(powers::Source::FirstParty)
+                        }
+                        None => {
+                            unavailable.push(Unavailable {
+                                fact: "snipe tax exemption classification",
+                                why: format!(
+                                    "{address} is exempt but the declared list could not be \
+                                     read, so declared and undeclared cannot be told apart"
+                                ),
+                            });
+                            None
+                        }
+                    };
+                    if let Some(source) = source {
+                        exemptions.push(Exemption {
+                            address: ChainAddress::Robinhood(address),
+                            source,
+                        });
+                    }
+                }
+                Some(false) => {}
+                None => unavailable.push(Unavailable {
+                    fact: "snipe tax exemption",
+                    why: format!("snipeTaxExempt could not be confirmed for {address}"),
+                }),
+            }
+        }
+    }
+
+    Powers {
+        creator_tax_bps: record.creator_tax_bps,
+        pending_creator_fee_recipient: pending_creator_fee_recipient.map(ChainAddress::Robinhood),
+        exemptions,
+    }
 }
 
 /// One ERC-20 string field of `token`, or `None` for every way that can fail.
@@ -844,6 +1021,7 @@ pub fn build_with_memory(
         market: None,
         token_ownership: None,
         creator_cash_flow: None,
+        powers: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -897,11 +1075,42 @@ pub fn build_with_memory(
 
     // 4. The launch block, its age and the launcher's own buy. Required by
     // design 0020 §1, so a miss is named and the sheet treats it as unread.
+    let mut launch_transaction = None;
+    let mut launch_receipt = None;
     match launch_facts(budget, client, token, &record, read.as_ref()) {
-        Ok(launch) => dossier.chain_launch = Some(launch),
+        Ok((launch, transaction, receipt)) => {
+            dossier.chain_launch = Some(launch);
+            launch_transaction = Some(transaction);
+            launch_receipt = receipt;
+        }
         Err(why) => dossier.unavailable.push(Unavailable {
             fact: "launch block",
             why,
+        }),
+    }
+
+    // 4b. S13's "owner powers live" (research 0052 §3; task packet
+    // M-D-0004). Needs the launch transaction's hash to read the declared
+    // exemption list from its calldata; without it (step 4 above failed)
+    // there is nothing to classify against, so the whole fact is named once
+    // rather than built on an empty declared list that would read as "no
+    // wallet was ever declared" instead of "unknown".
+    match launch_transaction {
+        Some(transaction) => {
+            dossier.powers = Some(powers_facts(
+                budget,
+                client,
+                token,
+                &record,
+                &transaction,
+                launch_receipt.as_ref(),
+                at,
+                &mut dossier.unavailable,
+            ));
+        }
+        None => dossier.unavailable.push(Unavailable {
+            fact: "powers",
+            why: "the launch transaction hash could not be read".to_owned(),
         }),
     }
 
