@@ -485,16 +485,30 @@ answers the query above directly.
 `robinhood.rs` writes into it from `dossier.funding.checked` — the
 launch-window buyers `wallets::investigate` already reads for the funding
 enrichment (§9 above) — once a `funding` read succeeds and a memory is
-present. No new RPC read backs this: the amount recorded is
-`Candidate::bought_wei`, the quote `wallets::investigate` already computed
-from the launch-window `CurveBuy` logs it already read, not a wider walk of
-every launch-window buyer or a re-derived ERC-20 token count. A write
-failure here is dropped, the same way the pair-quote-asset cache write is
-(§9's "Cost" above): the buyer index is an enrichment on top of `funding`,
-and this must never fail the sheet.
+present. No new RPC read backs this: the amounts recorded are
+`Candidate::bought_wei` and `Candidate::bought_tokens`, the quote and the
+token count `wallets::investigate` already computed from the launch-window
+`CurveBuy` logs it already read (`Trade::tokens`, decoded but formerly
+dropped by `wallets::purchases_from` — M-D-S6-token-amounts carries it
+through `Purchase`, `Buyer` and `Candidate`, mirroring `Sale::tokens` on the
+sell side), not a wider walk of every launch-window buyer. `bought_tokens`
+is `None` on a chain that does not read a per-buyer token count yet (Solana
+today, whose candidates come from a balance-rise walk, not a decoded
+`Trade`), and that `None` is stored as the row's own `token_amount`, never a
+fabricated 0. A write failure here is dropped, the same way the
+pair-quote-asset cache write is (§9's "Cost" above): the buyer index is an
+enrichment on top of `funding`, and this must never fail the sheet.
 
 Because the table is new SQL alongside the existing `facts (what, subject,
 block)` table, opening a database created before this table existed
 migrates cleanly: `CREATE TABLE IF NOT EXISTS` adds `buyer_index` beside
 whatever was already there and touches no existing row (memory.rs's
-migration test).
+migration test). The `token_amount` column arrived after the table itself
+(M-D-S6-token-amounts): a database that already has `buyer_index` gains the
+column through `ALTER TABLE ... ADD COLUMN` instead, guarded by a
+`pragma_table_info` check so opening the same database twice does not try
+to add it twice. SQLite's `ADD COLUMN` with no `DEFAULT` is metadata-only —
+it rewrites nothing — so every row written before the column existed reads
+back `token_amount = NULL` (unknown), never `0` (AGENTS.md rule 8), which is
+why `BuyerLaunch::token_amount` and `Memory::record_buy`'s parameter are
+both `Option<u128>` rather than `u128`.

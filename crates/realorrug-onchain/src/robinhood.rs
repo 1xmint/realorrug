@@ -568,8 +568,12 @@ fn pair_quote_asset(
 /// pre-aged-wallet / cross-token-recurrence factor) into the buyer index,
 /// when a memory is present. No new RPC read happens here: `funding.checked`
 /// is the candidate list `wallets::investigate` already spent budget
-/// reading, and `Candidate::bought_wei` is the amount it already computed
-/// from the launch-window `CurveBuy` logs, not a re-derived one.
+/// reading, and `Candidate::bought_wei`/`Candidate::bought_tokens` are the
+/// amounts it already computed from the launch-window `CurveBuy` logs, not
+/// re-derived ones. `bought_tokens` is `None` on chains that do not read a
+/// per-buyer token count yet (Solana today), and that `None` is passed
+/// through as the row's `token_amount` unchanged -- unknown stays unknown,
+/// never a fabricated 0.
 ///
 /// A write failure is dropped rather than surfaced as an `Unavailable`
 /// entry -- the same choice `pair_quote_asset`'s cache write makes just
@@ -592,6 +596,7 @@ fn record_buyer_index(
             &token_key,
             candidate.first_purchase_block,
             candidate.bought_wei,
+            candidate.bought_tokens,
         );
     }
 }
