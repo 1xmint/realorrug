@@ -59,13 +59,20 @@ its age rule is reused to keep fresh accounts off the ranked board.
   server is Josh's gate.
 - Every post about the game (a settlement, the weekly result) is Josh's gate
   until he approves its rule once.
-- A corrected fact from the earlier plan: Pons is about two-thirds of
-  launchpad revenue, not 28% (research 0051 §5). Decision 6 is judged against
-  the corrected figure.
+- A corrected fact from the earlier plan: Pons took about two-thirds of
+  launchpad fees, not 28% (63.9% across launchpads on one day, The Defiant,
+  2026-09-01; research 0051 §5). That is a one-day snapshot. Decision 6 needs
+  its own two-week measure, which the project does not track yet.
+- Signing a player in costs about $0.01 (one read of the player's own
+  account on X's current price list; research 0051 §1).
 
 ## Not decided
 
 - The window (fourteen days or three) waits on the replay.
-- The odds table waits on the replay, which waits on design 0027 slice 8 and
-  PR #117.
+- The odds table waits on the replay, which waits on design 0027 slice 8
+  (PR #117, the other blocker, merged 2026-09-18).
 - Which countries the rules exclude waits on the lawyer.
+- Whether we may keep a player's past calls after they delete their X account
+  or remove our app: X's developer policy as read does not say (research 0051
+  §1). It goes to the lawyer beside the prize question, before the call log
+  keeps anyone's history.

@@ -137,7 +137,11 @@ close it, and the rules page says so.
   the project (ADR 0023 decision 5) answers one question: *"Is a free-entry
   weekly prize for prediction accuracy acceptable when the pot is funded by
   token trading fees and rolls over?"* If the rollover is the problem, the
-  rollover goes first.
+  rollover goes first. A second question goes with it: *"May we keep a
+  player's past calls after they delete their X account or remove our
+  app?"* X's developer policy as read does not answer it (research 0051 §1).
+  Until it is answered, the call log keeps what it must to settle open calls
+  and nothing it cannot delete on request.
 - **Model judgement never moves money** (AGENTS rule 3.1). Scoring, the luck
   line and the winner are pure code. The payout pays what that code permits.
 
@@ -166,13 +170,13 @@ moves the bot's score or level.
 
 | Step | What | Waits on |
 |---|---|---|
-| G1 | Replay old launches: q per level, the window, dummy scores | 0027 slice 8, PR #117 |
+| G1 | Replay old launches: q per level, the window, dummy scores | 0027 slice 8 (PR #117 merged 2026-09-18) |
 | G2 | Score calls: settled calls and odds in; points, z, luck line, ranking out. Pure, in `realorrug-contest` | Nothing |
 | G3 | Pick the daily five from launches the readers already see; store level and q at listing. Pure | Nothing |
-| G4 | X sign-in, take a call, append-only call log, rate limits, deny by default with no config. In `realorrug-serve` | Research 0051 §1; live deploy is Josh's gate |
+| G4 | X sign-in, take a call, append-only call log, rate limits, deny by default with no config. In `realorrug-serve`. About $0.01 per sign-in (research 0051 §1) | Live deploy is Josh's gate |
 | G5 | Settle calls on the observation jobs | 0027 slice 9 |
 | G6 | Board endpoints beside `/v1/public/hunters` and site pages | G2, G4 |
-| G7 | Settlement and weekly posts; a result card players post themselves, from `crates/realorrug-serve/src/card.rs` | Josh's gate |
+| G7 | Settlement and weekly posts; a result card players post themselves, from `crates/realorrug-serve/src/card.rs` | Josh's gate; re-read X's automation rules and the pay-for-posting policy first-hand (research 0051 §2, §3 rest on secondary sources) |
 | G8 | The crowd signal | Settled records |
 | G9 | Point the payout at the G2 ranking | The lawyer's answer; Josh's gate |
 
