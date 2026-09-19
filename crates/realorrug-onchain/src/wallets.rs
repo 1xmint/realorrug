@@ -1228,6 +1228,134 @@ fn check_solana_candidate(
     candidate
 }
 
+/// How many blocks after the launch block count as "the same window" for a
+/// wallet-link check -- research 0052 §2.2, §3.2. Robinhood's blocks are
+/// about 0.1 s each, so "same block" alone is a much narrower net than it is
+/// on Solana; the factory's own `snipeTaxSeconds()` read as 3 (confirmed
+/// twice over, research 0047 §7 -- selector
+/// [`realorrug_robinhood::pons::curve::SNIPE_TAX_SECONDS`]) gives the
+/// natural width for "still inside the snipe-tax window": 3 s / 0.1 s per
+/// block is 30 blocks, ten times a single block.
+pub const LINK_WINDOW_BLOCKS: u64 = 30;
+
+/// Whether two buy sizes are within 10% of each other, expressed as the
+/// smaller's share of the larger in basis points.
+///
+/// Exactly 10% apart (9,000 bps) counts as "within": research 0052 §3.2's
+/// bands are stated as a closed threshold ("within 10%"), so the boundary
+/// itself belongs to the narrower band, not the wider one. Both directions
+/// of that boundary have a named test so a `<`/`<=` swap here fails a test,
+/// not just a mutation run.
+#[must_use]
+pub fn sizes_within_ten_percent(a: u128, b: u128) -> bool {
+    let (small, large) = if a <= b { (a, b) } else { (b, a) };
+    if large == 0 {
+        // Both zero: nothing to compare, and calling two empty buys
+        // "different sizes" would be a claim this reader cannot support.
+        return true;
+    }
+    small.saturating_mul(10_000) >= large.saturating_mul(9_000)
+}
+
+/// What is known about two wallets, feeding [`link_confidence`].
+///
+/// A struct of observations, not a raw score: nothing outside this module
+/// can hand `link_confidence` a number and skip the table, because there is
+/// no bps field to set. Every field names one thing that was actually
+/// checked; a caller with no evidence for a field leaves it `false`, which
+/// [`link_confidence`] reads as "not observed", never as "observed absent"
+/// (AGENTS.md §3 rule 8 -- this struct only ever grows evidence, it does not
+/// carry a way to assert a negative).
+// Seven independent observations, not app state to collapse into an enum:
+// research 0052 §3.2's table names each one separately and several can be
+// true of the same pair of wallets at once (a transfer *and* a same-block
+// buy), which a two-variant enum per pair could not represent.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkEvidence {
+    /// An ERC-20 `Transfer` moved tokens directly between the two wallets
+    /// (either direction), or from the deployer to both; or the two
+    /// addresses were declared together in `launchToken`'s exemption
+    /// calldata (research 0048 §3). The *open* case: research 0052 §3.2
+    /// gives this the top weight precisely because declaring a link is
+    /// never scored worse than hiding it.
+    pub transfer_or_declared_together: bool,
+    /// Both wallets' first purchase landed in the same block.
+    pub same_block: bool,
+    /// Both wallets were fresh: no on-chain history before the launch block
+    /// (`Candidate::nonce_before_launch == Some(0)` for both, or the
+    /// equivalent chain-specific check).
+    pub both_fresh: bool,
+    /// The two wallets' buy sizes are within 10% of each other --
+    /// [`sizes_within_ten_percent`] is the reference comparison a caller
+    /// should use to set this.
+    pub sizes_within_10_percent: bool,
+    /// Both wallets acted within [`LINK_WINDOW_BLOCKS`] of the launch block
+    /// (a superset of `same_block`; a caller sets this whenever `same_block`
+    /// is true too, since same-block evidence is also same-window evidence).
+    pub same_window: bool,
+    /// Both wallets sold within 50 blocks of each other. Confirms a link
+    /// found some other way; research 0052 §3.2 marks it "never the only
+    /// link", so [`link_confidence`] only lets it raise a confidence that is
+    /// already nonzero from another field.
+    pub correlated_sell: bool,
+    /// A native-ETH transfer funded one wallet from the other within one
+    /// hop. **Not readable today**: nothing in this crate walks a funding
+    /// graph more than the direct pre-purchase transfer `wallets.rs`
+    /// already reads for [`Funding::checked`] (research 0052 §3.2, §7.2 --
+    /// the read this would need is unbuilt, not merely unbudgeted). The
+    /// field exists so the evidence type matches the table exactly and so
+    /// the day this read is built, no caller needs a new enum variant; until
+    /// then nothing in this crate ever sets it `true`.
+    pub eth_funding_one_hop: bool,
+}
+
+/// Confidence that two wallets are one actor, in bps -- the **strongest**
+/// single piece of evidence present, never a sum (research 0052 §3.2: "never
+/// added across kinds", design 0027 §"Judgement" -- correlated evidence must
+/// not multiply). Reproduces the §3.2 table exactly:
+///
+/// | evidence | c (bps) |
+/// |---|---|
+/// | transfer between them, or declared together in calldata | 9,000 |
+/// | same launch block + both fresh + sizes within 10% | 7,000 |
+/// | same launch block + both fresh | 5,000 |
+/// | same [`LINK_WINDOW_BLOCKS`]-block window + sizes within 10% | 4,000 |
+/// | same [`LINK_WINDOW_BLOCKS`]-block window only | 2,000 |
+/// | ETH funding, one hop (not readable today) | 8,000 |
+/// | sold within 50 blocks of each other | 3,000, confirms only |
+/// | none of the above | 0 |
+///
+/// The correlated-sell row never establishes a link by itself: it only
+/// raises a confidence some other field already made nonzero, matching
+/// "never the only link".
+#[must_use]
+pub fn link_confidence(evidence: LinkEvidence) -> u16 {
+    let mut c: u16 = 0;
+    if evidence.same_window {
+        c = c.max(2_000);
+    }
+    if evidence.same_window && evidence.sizes_within_10_percent {
+        c = c.max(4_000);
+    }
+    if evidence.same_block && evidence.both_fresh {
+        c = c.max(5_000);
+    }
+    if evidence.same_block && evidence.both_fresh && evidence.sizes_within_10_percent {
+        c = c.max(7_000);
+    }
+    if evidence.eth_funding_one_hop {
+        c = c.max(8_000);
+    }
+    if evidence.transfer_or_declared_together {
+        c = c.max(9_000);
+    }
+    if evidence.correlated_sell && c > 0 {
+        c = c.max(3_000);
+    }
+    c
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1979,5 +2107,137 @@ mod creator_cash_flow_tests {
         assert_eq!(flow.proceeds_wei(), None);
         assert_eq!(flow.gaps.len(), 1, "gaps: {:?}", flow.gaps);
         assert!(flow.gaps[0].starts_with("creator transfer history"));
+    }
+}
+
+#[cfg(test)]
+mod link_confidence_tests {
+    use super::*;
+
+    #[test]
+    fn link_confidence_takes_strongest_not_sum() {
+        // Transfer (9,000) plus same block + fresh (5,000): the strongest
+        // alone, 9,000, never 16,000 or any other sum.
+        let evidence = LinkEvidence {
+            transfer_or_declared_together: true,
+            same_block: true,
+            both_fresh: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(evidence), 9_000);
+    }
+
+    #[test]
+    fn no_evidence_gives_zero() {
+        assert_eq!(link_confidence(LinkEvidence::default()), 0);
+    }
+
+    #[test]
+    fn transfer_or_declared_together_gives_9000() {
+        let evidence = LinkEvidence {
+            transfer_or_declared_together: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(evidence), 9_000);
+    }
+
+    #[test]
+    fn same_block_fresh_and_matched_sizes_gives_7000() {
+        let evidence = LinkEvidence {
+            same_block: true,
+            both_fresh: true,
+            sizes_within_10_percent: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(evidence), 7_000);
+    }
+
+    #[test]
+    fn same_block_and_fresh_alone_gives_5000() {
+        let evidence = LinkEvidence {
+            same_block: true,
+            both_fresh: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(evidence), 5_000);
+    }
+
+    #[test]
+    fn same_window_and_matched_sizes_gives_4000() {
+        let evidence = LinkEvidence {
+            same_window: true,
+            sizes_within_10_percent: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(evidence), 4_000);
+    }
+
+    #[test]
+    fn same_window_alone_gives_2000() {
+        let evidence = LinkEvidence {
+            same_window: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(evidence), 2_000);
+    }
+
+    #[test]
+    fn eth_funding_one_hop_gives_8000() {
+        // Not readable today (no caller in this crate can set this field),
+        // but the evidence type and its weight are reproduced from the
+        // table regardless, so the day the read exists nothing here changes.
+        let evidence = LinkEvidence {
+            eth_funding_one_hop: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(evidence), 8_000);
+    }
+
+    #[test]
+    fn correlated_sell_confirms_an_existing_link_but_is_never_the_only_one() {
+        // Alone, correlated selling proves nothing about identity -- the
+        // table marks it "never the only link" -- so it must not lift
+        // confidence off zero.
+        let alone = LinkEvidence {
+            correlated_sell: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(alone), 0);
+
+        // Alongside a weaker link (same window only, 2,000), it confirms and
+        // raises to its own 3,000.
+        let confirming = LinkEvidence {
+            same_window: true,
+            correlated_sell: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(confirming), 3_000);
+
+        // Alongside a stronger link, it never lowers what is already there.
+        let strong = LinkEvidence {
+            transfer_or_declared_together: true,
+            correlated_sell: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(strong), 9_000);
+    }
+
+    #[test]
+    fn sizes_within_ten_percent_boundary_is_closed_at_exactly_10_percent() {
+        // 90 vs 100 is exactly 10% apart: within.
+        assert!(sizes_within_ten_percent(90, 100));
+        assert!(sizes_within_ten_percent(100, 90), "order must not matter");
+    }
+
+    #[test]
+    fn sizes_within_ten_percent_boundary_excludes_just_over_10_percent() {
+        // 89 vs 100 is just over 10% apart: not within.
+        assert!(!sizes_within_ten_percent(89, 100));
+        assert!(!sizes_within_ten_percent(100, 89), "order must not matter");
+    }
+
+    #[test]
+    fn sizes_within_ten_percent_treats_two_zero_buys_as_matched() {
+        assert!(sizes_within_ten_percent(0, 0));
     }
 }
