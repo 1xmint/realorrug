@@ -234,12 +234,10 @@ impl Weight {
     /// exists to reject at a distance; clamping keeps the type total the way
     /// [`episode`] and [`weight`] are total.
     #[must_use]
-    pub const fn from_bps(bps: u32) -> Self {
-        if bps > Self::MAX.0 {
-            Self::MAX
-        } else {
-            Self(bps)
-        }
+    pub fn from_bps(bps: u32) -> Self {
+        // `min`, not `if bps > MAX`: at exactly 10,000 both branches of the
+        // `if` give the same value, so the comparison could not be tested.
+        Self(bps.min(Self::MAX.0))
     }
 
     /// The weight as a raw basis-point count.
@@ -450,6 +448,10 @@ mod tests {
             assessment.risk_index,
             u8::try_from(WEIGHT_LAUNCH_BLOCK + WEIGHT_CREATOR_HISTORY).unwrap()
         );
+        // The 0-100 weights rebased to bps, then combined by noisy-OR.
+        let (a, b) = (WEIGHT_LAUNCH_BLOCK * 100, WEIGHT_CREATOR_HISTORY * 100);
+        let expected = 10_000 - (10_000 - a) * (10_000 - b) / 10_000;
+        assert_eq!(assessment.score_bps.bps(), expected);
     }
 
     #[test]
@@ -563,6 +565,12 @@ mod tests {
                 "score_bps",
             ]
         );
+    }
+
+    #[test]
+    fn weight_bps_reads_back_what_went_in() {
+        assert_eq!(Weight::from_bps(1_234).bps(), 1_234);
+        assert_eq!(Weight::from_bps(10_001).bps(), 10_000);
     }
 
     #[test]
