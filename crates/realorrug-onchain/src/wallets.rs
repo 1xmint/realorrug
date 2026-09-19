@@ -1248,13 +1248,13 @@ pub const LINK_WINDOW_BLOCKS: u64 = 30;
 /// not just a mutation run.
 #[must_use]
 pub fn sizes_within_ten_percent(a: u128, b: u128) -> bool {
-    let (small, large) = if a <= b { (a, b) } else { (b, a) };
-    if large == 0 {
-        // Both zero: nothing to compare, and calling two empty buys
-        // "different sizes" would be a claim this reader cannot support.
-        return true;
-    }
-    small.saturating_mul(10_000) >= large.saturating_mul(9_000)
+    let (small, large) = (a.min(b), a.max(b));
+    // `small >= large - floor(large / 10)` is exactly `small >= 0.9 * large`
+    // for whole numbers, with no multiply: a saturating multiply would call
+    // two near-`u128::MAX` amounts "within 10%" whatever they were. Two
+    // empty buys pass (0 >= 0): calling them "different sizes" would be a
+    // claim this reader cannot support.
+    small >= large - large / 10
 }
 
 /// What is known about two wallets, feeding [`link_confidence`].
@@ -2125,6 +2125,15 @@ mod link_confidence_tests {
             ..LinkEvidence::default()
         };
         assert_eq!(link_confidence(evidence), 9_000);
+    }
+
+    #[test]
+    fn sizes_within_ten_percent_is_exact_near_u128_max() {
+        assert!(sizes_within_ten_percent(
+            u128::MAX,
+            u128::MAX - u128::MAX / 10
+        ));
+        assert!(!sizes_within_ten_percent(u128::MAX, u128::MAX / 2));
     }
 
     #[test]
