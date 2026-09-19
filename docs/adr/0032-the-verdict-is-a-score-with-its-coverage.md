@@ -133,6 +133,21 @@ weights should be *measured against outcomes*, not asserted from intuition
    implies today but does not yet compute). Only once those exist does a
    score drawn from them mean more than the ladder already means.
 
+**How the weights combine is noisy-OR, not a sum.** Research 0052 §4 compares
+a capped sum, "strongest flag dominates," and noisy-OR on the same worked
+sheet and picks noisy-OR: `rest = 10_000; for w in sorted_desc(weights): rest
+= rest * (10_000 - w) / 10_000; score = 10_000 - rest`, run over weights
+already deduplicated to one per causal episode (`assessment.rs`'s existing
+per-episode fold, §4.1). A capped sum lets several mild, correlated signals
+outrun one hard fact and double-counts a bundle seen four ways; taking the
+single strongest signal makes every corroborating signal after it free,
+so adding evidence never moves the number. Noisy-OR keeps the properties
+decision 1 through 3 above need: the strongest signal sets the floor, each
+further signal adds with diminishing returns, the combined score never
+exceeds 10,000 basis points, and adding a signal never lowers it — computed
+as a whole-number fold over `u32`, no floating point, per `AGENTS.md` §3
+rule 2 and design 0028's whole-number rule.
+
 ## Consequences
 
 - **A reader gets two numbers instead of a label and a reasons list**: a
