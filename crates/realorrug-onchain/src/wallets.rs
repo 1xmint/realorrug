@@ -138,6 +138,10 @@ pub struct Purchase {
     pub beneficiary: Address,
     /// Quote paid, in wei.
     pub quote: u128,
+    /// Tokens received, already decoded off `Trade::tokens` -- the same
+    /// field [`Sale::tokens`] keeps for the sell side (S7). Carried through
+    /// so a buyer's share of supply can be measured, not just its spend.
+    pub tokens: u128,
     /// The block it landed in.
     pub block: u64,
     /// Position within the block, for ordering; `(0, 0)` when the provider
@@ -160,6 +164,7 @@ pub fn purchases_from(logs: &[Log], curve: &Address) -> Vec<Purchase> {
             trader: t.trader,
             beneficiary: t.recipient,
             quote: t.quote,
+            tokens: t.tokens,
             block: log.block,
             position: log
                 .position
@@ -176,6 +181,9 @@ pub struct Buyer {
     pub address: Address,
     /// Quote it bought with in the window, in wei.
     pub quote: u128,
+    /// Tokens it bought in the window, summed over its purchases
+    /// ([`Purchase::tokens`]) the same way `quote` sums theirs.
+    pub tokens: u128,
     /// The block of its first purchase.
     pub first_block: u64,
     /// Position of its first purchase within that block.
@@ -190,10 +198,12 @@ pub fn buyers_of(purchases: &[Purchase]) -> Vec<Buyer> {
         let buyer = by_address.entry(p.beneficiary.0).or_insert_with(|| Buyer {
             address: p.beneficiary,
             quote: 0,
+            tokens: 0,
             first_block: p.block,
             first_position: p.position,
         });
         buyer.quote = buyer.quote.saturating_add(p.quote);
+        buyer.tokens = buyer.tokens.saturating_add(p.tokens);
         // `min` rather than a comparison: two purchases can never share a
         // position, so `<` and `<=` are the same here and a mutation test
         // cannot tell them apart.
@@ -302,6 +312,12 @@ pub struct Candidate {
     pub address: String,
     /// Quote it bought with in the window, in the chain's smallest unit.
     pub bought_wei: u128,
+    /// Tokens it bought in the window ([`Buyer::tokens`]). `None` when the
+    /// token amount was not read for this chain (Solana's candidates are
+    /// built from a balance-rise walk, not a decoded `Trade`, and no token
+    /// count is read there today) -- `None`, never a fabricated 0, per
+    /// AGENTS.md rule 8 ("absent is not zero").
+    pub bought_tokens: Option<u128>,
     /// The block of its first purchase.
     pub first_purchase_block: u64,
     /// Whether the address holds code; `None` when the read failed.
@@ -471,6 +487,7 @@ fn check_candidate(
     let mut candidate = Candidate {
         address: buyer.address.to_string(),
         bought_wei: buyer.quote,
+        bought_tokens: Some(buyer.tokens),
         first_purchase_block: buyer.first_block,
         is_contract: None,
         nonce_before_launch: None,
@@ -1157,6 +1174,11 @@ fn check_solana_candidate(
     let mut candidate = Candidate {
         address: address.clone(),
         bought_wei: 0,
+        // Not read here: `buyers_in` only reports which wallets' balance of
+        // the mint rose, not by how much beyond "some" (the same reason
+        // `bought_wei` above is 0, not a quote). `None`, not 0, so a later
+        // reader cannot mistake "not read" for "bought nothing".
+        bought_tokens: None,
         first_purchase_block: buyer.first_purchase_slot,
         is_contract: None,
         nonce_before_launch: None,
@@ -1644,6 +1666,97 @@ pub fn correlated_selling(
     }
 }
 
+// --- S6 "linked-wallet holdings" (research 0052 §2.3, §3.1 S6, §3.2) ------
+
+/// The sum of what a set of wallets holds, each wallet counted once even
+/// when it links to several others, scaled by how confident the link is.
+///
+/// `holdings` is `(wallet, share_bps, link_confidence_bps)`: `share_bps` is
+/// that wallet's own share of supply, `link_confidence_bps` the strongest
+/// [`link_confidence`] tying it to the wallet under investigation (research
+/// 0052 §3.2's own rule: confidence is taken from the strongest evidence,
+/// never summed across kinds -- a caller with more than one piece of
+/// evidence for the same wallet must already have reduced it to one
+/// `link_confidence_bps` via `link_confidence` before calling this).
+///
+/// Per wallet the effective holding is `share_bps * link_confidence_bps /
+/// 10_000` (research 0052 §3.2's own formula; whole-number division, so
+/// 15% at 7,000 bps confidence is 1,050 bps, not 1,500). The same wallet
+/// address can appear more than once in `holdings` -- e.g. read once from
+/// the buyer set and again from a holder-balance read -- and must be
+/// counted once, not twice: this function keeps the *strongest* effective
+/// value seen per address (never their sum, for the same reason confidence
+/// itself is not summed) and sums across distinct addresses.
+///
+/// No caller reads this yet; S2's raise ("same-window buyers hold >= 1,000
+/// bps together", research 0052 §3.1 row S2) and S1's linked-wallet share
+/// are the intended callers, wired in a follow-up slice that also carries
+/// the `Powers.exemptions`/`Funding.checked` reads this needs.
+///
+/// Integer math only: every multiply is `u32` (bps values fit in `u16`, so
+/// their product fits comfortably), every sum saturates so a pathological
+/// input clamps at `u16::MAX` instead of wrapping.
+#[must_use]
+pub fn linked_holdings_bps(holdings: &[(Address, u16, u16)]) -> u16 {
+    let mut strongest: BTreeMap<[u8; 20], u16> = BTreeMap::new();
+    for &(wallet, share_bps, confidence_bps) in holdings {
+        let effective = u32::from(share_bps) * u32::from(confidence_bps) / 10_000;
+        let effective = u16::try_from(effective).unwrap_or(u16::MAX);
+        strongest
+            .entry(wallet.0)
+            .and_modify(|current| *current = (*current).max(effective))
+            .or_insert(effective);
+    }
+    strongest
+        .values()
+        .fold(0u16, |sum, &v| sum.saturating_add(v))
+}
+
+#[cfg(test)]
+mod linked_holdings_tests {
+    use super::*;
+
+    fn addr(b: u8) -> Address {
+        Address([b; 20])
+    }
+
+    #[test]
+    fn confidence_zero_contributes_nothing() {
+        assert_eq!(linked_holdings_bps(&[(addr(1), 5_000, 0)]), 0);
+    }
+
+    #[test]
+    fn confidence_full_contributes_all_of_the_share() {
+        assert_eq!(linked_holdings_bps(&[(addr(1), 5_000, 10_000)]), 5_000);
+    }
+
+    #[test]
+    fn partial_confidence_scales_the_share_down() {
+        // 15% at 7,000 bps confidence: 1,500 * 7,000 / 10,000 = 1,050.
+        assert_eq!(linked_holdings_bps(&[(addr(1), 1_500, 7_000)]), 1_050);
+    }
+
+    #[test]
+    fn a_wallet_linked_twice_is_counted_once_at_its_strongest_reading() {
+        // Same wallet appears from two evidence paths; must not sum.
+        let holdings = &[(addr(1), 1_000, 2_000), (addr(1), 1_000, 9_000)];
+        // Weak reading alone would be 200; strong alone 900; summed 1,100.
+        // The rule is "strongest, not sum": 900.
+        assert_eq!(linked_holdings_bps(holdings), 900);
+    }
+
+    #[test]
+    fn distinct_wallets_sum() {
+        let holdings = &[(addr(1), 1_000, 10_000), (addr(2), 500, 10_000)];
+        assert_eq!(linked_holdings_bps(holdings), 1_500);
+    }
+
+    #[test]
+    fn empty_holdings_is_zero() {
+        assert_eq!(linked_holdings_bps(&[]), 0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1656,6 +1769,7 @@ mod tests {
         Buyer {
             address: addr(b),
             quote,
+            tokens: 0,
             first_block: block,
             first_position: (0, 0),
         }
@@ -1665,6 +1779,7 @@ mod tests {
         Candidate {
             address: addr(b).to_string(),
             bought_wei: quote,
+            bought_tokens: Some(0),
             first_purchase_block: 10,
             is_contract: Some(false),
             nonce_before_launch: Some(0),
@@ -1724,9 +1839,9 @@ mod tests {
 
     #[test]
     fn a_buyer_is_aggregated_by_beneficiary_not_by_trader() {
-        let log = |trader: u8, recipient: u8, quote: u128, block: u64| {
+        let log = |trader: u8, recipient: u8, quote: u128, tokens: u128, block: u64| {
             let mut data = Vec::new();
-            for v in [quote, 1_000, 0, 0] {
+            for v in [quote, tokens, 0, 0] {
                 let mut w = [0u8; 32];
                 w[16..].copy_from_slice(&v.to_be_bytes());
                 data.extend(w);
@@ -1744,14 +1859,14 @@ mod tests {
                 position: None,
             }
         };
-        let mut sell = log(1, 1, 99, 1);
+        let mut sell = log(1, 1, 99, 1_000, 1);
         sell.topics[0] = topic::CURVE_SELL;
-        let mut other_curve = log(1, 1, 99, 1);
+        let mut other_curve = log(1, 1, 99, 1_000, 1);
         other_curve.address = addr(0xdd);
         let logs = vec![
-            log(0x22, 0x01, 5, 3), // a router buys for 01
-            log(0x01, 0x01, 7, 2), // 01 buys directly, earlier
-            log(0x22, 0x02, 9, 3), // the same router buys for 02
+            log(0x22, 0x01, 5, 300, 3), // a router buys for 01
+            log(0x01, 0x01, 7, 400, 2), // 01 buys directly, earlier
+            log(0x22, 0x02, 9, 900, 3), // the same router buys for 02
             sell,
             other_curve,
         ];
@@ -1763,12 +1878,21 @@ mod tests {
         );
         assert_eq!(purchases[0].trader, addr(0x22));
         assert_eq!(purchases[0].beneficiary, addr(0x01));
+        assert_eq!(
+            purchases[0].tokens, 300,
+            "the decoded token amount must survive purchases_from"
+        );
         let buyers = buyers_of(&purchases);
         assert_eq!(buyers.len(), 2, "the router is not a buyer");
         assert_eq!(buyers[0].address, addr(0x01));
         assert_eq!(buyers[0].quote, 12);
+        assert_eq!(
+            buyers[0].tokens, 700,
+            "two buys by one wallet (300 + 400) must sum, not just the last one"
+        );
         assert_eq!(buyers[0].first_block, 2);
         assert_eq!(buyers[1].address, addr(0x02));
+        assert_eq!(buyers[1].tokens, 900);
     }
 
     #[test]

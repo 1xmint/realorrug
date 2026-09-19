@@ -576,6 +576,12 @@ pub struct BuyerLaunch {
     /// The amount recorded with the buy, in the chain's smallest unit for
     /// whatever was paid (wei for Robinhood's launch-window quote).
     pub amount: u128,
+    /// The token amount bought, when it was read. `None` on every row
+    /// written before this column existed (the migration gives them `NULL`,
+    /// never a fabricated 0 -- AGENTS.md rule 8) and on any chain/path that
+    /// still does not read a per-buyer token count (`Candidate::bought_tokens`
+    /// mirrors the same `None`).
+    pub token_amount: Option<u128>,
 }
 
 /// What [`Memory::extend_transfers`] did with the events it was handed.
@@ -734,6 +740,36 @@ impl Memory {
              CREATE INDEX IF NOT EXISTS buyer_index_by_buyer
                 ON buyer_index (chain, buyer);",
         )?;
+        Self::add_buyer_index_token_amount_column(conn)?;
+        Ok(())
+    }
+
+    /// Adds `buyer_index.token_amount` to a database that predates it,
+    /// without touching a row that is already there.
+    ///
+    /// `CREATE TABLE IF NOT EXISTS` above only creates the table when it is
+    /// wholly absent; a database opened before this column existed already
+    /// has `buyer_index` and needs `ALTER TABLE` instead. SQLite's
+    /// `ADD COLUMN` with no `DEFAULT` is metadata-only -- it does not
+    /// rewrite a single existing row -- and every row that predates the
+    /// column reads back `NULL` (unknown), never `0` (AGENTS.md rule 8: a
+    /// buy recorded before this shipped never had its token amount read, so
+    /// it must not now claim it bought nothing).
+    ///
+    /// Guarded by `pragma_table_info` rather than run unconditionally,
+    /// because `Memory::open` calls this every time a database is opened
+    /// and a second `ALTER TABLE ADD COLUMN token_amount` on a database that
+    /// already has it is a SQLite error ("duplicate column name"), not a
+    /// no-op the way `CREATE TABLE IF NOT EXISTS` is.
+    fn add_buyer_index_token_amount_column(conn: &Connection) -> Result<(), Error> {
+        let has_column: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('buyer_index') WHERE name = 'token_amount'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_column == 0 {
+            conn.execute_batch("ALTER TABLE buyer_index ADD COLUMN token_amount TEXT;")?;
+        }
         Ok(())
     }
 
@@ -764,11 +800,19 @@ impl Memory {
         token: &str,
         block: u64,
         amount: u128,
+        token_amount: Option<u128>,
     ) -> Result<bool, Error> {
         let changed = self.conn.execute(
-            "INSERT OR IGNORE INTO buyer_index (chain, buyer, token, block, amount)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![chain, buyer, token, to_i64(block), amount.to_string()],
+            "INSERT OR IGNORE INTO buyer_index (chain, buyer, token, block, amount, token_amount)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                chain,
+                buyer,
+                token,
+                to_i64(block),
+                amount.to_string(),
+                token_amount.map(|v| v.to_string()),
+            ],
         )?;
         Ok(changed > 0)
     }
@@ -783,7 +827,7 @@ impl Memory {
     /// parses.
     pub fn launches_bought_by(&self, chain: &str, buyer: &str) -> Result<Vec<BuyerLaunch>, Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT token, block, amount FROM buyer_index
+            "SELECT token, block, amount, token_amount FROM buyer_index
              WHERE chain = ?1 AND buyer = ?2
              ORDER BY block, token",
         )?;
@@ -792,11 +836,20 @@ impl Memory {
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })?;
         let mut launches = Vec::new();
         for row in rows {
-            let (token, block, amount) = row?;
+            let (token, block, amount, token_amount) = row?;
+            let token_amount = token_amount
+                .map(|v| {
+                    v.parse::<u128>().map_err(|_| Error::Ledger {
+                        token: token.clone(),
+                        why: format!("buyer index token amount {v:?} does not parse"),
+                    })
+                })
+                .transpose()?;
             launches.push(BuyerLaunch {
                 token: token.clone(),
                 block: u64::try_from(block).unwrap_or(0),
@@ -804,6 +857,7 @@ impl Memory {
                     token,
                     why: format!("buyer index amount {amount:?} does not parse"),
                 })?,
+                token_amount,
             });
         }
         Ok(launches)
@@ -1994,13 +2048,13 @@ mod tests {
     #[test]
     fn a_wallet_seen_buying_two_launches_is_retrievable_by_address() {
         let mem = Memory::open_in_memory().expect("open");
-        mem.record_buy(CHAIN, "wallet", "TOKEN_A", 10, 111)
+        mem.record_buy(CHAIN, "wallet", "TOKEN_A", 10, 111, Some(4_000))
             .expect("record A");
-        mem.record_buy(CHAIN, "wallet", "TOKEN_B", 20, 222)
+        mem.record_buy(CHAIN, "wallet", "TOKEN_B", 20, 222, None)
             .expect("record B");
         // A different wallet buying the same launch must not show up here --
         // the index is scoped by buyer, not by launch.
-        mem.record_buy(CHAIN, "someone else", "TOKEN_A", 10, 999)
+        mem.record_buy(CHAIN, "someone else", "TOKEN_A", 10, 999, Some(1))
             .expect("record other buyer");
 
         let launches = mem.launches_bought_by(CHAIN, "wallet").expect("read");
@@ -2011,11 +2065,13 @@ mod tests {
                     token: "TOKEN_A".to_owned(),
                     block: 10,
                     amount: 111,
+                    token_amount: Some(4_000),
                 },
                 BuyerLaunch {
                     token: "TOKEN_B".to_owned(),
                     block: 20,
                     amount: 222,
+                    token_amount: None,
                 },
             ]
         );
@@ -2034,7 +2090,7 @@ mod tests {
     fn re_recording_the_same_buy_is_idempotent() {
         let mem = Memory::open_in_memory().expect("open");
         assert!(
-            mem.record_buy(CHAIN, "wallet", TOKEN, 10, 111)
+            mem.record_buy(CHAIN, "wallet", TOKEN, 10, 111, Some(50))
                 .expect("first record"),
             "the first record of a key must insert"
         );
@@ -2042,7 +2098,7 @@ mod tests {
         // amount than the first call: the sheet re-running over the same
         // launch window must not fail or overwrite the first-seen buy.
         assert!(
-            !mem.record_buy(CHAIN, "wallet", TOKEN, 999, 1)
+            !mem.record_buy(CHAIN, "wallet", TOKEN, 999, 1, Some(1))
                 .expect("re-record"),
             "a re-record of the same key must be a no-op, not a second insert"
         );
@@ -2054,8 +2110,36 @@ mod tests {
                 token: TOKEN.to_owned(),
                 block: 10,
                 amount: 111,
+                token_amount: Some(50),
             }],
             "the first-seen block and amount must stand"
+        );
+    }
+
+    #[test]
+    fn a_buy_recorded_before_the_token_amount_column_existed_reads_back_none() {
+        // Standing in for a row `record_buy` wrote before this migration
+        // shipped: `buyer_index` exists but without `token_amount`, so the
+        // insert below can only fill the columns that predate it.
+        let mem = Memory::open_in_memory().expect("open");
+        mem.conn
+            .execute(
+                "INSERT INTO buyer_index (chain, buyer, token, block, amount)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![CHAIN, "wallet", TOKEN, 10i64, "111"],
+            )
+            .expect("seed a pre-migration row");
+
+        let launches = mem.launches_bought_by(CHAIN, "wallet").expect("read");
+        assert_eq!(
+            launches,
+            vec![BuyerLaunch {
+                token: TOKEN.to_owned(),
+                block: 10,
+                amount: 111,
+                token_amount: None,
+            }],
+            "a row with no token_amount must read back None, never a fabricated 0"
         );
     }
 
@@ -2100,11 +2184,14 @@ mod tests {
         assert_eq!(fact.value, "creator=ABC");
         assert_eq!(fact.block, 100);
 
-        mem.record_buy(CHAIN, "wallet", "TOKEN", 100, 5)
+        mem.record_buy(CHAIN, "wallet", "TOKEN", 100, 5, Some(9))
             .expect("the buyer index table must now exist");
+        let launches = mem.launches_bought_by(CHAIN, "wallet").expect("read");
+        assert_eq!(launches.len(), 1);
         assert_eq!(
-            mem.launches_bought_by(CHAIN, "wallet").expect("read").len(),
-            1
+            launches[0].token_amount,
+            Some(9),
+            "a row written after the migration keeps its token amount"
         );
     }
 }

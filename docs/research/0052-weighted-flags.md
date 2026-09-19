@@ -193,7 +193,7 @@ fixtures roughly stable until the replay in §5 moves them.
 | S3 | **repeat launcher** (`RepeatLauncher`) | 1,000 | +800 if >= 10 lifetime launches (M); +500 if any prior launch hit `LiquidityGone` before graduation (M, needs an outcome index); +400 if a duplicate name/symbol relaunch (M, Radar `creator_history`) | -500 if any prior launch graduated organically **and** held liquidity 7 days (M; research 0011: graduation alone is not a good sign, hence the 7-day hold); -200 if the floor was measured on < 200 creators (I) | fresh deployer per launch / `creatorFeeRecipient` recurrence and `pendingCreatorFeeRecipient` moves (research 0047 §7.2) | yes; keyed on `deployer()` per 0047 §6 |
 | S4 | **creator never graduated organically** (`CreatorNeverGraduatedOrganically`) | 600 | +400 if measured >= 5 (M) | -400 if measured <= 2 (M, thin denominator) | none; it is history | yes |
 | S5 | **holder concentration** (`HolderConcentration`) | 1,200 | +1,000 if largest non-infrastructure >= 2,000 bps (M); +600 if >= 1,000 bps (M); +800 if top-10 >= 5,000 bps (M) | 0 for "may be a pool": an unresolved large balance keeps full weight with unresolved-role wording; -600 only with a `Proof` (`roles.rs`) that the balance is curve, pool, factory or locker | split across wallets / linked-wallet sum (§3.2) | **partly wired** (M-D-weights-s2-s5-s13): the two raises fire off `Kind::LargestHolderShare` (`sheet.rs` `holder_concentration_factors`), standing in for "largest non-infrastructure" per this row's own "unresolved large balance keeps full weight" rule, since `roles::Concentration`'s role-proven reading is never projected onto the sheet. The top-10 raise and the `Proof`-gated lower stay out: no top-10 fact and no `Proof` reach the sheet; `HolderConcentration` itself is still not pushed by `FactSheet::build` on any chain, so these factors are exercised only by directly-constructed test sheets today; holder-read paging bug (research 0050 §5) unresolved |
-| S6 | **linked-wallet holdings** (new) | 0 alone | feeds S1, S2, S5 as the sum over linked wallets scaled by link confidence (§3.2) | -- | see §2.3 | link kinds: same-window + fresh + size (yes); ERC-20 transfer graph (yes); ETH funding (no) |
+| S6 | **linked-wallet holdings** (new) | 0 alone | feeds S1, S2, S5 as the sum over linked wallets scaled by link confidence (§3.2) | -- | see §2.3 | link kinds: same-window + fresh + size (yes); ERC-20 transfer graph (yes); ETH funding (no); **the sum itself is wired** (M-D-S6-token-amounts: `wallets::linked_holdings_bps`, dedupes by wallet at its strongest effective reading, integer bps only), but no caller feeds it yet -- S1/S2's factor wiring is the next slice |
 | S7 | **correlated selling** (new) | 1,000 | +800 if >= 3 linked wallets sold within 50 blocks (M); +600 if the sold volume >= 1,000 bps of supply (M) | -300 if the sells spread over > 1 hour (M) | cannot be hidden: the sell is the point | **wired, pre-graduation only** (`wallets.rs` `correlated_selling`; fires at 2 linked sellers, link confidence ≥ 4,000 bps from buy-side evidence); post-graduation blocked on the pool address |
 | S8 | **fresh-wallet share** (new) | 800 | +600 if >= 5,000 bps of launch-window buy volume came from wallets with `nonce_before_launch == 0` (M) | -400 if < 2,000 bps (M) | pre-age wallets / cross-token recurrence (needs a buyer index, §8) | yes for the candidates checked; `coverage_bps` states how much volume was checked |
 | S9 | **funding from a known rug-linked wallet** (new) | 1,500 | +1,000 if the funder deployed a token that hit `LiquidityGone` (M) | -- | CEX hop / nothing today | **no**: needs traces or an ERC-20 path; declared but not pushed, like today's five |
@@ -554,6 +554,28 @@ this task's allowed files, so no new decode of the launched token's own
 amount was added; a later slice that wants that number reads it from
 `wallets.rs` and passes it through the same `record_buy` call this task
 added.
+
+**M-D-S6-token-amounts built (2026-09-19), closing the gap above.**
+`Trade::tokens` was already decoded per purchase in `realorrug-robinhood`'s
+`pons.rs` and simply dropped by `wallets::purchases_from`; it now survives
+onto `Purchase::tokens`, sums onto `Buyer::tokens` the way `quote` already
+does, and reaches `Candidate::bought_tokens` (`Option<u128>` -- `None` on
+Solana, whose candidates never had a decoded `Trade` to read tokens from,
+never a fabricated 0). `robinhood.rs`'s `record_buyer_index` now passes
+`Candidate::bought_tokens` through to `Memory::record_buy`, which stores it
+in a new `buyer_index.token_amount` column added by a migration that does
+not rewrite existing rows (design 0021's "Buyer index" section, updated in
+the same commit) -- a buy recorded before this shipped reads back
+`token_amount = None`, not 0. This task also added
+`wallets::linked_holdings_bps`, the S6 primitive itself (§3.1's row below,
+§3.2's formula): given a wallet's own share of supply and the strongest
+[`link_confidence`] tying it to the wallet under investigation, it sums
+`share_bps * confidence_bps / 10_000` across distinct wallets, counting a
+wallet linked more than once at its strongest reading, never a sum of
+several. No caller reads it yet -- S1's and S2's linked-wallet raises
+(§3.1 rows S1, S2) are the intended callers, wired in a follow-up slice
+that also carries the `Powers.exemptions`/`Funding.checked` reads those
+factors need.
 
 ## 9. Where this is weak
 
