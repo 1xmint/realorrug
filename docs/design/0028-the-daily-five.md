@@ -179,3 +179,31 @@ moves the bot's score or level.
 Until G1 lands, G2 and G3 are built and tested against an odds table given in
 the test. The window defaults to fourteen days and becomes three if the replay
 shows most rugs land inside three.
+
+### G2 as built
+
+`crates/realorrug-contest/src/calls.rs`, exported from the crate root.
+
+- The luck line is compared without a `sqrt` or a division: `total^2 >=
+  z*^2 * variance` is equivalent to `z >= z*` whenever `total > 0` and
+  `variance > 0`, and needs one `f64` (`z*^2 = 2 ln(N / 0.05)`) computed once
+  per ranking rather than a `sqrt` computed once per player. `z` itself is
+  still reported on each player record (§4 says "ordered by z desc"), but only
+  to order players who already cleared the line by the integer test; a
+  boundary case close enough to be sensitive to that ordering is, by
+  construction, statistically indistinguishable from noise. See the doc
+  comment on `clears_luck_line` for the precision bound this rests on.
+- A player whose every call was made at `q = 0` or `q = 10 000` has
+  `variance = 0` and is placed "within luck" rather than treated as clearing
+  the line automatically (dividing by zero variance is not "infinitely
+  good"). §4 does not name this edge case; it cannot arise from the
+  published odds table (§3, "the replay ... gives ... the share"), which
+  never actually reaches the two ends of the scale.
+- The coin-flip dummy strategy (§5) is a stable hash (FNV-1a) of the coin id,
+  not `splitmix64`: the design note only rules out an RNG dependency, and
+  FNV-1a needs no seed and no crate, just the coin id.
+- `min_account_age_days` is threaded through as a caller-supplied parameter
+  rather than reusing `score::Rules` directly: the daily five's eligibility
+  gate (20 calls, 10 creators, age) is its own rule with its own thresholds,
+  not the weekly contest's operator list and cooldown, so only the age floor
+  is shared, by convention rather than by sharing the type.
