@@ -247,6 +247,29 @@ mod tests {
     }
 
     #[test]
+    fn day_start_is_inclusive_day_end_is_exclusive() {
+        // `launched_at < day_start` (not `<=`): a launch exactly at
+        // `day_start` is inside the day, matching `day_end`'s exclusive
+        // bound below to make the window half-open, not empty or double
+        // counted at the seam between two days.
+        let at_start = launch("sol", "at-start", 10, 500, 1_000);
+        let before_start = launch("sol", "before-start", 9, 500, 1_000);
+        let at_end = launch("sol", "at-end", 100, 500, 1_000);
+        let launches = vec![at_start.clone(), before_start.clone(), at_end.clone()];
+
+        let five = pick(&launches, 10, 100);
+        assert_eq!(five.picks.len(), 1);
+        assert_eq!(five.picks[0].token_address, "at-start");
+        assert_eq!(
+            five.not_picked,
+            vec![
+                (before_start, NotPicked::OutsideDay),
+                (at_end, NotPicked::OutsideDay),
+            ]
+        );
+    }
+
+    #[test]
     fn unknown_intake_never_picked() {
         let mut unpriced = launch("sol", "x", 10, 0, 1_000);
         unpriced.intake_usd_cents = None;

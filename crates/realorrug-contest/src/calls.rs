@@ -351,6 +351,9 @@ fn z_hundredths(total: i64, variance: u128) -> Option<i64> {
     let total_u = u128::from(total.unsigned_abs());
     let scaled = total_u.checked_mul(total_u)?.checked_mul(10_000)? / variance;
     let magnitude = i64::try_from(u128::isqrt(scaled)).unwrap_or(i64::MAX);
+    // `total < 0` vs `total <= 0` are equivalent here (not tested apart): at
+    // `total == 0`, `magnitude` is always `0`, so negating it changes
+    // nothing either way.
     Some(if total < 0 { -magnitude } else { magnitude })
 }
 
@@ -385,6 +388,28 @@ fn tie_break(a: &PlayerRecord, b: &PlayerRecord) -> std::cmp::Ordering {
         .cmp(&a.settled)
         .then_with(|| a.first_call_at.cmp(&b.first_call_at))
         .then_with(|| a.player.cmp(&b.player))
+}
+
+/// The order `above_line` is sorted into: exact cross-multiplication, no
+/// float and no `z_hundredths` field involved. `total_a / sqrt(var_a) >=
+/// total_b / sqrt(var_b)` (both totals positive, both variances positive --
+/// guaranteed by [`clears_luck_line`] for every record in `above_line`) is
+/// equivalent to `total_a^2 * var_b >= total_b^2 * var_a`. Squaring, not
+/// doubling, is load-bearing here: a mutant that turned either `*` in the
+/// squaring below into `+` would compare `total_a / var_a` against
+/// `total_b / var_b` instead, a different (and wrong) order whenever the two
+/// variances differ; `above_line_order_uses_squares_not_sums` pins the
+/// distinction with numbers chosen so the two orders disagree. Saturating
+/// rather than checked below: an overflow would need call totals far past
+/// anything this contest can produce, and falling back to "as if maximal"
+/// keeps the sort total instead of panicking on it.
+fn above_line_order(a: &PlayerRecord, b: &PlayerRecord) -> std::cmp::Ordering {
+    let a_sq = u128::from(a.total.unsigned_abs()) * u128::from(a.total.unsigned_abs());
+    let b_sq = u128::from(b.total.unsigned_abs()) * u128::from(b.total.unsigned_abs());
+    let lhs = a_sq.saturating_mul(b.variance);
+    let rhs = b_sq.saturating_mul(a.variance);
+    // Descending: the bigger cross-product (higher `z`) sorts first.
+    rhs.cmp(&lhs).then_with(|| tie_break(a, b))
 }
 
 /// Scores a run of settled calls into the ranking design 0028 §4 describes.
@@ -428,22 +453,7 @@ pub fn score_calls(calls: &[SettledCall], min_account_age_days: u32) -> DailyFiv
         }
     }
 
-    above_line.sort_by(|a, b| {
-        // Exact cross-multiplication order, no float and no `z` field
-        // involved: `total_a / sqrt(var_a) >= total_b / sqrt(var_b)` (both
-        // totals positive, both variances positive -- guaranteed by
-        // `clears_luck_line` for every record in `above_line`) is equivalent
-        // to `total_a^2 * var_b >= total_b^2 * var_a`. Saturating rather than
-        // checked: an overflow here would need call totals far past anything
-        // this contest can produce, and falling back to "as if maximal"
-        // keeps the sort total instead of panicking on it.
-        let a_sq = u128::from(a.total.unsigned_abs()) * u128::from(a.total.unsigned_abs());
-        let b_sq = u128::from(b.total.unsigned_abs()) * u128::from(b.total.unsigned_abs());
-        let lhs = a_sq.saturating_mul(b.variance);
-        let rhs = b_sq.saturating_mul(a.variance);
-        // Descending: the bigger cross-product (higher `z`) sorts first.
-        rhs.cmp(&lhs).then_with(|| tie_break(a, b))
-    });
+    above_line.sort_by(above_line_order);
     within_luck.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| tie_break(a, b)));
     excluded.sort();
 
@@ -897,6 +907,168 @@ mod tests {
         assert_luck_line_close(100, 15.201_804_919_084_165);
         // 2*ln(20*1000) = 2*ln(20000) = 19.806975105072256...
         assert_luck_line_close(1_000, 19.806_975_105_072_256);
+    }
+
+    // --- z_hundredths: exact values, including negative and zero-variance ---
+
+    #[test]
+    fn z_hundredths_zero_variance_is_none() {
+        assert_eq!(z_hundredths(1_000, 0), None);
+    }
+
+    #[test]
+    fn z_hundredths_exact_values() {
+        // total = 300, variance = 900: total^2 * 10_000 / variance =
+        // 90_000 * 10_000 / 900 = 1_000_000, isqrt(1_000_000) = 1_000 exactly
+        // -- chosen so `/` mutated to `%` (remainder 0, giving 0) or `*`
+        // (an enormous product) both produce a value nothing like 1_000.
+        assert_eq!(z_hundredths(300, 900), Some(1_000));
+        // The sign follows `total`, not `variance`: same magnitude, negative.
+        assert_eq!(z_hundredths(-300, 900), Some(-1_000));
+    }
+
+    // --- above_line ordering: squares, not sums ---
+
+    fn bare_record(player: &str, total: i64, variance: u128) -> PlayerRecord {
+        PlayerRecord {
+            player: player.to_string(),
+            total,
+            settled: 0,
+            distinct_creators: 0,
+            variance,
+            z_hundredths: None,
+            first_call_at: 0,
+        }
+    }
+
+    #[test]
+    fn above_line_order_uses_squares_not_sums() {
+        // a: total^2/variance = 100/5 = 20. b: total^2/variance = 9/1 = 9.
+        // By the correct (squared) comparison, a has the higher z and sorts
+        // first. By total/variance (what a `*` -> `+` mutant in the squaring
+        // would compute instead: doubling is linear, so the comparison
+        // collapses to total_a * var_b vs total_b * var_a, i.e. total/var),
+        // b (3/1 = 3) beats a (10/5 = 2), reversing the order -- so this
+        // pins the squaring, not just "some order".
+        let a = bare_record("a", 10, 5);
+        let b = bare_record("b", 3, 1);
+        assert_eq!(above_line_order(&a, &b), std::cmp::Ordering::Less);
+        assert_eq!(above_line_order(&b, &a), std::cmp::Ordering::Greater);
+    }
+
+    // --- eligibility: exact boundaries ---
+
+    fn boundary_calls(n: usize, n_creators: usize, age_days: u32) -> Vec<SettledCall> {
+        let n_creators = n_creators.max(1);
+        (0..n)
+            .map(|i| SettledCall {
+                player: "p".to_string(),
+                coin_id: format!("coin-{i}"),
+                creator_id: format!("creator-{}", i % n_creators),
+                side: Side::Rug,
+                q: Odds::new(5_000).unwrap(),
+                outcome: Outcome::Stood,
+                called_at: u64::try_from(i).unwrap_or(u64::MAX),
+                account_age_days: Some(age_days),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn eligibility_call_count_boundary() {
+        let calls = boundary_calls(19, 10, 365);
+        let refs: Vec<&SettledCall> = calls.iter().collect();
+        assert_eq!(
+            eligibility(&refs, 30),
+            Some(Excluded::TooFewCalls { settled: 19 })
+        );
+
+        let calls = boundary_calls(20, 10, 365);
+        let refs: Vec<&SettledCall> = calls.iter().collect();
+        assert_eq!(eligibility(&refs, 30), None);
+    }
+
+    #[test]
+    fn eligibility_creator_count_boundary() {
+        let calls = boundary_calls(20, 9, 365);
+        let refs: Vec<&SettledCall> = calls.iter().collect();
+        assert_eq!(
+            eligibility(&refs, 30),
+            Some(Excluded::TooFewCreators { creators: 9 })
+        );
+
+        let calls = boundary_calls(20, 10, 365);
+        let refs: Vec<&SettledCall> = calls.iter().collect();
+        assert_eq!(eligibility(&refs, 30), None);
+    }
+
+    #[test]
+    fn eligibility_account_age_boundary() {
+        let calls = boundary_calls(20, 10, 29);
+        let refs: Vec<&SettledCall> = calls.iter().collect();
+        assert_eq!(
+            eligibility(&refs, 30),
+            Some(Excluded::AccountTooNew { days: 29 })
+        );
+
+        let calls = boundary_calls(20, 10, 30);
+        let refs: Vec<&SettledCall> = calls.iter().collect();
+        assert_eq!(eligibility(&refs, 30), None);
+    }
+
+    // --- exact variance sums ---
+
+    #[test]
+    fn variance_is_an_exact_sum() {
+        // q = 2 000 contributes 2 000 * 8 000 = 16 000 000 per call; 20
+        // calls sum to exactly 320 000 000, not an approximation.
+        let calls: Vec<SettledCall> = (0..20)
+            .map(|i| SettledCall {
+                player: "p".to_string(),
+                coin_id: format!("coin-{i}"),
+                creator_id: format!("creator-{}", i % 10),
+                side: Side::Rug,
+                q: Odds::new(2_000).unwrap(),
+                outcome: Outcome::Stood,
+                called_at: i,
+                account_age_days: Some(365),
+            })
+            .collect();
+        let ranking = score_calls(&calls, 30);
+        let record = ranking
+            .within_luck
+            .iter()
+            .chain(ranking.above_line.iter())
+            .find(|r| r.player == "p")
+            .expect("player p is eligible");
+        assert_eq!(record.variance, 320_000_000);
+    }
+
+    // --- AgreeWithBot at the q = 5 000 boundary ---
+
+    #[test]
+    fn agree_with_bot_boundary() {
+        let below = SettledCoin {
+            coin_id: "below".to_string(),
+            q: Odds::new(4_999).unwrap(),
+            outcome: Outcome::Stood,
+        };
+        let at = SettledCoin {
+            coin_id: "at".to_string(),
+            q: Odds::new(5_000).unwrap(),
+            outcome: Outcome::Stood,
+        };
+        assert_eq!(DummyStrategy::AgreeWithBot.call(&below), Side::Real);
+        assert_eq!(DummyStrategy::AgreeWithBot.call(&at), Side::Rug);
+    }
+
+    // --- fnv1a64: published FNV-1a 64 test vectors ---
+
+    #[test]
+    fn fnv1a64_matches_published_vectors() {
+        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
     }
 
     #[test]
