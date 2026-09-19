@@ -155,6 +155,13 @@ pub struct Assessment {
     /// distinct episodes among `findings`, of that episode's hand-set
     /// weight, saturating at 100. Two signals in one episode add once.
     pub risk_index: u8,
+    /// The same per-episode weights as `risk_index`, scaled to basis points
+    /// and combined by [`noisy_or`] instead of summed (research 0052 §4,
+    /// ADR 0032's noisy-OR paragraph). Kept alongside `risk_index` rather
+    /// than replacing it -- `risk_index` is a pinned JSON key (module
+    /// `tests::packet_json_field_names_are_pinned`) and this slice does not
+    /// change its value.
+    pub score_bps: Weight,
     /// Facts read over facts read plus gaps. Never moves `risk_index`.
     pub coverage: Coverage,
     /// `sheet.unknown`, verbatim -- the gaps that force `CantTell` today,
@@ -204,6 +211,77 @@ const fn weight(episode: Episode) -> u32 {
     }
 }
 
+/// A weight in basis points (bps; 10,000 bps = 100%) -- research 0052's unit
+/// for a signal's weight and for the combined score alike. `u32` only: this
+/// file stays whole-number throughout, no floating-point type anywhere in it
+/// (`AGENTS.md` §3 rule 2, design 0028's whole-number rule).
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct Weight(u32);
+
+impl Weight {
+    /// 10,000 bps: the ceiling both a single weight and [`noisy_or`]'s output
+    /// saturate at.
+    pub const MAX: Self = Self(10_000);
+    /// 0 bps: [`noisy_or`] on an empty slice, and the floor no weight goes
+    /// under.
+    pub const ZERO: Self = Self(0);
+
+    /// Builds a weight from a basis-point count, clamped to `0..=10_000` --
+    /// a weight above the ceiling is a caller bug, not a value this type
+    /// exists to reject at a distance; clamping keeps the type total the way
+    /// [`episode`] and [`weight`] are total.
+    #[must_use]
+    pub fn from_bps(bps: u32) -> Self {
+        // `min`, not `if bps > MAX`: at exactly 10,000 both branches of the
+        // `if` give the same value, so the comparison could not be tested.
+        Self(bps.min(Self::MAX.0))
+    }
+
+    /// The weight as a raw basis-point count.
+    #[must_use]
+    pub const fn bps(self) -> u32 {
+        self.0
+    }
+}
+
+/// Combines weights the way independent chances combine: the chance none of
+/// them holds is the product of each one's absence, so the combined weight is
+/// `10_000 - product_i(10_000 - w_i)`, scaled back to bps at every step
+/// (research 0052 §4). Picked over a capped sum (lets several mild,
+/// correlated signals outrun one hard fact) and over "strongest wins" (every
+/// corroborating signal after the first is free) because this is the one
+/// rule where the strongest signal sets the floor, each further signal adds
+/// with diminishing returns, the result never exceeds [`Weight::MAX`], and
+/// adding a weight never lowers the result.
+///
+/// **Caller dedups by episode first.** This fold has no notion of which
+/// weights are evidence of the same underlying event -- [`Assessment::from`]
+/// folds `sheet.signals` down to one weight per distinct [`Episode`] (the
+/// existing `max`-per-episode read, module doc "Correlated flags count
+/// once") before calling this, so a bundle seen four ways is one input here,
+/// not four.
+///
+/// **Sorted descending, then folded in that fixed order.** The floor
+/// division at each step is not associative: the same multiset folded in a
+/// different order can round differently by a few bps. Sorting first makes
+/// the order a function of the *values* alone, so every permutation of the
+/// same input produces the same output, and the whole computation stays in
+/// `u32` (`10_000 * 10_000` fits well under `u32::MAX` before the divide).
+#[must_use]
+pub fn noisy_or(weights: &[Weight]) -> Weight {
+    // `min` because a `Weight` read back through serde skips `from_bps`'s
+    // clamp; an over-cap value must saturate, not underflow `10_000 - w`.
+    let mut bps: Vec<u32> = weights.iter().map(|w| w.0.min(10_000)).collect();
+    bps.sort_unstable_by(|a, b| b.cmp(a));
+    let rest = bps
+        .iter()
+        .fold(10_000u32, |rest, &w| rest * (10_000 - w) / 10_000);
+    Weight::from_bps(10_000 - rest)
+}
+
 /// The milder band a model may propose beside the published one, or `None`
 /// when the level admits nothing else.
 ///
@@ -241,6 +319,12 @@ impl Assessment {
             })
             .collect();
 
+        // Dedup by episode happens right here, once, before either
+        // `risk_index` or `score_bps` reads a weight: a bundle that fires
+        // several signals of the same causal episode is one entry in
+        // `episodes`, so neither the summed nor the noisy-OR combination
+        // below counts it more than once (module doc "Correlated flags
+        // count once").
         let mut episodes: Vec<Episode> = findings.iter().map(|f| f.episode).collect();
         episodes.sort_by_key(|e| *e as u8);
         episodes.dedup();
@@ -248,6 +332,16 @@ impl Assessment {
             .iter()
             .fold(0u32, |total, &ep| total + weight(ep))
             .min(100) as u8;
+        // `weight(ep)` is on the 0-100 scale `risk_index` sums; `* 100`
+        // rebases it to basis points for `noisy_or`, which is the unit
+        // research 0052 §4 specifies and the unit fitted per-signal weights
+        // (future work, ADR 0032 decision 5) will land in directly.
+        let score_bps = noisy_or(
+            &episodes
+                .iter()
+                .map(|&ep| Weight::from_bps(weight(ep) * 100))
+                .collect::<Vec<_>>(),
+        );
 
         let read = sheet.facts.len();
         let gaps = sheet.unknown.len() + sheet.skipped.len();
@@ -265,6 +359,7 @@ impl Assessment {
         Self {
             findings,
             risk_index,
+            score_bps,
             coverage,
             critical_gaps: sheet.unknown.clone(),
             level,
@@ -353,6 +448,10 @@ mod tests {
             assessment.risk_index,
             u8::try_from(WEIGHT_LAUNCH_BLOCK + WEIGHT_CREATOR_HISTORY).unwrap()
         );
+        // The 0-100 weights rebased to bps, then combined by noisy-OR.
+        let (a, b) = (WEIGHT_LAUNCH_BLOCK * 100, WEIGHT_CREATOR_HISTORY * 100);
+        let expected = 10_000 - (10_000 - a) * (10_000 - b) / 10_000;
+        assert_eq!(assessment.score_bps.bps(), expected);
     }
 
     #[test]
@@ -463,7 +562,123 @@ mod tests {
                 "findings",
                 "level",
                 "risk_index",
+                "score_bps",
             ]
         );
+    }
+
+    #[test]
+    fn weight_bps_reads_back_what_went_in() {
+        assert_eq!(Weight::from_bps(1_234).bps(), 1_234);
+        assert_eq!(Weight::from_bps(10_001).bps(), 10_000);
+    }
+
+    #[test]
+    fn noisy_or_saturates_a_deserialized_over_cap_weight() {
+        let over: Weight = serde_json::from_str("20000").expect("a bare number");
+        assert_eq!(noisy_or(&[over]), Weight::MAX);
+    }
+
+    #[test]
+    fn noisy_or_dedup_case_from_research_0052() {
+        // §4.1, case C after episode dedup: S2, S1, S5 -> 3,800; 2,700;
+        // 1,800 bps.
+        let weights = [
+            Weight::from_bps(3_800),
+            Weight::from_bps(2_700),
+            Weight::from_bps(1_800),
+        ];
+        assert_eq!(noisy_or(&weights), Weight::from_bps(6_289));
+    }
+
+    #[test]
+    fn noisy_or_raw_case_from_research_0052() {
+        // §4.1, case C before episode dedup: adds S8 at 1,400 bps.
+        let weights = [
+            Weight::from_bps(3_800),
+            Weight::from_bps(2_700),
+            Weight::from_bps(1_800),
+            Weight::from_bps(1_400),
+        ];
+        assert_eq!(noisy_or(&weights), Weight::from_bps(6_809));
+    }
+
+    #[test]
+    fn noisy_or_is_order_independent() {
+        let ascending = [
+            Weight::from_bps(1_400),
+            Weight::from_bps(1_800),
+            Weight::from_bps(2_700),
+            Weight::from_bps(3_800),
+        ];
+        let shuffled = [
+            Weight::from_bps(2_700),
+            Weight::from_bps(1_400),
+            Weight::from_bps(3_800),
+            Weight::from_bps(1_800),
+        ];
+        let descending = [
+            Weight::from_bps(3_800),
+            Weight::from_bps(2_700),
+            Weight::from_bps(1_800),
+            Weight::from_bps(1_400),
+        ];
+        let expected = Weight::from_bps(6_809);
+        assert_eq!(noisy_or(&ascending), expected);
+        assert_eq!(noisy_or(&shuffled), expected);
+        assert_eq!(noisy_or(&descending), expected);
+    }
+
+    #[test]
+    fn noisy_or_never_lowers_when_a_weight_is_added() {
+        let before = [Weight::from_bps(3_800), Weight::from_bps(2_700)];
+        let after = [
+            Weight::from_bps(3_800),
+            Weight::from_bps(2_700),
+            Weight::from_bps(1_800),
+        ];
+        assert!(noisy_or(&after) >= noisy_or(&before));
+
+        // Also true for a weight far weaker than every existing one, and for
+        // one far stronger -- the property holds regardless of where the
+        // new weight lands once sorted.
+        let with_weak_addition = [
+            Weight::from_bps(3_800),
+            Weight::from_bps(2_700),
+            Weight::from_bps(10),
+        ];
+        assert!(noisy_or(&with_weak_addition) >= noisy_or(&before));
+
+        let with_strong_addition = [
+            Weight::from_bps(3_800),
+            Weight::from_bps(2_700),
+            Weight::from_bps(9_000),
+        ];
+        assert!(noisy_or(&with_strong_addition) >= noisy_or(&before));
+    }
+
+    #[test]
+    fn noisy_or_empty_is_zero() {
+        assert_eq!(noisy_or(&[]), Weight::ZERO);
+    }
+
+    #[test]
+    fn noisy_or_single_weight_is_itself() {
+        for bps in [1, 2_500, 5_000, 9_999] {
+            let weight = Weight::from_bps(bps);
+            assert_eq!(noisy_or(&[weight]), weight);
+        }
+    }
+
+    #[test]
+    fn noisy_or_saturates_at_ten_thousand() {
+        let weights = [Weight::MAX, Weight::from_bps(2_500)];
+        assert_eq!(noisy_or(&weights), Weight::MAX);
+    }
+
+    #[test]
+    fn weight_clamps_above_ten_thousand() {
+        assert_eq!(Weight::from_bps(10_001), Weight::MAX);
+        assert_eq!(Weight::from_bps(u32::MAX), Weight::MAX);
     }
 }
