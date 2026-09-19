@@ -559,6 +559,39 @@ fn pair_quote_asset(
     ))
 }
 
+/// Writes the launch-window buyers `wallets::investigate` already read
+/// (research 0052 §7.2 and §8, task M-D-0009: the buyer index feeds S8's
+/// pre-aged-wallet / cross-token-recurrence factor) into the buyer index,
+/// when a memory is present. No new RPC read happens here: `funding.checked`
+/// is the candidate list `wallets::investigate` already spent budget
+/// reading, and `Candidate::bought_wei` is the amount it already computed
+/// from the launch-window `CurveBuy` logs, not a re-derived one.
+///
+/// A write failure is dropped rather than surfaced as an `Unavailable`
+/// entry -- the same choice `pair_quote_asset`'s cache write makes just
+/// above -- because the buyer index is an enrichment on top of `funding`,
+/// which the dossier has already recorded by the time this runs; a memory
+/// write going wrong must never fail the sheet.
+fn record_buyer_index(
+    memory: Option<&Memory>,
+    token: &RobinhoodAddress,
+    funding: &wallets::Funding,
+) {
+    let Some(memory) = memory else {
+        return;
+    };
+    let token_key = token.to_string();
+    for candidate in &funding.checked {
+        let _ = memory.record_buy(
+            MEMORY_CHAIN,
+            &candidate.address,
+            &token_key,
+            candidate.first_purchase_block,
+            candidate.bought_wei,
+        );
+    }
+}
+
 /// The launcher's own `CurveBuy` logs among `logs`: buys against this
 /// token's own curve, made by or for the deployer.
 ///
@@ -1277,7 +1310,10 @@ pub fn build_with_memory(
                 header.number,
                 memory,
             ) {
-                Ok(funding) => dossier.funding = Some(funding),
+                Ok(funding) => {
+                    record_buyer_index(memory, token, &funding);
+                    dossier.funding = Some(funding);
+                }
                 Err(why) => dossier.unavailable.push(Unavailable {
                     fact: "funding",
                     why,
@@ -2176,6 +2212,17 @@ pub(crate) mod tests {
                 .iter()
                 .all(|e| !e.material && e.funder == HUB.to_string())
         );
+        // Every buyer the funding step read lands in the buyer index, with
+        // the block and quote that step already had (M-D-0009).
+        for candidate in &funding.checked {
+            let launches = memory
+                .launches_bought_by(MEMORY_CHAIN, &candidate.address)
+                .expect("buyer index");
+            assert_eq!(launches.len(), 1, "{}", candidate.address);
+            assert_eq!(launches[0].token, token().to_string());
+            assert_eq!(launches[0].block, candidate.first_purchase_block);
+            assert_eq!(launches[0].amount, candidate.bought_wei);
+        }
     }
 
     #[test]

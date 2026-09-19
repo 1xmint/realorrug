@@ -466,3 +466,35 @@ the amount and whether it was material against the purchase. A `funding`
 check run records the launch window read and `Complete` only when every
 chosen candidate's history was read to its end; a compute-unit cap or a
 provider that does not serve the method leaves it `Truncated`.
+
+### Buyer index (research 0052 §7.2 and §8, task M-D-0009)
+
+A `buyer_index` table, `Forever` in spirit though not stored through the
+`facts` key: one row per `(chain, buyer, token)`, recording which wallets
+bought which Robinhood launches, with the block of the buy and the amount.
+The primary key is `(chain, buyer, token)` rather than an event id the way
+`funding_edges` and `creator_trades` key theirs, because the question this
+table answers — S8's pre-aged-wallet and cross-token-recurrence factor
+(research 0052 §3 row S8, §7.2): given a wallet address, which launches has
+it bought, and how many — only needs "did this wallet buy this launch"
+once per pair, not every purchase transaction. `record_buy` is an
+`INSERT OR IGNORE` on that key, so a re-run over the same launch window
+is a no-op rather than a conflict or a second row; `launches_bought_by`
+answers the query above directly.
+
+`robinhood.rs` writes into it from `dossier.funding.checked` — the
+launch-window buyers `wallets::investigate` already reads for the funding
+enrichment (§9 above) — once a `funding` read succeeds and a memory is
+present. No new RPC read backs this: the amount recorded is
+`Candidate::bought_wei`, the quote `wallets::investigate` already computed
+from the launch-window `CurveBuy` logs it already read, not a wider walk of
+every launch-window buyer or a re-derived ERC-20 token count. A write
+failure here is dropped, the same way the pair-quote-asset cache write is
+(§9's "Cost" above): the buyer index is an enrichment on top of `funding`,
+and this must never fail the sheet.
+
+Because the table is new SQL alongside the existing `facts (what, subject,
+block)` table, opening a database created before this table existed
+migrates cleanly: `CREATE TABLE IF NOT EXISTS` adds `buyer_index` beside
+whatever was already there and touches no existing row (memory.rs's
+migration test).
