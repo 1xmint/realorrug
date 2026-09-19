@@ -274,7 +274,9 @@ impl Weight {
 /// `u32` (`10_000 * 10_000` fits well under `u32::MAX` before the divide).
 #[must_use]
 pub fn noisy_or(weights: &[Weight]) -> Weight {
-    let mut bps: Vec<u32> = weights.iter().map(|w| w.0).collect();
+    // `min` because a `Weight` read back through serde skips `from_bps`'s
+    // clamp; an over-cap value must saturate, not underflow `10_000 - w`.
+    let mut bps: Vec<u32> = weights.iter().map(|w| w.0.min(10_000)).collect();
     bps.sort_unstable_by(|a, b| b.cmp(a));
     let rest = bps
         .iter()
@@ -561,6 +563,12 @@ mod tests {
                 "score_bps",
             ]
         );
+    }
+
+    #[test]
+    fn noisy_or_saturates_a_deserialized_over_cap_weight() {
+        let over: Weight = serde_json::from_str("20000").expect("a bare number");
+        assert_eq!(noisy_or(&[over]), Weight::MAX);
     }
 
     #[test]
