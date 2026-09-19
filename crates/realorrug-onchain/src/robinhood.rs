@@ -2982,6 +2982,9 @@ pub(crate) mod tests {
         // Two hundred characters: far past any real ticker, and past this
         // sanitiser's own 32-character ceiling.
         assert_eq!(sanitised_symbol(&"A".repeat(200)), None);
+        // The cap is inclusive: 32 characters is a ticker, 33 is not.
+        assert_eq!(sanitised_symbol(&"A".repeat(32)), Some("A".repeat(32)));
+        assert_eq!(sanitised_symbol(&"A".repeat(33)), None);
         // Non-ASCII: a script this sanitiser does not vouch for, even one
         // that looks like harmless letters.
         assert_eq!(sanitised_symbol("HIMS\u{202e}"), None);
