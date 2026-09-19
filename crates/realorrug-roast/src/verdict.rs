@@ -1280,6 +1280,7 @@ pub(crate) mod tests {
                 supply: None,
                 name: None,
                 symbol: None,
+                correlated_selling: None,
             }),
             holders: Some(realorrug_onchain::Holders {
                 count: 529,

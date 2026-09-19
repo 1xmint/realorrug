@@ -1356,6 +1356,283 @@ pub fn link_confidence(evidence: LinkEvidence) -> u16 {
     c
 }
 
+// --- S7 "correlated selling" (research 0052 §3, M-D-0008) ---------------
+
+/// One `CurveSell` in the launch window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sale {
+    /// Who sold: a `CurveSell`'s `seller` topic, `Trade::trader` after
+    /// decoding (the position that shrinks, not `recipient`).
+    pub seller: Address,
+    /// Tokens sold.
+    pub tokens: u128,
+    /// Quote received, in wei.
+    pub quote: u128,
+    /// The block it landed in.
+    pub block: u64,
+    /// Position within the block, for ordering; `(0, 0)` when the provider
+    /// omitted it.
+    pub position: (u64, u64),
+    /// The transaction that carried it.
+    pub transaction: Hash32,
+}
+
+/// Every sale among `logs` made against `curve`. Mirrors [`purchases_from`]
+/// for the other side of `Trade`.
+#[must_use]
+pub fn sells_from(logs: &[Log], curve: &Address) -> Vec<Sale> {
+    logs.iter()
+        .filter_map(|log| Trade::from_log(log).map(|t| (log, t)))
+        .filter(|(_, t)| t.side == Side::Sell && t.curve == *curve)
+        .map(|(log, t)| Sale {
+            seller: t.trader,
+            tokens: t.tokens,
+            quote: t.quote,
+            block: log.block,
+            position: log
+                .position
+                .map_or((0, 0), |p| (p.transaction_index, p.log_index)),
+            transaction: log.transaction,
+        })
+        .collect()
+}
+
+/// How confident two selling wallets must look, by how they *bought*, before
+/// their sells count toward the same S7 cluster (research 0052 §3, §3.2).
+///
+/// The "same [`LINK_WINDOW_BLOCKS`]-block window + sizes within 10%" tier
+/// (4,000 bps): the tier above it, "both fresh", needs an
+/// `eth_getTransactionCount` per wallet that S7's own cost row (research
+/// 0052 §7.1: "60 CU per window", one `eth_getLogs`) does not budget for.
+/// This deliberately never looks at `LinkEvidence::correlated_sell` (the
+/// sells' own timing) to decide linkage here: that field's own doc says it
+/// is "never the only link", and using the sells to link the sells would be
+/// exactly that. So [`largest_sell_cluster`] only ever reads how a wallet
+/// bought to decide whether it belongs in a selling cluster, never how it
+/// sold.
+pub const SELL_CLUSTER_LINK_THRESHOLD_BPS: u16 = 4_000;
+
+/// The window S7 looks for a cluster of linked sellers in -- research 0052
+/// §3.1's S7 row and §7.1's cost row both say 50 blocks.
+pub const SELL_CLUSTER_WINDOW_BLOCKS: u64 = 50;
+
+/// How many linked wallets selling inside one window fires S7's first
+/// factor -- research 0052 §3.1.
+pub const SELL_CLUSTER_WALLET_THRESHOLD: u32 = 3;
+
+/// How much of supply the cluster must have sold to fire S7's second
+/// factor, in basis points -- research 0052 §3.1.
+pub const SELL_CLUSTER_VOLUME_BPS_THRESHOLD: u16 = 1_000;
+
+/// How many seconds the cluster's sells can spread over before S7's third
+/// factor lowers the weight instead of raising it -- research 0052 §3.1.
+pub const SELL_CLUSTER_SPREAD_SECONDS_THRESHOLD: u64 = 3_600;
+
+/// The largest cluster [`largest_sell_cluster`] found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SellCluster {
+    members: Vec<Address>,
+    tokens_sold: u128,
+    first_block: u64,
+    last_block: u64,
+}
+
+/// The largest cluster of mutually linked sellers whose sells all landed
+/// inside one [`SELL_CLUSTER_WINDOW_BLOCKS`]-block window, or `None` when
+/// `sells` is empty.
+///
+/// A seller with no matching [`Buyer`] record (it never bought inside the
+/// launch window this dossier read -- a transfer-in, or a buy before the
+/// window) has no evidence to link it to anything, so it can only ever form
+/// a cluster of one: absent buy-side evidence is not evidence of no link
+/// (rule 8), but it is not evidence of a link either.
+///
+/// Deterministic: sellers are aggregated by address first (so a wallet that
+/// sold in several transactions counts once), then every seller is tried as
+/// the earliest member of a candidate cluster, in address order, and the
+/// largest candidate wins ties by being found first -- the same run over the
+/// same logs always returns the same cluster.
+fn largest_sell_cluster(sells: &[Sale], buyers: &[Buyer]) -> Option<SellCluster> {
+    let mut by_seller: BTreeMap<[u8; 20], (Address, u128, u64, u64)> = BTreeMap::new();
+    for s in sells {
+        let entry = by_seller
+            .entry(s.seller.0)
+            .or_insert((s.seller, 0u128, s.block, s.block));
+        entry.1 = entry.1.saturating_add(s.tokens);
+        entry.2 = entry.2.min(s.block);
+        entry.3 = entry.3.max(s.block);
+    }
+    let by_buyer: BTreeMap<[u8; 20], &Buyer> = buyers.iter().map(|b| (b.address.0, b)).collect();
+    let sellers: Vec<(Address, u128, u64, u64)> = by_seller.into_values().collect();
+
+    let mut best: Option<SellCluster> = None;
+    for anchor in &sellers {
+        let Some(anchor_buy) = by_buyer.get(&anchor.0.0) else {
+            continue;
+        };
+        let mut members = vec![anchor.0];
+        let mut tokens = anchor.1;
+        let mut first_block = anchor.2;
+        let mut last_block = anchor.3;
+        for other in &sellers {
+            if other.0 == anchor.0 || other.2 < anchor.2 {
+                // Only ever grow forward from the earliest seller in a pair,
+                // so each pair is considered once and the result cannot
+                // depend on iteration order.
+                continue;
+            }
+            // The boundary itself is inside the window: "within 50 blocks"
+            // is a closed bound, the same reading `sizes_within_ten_percent`
+            // gives "within 10%". A named test pins both sides.
+            if other.2 - anchor.2 > SELL_CLUSTER_WINDOW_BLOCKS {
+                continue;
+            }
+            let Some(other_buy) = by_buyer.get(&other.0.0) else {
+                continue;
+            };
+            let evidence = LinkEvidence {
+                same_block: anchor_buy.first_block == other_buy.first_block,
+                same_window: anchor_buy.first_block.abs_diff(other_buy.first_block)
+                    <= LINK_WINDOW_BLOCKS,
+                sizes_within_10_percent: sizes_within_ten_percent(
+                    anchor_buy.quote,
+                    other_buy.quote,
+                ),
+                ..LinkEvidence::default()
+            };
+            if link_confidence(evidence) >= SELL_CLUSTER_LINK_THRESHOLD_BPS {
+                members.push(other.0);
+                tokens = tokens.saturating_add(other.1);
+                first_block = first_block.min(other.2);
+                last_block = last_block.max(other.3);
+            }
+        }
+        // `>` rather than `>=`: the first cluster of a given size found (in
+        // address order, since `sellers` came out of a `BTreeMap`) is the
+        // one kept, so re-running this over the same logs cannot silently
+        // pick a different same-size cluster.
+        let better = best.as_ref().map_or(true, |b| members.len() > b.members.len());
+        if better {
+            best = Some(SellCluster {
+                members,
+                tokens_sold: tokens,
+                first_block,
+                last_block,
+            });
+        }
+    }
+    best
+}
+
+/// S7's result: the largest linked-seller cluster, its share of supply, and
+/// how long its sells spread over.
+///
+/// `sells_read` is the gate rule 8 needs: when it is `false`, the other
+/// fields were never measured and must not be published as "no correlated
+/// selling" -- only as unknown. When it is `true`, `linked_sellers == 0` is
+/// a real, measured zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CorrelatedSelling {
+    /// Wallets in the largest cluster [`largest_sell_cluster`] found.
+    pub linked_sellers: u32,
+    /// That cluster's tokens sold as a share of supply, in basis points.
+    /// `None` when supply could not be read, even when `sells_read` is
+    /// `true`.
+    pub sold_bps_of_supply: Option<u16>,
+    /// Seconds between the cluster's earliest and latest sell, by the
+    /// chain's own block timestamps. `None` when a timestamp could not be
+    /// read, or the cluster has one member.
+    pub spread_seconds: Option<u64>,
+    /// Whether the `CurveSell` logs behind every field above were actually
+    /// read.
+    pub sells_read: bool,
+}
+
+/// Reads S7 "correlated selling" for one pre-graduation launch window.
+///
+/// One `eth_getLogs` read over the whole window, the same cost and shape as
+/// [`creator_cash_flow`]'s: `record.curve`'s own logs, unfiltered by topic,
+/// decode into both buys (for link evidence, via [`buyers_of`]) and sells
+/// (via [`sells_from`]), so this never issues a second read for buys the
+/// dossier already needed elsewhere. Naturally pre-graduation only: a
+/// graduated curve prices nothing and stops emitting `CurveSell` at all
+/// (research 0044), so a window that runs past graduation still only picks
+/// up the sells that happened before it, with no special case needed here.
+///
+/// Never fails outright: a read that cannot be afforded or that the
+/// provider rejects comes back with `sells_read: false`, on the same terms
+/// as [`creator_cash_flow`].
+#[must_use]
+pub fn correlated_selling(
+    client: &Rpc,
+    budget: &mut Budget,
+    record: &LaunchedToken,
+    launch_block: u64,
+    read_block: u64,
+    supply: Option<u128>,
+) -> CorrelatedSelling {
+    let none_read = CorrelatedSelling {
+        linked_sellers: 0,
+        sold_bps_of_supply: None,
+        spread_seconds: None,
+        sells_read: false,
+    };
+    let logs = match take(budget, CU_GET_LOGS)
+        .and_then(|()| client.logs_range(&record.curve, &[], launch_block, read_block).map_err(|e| match e {
+            LogsError::TooManyResults => {
+                "the token's lifetime curve activity held more trades than one read returns"
+                    .to_owned()
+            }
+            LogsError::Other(why) => why,
+        }))
+    {
+        Ok(logs) => logs,
+        Err(_) => return none_read,
+    };
+
+    let buyers = buyers_of(&purchases_from(&logs, &record.curve));
+    let sells = sells_from(&logs, &record.curve);
+    let Some(cluster) = largest_sell_cluster(&sells, &buyers) else {
+        return CorrelatedSelling {
+            sells_read: true,
+            ..none_read
+        };
+    };
+
+    let sold_bps_of_supply = supply.filter(|s| *s > 0).and_then(|supply| {
+        cluster
+            .tokens_sold
+            .saturating_mul(10_000)
+            .checked_div(supply)
+            .map(|bps| u16::try_from(bps).unwrap_or(u16::MAX))
+    });
+
+    let spread_seconds = if cluster.members.len() < 2 {
+        None
+    } else {
+        // `eth_getBlockByNumber` costs a call but no named CU here, the same
+        // terms `robinhood.rs`'s own `block_time` wrapper reads it on.
+        let mut read_time = |number: u64| -> Option<u64> {
+            budget
+                .take_call()
+                .ok()
+                .and_then(|()| client.block_time(Some(number)).ok())
+                .map(|(_, timestamp)| timestamp)
+        };
+        match (read_time(cluster.first_block), read_time(cluster.last_block)) {
+            (Some(first), Some(last)) => Some(last.saturating_sub(first)),
+            _ => None,
+        }
+    };
+
+    CorrelatedSelling {
+        linked_sellers: u32::try_from(cluster.members.len()).unwrap_or(u32::MAX),
+        sold_bps_of_supply,
+        spread_seconds,
+        sells_read: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

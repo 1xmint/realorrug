@@ -4833,6 +4833,7 @@ mod tests {
             supply,
             name: name.map(str::to_owned),
             symbol: symbol.map(str::to_owned),
+            correlated_selling: None,
         });
         dossier
     }

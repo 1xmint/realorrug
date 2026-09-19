@@ -425,6 +425,7 @@ mod tests {
             supply: None,
             name: None,
             symbol: None,
+            correlated_selling: None,
         });
         attach(
             &mut dossier,
