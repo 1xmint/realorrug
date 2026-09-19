@@ -129,11 +129,20 @@ impl Subject {
             // `TokenOwnership` is a different reading of the same question
             // -- who holds the supply -- so it belongs beside the other
             // holder-subject kinds rather than under `Self::Token`.
+            // S7's cluster is the selling *wallets*, never the creator: a
+            // sentence about the creator may not cite it, unlike
+            // `Kind::CreatorCashFlow` above, which is the creator's own
+            // wallet. It is not `Self::Launch` either -- the window it reads
+            // is the launch window, but what it measures is who sold, the
+            // same question `Kind::Holders` answers about who holds.
             Kind::Holders
             | Kind::LargestHolderShare
             | Kind::FundingChecked
             | Kind::SharedFunder
-            | Kind::TokenOwnership => Self::Holders,
+            | Kind::TokenOwnership
+            | Kind::CorrelatedSellWallets
+            | Kind::CorrelatedSellVolumeBps
+            | Kind::CorrelatedSellSpreadSeconds => Self::Holders,
             // `OutcomeRate` (ADR 0033) measures launches shaped like this one,
             // not this launch alone, but it is still a claim about the launch
             // population rather than the creator, holders or venue -- the

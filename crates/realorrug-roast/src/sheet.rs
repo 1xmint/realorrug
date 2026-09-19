@@ -243,6 +243,17 @@ pub enum Signal {
     /// Design 0020 §3: blocked on research 0044's bytecode/ABI check, which
     /// this design names the slot for without designing.
     OwnerCanStillMintOrPause,
+    /// Wallets that bought the launch in a way that links them (research
+    /// 0052 §3.2) sold within one [`realorrug_onchain::wallets::
+    /// SELL_CLUSTER_WINDOW_BLOCKS`]-block window of each other.
+    ///
+    /// Research 0052 §3.1's S7 row: "cannot be hidden -- the sell is the
+    /// point", unlike the launch-block signals above, whose gaming counters
+    /// are all about *not looking linked at launch*. Pre-graduation only
+    /// today: a graduated curve stops emitting `CurveSell`
+    /// (`realorrug_onchain::wallets::correlated_selling`'s own doc), so this
+    /// only ever fires from reads inside the bonding-curve window.
+    CorrelatedSelling,
 }
 
 /// The innocent, on-chain-identical reading of a signal, from design 0020
@@ -303,6 +314,11 @@ pub(crate) fn twin_for(signal: Signal) -> &'static str {
              deployer intends to use it or it is simply part of a stock contract template \
              nobody bothered to strip"
         }
+        Signal::CorrelatedSelling => {
+            "wallets that look linked selling in the same short window reads the same whether \
+             they are one actor cashing out or several separate early buyers who all decided, \
+             on their own, that the same moment was a good time to take profit"
+        }
     }
 }
 
@@ -338,6 +354,7 @@ impl Signal {
             Signal::OwnerCanStillMintOrPause => {
                 "the contract can still be minted or paused at will"
             }
+            Signal::CorrelatedSelling => "wallets that look linked sold together",
         }
     }
 }
@@ -521,7 +538,74 @@ pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
         }
     }
 
+    if sheet.signals.contains(&Signal::CorrelatedSelling) {
+        correlated_selling_factors(sheet, &mut factors);
+    }
+
     factors
+}
+
+/// The three S7 raise/lower factors (research 0052 §3.1), split out of
+/// [`factors`] itself so that function stays under clippy's line count.
+///
+/// Range `match`/`if let`, same discipline as the S1 block above: a boundary
+/// that moves has to move an arm, not a comparison a mutant can flip without
+/// a test noticing.
+fn correlated_selling_factors(sheet: &FactSheet, factors: &mut Vec<Factor>) {
+    if let Some(wallets) = fact_value(sheet, crate::clause::Kind::CorrelatedSellWallets) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "CorrelatedSellWallets is a cluster size, pushed from a u32 that never \
+                      approaches i64's range"
+        )]
+        let wallets = wallets.round() as i64;
+        if let 3..=i64::MAX = wallets {
+            factors.push(Factor {
+                signal: Signal::CorrelatedSelling,
+                name: "linked sellers >= 3 within the window".to_owned(),
+                delta_bps: 800,
+                grade: Grade::Measured,
+                evidence: format!(
+                    "{wallets} linked-at-buy wallets sold within the same 50-block window"
+                ),
+            });
+        }
+    }
+
+    if let Some(bps_f64) = fact_value(sheet, crate::clause::Kind::CorrelatedSellVolumeBps) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "CorrelatedSellVolumeBps is pushed from a u16, far inside i64's range"
+        )]
+        let bps = bps_f64.round() as i64;
+        if let 1_000..=i64::MAX = bps {
+            factors.push(Factor {
+                signal: Signal::CorrelatedSelling,
+                name: "sold volume >= 1,000 bps of supply".to_owned(),
+                delta_bps: 600,
+                grade: Grade::Measured,
+                evidence: format!("the cluster sold {:.2}% of total supply", bps_f64 / 100.0),
+            });
+        }
+    }
+
+    if let Some(seconds_f64) = fact_value(sheet, crate::clause::Kind::CorrelatedSellSpreadSeconds) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "CorrelatedSellSpreadSeconds is pushed from a u64 spread over at most a \
+                      launch's own lifetime, far inside i64's range"
+        )]
+        let seconds = seconds_f64.round() as i64;
+        if let 3_601..=i64::MAX = seconds {
+            factors.push(Factor {
+                signal: Signal::CorrelatedSelling,
+                name: "sells spread over > 1 hour".to_owned(),
+                delta_bps: -300,
+                grade: Grade::Measured,
+                evidence: format!("the cluster's sells spread over {seconds} seconds"),
+            });
+        }
+    }
 }
 
 /// Everything the analyst may assert about one token.
@@ -890,6 +974,10 @@ impl FactSheet {
             // itself still read fine, only its unit's name did not, and a
             // launcher whose pair token answers slowly must not be scored
             // worse than one whose pair reads cleanly.
+            // `correlated selling` (S7, research 0052 §3) joins it too: the
+            // signal can only raise the risk score, so an unread S7 is a gap
+            // in coverage, never a reason to fall to `CantTell` -- a token
+            // must not score worse because its trade logs were slow to read.
             if matches!(
                 miss.fact,
                 "capacity"
@@ -898,6 +986,7 @@ impl FactSheet {
                     | "market"
                     | "token ownership"
                     | "quote asset"
+                    | "correlated selling"
             ) {
                 // Recorded here, not dropped: `assessment.rs`'s coverage
                 // figure needs to know this gap exists even though
@@ -1380,6 +1469,94 @@ fn push_chain_launch(
     }
 
     push_dev_buy_share(facts, launch);
+    push_correlated_selling(facts, signals, launch);
+}
+
+/// S7 "correlated selling" (research 0052 §3.1): the largest cluster of
+/// linked-at-buy wallets that sold inside one window, its share of supply
+/// and how long its sells spread over.
+///
+/// **Only pushes anything when `sells_read` is `true`.** Rule 8 (absent is
+/// not zero): a read that never happened must never be published as "no
+/// correlated selling", so a `false` reads as silence here, the same as an
+/// unset `dev_buy_wei` does above. The signal itself fires on `>= 2` linked
+/// sellers -- one seller has nothing to be correlated *with* -- and the
+/// three raise/lower factors past that are [`factors`]'s job, not this
+/// function's, the same split `push_dev_buy_share`/[`factors`] already use
+/// for S1.
+fn push_correlated_selling(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, launch: &ChainLaunch) {
+    let Some(cs) = launch.correlated_selling.as_ref() else {
+        return;
+    };
+    // Unread is unknown (rule 8), and one seller is not correlated with
+    // anything: nothing is said below a linked pair, so a fact about "1
+    // linked seller" never reaches a reply.
+    match (cs.sells_read, cs.linked_sellers) {
+        (true, 2..) => {}
+        _ => return,
+    }
+
+    facts.push(
+        Fact::exact(
+            Kind::CorrelatedSellWallets,
+            "wallets in the largest cluster of linked-at-buy sellers whose sells landed inside \
+             one 50-block window",
+            f64::from(cs.linked_sellers),
+            cs.linked_sellers.to_string(),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "{} wallets that look linked sold within a 50-block window of each other.",
+                cs.linked_sellers
+            ),
+        )
+        .saying(
+            Voice::Blunt,
+            format!("Linked sellers: {}.", cs.linked_sellers),
+        ),
+    );
+
+    if let Some(bps) = cs.sold_bps_of_supply {
+        let bps_f64 = f64::from(bps);
+        let rendered = format!("{:.2}%", bps_f64 / 100.0);
+        facts.push(
+            Fact::exact(
+                Kind::CorrelatedSellVolumeBps,
+                "that cluster's tokens sold as a share of the token's total supply",
+                bps_f64,
+                rendered.clone(),
+            )
+            .saying(
+                Voice::Plain,
+                format!("Together they sold {rendered} of supply."),
+            )
+            .saying(Voice::Blunt, format!("Cluster sold: {rendered}.")),
+        );
+    }
+
+    if let Some(seconds) = cs.spread_seconds {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a spread in seconds is well inside f64's exact integer range"
+        )]
+        let seconds_f64 = seconds as f64;
+        facts.push(
+            Fact::exact(
+                Kind::CorrelatedSellSpreadSeconds,
+                "seconds between that cluster's earliest and latest sell",
+                seconds_f64,
+                format!("{seconds} s"),
+            )
+            .saying(
+                Voice::Plain,
+                format!("Their sells spread over {seconds} seconds."),
+            )
+            .saying(Voice::Blunt, format!("Sell spread: {seconds} s.")),
+        );
+    }
+
+    signals.push(Signal::CorrelatedSelling);
 }
 
 /// The launcher's own launch-block buy as a share of the token's total
@@ -3437,6 +3614,119 @@ mod tests {
         assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
     }
 
+    #[test]
+    fn one_linked_seller_says_nothing_and_fires_nothing() {
+        let dossier = robinhood_launch_with_correlated_selling(1, Some(5_000), Some(0));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CorrelatedSelling));
+        assert!(fact_of(&sheet, Kind::CorrelatedSellWallets).is_none());
+        assert!(fact_of(&sheet, Kind::CorrelatedSellVolumeBps).is_none());
+    }
+
+    #[test]
+    fn unread_sells_say_nothing_and_fire_nothing() {
+        let mut dossier = robinhood_launch_with_correlated_selling(3, Some(5_000), Some(0));
+        if let Some(cs) = dossier
+            .chain_launch
+            .as_mut()
+            .and_then(|launch| launch.correlated_selling.as_mut())
+        {
+            cs.sells_read = false;
+        }
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CorrelatedSelling));
+        assert!(fact_of(&sheet, Kind::CorrelatedSellWallets).is_none());
+    }
+
+    /// research 0052 §3.1's S7 row: 2 linked sellers is not yet a cluster
+    /// worth raising over (the signal itself needs `>= 2` to fire at all,
+    /// but the `+800` factor's own threshold is `>= 3`) -- no factor fires.
+    #[test]
+    fn two_linked_sellers_does_not_raise_the_wallet_count_factor() {
+        let dossier = robinhood_launch_with_correlated_selling(2, None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(sheet.signals.contains(&Signal::CorrelatedSelling));
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    /// Exactly 3 linked sellers clears research 0052 §3.1's S7 wallet-count
+    /// boundary. Paired with the test above so a mutant moving the `3` bound
+    /// either way is caught on one side or the other.
+    #[test]
+    fn three_linked_sellers_raises_the_wallet_count_factor_by_800() {
+        let dossier = robinhood_launch_with_correlated_selling(3, None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CorrelatedSelling,
+                name: "linked sellers >= 3 within the window".to_owned(),
+                delta_bps: 800,
+                grade: Grade::Measured,
+                evidence: "3 linked-at-buy wallets sold within the same 50-block window".to_owned(),
+            }]
+        );
+    }
+
+    /// 999 of 10,000 bps (9.99% of supply) is one bps short of research
+    /// 0052 §3.1's S7 volume boundary: no volume factor fires.
+    #[test]
+    fn sold_volume_of_999_bps_does_not_raise_the_volume_factor() {
+        let dossier = robinhood_launch_with_correlated_selling(2, Some(999), None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    /// Exactly 1,000 bps of supply sold clears the S7 volume boundary.
+    /// Paired with the test above so a mutant moving the `1_000` bound
+    /// either way is caught on one side or the other.
+    #[test]
+    fn sold_volume_of_1000_bps_raises_the_volume_factor_by_600() {
+        let dossier = robinhood_launch_with_correlated_selling(2, Some(1_000), None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CorrelatedSelling,
+                name: "sold volume >= 1,000 bps of supply".to_owned(),
+                delta_bps: 600,
+                grade: Grade::Measured,
+                evidence: "the cluster sold 10.00% of total supply".to_owned(),
+            }]
+        );
+    }
+
+    /// Exactly 1 hour (3,600 seconds) is still within research 0052 §3.1's
+    /// S7 "spread over > 1 hour" wording: the lower factor must not fire yet.
+    #[test]
+    fn a_spread_of_exactly_one_hour_does_not_lower_the_spread_factor() {
+        let dossier = robinhood_launch_with_correlated_selling(2, None, Some(3_600));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    /// One second past 1 hour clears the S7 spread boundary and lowers the
+    /// factor. Paired with the test above so a mutant moving the `3_600`
+    /// bound either way is caught on one side or the other.
+    #[test]
+    fn a_spread_of_one_hour_and_one_second_lowers_the_spread_factor_by_300() {
+        let dossier = robinhood_launch_with_correlated_selling(2, None, Some(3_601));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CorrelatedSelling,
+                name: "sells spread over > 1 hour".to_owned(),
+                delta_bps: -300,
+                grade: Grade::Measured,
+                evidence: "the cluster's sells spread over 3601 seconds".to_owned(),
+            }]
+        );
+    }
+
     /// A reverted launch transaction reads `dev_buy_wei` and `dev_buy_tokens`
     /// as `Some(0)`, the same as `robinhood.rs`'s own reader does for a
     /// reverted receipt -- and 0 of any nonzero supply is 0 bps, so the
@@ -3537,6 +3827,7 @@ mod tests {
             Signal::RepeatLauncher,
             Signal::HolderConcentration,
             Signal::OwnerCanStillMintOrPause,
+            Signal::CorrelatedSelling,
         ] {
             let twin = twin_for(signal);
             assert!(!twin.is_empty(), "{signal:?} has an empty twin");
@@ -3550,7 +3841,7 @@ mod tests {
     /// Every variant, listed once for the two tests below. A new variant
     /// will not fail to compile against this array, but it will fail
     /// `Signal::plain`'s own exhaustive match, which is the cheaper guard.
-    const EVERY_SIGNAL: [Signal; 9] = [
+    const EVERY_SIGNAL: [Signal; 10] = [
         Signal::LaunchBlockInStrongestBand,
         Signal::CreatorNeverGraduatedOrganically,
         Signal::CreatorBoughtOwnLaunch,
@@ -3560,12 +3851,13 @@ mod tests {
         Signal::RepeatLauncher,
         Signal::HolderConcentration,
         Signal::OwnerCanStillMintOrPause,
+        Signal::CorrelatedSelling,
     ];
 
     #[test]
     fn every_signal_has_a_plain_phrase_no_other_signal_shares() {
         // The checks below pin what a phrase must look like; this pins that
-        // there are nine of them. One body returning a single string for
+        // there are ten of them. One body returning a single string for
         // every variant passes "non-empty, short, digit-free" perfectly and
         // draws a card whose three lines all say the same thing.
         let phrases: Vec<&str> = EVERY_SIGNAL.iter().map(|s| s.plain()).collect();
@@ -4002,6 +4294,23 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert_eq!(sheet.skipped, vec!["quote asset".to_owned()]);
         assert!(!sheet.unknown.iter().any(|u| u.contains("quote asset")));
+    }
+
+    #[test]
+    fn an_unread_correlated_selling_is_a_coverage_gap_not_an_unknown_line() {
+        // S7 can only raise the score, so logs that could not be read must
+        // show as a gap in coverage and leave `unknown` (which can push the
+        // level to `CantTell`) exactly as it was.
+        let dossier = dossier_for([3u8; 32]);
+        let baseline = FactSheet::build(&dossier, None, None, None, None);
+        let mut missed = dossier.clone();
+        missed.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "correlated selling",
+            why: "the curve's trade logs could not be read".to_owned(),
+        });
+        let sheet = FactSheet::build(&missed, None, None, None, None);
+        assert_eq!(sheet.skipped, vec!["correlated selling".to_owned()]);
+        assert_eq!(sheet.unknown, baseline.unknown);
     }
 
     #[test]
@@ -4833,6 +5142,35 @@ mod tests {
             supply,
             name: name.map(str::to_owned),
             symbol: symbol.map(str::to_owned),
+            correlated_selling: None,
+        });
+        dossier
+    }
+
+    /// Builds a launch whose only fact of interest is S7's cluster, so each
+    /// boundary test below exercises exactly one of `correlated_selling_factors`'s
+    /// three range checks without the `CreatorBoughtOwnLaunch` share above also
+    /// firing and cluttering the assertion.
+    fn robinhood_launch_with_correlated_selling(
+        linked_sellers: u32,
+        sold_bps_of_supply: Option<u16>,
+        spread_seconds: Option<u64>,
+    ) -> Dossier {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.chain_launch = Some(realorrug_onchain::ChainLaunch {
+            block: 64,
+            age_seconds: Some(3_600),
+            dev_buy_wei: None,
+            dev_buy_tokens: None,
+            supply: None,
+            name: None,
+            symbol: None,
+            correlated_selling: Some(realorrug_onchain::wallets::CorrelatedSelling {
+                linked_sellers,
+                sold_bps_of_supply,
+                spread_seconds,
+                sells_read: true,
+            }),
         });
         dossier
     }

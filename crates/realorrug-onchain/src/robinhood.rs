@@ -209,6 +209,10 @@ fn launch_facts(
             supply,
             name: text_field(budget, client, token, erc20::NAME, at),
             symbol: text_field(budget, client, token, erc20::SYMBOL, at),
+            // Needs the read-point block, which this function is not given
+            // (it only sees the launch); `build_with_memory` fills it in
+            // after this call returns, on the same `ChainLaunch` (step 5d).
+            correlated_selling: None,
         },
         log.transaction,
         receipt,
@@ -1351,6 +1355,40 @@ pub fn build_with_memory(
         }),
     }
 
+    // 5d. S7 "correlated selling" (research 0052 §3, M-D-0008): whether
+    // wallets linked by how they bought also sold in a tight cluster. Needs
+    // the same launch window as 5b/5c, plus the supply already read in step
+    // 4 for the volume-share factor; it is written onto `dossier.chain_launch`
+    // (rather than passed to `launch_facts`) because `launch_facts` runs
+    // before the read point is known and cannot bound the window itself.
+    // `wallets::correlated_selling` never fails outright, the same as
+    // `creator_cash_flow` -- but a window that could not be established, or
+    // trade logs that could not be read, is named as a miss so the sheet
+    // counts it as a coverage gap rather than a quiet "no cluster" (rule 8).
+    match (dossier.chain_launch.as_mut(), read.as_ref()) {
+        (Some(launch), Some(header)) => {
+            let result = wallets::correlated_selling(
+                client,
+                budget,
+                &record,
+                launch.block,
+                header.number,
+                launch.supply,
+            );
+            if !result.sells_read {
+                dossier.unavailable.push(Unavailable {
+                    fact: "correlated selling",
+                    why: "the curve's trade logs could not be read".to_owned(),
+                });
+            }
+            launch.correlated_selling = Some(result);
+        }
+        _ => dossier.unavailable.push(Unavailable {
+            fact: "correlated selling",
+            why: "the launch window needs both the launch block and the read point".to_owned(),
+        }),
+    }
+
     // 6. Facts this reader cannot supply at all yet, regardless of budget.
     // AGENTS.md §3 rule 8: absent is not zero, so each is named rather than
     // left as a silent `None`.
@@ -1995,6 +2033,16 @@ pub(crate) mod tests {
                 // these the share card drew its verdict over a blank.
                 name: Some("Pepe Token".to_owned()),
                 symbol: Some("PEPE".to_owned()),
+                // `full_bodies`' script is spent by holders (step 5); steps
+                // 5b/5c/5d all run past it and every read they attempt is a
+                // refused connection, which S7 degrades the same way
+                // `creator_cash_flow` does: a named "not read", not a zero.
+                correlated_selling: Some(wallets::CorrelatedSelling {
+                    linked_sellers: 0,
+                    sold_bps_of_supply: None,
+                    spread_seconds: None,
+                    sells_read: false,
+                }),
             })
         );
         // The launcher 100, Alice 200, Bob 100. The curve and the factory are
@@ -2020,8 +2068,16 @@ pub(crate) mod tests {
         // are present. Pinned rather than left loose because the default
         // budget is sixty calls and a read that quietly grows is how a
         // plan's daily quota goes without anyone choosing to spend it.
-        // Plus the two token-powers reads (M-D-0004).
-        assert_eq!(dossier.calls, 15);
+        // Plus the two token-powers reads (M-D-0004) and S7's curve read
+        // (M-D-0008), refused here because the script has run out.
+        assert_eq!(dossier.calls, 16);
+        // That refused read is named, so the sheet can count it as a gap.
+        assert!(
+            dossier
+                .unavailable
+                .iter()
+                .any(|u| u.fact == "correlated selling")
+        );
     }
 
     #[test]
@@ -2162,9 +2218,9 @@ pub(crate) mod tests {
         );
         assert_eq!(
             dossier.calls,
-            12 + 1 + 4 * 3 + 2,
-            "the core reads (two of them token powers), the window, three per candidate, and \
-             creator_cash_flow's two eth_getLogs reads (design 0027 slice 5)"
+            12 + 1 + 4 * 3 + 2 + 1,
+            "the core reads (two of them token powers), the window, three per candidate, \
+             creator_cash_flow's two eth_getLogs reads (design 0027 slice 5), and S7's curve read"
         );
 
         let key = token().to_string();
@@ -2328,8 +2384,9 @@ pub(crate) mod tests {
         assert!(funding.checked[1].funding_complete);
         assert_eq!(
             dossier.calls,
-            12 + 1 + 4 + 3 + 2,
-            "the core reads, two of them token powers, plus creator_cash_flow's two reads"
+            12 + 1 + 4 + 3 + 2 + 1,
+            "the core reads, two of them token powers, creator_cash_flow's two reads and S7's \
+             curve read"
         );
     }
 
@@ -2428,9 +2485,9 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            first.calls, 15,
-            "remembering costs no extra call; thirteen core reads (two of them token powers) plus \
-             creator_cash_flow's two (design 0027 slice 5)"
+            first.calls, 16,
+            "remembering costs no extra call; thirteen core reads (two of them token powers), \
+             creator_cash_flow's two (design 0027 slice 5) and S7's curve read"
         );
         assert_eq!(
             memory
@@ -2465,8 +2522,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            second.calls, 16,
-            "fifteen as before plus the checkpoint's header; the walk itself is one page"
+            second.calls, 17,
+            "sixteen as before plus the checkpoint's header; the walk itself is one page"
         );
         assert_eq!(
             memory
@@ -2521,8 +2578,9 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            again.calls, 14,
-            "ten as before, the two token-powers reads, plus creator_cash_flow's two reads"
+            again.calls, 15,
+            "ten as before, the two token-powers reads, creator_cash_flow's two reads and S7's \
+             curve read"
         );
         let run = memory
             .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
@@ -2688,8 +2746,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            dossier.calls, 16,
-            "plus the two token-powers reads and creator_cash_flow's two reads"
+            dossier.calls, 17,
+            "plus the two token-powers reads, creator_cash_flow's two reads and S7's curve read"
         );
         assert_eq!(
             memory

@@ -92,6 +92,10 @@ const LIVE_RISK_SIGNALS: &[Signal] = &[
     Signal::RepeatLauncher,
     Signal::HolderConcentration,
     Signal::OwnerCanStillMintOrPause,
+    // New variant, not carried by any fixture before this work, so adding it
+    // here cannot move a published level the fixtures already pin (the
+    // packet's own condition for including it).
+    Signal::CorrelatedSelling,
 ];
 
 /// Computes the verdict level from the sheet alone.
@@ -1527,6 +1531,7 @@ pub(crate) mod tests {
                 supply: None,
                 name: None,
                 symbol: None,
+                correlated_selling: None,
             }),
             holders: Some(realorrug_onchain::Holders {
                 count: 529,
