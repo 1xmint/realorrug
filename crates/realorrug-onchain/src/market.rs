@@ -421,6 +421,8 @@ mod tests {
             block: 5,
             age_seconds: Some(10),
             dev_buy_wei: Some(0),
+            dev_buy_tokens: Some(0),
+            supply: None,
             name: None,
             symbol: None,
         });

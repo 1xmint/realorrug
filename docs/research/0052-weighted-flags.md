@@ -188,7 +188,7 @@ fixtures roughly stable until the replay in §5 moves them.
 
 | # | signal | base bps | raise | lower | gaming / counter | today |
 |---|---|---|---|---|---|---|
-| S1 | **creator bought own launch** (`CreatorBoughtOwnLaunch`) | 1,200 | +1,500 if the creator's own share (M: `dev_buy_wei` against the curve price at the launch block) or the linked-wallet effective sum (I, §3.2) is >= 1,000 bps; +800 if >= 500 bps; +600 if the creator sold any within 24 h (M, `CreatorCashFlow`) | -400 if share < 100 bps (M); -300 if the buy wallets are declared in the launch calldata exemption list (M, research 0048 §3); at most -200 if announced on X before the launch block (S) | split across wallets / §3.2 linking; hide by CEX funding / correlated-sell factor still fires | yes; share needs one `eth_call` for the launch-block price |
+| S1 | **creator bought own launch** (`CreatorBoughtOwnLaunch`) | 1,200 | +1,500 if the creator's own share (M: `dev_buy_wei` against the curve price at the launch block) or the linked-wallet effective sum (I, §3.2) is >= 1,000 bps; +800 if >= 500 bps; +600 if the creator sold any within 24 h (M, `CreatorCashFlow`) | -400 if share < 100 bps (M); -300 if the buy wallets are declared in the launch calldata exemption list (M, research 0048 §3); at most -200 if announced on X before the launch block (S) | split across wallets / §3.2 linking; hide by CEX funding / correlated-sell factor still fires | yes; share needs one `eth_call` for the launch-block price [^s1-correction] |
 | S2 | **launch-block recipient band** (`LaunchBlockInStrongestBand`) | 1,500 | +1,000 if same-window buyers hold >= 1,000 bps together (M; Bubblemaps' own 10% threshold); +800 if >= 3 buyers are fresh (M); +500 if sizes are within 10% of each other (I) | -500 if every launch-window buyer is on the declared exemption list (M); -300 if the band was measured on < 200 launches (I, thin sample) | spread buys over 30 blocks / count the same shape over the first 30 blocks (3 s, `snipeTaxSeconds`) | yes; band not yet measured for Pons v2 |
 | S3 | **repeat launcher** (`RepeatLauncher`) | 1,000 | +800 if >= 10 lifetime launches (M); +500 if any prior launch hit `LiquidityGone` before graduation (M, needs an outcome index); +400 if a duplicate name/symbol relaunch (M, Radar `creator_history`) | -500 if any prior launch graduated organically **and** held liquidity 7 days (M; research 0011: graduation alone is not a good sign, hence the 7-day hold); -200 if the floor was measured on < 200 creators (I) | fresh deployer per launch / `creatorFeeRecipient` recurrence and `pendingCreatorFeeRecipient` moves (research 0047 §7.2) | yes; keyed on `deployer()` per 0047 §6 |
 | S4 | **creator never graduated organically** (`CreatorNeverGraduatedOrganically`) | 600 | +400 if measured >= 5 (M) | -400 if measured <= 2 (M, thin denominator) | none; it is history | yes |
@@ -205,6 +205,16 @@ fixtures roughly stable until the replay in §5 moves them.
 | S15 | **tax changed after launch** | Pons v2 sets the tax once (research 0047); if a change is ever observed, 2,000 | -- | -- | -- | drift alarm only (0047 §7.3) |
 | S16 | **social signals** (X posts, metadata claims) | 0 | none; a post never raises a weight | at most -200 on S1 for a pre-launch announcement (S), never below the floor | trivially gamed | data only (§7.3) |
 | S17 | **a required fact unread** | not a weight: `CantTell` stays a gate (§4.3) | -- | -- | -- | -- |
+
+[^s1-correction]: **Correction (dev-share wiring):** this table row assumed
+the creator's share of supply needed the curve's launch-block price via an
+`eth_call`. It does not: the launch transaction's own receipt (already
+fetched for `dev_buy_wei`) carries the buyer's `CurveBuy` `tokensOut` and the
+ERC-20 mint `Transfer` from the zero address, so `dev_buy_tokens * 10,000 /
+supply` is read straight off facts already on the sheet, with no added RPC
+call. See `ChainLaunch::dev_buy_tokens`/`ChainLaunch::supply`
+(`realorrug-onchain/src/dossier.rs`) and `crate::sheet::factors` in
+`realorrug-roast/src/sheet.rs`.
 
 ### 3.2 How wallet-link confidence scales a weight
 

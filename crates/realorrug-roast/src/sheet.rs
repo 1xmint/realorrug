@@ -406,23 +406,28 @@ fn fact_value(sheet: &FactSheet, kind: crate::clause::Kind) -> Option<f64> {
 /// Research 0052 §3.1's catalogue, wired to the facts a [`FactSheet`]
 /// already carries.
 ///
-/// **Only two rows are wired today.** Most of the catalogue's raise and
-/// lower factors need an input this sheet does not hold yet -- a
-/// launch-block price to turn a dev buy into a share, a linked-wallet sum, a
-/// fresh-wallet count, a declared-exemption list, a band's own sample size.
-/// None of those are invented here (AGENTS.md §3 rule 2); adding the
-/// `eth_call` that would read the first of them is out of this packet's
-/// scope (M-D-0002's own stop-and-ask). What is already on the sheet:
+/// **Three rows are wired today.** Most of the catalogue's raise and lower
+/// factors still need an input this sheet does not hold yet -- a
+/// linked-wallet sum, a fresh-wallet count, a declared-exemption list, a
+/// band's own sample size. None of those are invented here (AGENTS.md §3
+/// rule 2). What is already on the sheet:
 ///
 /// - [`Signal::RepeatLauncher`]'s `+800` (>= 10 lifetime launches, M),
 ///   read from `Kind::CreatorLaunches`.
 /// - [`Signal::CreatorNeverGraduatedOrganically`]'s `+400` (>= 5 measured,
 ///   M) and `-400` (<= 2 measured, thin denominator, M), read from
 ///   `Kind::CreatorMeasured`.
+/// - [`Signal::CreatorBoughtOwnLaunch`]'s share-of-supply raise and lower
+///   (research 0052 §3.1's S1 row; corrected 2026-09-18 -- it does not need
+///   the launch-block `eth_call` the row assumed, because `dev_buy_tokens`
+///   and `supply` come from the launch receipt already read), from
+///   `Kind::DevBuyShare` in bps: `+1500` if `>= 1,000`, else `+800` if
+///   `>= 500`, else `-400` if `< 100`. The declared-in-calldata `-300` and
+///   the announced-on-X `-200` are out of this packet's scope.
 ///
-/// Both fire only when the signal itself already fired -- a factor with no
-/// signal to adjust would have nothing to attach to on the sheet the model
-/// reads.
+/// All three fire only when the signal itself already fired -- a factor
+/// with no signal to adjust would have nothing to attach to on the sheet
+/// the model reads.
 #[must_use]
 pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
     let mut factors = Vec::new();
@@ -465,6 +470,54 @@ pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
                     "only {measured:.0} of this creator's launches have been measured"
                 ),
             });
+        }
+    }
+
+    if sheet.signals.contains(&Signal::CreatorBoughtOwnLaunch)
+        && let Some(bps_f64) = fact_value(sheet, crate::clause::Kind::DevBuyShare)
+    {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "DevBuyShare's value is an integer bps in [0, 10_000+] pushed by \
+                      push_dev_buy_share, which never carries a fraction"
+        )]
+        let bps = bps_f64.round() as i64;
+        // A `match` on ranges, not a chain of `>=`/`<` comparisons: flipping
+        // one boundary in a chain can leave every existing fixture passing
+        // (a mutant that a test suite never notices), while a range bound
+        // moving here changes which arm a boundary value lands in.
+        match bps {
+            1_000..=i64::MAX => factors.push(Factor {
+                signal: Signal::CreatorBoughtOwnLaunch,
+                name: "own-launch share >= 1,000 bps".to_owned(),
+                delta_bps: 1_500,
+                grade: Grade::Measured,
+                evidence: format!(
+                    "the launcher's launch-transaction buy is {:.2}% of total supply",
+                    bps_f64 / 100.0
+                ),
+            }),
+            500..=999 => factors.push(Factor {
+                signal: Signal::CreatorBoughtOwnLaunch,
+                name: "own-launch share >= 500 bps".to_owned(),
+                delta_bps: 800,
+                grade: Grade::Measured,
+                evidence: format!(
+                    "the launcher's launch-transaction buy is {:.2}% of total supply",
+                    bps_f64 / 100.0
+                ),
+            }),
+            i64::MIN..=99 => factors.push(Factor {
+                signal: Signal::CreatorBoughtOwnLaunch,
+                name: "own-launch share < 100 bps".to_owned(),
+                delta_bps: -400,
+                grade: Grade::Measured,
+                evidence: format!(
+                    "the launcher's launch-transaction buy is only {:.2}% of total supply",
+                    bps_f64 / 100.0
+                ),
+            }),
+            _ => {}
         }
     }
 
@@ -1325,6 +1378,59 @@ fn push_chain_launch(
             .saying(Voice::Blunt, "The launcher's own bid: unread."),
         ),
     }
+
+    push_dev_buy_share(facts, launch);
+}
+
+/// The launcher's own launch-block buy as a share of the token's total
+/// supply, from `dev_buy_tokens` and `supply` alone -- both already on the
+/// receipt `launch_facts` reads, so this needs no `eth_call` for a
+/// launch-block price the way research 0052 §3.1's S1 row assumed.
+///
+/// `None` on either side pushes nothing: a share computed from a supply of
+/// `None` would be inventing the denominator (AGENTS.md §3 rule 2), and a
+/// share is not a fact until both halves are read. Integer bps, checked,
+/// because a share this small in a wrong direction is exactly the number
+/// [`crate::sheet::factors`] grades a boundary on.
+fn push_dev_buy_share(facts: &mut Vec<Fact>, launch: &ChainLaunch) {
+    let (Some(tokens), Some(supply)) = (launch.dev_buy_tokens, launch.supply) else {
+        return;
+    };
+    if supply == 0 {
+        return;
+    }
+    let Some(bps) = tokens
+        .checked_mul(10_000)
+        .and_then(|n| n.checked_div(supply))
+    else {
+        return;
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a bps share is at most a few million even for a wildly lopsided supply, far \
+                  inside f64's exact integer range"
+    )]
+    let bps_f64 = bps as f64;
+    // Always two places: a bps share is exact to 0.01%, so two places
+    // neither rounds a small buy to zero nor adds a digit that was not read.
+    let rendered = format!("{:.2}%", bps_f64 / 100.0);
+    facts.push(
+        Fact::exact(
+            Kind::DevBuyShare,
+            "the launcher's own launch-transaction buy as a share of the token's total supply, \
+             from the receipt's CurveBuy tokensOut and mint Transfer alone",
+            bps_f64,
+            rendered.clone(),
+        )
+        .saying(
+            Voice::Plain,
+            format!("The launcher bought {rendered} of supply in the launch transaction."),
+        )
+        .saying(
+            Voice::Blunt,
+            format!("Launcher's launch-tx share: {rendered}."),
+        ),
+    );
 }
 
 /// Who holds a Robinhood token, and how much the largest single address has.
@@ -3181,6 +3287,176 @@ mod tests {
         assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
     }
 
+    /// research 0052 §6 case B, replayed through `factors` alone (the
+    /// noisy-OR score is `assessment.rs`'s job): 800 bps, one wallet, said
+    /// nothing. `1,200 + 800 = 2,000` is checked there; this pins the `+800`
+    /// half of that arithmetic to the exact fact this packet wires.
+    #[test]
+    fn share_of_500_bps_raises_creator_bought_own_launch_factor_by_800() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(1), Some(500), Some(10_000), None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(sheet.signals.contains(&Signal::CreatorBoughtOwnLaunch));
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CreatorBoughtOwnLaunch,
+                name: "own-launch share >= 500 bps".to_owned(),
+                delta_bps: 800,
+                grade: Grade::Measured,
+                evidence: "the launcher's launch-transaction buy is 5.00% of total supply"
+                    .to_owned(),
+            }]
+        );
+    }
+
+    /// One bps short of the 500 boundary: 499/1,000 = 499 bps must not
+    /// raise the factor. Paired with the test above so a mutant that moves
+    /// the `500` bound either up or down is caught on one side or the other.
+    #[test]
+    fn share_of_499_bps_does_not_raise_the_500_bps_factor() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(1), Some(499), Some(10_000), None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    #[test]
+    fn share_of_1000_bps_raises_creator_bought_own_launch_factor_by_1500() {
+        let dossier = robinhood_launch_with_share(
+            Some(3_600),
+            Some(1),
+            Some(1_000),
+            Some(10_000),
+            None,
+            None,
+        );
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CreatorBoughtOwnLaunch,
+                name: "own-launch share >= 1,000 bps".to_owned(),
+                delta_bps: 1_500,
+                grade: Grade::Measured,
+                evidence: "the launcher's launch-transaction buy is 10.00% of total supply"
+                    .to_owned(),
+            }]
+        );
+    }
+
+    /// One bps short of the 1,000 boundary: it must land in the `>= 500`
+    /// arm (`+800`), not the `>= 1,000` arm (`+1,500`) and not fall through
+    /// to no factor -- pinning both edges of the middle band at once.
+    #[test]
+    fn share_of_999_bps_lands_in_the_500_bps_band_not_the_1000_bps_band() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(1), Some(999), Some(10_000), None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CreatorBoughtOwnLaunch,
+                name: "own-launch share >= 500 bps".to_owned(),
+                delta_bps: 800,
+                grade: Grade::Measured,
+                evidence: "the launcher's launch-transaction buy is 9.99% of total supply"
+                    .to_owned(),
+            }]
+        );
+    }
+
+    /// research 0052 §6 case A's S1 half, replayed through `factors` alone:
+    /// 50 bps share lowers the factor by 400 (`1,200 - 400 = 800` before the
+    /// case's own self-reported `-200`, which this packet does not build).
+    #[test]
+    fn share_of_50_bps_lowers_creator_bought_own_launch_factor_by_400() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(1), Some(50), Some(10_000), None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CreatorBoughtOwnLaunch,
+                name: "own-launch share < 100 bps".to_owned(),
+                delta_bps: -400,
+                grade: Grade::Measured,
+                evidence: "the launcher's launch-transaction buy is only 0.50% of total supply"
+                    .to_owned(),
+            }]
+        );
+    }
+
+    /// One bps short of the 100-bps lower boundary from the other side: 99
+    /// of 10,000 = 99 bps must still lower the factor. Paired with the test
+    /// below so a mutant moving the `100` bound is caught either way.
+    #[test]
+    fn share_of_99_bps_still_lowers_the_factor() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(1), Some(99), Some(10_000), None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let found = factors(&sheet);
+        assert_eq!(found[0].delta_bps, -400, "{found:?}");
+    }
+
+    /// Exactly 100 bps: past the `< 100` lower and short of the `>= 500`
+    /// raise, so research 0052 §3.1's S1 row fires no factor at all here.
+    #[test]
+    fn share_of_exactly_100_bps_fires_no_factor() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(1), Some(100), Some(10_000), None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    /// A missing supply is absent, not zero (rule 8): no share fact is
+    /// pushed, so no factor can fire even though `CreatorBoughtOwnLaunch`
+    /// itself still does (a nonzero `dev_buy_wei` was seen).
+    #[test]
+    fn missing_supply_fires_no_share_factor() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(1), Some(500), None, None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(sheet.signals.contains(&Signal::CreatorBoughtOwnLaunch));
+        assert!(fact_of(&sheet, Kind::DevBuyShare).is_none());
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    /// A supply of zero would divide by zero; guarded, not a panic and not
+    /// a share of infinity.
+    #[test]
+    fn zero_supply_fires_no_share_factor() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(1), Some(500), Some(0), None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::DevBuyShare).is_none());
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    /// A reverted launch transaction reads `dev_buy_wei` and `dev_buy_tokens`
+    /// as `Some(0)`, the same as `robinhood.rs`'s own reader does for a
+    /// reverted receipt -- and 0 of any nonzero supply is 0 bps, so the
+    /// factor lowers the same way an honestly-tiny buy would.
+    #[test]
+    fn a_reverted_launch_transactions_zero_dev_buy_does_not_raise_creator_bought_own_launch() {
+        let dossier =
+            robinhood_launch_with_share(Some(3_600), Some(0), Some(0), Some(10_000), None, None);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        // dev_buy_wei of 0 never sets the signal in the first place (a
+        // buy that reads as zero is "did not buy", not "bought own
+        // launch") -- so there is nothing for a share factor to attach to.
+        assert!(
+            !sheet.signals.contains(&Signal::CreatorBoughtOwnLaunch),
+            "{:?}",
+            sheet.signals
+        );
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
     #[test]
     fn ten_or_more_lifetime_launches_raises_repeat_launcher_factor() {
         let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
@@ -3218,14 +3494,14 @@ mod tests {
     }
 
     /// M-D-0002's own fixture rubric: `the_live_robinhood_sheet` prints its
-    /// factors with grades. It has none today, and the reason is the reason
-    /// the packet asked to have stopped and asked about: the only signal
-    /// this fixture fires is `CreatorBoughtOwnLaunch` (a dev buy was seen in
-    /// the launch transaction), and every raise or lower research 0052 §3.1
-    /// lists for it needs the launcher's share of supply, which needs the
-    /// launch-block price -- an `eth_call` this packet was told not to add.
-    /// The fixture also passes no creator index, so the two factors this
-    /// packet does wire (`RepeatLauncher`, `CreatorNeverGraduatedOrganically`)
+    /// factors with grades. It has none today. The only signal this fixture
+    /// fires is `CreatorBoughtOwnLaunch` (a dev buy was seen in the launch
+    /// transaction), but its `ChainLaunch` fixture carries `dev_buy_wei`
+    /// alone -- `dev_buy_tokens` and `supply` are `None` -- so the share
+    /// this factor now reads (dev-share, corrected 2026-09-18: from the
+    /// launch receipt, no `eth_call`) has nothing to compute from. The
+    /// fixture also passes no creator index, so the two factors this packet
+    /// wires elsewhere (`RepeatLauncher`, `CreatorNeverGraduatedOrganically`)
     /// have no signal to attach to here either. An empty list is the honest
     /// answer, not a bug to paper over with an invented number.
     #[test]
@@ -4534,11 +4810,27 @@ mod tests {
         name: Option<&str>,
         symbol: Option<&str>,
     ) -> Dossier {
+        robinhood_launch_with_share(age_seconds, dev_buy_wei, None, None, name, symbol)
+    }
+
+    /// [`named_robinhood_launch`], plus the two fields
+    /// [`Signal::CreatorBoughtOwnLaunch`]'s share factors read:
+    /// `dev_buy_tokens` and `supply`.
+    fn robinhood_launch_with_share(
+        age_seconds: Option<u64>,
+        dev_buy_wei: Option<u128>,
+        dev_buy_tokens: Option<u128>,
+        supply: Option<u128>,
+        name: Option<&str>,
+        symbol: Option<&str>,
+    ) -> Dossier {
         let mut dossier = robinhood_dossier_for([1u8; 20]);
         dossier.chain_launch = Some(realorrug_onchain::ChainLaunch {
             block: 64,
             age_seconds,
             dev_buy_wei,
+            dev_buy_tokens,
+            supply,
             name: name.map(str::to_owned),
             symbol: symbol.map(str::to_owned),
         });

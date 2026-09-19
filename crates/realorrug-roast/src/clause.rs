@@ -88,6 +88,10 @@ pub enum Kind {
     DevBuy,
     /// No creator buy was found. Absent, not zero.
     DevBuyUnseen,
+    /// The launcher's own `CurveBuy` tokens as a share of the token's total
+    /// supply, from the launch transaction's receipt alone (research 0052
+    /// §3.1's S1 row; no `eth_call` for a launch-block price).
+    DevBuyShare,
     /// Tokens this creator has launched, in Radar's record.
     CreatorLaunches,
     /// How many of those have had an outcome measured.
