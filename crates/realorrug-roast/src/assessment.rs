@@ -51,8 +51,7 @@ pub enum Group {
     /// How the token's exit was observed: liquidity, a creator sale, buyers'
     /// ability to sell.
     ExitMechanics,
-    /// Post-launch trading behaviour. No shipped signal reads this group yet
-    /// -- see [`group`]'s doc comment.
+    /// Post-launch trading behaviour: `Signal::CorrelatedSelling` (S7).
     TradingBehaviour,
 }
 
@@ -91,7 +90,15 @@ pub const fn episode(signal: Signal) -> Episode {
         Signal::RepeatLauncher | Signal::CreatorNeverGraduatedOrganically => {
             Episode::CreatorHistory
         }
-        Signal::LiquidityGone | Signal::CreatorSoldOut | Signal::BuyersCannotSell => Episode::Exit,
+        // S7 is an act, not a shape: unlike `LaunchBlockInStrongestBand`
+        // (how the launch block looked) it is something wallets *did* after
+        // the fact, the same kind of event `LiquidityGone`,
+        // `CreatorSoldOut` and `BuyersCannotSell` are -- the exit itself,
+        // not evidence about who set it up.
+        Signal::LiquidityGone
+        | Signal::CreatorSoldOut
+        | Signal::BuyersCannotSell
+        | Signal::CorrelatedSelling => Episode::Exit,
         Signal::HolderConcentration => Episode::Holders,
         Signal::OwnerCanStillMintOrPause => Episode::Authority,
     }
@@ -101,13 +108,9 @@ pub const fn episode(signal: Signal) -> Episode {
 ///
 /// Total for the same reason [`episode`] is: a signal ships, this compiles,
 /// which forces its group to be named alongside it. Design 0027's
-/// "trading behaviour" group has no member yet -- no shipped signal reads
-/// post-launch trading -- so it is unreachable through this function today,
-/// same as `Rugged` is unreachable through production signals per ADR 0032's
-/// context section; the variant stays on [`Group`] because the packet is the
-/// contract this crate's other readers (voice, analyst, site) serialise, and
-/// removing it would be a wire-format change for no reason tied to this
-/// slice.
+/// "trading behaviour" group reached its first member with S7
+/// (`Signal::CorrelatedSelling`, M-D-0008): post-launch selling, not launch
+/// structure, creator history, ownership or curve exit.
 #[must_use]
 pub const fn group(signal: Signal) -> Group {
     match signal {
@@ -119,6 +122,11 @@ pub const fn group(signal: Signal) -> Group {
         Signal::LiquidityGone | Signal::CreatorSoldOut | Signal::BuyersCannotSell => {
             Group::ExitMechanics
         }
+        // The first shipped signal to read this group: unlike the exit
+        // mechanics above (the curve, the creator's own wallet), S7 is
+        // wallets *trading* after launch, which is what `TradingBehaviour`
+        // was named for -- see the group's own doc comment.
+        Signal::CorrelatedSelling => Group::TradingBehaviour,
     }
 }
 
@@ -271,7 +279,7 @@ const fn signal_base_bps(signal: Signal) -> u32 {
         // one line below. That is a syntactic merge only: a later
         // re-measurement of one must not be assumed to move the other.
         Signal::LaunchBlockInStrongestBand => 1_500,
-        Signal::RepeatLauncher => 1_000,
+        Signal::RepeatLauncher | Signal::CorrelatedSelling => 1_000,
         Signal::CreatorNeverGraduatedOrganically => 600,
         Signal::CreatorBoughtOwnLaunch | Signal::HolderConcentration => 1_200,
         Signal::LiquidityGone | Signal::BuyersCannotSell => 4_000,
@@ -509,6 +517,7 @@ mod tests {
             Signal::RepeatLauncher,
             Signal::HolderConcentration,
             Signal::OwnerCanStillMintOrPause,
+            Signal::CorrelatedSelling,
         ] {
             let _ = episode(signal);
         }
@@ -570,6 +579,7 @@ mod tests {
                 Signal::RepeatLauncher,
                 Signal::HolderConcentration,
                 Signal::OwnerCanStillMintOrPause,
+                Signal::CorrelatedSelling,
             ],
             &[],
         );

@@ -1511,7 +1511,9 @@ fn largest_sell_cluster(sells: &[Sale], buyers: &[Buyer]) -> Option<SellCluster>
         // address order, since `sellers` came out of a `BTreeMap`) is the
         // one kept, so re-running this over the same logs cannot silently
         // pick a different same-size cluster.
-        let better = best.as_ref().map_or(true, |b| members.len() > b.members.len());
+        let better = best
+            .as_ref()
+            .is_none_or(|b| members.len() > b.members.len());
         if better {
             best = Some(SellCluster {
                 members,
@@ -1577,17 +1579,18 @@ pub fn correlated_selling(
         spread_seconds: None,
         sells_read: false,
     };
-    let logs = match take(budget, CU_GET_LOGS)
-        .and_then(|()| client.logs_range(&record.curve, &[], launch_block, read_block).map_err(|e| match e {
-            LogsError::TooManyResults => {
-                "the token's lifetime curve activity held more trades than one read returns"
-                    .to_owned()
-            }
-            LogsError::Other(why) => why,
-        }))
-    {
-        Ok(logs) => logs,
-        Err(_) => return none_read,
+    let Ok(logs) = take(budget, CU_GET_LOGS).and_then(|()| {
+        client
+            .logs_range(&record.curve, &[], launch_block, read_block)
+            .map_err(|e| match e {
+                LogsError::TooManyResults => {
+                    "the token's lifetime curve activity held more trades than one read returns"
+                        .to_owned()
+                }
+                LogsError::Other(why) => why,
+            })
+    }) else {
+        return none_read;
     };
 
     let buyers = buyers_of(&purchases_from(&logs, &record.curve));
@@ -1619,7 +1622,10 @@ pub fn correlated_selling(
                 .and_then(|()| client.block_time(Some(number)).ok())
                 .map(|(_, timestamp)| timestamp)
         };
-        match (read_time(cluster.first_block), read_time(cluster.last_block)) {
+        match (
+            read_time(cluster.first_block),
+            read_time(cluster.last_block),
+        ) {
             (Some(first), Some(last)) => Some(last.saturating_sub(first)),
             _ => None,
         }
@@ -2197,6 +2203,46 @@ mod tests {
             assert!(method_unsupported(alone), "{alone}");
         }
     }
+
+    fn sale(seller: u8, tokens: u128, block: u64) -> Sale {
+        Sale {
+            seller: addr(seller),
+            tokens,
+            quote: tokens,
+            block,
+            position: (0, 0),
+            transaction: Hash32([1; 32]),
+        }
+    }
+
+    /// Two wallets that bought in the same window with matched sizes clear
+    /// [`SELL_CLUSTER_LINK_THRESHOLD_BPS`] (4,000, the "same window + sizes"
+    /// tier) -- the fixture both boundary tests below reuse.
+    fn linked_buyers() -> Vec<Buyer> {
+        vec![buyer(1, 100, 10), buyer(2, 100, 10)]
+    }
+
+    #[test]
+    fn a_sell_landing_exactly_50_blocks_after_the_anchor_joins_the_cluster() {
+        let sells = vec![sale(1, 10, 100), sale(2, 10, 150)];
+        let cluster = largest_sell_cluster(&sells, &linked_buyers()).unwrap();
+        assert_eq!(
+            cluster.members.len(),
+            2,
+            "50 blocks apart is inside the window"
+        );
+    }
+
+    #[test]
+    fn a_sell_landing_51_blocks_after_the_anchor_does_not_join_the_cluster() {
+        let sells = vec![sale(1, 10, 100), sale(2, 10, 151)];
+        let cluster = largest_sell_cluster(&sells, &linked_buyers()).unwrap();
+        assert_eq!(
+            cluster.members.len(),
+            1,
+            "51 blocks apart is just outside the window"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2542,4 +2588,5 @@ mod link_confidence_tests {
     fn sizes_within_ten_percent_treats_two_zero_buys_as_matched() {
         assert!(sizes_within_ten_percent(0, 0));
     }
+
 }

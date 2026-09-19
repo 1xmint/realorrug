@@ -226,6 +226,19 @@ pub enum Kind {
     /// creator, never about holders. Never rendered or reasoned about as
     /// "profit": it excludes gas, fees and anything still held but not sold.
     CreatorCashFlow,
+    /// Wallets in the largest linked-seller cluster S7 found selling inside
+    /// one `SELL_CLUSTER_WINDOW_BLOCKS`-block window
+    /// (`realorrug_onchain::wallets::CorrelatedSelling::linked_sellers`).
+    /// Only pushed when the sells were actually read -- rule 8, absent is
+    /// not zero.
+    CorrelatedSellWallets,
+    /// That cluster's tokens sold as a share of the token's total supply, in
+    /// basis points
+    /// (`realorrug_onchain::wallets::CorrelatedSelling::sold_bps_of_supply`).
+    CorrelatedSellVolumeBps,
+    /// Seconds between the cluster's earliest and latest sell
+    /// (`realorrug_onchain::wallets::CorrelatedSelling::spread_seconds`).
+    CorrelatedSellSpreadSeconds,
 }
 
 /// Which register a clause is written in.

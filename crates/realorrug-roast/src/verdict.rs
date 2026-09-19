@@ -92,6 +92,10 @@ const LIVE_RISK_SIGNALS: &[Signal] = &[
     Signal::RepeatLauncher,
     Signal::HolderConcentration,
     Signal::OwnerCanStillMintOrPause,
+    // New variant, not carried by any fixture before this work, so adding it
+    // here cannot move a published level the fixtures already pin (the
+    // packet's own condition for including it).
+    Signal::CorrelatedSelling,
 ];
 
 /// Computes the verdict level from the sheet alone.
