@@ -2588,5 +2588,4 @@ mod link_confidence_tests {
     fn sizes_within_ten_percent_treats_two_zero_buys_as_matched() {
         assert!(sizes_within_ten_percent(0, 0));
     }
-
 }
