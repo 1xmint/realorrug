@@ -342,6 +342,135 @@ impl Signal {
     }
 }
 
+/// How a [`Factor`] was established -- research 0052 §1's three grades.
+///
+/// **Ordering matters to nobody here, only the variant does.**
+/// [`crate::assessment::adjusted_weight`] matches on this to enforce research
+/// 0052 §3.3's rule that a self-reported fact may only ever lower a weight:
+/// the type carries the grade so that rule is a `match` arm, not a
+/// convention a factor's author has to remember.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Grade {
+    /// Read from the chain or an index Real or Rug holds.
+    Measured,
+    /// Computed from measured facts through a rule with a stated error.
+    Inferred,
+    /// A person said it, on X or in token metadata. Data, never an
+    /// instruction, and never a fact on its own -- research 0052 §3.3 caps
+    /// what it may do to a weight.
+    SelfReported,
+}
+
+/// A measured fact that raises or lowers one signal's weight -- research
+/// 0052 §3's catalogue, one entry per row that fires.
+///
+/// **Built only from facts the sheet already holds.** [`factors`] reads
+/// [`FactSheet::facts`] and [`FactSheet::signals`] alone; it never reaches
+/// back into a dossier or an index that is not already represented there
+/// (AGENTS.md §3 rule 2). A catalogue row whose input the sheet does not
+/// carry yet is simply absent from the returned list -- the gap shows in
+/// coverage, the same as any other unread input, never as a factor scored
+/// at zero.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Factor {
+    /// Which signal this factor adjusts.
+    pub signal: Signal,
+    /// A short, stable name for the factor, for logs and the printed sheet.
+    pub name: String,
+    /// How many basis points this factor moves the signal's weight. Whole
+    /// numbers only, added to the signal's base by
+    /// [`crate::assessment::adjusted_weight`].
+    pub delta_bps: i32,
+    /// How this factor was established.
+    pub grade: Grade,
+    /// The fact that grounds this factor, in words a reader can check
+    /// against the sheet.
+    pub evidence: String,
+}
+
+/// The value of the first (and, today, only) fact of a given [`Kind`] on the
+/// sheet, or `None` when the sheet does not carry one.
+///
+/// A thin accessor kept beside [`factors`] rather than made a general
+/// `FactSheet` method: it exists only so [`factors`] reads the sheet the
+/// same way for every [`Kind`] it checks, not because another caller needs
+/// it yet.
+fn fact_value(sheet: &FactSheet, kind: crate::clause::Kind) -> Option<f64> {
+    sheet
+        .facts
+        .iter()
+        .find(|fact| fact.kind == kind)
+        .and_then(|fact| fact.values.first().copied())
+}
+
+/// Research 0052 §3.1's catalogue, wired to the facts a [`FactSheet`]
+/// already carries.
+///
+/// **Only two rows are wired today.** Most of the catalogue's raise and
+/// lower factors need an input this sheet does not hold yet -- a
+/// launch-block price to turn a dev buy into a share, a linked-wallet sum, a
+/// fresh-wallet count, a declared-exemption list, a band's own sample size.
+/// None of those are invented here (AGENTS.md §3 rule 2); adding the
+/// `eth_call` that would read the first of them is out of this packet's
+/// scope (M-D-0002's own stop-and-ask). What is already on the sheet:
+///
+/// - [`Signal::RepeatLauncher`]'s `+800` (>= 10 lifetime launches, M),
+///   read from `Kind::CreatorLaunches`.
+/// - [`Signal::CreatorNeverGraduatedOrganically`]'s `+400` (>= 5 measured,
+///   M) and `-400` (<= 2 measured, thin denominator, M), read from
+///   `Kind::CreatorMeasured`.
+///
+/// Both fire only when the signal itself already fired -- a factor with no
+/// signal to adjust would have nothing to attach to on the sheet the model
+/// reads.
+#[must_use]
+pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
+    let mut factors = Vec::new();
+
+    if sheet.signals.contains(&Signal::RepeatLauncher)
+        && let Some(launches) = fact_value(sheet, crate::clause::Kind::CreatorLaunches)
+        && launches >= 10.0
+    {
+        factors.push(Factor {
+            signal: Signal::RepeatLauncher,
+            name: "lifetime launches >= 10".to_owned(),
+            delta_bps: 800,
+            grade: Grade::Measured,
+            evidence: format!(
+                "{launches:.0} tokens this creator has launched, in Real or Rug's record"
+            ),
+        });
+    }
+
+    if sheet
+        .signals
+        .contains(&Signal::CreatorNeverGraduatedOrganically)
+        && let Some(measured) = fact_value(sheet, crate::clause::Kind::CreatorMeasured)
+    {
+        if measured >= 5.0 {
+            factors.push(Factor {
+                signal: Signal::CreatorNeverGraduatedOrganically,
+                name: "measured launches >= 5".to_owned(),
+                delta_bps: 400,
+                grade: Grade::Measured,
+                evidence: format!("{measured:.0} of this creator's launches have been measured"),
+            });
+        } else if measured <= 2.0 {
+            factors.push(Factor {
+                signal: Signal::CreatorNeverGraduatedOrganically,
+                name: "measured launches <= 2, thin denominator".to_owned(),
+                delta_bps: -400,
+                grade: Grade::Measured,
+                evidence: format!(
+                    "only {measured:.0} of this creator's launches have been measured"
+                ),
+            });
+        }
+    }
+
+    factors
+}
+
 /// Everything the analyst may assert about one token.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FactSheet {
@@ -2993,6 +3122,124 @@ mod tests {
                 twin_for(Signal::CreatorBoughtOwnLaunch).to_owned(),
                 twin_for(Signal::CreatorNeverGraduatedOrganically).to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn measured_launches_above_five_raises_creator_never_graduated_factor() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        let index = index_with(record(6, 0));
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, None);
+        assert!(
+            sheet
+                .signals
+                .contains(&Signal::CreatorNeverGraduatedOrganically)
+        );
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CreatorNeverGraduatedOrganically,
+                name: "measured launches >= 5".to_owned(),
+                delta_bps: 400,
+                grade: Grade::Measured,
+                evidence: "6 of this creator's launches have been measured".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn measured_launches_at_or_below_two_lowers_creator_never_graduated_factor() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        let index = index_with(record(2, 0));
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, None);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::CreatorNeverGraduatedOrganically,
+                name: "measured launches <= 2, thin denominator".to_owned(),
+                delta_bps: -400,
+                grade: Grade::Measured,
+                evidence: "only 2 of this creator's launches have been measured".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn between_the_two_measured_thresholds_no_factor_fires() {
+        // Three measured launches: past the thin-sample lower (<= 2) and
+        // short of the raise (>= 5). Research 0052 §3.1 names both edges and
+        // nothing in between, so the middle stays base-weight.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        let index = index_with(record(3, 0));
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, None);
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    #[test]
+    fn ten_or_more_lifetime_launches_raises_repeat_launcher_factor() {
+        let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
+        let list = empty_first_party_list();
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        let index = index_with_floor_and_target(creator_address, 10, 5, 100);
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, Some(&list));
+        assert!(sheet.signals.contains(&Signal::RepeatLauncher));
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::RepeatLauncher,
+                name: "lifetime launches >= 10".to_owned(),
+                delta_bps: 800,
+                grade: Grade::Measured,
+                evidence: "10 tokens this creator has launched, in Real or Rug's record".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn nine_lifetime_launches_does_not_raise_the_repeat_launcher_factor() {
+        // The boundary's other side: one below ten fires the signal (the
+        // floor here is five) but not the factor.
+        let creator_address = realorrug_types::Address::new([9u8; 32]).to_string();
+        let list = empty_first_party_list();
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        let index = index_with_floor_and_target(creator_address, 9, 5, 100);
+        let sheet = FactSheet::build(&dossier, None, Some(&index), None, Some(&list));
+        assert!(sheet.signals.contains(&Signal::RepeatLauncher));
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    /// M-D-0002's own fixture rubric: `the_live_robinhood_sheet` prints its
+    /// factors with grades. It has none today, and the reason is the reason
+    /// the packet asked to have stopped and asked about: the only signal
+    /// this fixture fires is `CreatorBoughtOwnLaunch` (a dev buy was seen in
+    /// the launch transaction), and every raise or lower research 0052 §3.1
+    /// lists for it needs the launcher's share of supply, which needs the
+    /// launch-block price -- an `eth_call` this packet was told not to add.
+    /// The fixture also passes no creator index, so the two factors this
+    /// packet does wire (`RepeatLauncher`, `CreatorNeverGraduatedOrganically`)
+    /// have no signal to attach to here either. An empty list is the honest
+    /// answer, not a bug to paper over with an invented number.
+    #[test]
+    fn the_live_robinhood_sheet_prints_its_factors_with_grades() {
+        let sheet = crate::verdict::tests::the_live_robinhood_sheet();
+        let found = factors(&sheet);
+        for factor in &found {
+            println!(
+                "{:?} {} {:+} bps ({:?}): {}",
+                factor.signal, factor.name, factor.delta_bps, factor.grade, factor.evidence
+            );
+        }
+        assert!(
+            found.is_empty(),
+            "no factor is wireable for this fixture yet -- see this test's doc comment: {found:?}"
         );
     }
 
