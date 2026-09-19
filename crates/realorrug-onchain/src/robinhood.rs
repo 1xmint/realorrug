@@ -31,7 +31,7 @@ use std::time::SystemTime;
 
 use realorrug_robinhood::erc20;
 use realorrug_robinhood::pons::{
-    FACTORY, Launched, LaunchedToken, Side, Trade, curve, powers, topic,
+    FACTORY, Launched, LaunchedToken, Side, Trade, Transfer, curve, powers, topic,
 };
 use realorrug_robinhood::{
     Address as RobinhoodAddress, BlockHeader, Hash32, Log, LogsError, Receipt, Rpc,
@@ -184,12 +184,29 @@ fn launch_facts(
             0
         }
     });
+    let dev_buy_tokens = receipt.as_ref().map(|receipt| {
+        if receipt.succeeded {
+            launcher_buy_tokens(&receipt.logs, record)
+        } else {
+            0
+        }
+    });
+    // Unlike the two above, a reverted transaction genuinely cannot have
+    // minted anything, so `None` here (rather than `Some(0)`) would be wrong
+    // in the other direction; `mint_supply` already reads `None` only when
+    // no mint log is present, which is exactly what a reverted receipt has.
+    let supply = receipt
+        .as_ref()
+        .filter(|receipt| receipt.succeeded)
+        .and_then(|receipt| mint_supply(&receipt.logs, token));
 
     Ok((
         ChainLaunch {
             block: log.block,
             age_seconds,
             dev_buy_wei,
+            dev_buy_tokens,
+            supply,
             name: text_field(budget, client, token, erc20::NAME, at),
             symbol: text_field(budget, client, token, erc20::SYMBOL, at),
         },
@@ -542,21 +559,61 @@ fn pair_quote_asset(
     ))
 }
 
-/// Wei the launcher spent on curve buys among `logs`: buys against this
+/// The launcher's own `CurveBuy` logs among `logs`: buys against this
 /// token's own curve, made by or for the deployer.
 ///
 /// The curve is compared because any contract can emit a `CurveBuy`'s bytes
-/// (`Trade::from_log`'s own doc comment says so). Saturating, because a sum
-/// past `u128` is not a real ETH amount and must not wrap into a small one.
+/// (`Trade::from_log`'s own doc comment says so). Shared by [`launcher_buy`]
+/// (sums `quote`) and [`launcher_buy_tokens`] (sums `tokens`) so the two
+/// numbers can never disagree on which trades are the launcher's.
+fn launcher_buys<'a>(
+    logs: &'a [Log],
+    record: &'a LaunchedToken,
+) -> impl Iterator<Item = Trade> + 'a {
+    logs.iter().filter_map(Trade::from_log).filter(|t| {
+        t.side == Side::Buy
+            && t.curve == record.curve
+            && (t.trader == record.deployer || t.recipient == record.deployer)
+    })
+}
+
+/// Wei the launcher spent on curve buys among `logs`: buys against this
+/// token's own curve, made by or for the deployer.
+///
+/// Saturating, because a sum past `u128` is not a real ETH amount and must
+/// not wrap into a small one.
 fn launcher_buy(logs: &[Log], record: &LaunchedToken) -> u128 {
-    logs.iter()
-        .filter_map(Trade::from_log)
-        .filter(|t| {
-            t.side == Side::Buy
-                && t.curve == record.curve
-                && (t.trader == record.deployer || t.recipient == record.deployer)
-        })
-        .fold(0u128, |sum, t| sum.saturating_add(t.quote))
+    launcher_buys(logs, record).fold(0u128, |sum, t| sum.saturating_add(t.quote))
+}
+
+/// Tokens the launcher received on curve buys among `logs`, on the same
+/// filter as [`launcher_buy`]: `CurveBuy` already carries `tokensOut`
+/// (research 0052 §3.1's S1 row assumed a launch-block `eth_call` was
+/// needed for this; the launch transaction's own logs already have it).
+/// Saturating, for the same reason as [`launcher_buy`].
+fn launcher_buy_tokens(logs: &[Log], record: &LaunchedToken) -> u128 {
+    launcher_buys(logs, record).fold(0u128, |sum, t| sum.saturating_add(t.tokens))
+}
+
+/// The token's total supply, summed from every ERC-20 `Transfer` among
+/// `logs` out of the zero address (a mint) and into `token`.
+///
+/// `None` when `logs` carries no such mint -- absent, not a zero supply
+/// (rule 8): a launch could have minted before the transaction this receipt
+/// covers, in which case this read simply cannot see it, and claiming zero
+/// would be worse than saying nothing. Saturating for the same reason as
+/// [`launcher_buy`].
+fn mint_supply(logs: &[Log], token: &RobinhoodAddress) -> Option<u128> {
+    let mut total: Option<u128> = None;
+    for transfer in logs
+        .iter()
+        .filter(|log| log.address == *token)
+        .filter_map(Transfer::from_log)
+        .filter(|t| t.from == RobinhoodAddress::ZERO)
+    {
+        total = Some(total.unwrap_or(0).saturating_add(transfer.amount));
+    }
+    total
 }
 
 /// Who holds the token, from every `Transfer` it emitted.
@@ -1736,6 +1793,41 @@ pub(crate) mod tests {
         assert_eq!(launcher_buy(&logs, &rec), 18);
         let strangers = [one_sided(&ALICE, &BOB, 13)];
         assert_eq!(launcher_buy(&strangers, &rec), 0);
+        // Same filter, `tokensOut` instead of `quoteIn`: research 0052 §3.1's
+        // S1 row assumed a launch-block `eth_call` was needed for a share --
+        // `CurveBuy` already carries this.
+        assert_eq!(launcher_buy_tokens(&logs, &rec), 2_000);
+        assert_eq!(launcher_buy_tokens(&strangers, &rec), 0);
+    }
+
+    #[test]
+    fn mint_supply_sums_transfers_from_the_zero_address_to_the_token() {
+        let tok = token();
+        let logs: Vec<Log> = [
+            transfer(&RobinhoodAddress::ZERO, &tok, 600_000_000),
+            transfer(&RobinhoodAddress::ZERO, &tok, 400_000_000),
+            // Not a mint: a real transfer between two holders must not
+            // count toward supply.
+            transfer(&ALICE, &BOB, 999),
+        ]
+        .iter()
+        .map(|v| Log::from_json(v).expect("a log"))
+        .collect();
+        assert_eq!(mint_supply(&logs, &tok), Some(1_000_000_000));
+    }
+
+    #[test]
+    fn mint_supply_is_none_not_zero_when_no_mint_log_is_present() {
+        // Rule 8: a receipt that carries no mint (a reverted transaction, or
+        // simply none in this transaction) must not read as "supply is 0" --
+        // that would license "the launcher holds 100% of nothing" instead of
+        // "supply unread".
+        let tok = token();
+        let logs: Vec<Log> = [transfer(&ALICE, &BOB, 999)]
+            .iter()
+            .map(|v| Log::from_json(v).expect("a log"))
+            .collect();
+        assert_eq!(mint_supply(&logs, &tok), None);
     }
 
     fn transfer(from: &RobinhoodAddress, to: &RobinhoodAddress, value: u128) -> serde_json::Value {
@@ -1769,6 +1861,12 @@ pub(crate) mod tests {
     const BOB: RobinhoodAddress = RobinhoodAddress([0xb0; 20]);
     const DAVE: RobinhoodAddress = RobinhoodAddress([0xd0; 20]);
     const DEV_BUY: u128 = 500_000_000_000_000_000;
+    /// `buy_log`'s hard-coded `tokensOut` (research 0036 §3): every buy in
+    /// this test file pays out the same token amount regardless of quote.
+    const DEV_BUY_TOKENS: u128 = 1_000;
+    /// Total supply minted to the curve in the launch transaction (research
+    /// 0036 lines ~94, ~125: 1,000,000,000 tokens).
+    const MINT_SUPPLY: u128 = 1_000_000_000;
 
     /// Where the holders read sits in [`full_bodies`]'s script: after the
     /// launch reads, the name and symbol, and the two token-powers reads.
@@ -1785,6 +1883,9 @@ pub(crate) mod tests {
             "to": FACTORY.to_string(),
             "logs": [
                 launch_log(rec),
+                // The mint of the whole supply to the curve, the same
+                // transaction (research 0036 §3).
+                transfer(&RobinhoodAddress::ZERO, &rec.curve, MINT_SUPPLY),
                 buy_log(&rec.curve, &rec.deployer, DEV_BUY),
                 // Someone else's buy in the same transaction is not the launcher's.
                 buy_log(&rec.curve, &ALICE, 7),
@@ -1848,6 +1949,11 @@ pub(crate) mod tests {
                 block: LAUNCH_BLOCK,
                 age_seconds: Some(3_600),
                 dev_buy_wei: Some(DEV_BUY),
+                // From the same receipt's `CurveBuy` and mint `Transfer`
+                // logs -- no extra `eth_call` (research 0052 §3.1's S1 row
+                // assumed one was needed; it was not).
+                dev_buy_tokens: Some(DEV_BUY_TOKENS),
+                supply: Some(MINT_SUPPLY),
                 // Two `eth_call`s the reader did not make before 2026-09-17.
                 // No Pons event or factory record carries a name, so without
                 // these the share card drew its verdict over a blank.
@@ -1880,6 +1986,29 @@ pub(crate) mod tests {
         // plan's daily quota goes without anyone choosing to spend it.
         // Plus the two token-powers reads (M-D-0004).
         assert_eq!(dossier.calls, 15);
+    }
+
+    #[test]
+    fn a_reverted_launch_transaction_reads_dev_buy_tokens_as_zero_and_supply_as_unread() {
+        // A reverted transaction's logs never happened (the same rule
+        // `dev_buy_wei` already follows): the `CurveBuy` never fired, so
+        // `dev_buy_tokens` reads as a measured zero, and the mint never
+        // happened either, so `supply` is `None` -- absent, not zero
+        // (rule 8) -- rather than the wrong claim that this token has no
+        // supply at all.
+        let rec = record(
+            true,
+            RobinhoodAddress([0x23; 20]),
+            RobinhoodAddress([0x34; 20]),
+        );
+        let client = Rpc::new(serve(full_bodies(&rec, "0x0")));
+        let mut b = budget();
+
+        let dossier = build(&client, &mut b, &token()).expect("a dossier");
+        let launch = dossier.chain_launch.expect("a launch");
+        assert_eq!(launch.dev_buy_wei, Some(0));
+        assert_eq!(launch.dev_buy_tokens, Some(0));
+        assert_eq!(launch.supply, None);
     }
 
     // ---- slice 3: who funded the first buyers -------------------------

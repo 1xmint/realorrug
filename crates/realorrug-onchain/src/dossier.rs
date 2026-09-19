@@ -202,6 +202,23 @@ pub struct ChainLaunch {
     /// transaction. `Some(0)` means the transaction was read and held no such
     /// buy; `None` means it could not be read, which is not zero (rule 8).
     pub dev_buy_wei: Option<u128>,
+    /// Tokens the launcher received from its own `CurveBuy` logs in the
+    /// launch transaction -- the same filter `launcher_buy` uses for
+    /// [`ChainLaunch::dev_buy_wei`] (same curve, launcher as trader or
+    /// recipient), summing `tokensOut` instead of `quoteIn`.
+    ///
+    /// Free: `CurveBuy` already carries `tokensOut` (research 0052's assumed
+    /// launch-block `eth_call` is not needed). `Some(0)` means the launch
+    /// transaction was read and held no such buy; a reverted receipt also
+    /// reads as `Some(0)`, the same as `dev_buy_wei`. `None` means the
+    /// receipt could not be read, which is not zero (rule 8).
+    pub dev_buy_tokens: Option<u128>,
+    /// The token's total supply, summed from the launch receipt's ERC-20
+    /// `Transfer` logs out of the zero address (a mint). Supply is a launch
+    /// config value, not a constant, so it is read from the mint rather than
+    /// assumed. `None` when the launch receipt carries no such mint, or
+    /// could not be read -- absent, not zero (rule 8).
+    pub supply: Option<u128>,
     /// The token's `name()`, or `None` when the call could not be read.
     ///
     /// **Untrusted**: it is whatever string the launcher put in their

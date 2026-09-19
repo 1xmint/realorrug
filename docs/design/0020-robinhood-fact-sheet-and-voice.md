@@ -325,14 +325,23 @@ wired:
 | `RepeatLauncher` | lifetime launches ≥ 10 | +800 bps | Measured | `Kind::CreatorLaunches`, from the creator index |
 | `CreatorNeverGraduatedOrganically` | measured launches ≥ 5 | +400 bps | Measured | `Kind::CreatorMeasured`, from the creator index |
 | `CreatorNeverGraduatedOrganically` | measured launches ≤ 2 (thin denominator) | −400 bps | Measured | `Kind::CreatorMeasured`, from the creator index |
+| `CreatorBoughtOwnLaunch` | dev-buy share ≥ 1,000 bps of supply | +1,500 bps | Measured | `Kind::DevBuyShare`, from `ChainLaunch::dev_buy_tokens` and `ChainLaunch::supply` |
+| `CreatorBoughtOwnLaunch` | dev-buy share 500..999 bps of supply | +800 bps | Measured | `Kind::DevBuyShare`, from `ChainLaunch::dev_buy_tokens` and `ChainLaunch::supply` |
+| `CreatorBoughtOwnLaunch` | dev-buy share < 100 bps of supply | −400 bps | Measured | `Kind::DevBuyShare`, from `ChainLaunch::dev_buy_tokens` and `ChainLaunch::supply` |
+
+`CreatorBoughtOwnLaunch`'s dev-buy-share factors (research 0052 §6 cases A and
+B both turn on these) turned out not to need the launch-block price research
+0052 assumed: the launch transaction's own receipt (already fetched in
+`launch_facts`) carries the buyer's `CurveBuy` `tokensOut` and the ERC-20
+mint `Transfer` from the zero address, so the share is `dev_buy_tokens *
+10,000 / supply` read straight off facts already on hand -- no `eth_call`
+added (AGENTS.md §3 rule 2; `ChainLaunch::dev_buy_tokens` and
+`ChainLaunch::supply` in `realorrug-onchain/src/dossier.rs`). This corrects
+the assumption recorded in an earlier draft of this paragraph.
 
 The rest of research 0052 §3.1's catalogue is **not yet wired**, each for a
 named reason rather than left silent:
 
-- `CreatorBoughtOwnLaunch`'s dev-buy-share factors (research 0052 §6 cases A
-  and B both turn on these) need the launch-block price; `ChainLaunch`
-  (`realorrug-onchain/src/dossier.rs`) has no such field, and this task does
-  not add an RPC call to manufacture one (AGENTS.md §3 rule 2).
 - `LaunchBlockInStrongestBand`'s fresh-wallet, linked-wallet, exemption and
   thin-sample factors need per-recipient wallet history and `baserates.rs`'s
   `Band` carries no sample-size field to key a thin-sample factor on.

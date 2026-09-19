@@ -858,21 +858,47 @@ mod tests {
         );
     }
 
-    // Research 0052 §6 cases A (600 bps) and B (2,000 bps) are both driven by
-    // `CreatorBoughtOwnLaunch`'s dev-buy-share factors, which key off the
-    // launch-block price. `ChainLaunch` (realorrug-onchain/src/dossier.rs)
-    // has no such field today, and M-D-0002 is not adding an RPC call to
-    // invent one (AGENTS.md §3 rule 2: an unread input is an absent factor,
-    // never a guessed one). So neither case can be reproduced by the sheet
-    // yet; this is recorded here rather than faked.
+    // Research 0052 §6 case A: a 50 bps dev-buy share lowers
+    // `CreatorBoughtOwnLaunch` by 400 (the `<100` bps band, see
+    // `crate::sheet::factors`), read from the launch receipt's `CurveBuy`
+    // `tokensOut` and mint `Transfer` -- no `eth_call` added. Case A's
+    // published 600 also folds in a -200 self-reported factor this task does
+    // not build, so only the Measured part (1,200 - 400 = 800) is asserted
+    // here, through `adjusted_weight` the same way the score is computed.
     #[test]
-    fn research_0052_cases_a_and_b_are_not_reproducible_without_dev_buy_share() {
+    fn research_0052_case_a_fifty_bps_share_lowers_creator_bought_own_launch_to_800() {
         let base = signal_base_bps(Signal::CreatorBoughtOwnLaunch);
         assert_eq!(base, 1_200, "base weight is unchanged by this task");
-        assert_ne!(base, 600, "case A's 600 bps needs the dev-buy-share factor");
-        assert_ne!(
-            base, 2_000,
-            "case B's 2,000 bps needs the dev-buy-share factor"
+        let factors = [Factor {
+            signal: Signal::CreatorBoughtOwnLaunch,
+            name: "dev buy share".to_owned(),
+            delta_bps: -400,
+            grade: Grade::Measured,
+            evidence: "the launch receipt's mint and CurveBuy tokensOut".to_owned(),
+        }];
+        assert_eq!(
+            adjusted_weight(Signal::CreatorBoughtOwnLaunch, &factors).bps(),
+            800,
+            "case A: 1,200 base - 400 (50 bps share, the <100 bps band) = 800"
+        );
+    }
+
+    // Research 0052 §6 case B: an 800 bps dev-buy share raises
+    // `CreatorBoughtOwnLaunch` by 800 (the 500..=999 bps band), landing
+    // exactly on the case's published 2,000.
+    #[test]
+    fn research_0052_case_b_eight_hundred_bps_share_raises_creator_bought_own_launch_to_2000() {
+        let factors = [Factor {
+            signal: Signal::CreatorBoughtOwnLaunch,
+            name: "dev buy share".to_owned(),
+            delta_bps: 800,
+            grade: Grade::Measured,
+            evidence: "the launch receipt's mint and CurveBuy tokensOut".to_owned(),
+        }];
+        assert_eq!(
+            adjusted_weight(Signal::CreatorBoughtOwnLaunch, &factors).bps(),
+            2_000,
+            "case B: 1,200 base + 800 (800 bps share, the 500..=999 bps band) = 2,000"
         );
     }
 }

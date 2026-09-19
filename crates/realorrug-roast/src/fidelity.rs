@@ -116,6 +116,9 @@ impl Subject {
             // cite it and a sentence about holders may not.
             | Kind::DevBuy
             | Kind::DevBuyUnseen
+            // Same buy, expressed as a share of supply instead of a wei
+            // amount -- still the creator's own spending.
+            | Kind::DevBuyShare
             // The creator's own observed sale proceeds, net and outgoing
             // transfers -- the same actor `Kind::DevBuy` is about, just the
             // other end of the same wallet's activity.
