@@ -216,10 +216,10 @@ pub mod powers {
     /// empty list (length `0`) -- see this function's test.
     #[must_use]
     pub fn declared_exemptions(input: &[u8]) -> Option<Vec<Address>> {
-        if input.len() < 4 || input[..4] != LAUNCH_TOKEN {
-            return None;
-        }
-        let args = &input[4..];
+        // `strip_prefix` rather than a length check and a slice: shorter
+        // input than the selector simply does not match, with no index to
+        // get wrong.
+        let args = input.strip_prefix(&LAUNCH_TOKEN[..])?;
         // Four head words: the fourth (index 3) is the byte offset,
         // relative to the start of `args`, to the dynamic `address[]`'s
         // length word -- per the confirmed shape above. A real offset is
@@ -1233,7 +1233,8 @@ mod creator_role_tests {
 #[cfg(test)]
 mod powers_tests {
     use super::powers::{
-        FIRST_PARTY, Source, classify, declared_exemptions, pending_recipient_from_return,
+        FIRST_PARTY, LAUNCH_TOKEN, Source, classify, declared_exemptions,
+        pending_recipient_from_return,
     };
     use crate::{Address, hex_bytes};
 
@@ -1259,6 +1260,14 @@ mod powers_tests {
         let mut input = hex_bytes(CLEAN_LAUNCH_INPUT).expect("valid hex");
         input[0] = 0xff;
         assert_eq!(declared_exemptions(&input), None);
+    }
+
+    /// Input shorter than the selector itself is refused, not indexed past
+    /// its end.
+    #[test]
+    fn declared_exemptions_refuses_input_shorter_than_the_selector() {
+        assert_eq!(declared_exemptions(&LAUNCH_TOKEN[..3]), None);
+        assert_eq!(declared_exemptions(&[]), None);
     }
 
     /// Calldata cut short before the fourth head word is not a shorter list,
