@@ -178,7 +178,18 @@ impl Subject {
             // (`Subject::Liquidity` is capacity and cost, a different
             // question `market.rs`'s own doc comment draws the same line
             // about) and not the venue's population rate.
-            Kind::Graduated | Kind::Age | Kind::Market | Kind::QuotePair => Self::Token,
+            // S13's owner powers (ADR 0035) are about the contract's own
+            // live mechanics -- what the deployed token still lets happen --
+            // the same subject `Kind::Graduated` and `Kind::QuotePair`
+            // already carry, not the creator's own wallet activity
+            // (`Kind::DevBuy`'s subject, above) or the holders reading it.
+            Kind::Graduated
+            | Kind::Age
+            | Kind::Market
+            | Kind::QuotePair
+            | Kind::CreatorTaxBps
+            | Kind::PendingCreatorFeeRecipientSet
+            | Kind::UndeclaredExemptions => Self::Token,
         }
     }
 }
