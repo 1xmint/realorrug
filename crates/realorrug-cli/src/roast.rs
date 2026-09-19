@@ -138,6 +138,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
             // escapes: these are arbitrary creator-controlled bytes.
             println!("{label} (untrusted): {}", safe(value, 64));
         }
+        // Research 0052 §4.2, M-D-0005: shadow only. The published level
+        // above is `sheet`'s, unchanged; this line never replaces it, only
+        // sits beside it for an operator watching the two agree or diverge.
+        let assessment = realorrug_roast::Assessment::from(&sheet);
+        println!(
+            "provisional: score {} bps -> {:?} (published level: {:?})",
+            assessment.score_bps.bps(),
+            assessment.score_level,
+            assessment.level
+        );
         println!("--- reply ---");
     }
 

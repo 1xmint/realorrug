@@ -173,6 +173,12 @@ pub struct Assessment {
     /// nothing reads this to publish anything (design 0027's "Judgement":
     /// "run it in shadow, with code alone supplying the published band").
     pub admissible: Vec<Level>,
+    /// Research 0052 §4.2, M-D-0005: the level `score_bps` alone would
+    /// publish, from [`crate::verdict::level_from_score`]. **Shadow only** --
+    /// nothing reads this to publish anything either; `level` above stays
+    /// the one [`crate::verdict::level`] computed until a later step flips a
+    /// flag research 0052 §9 says must wait for the owner to confirm.
+    pub score_level: Level,
 }
 
 /// One launch-block read: 25. Design 0020 §3's own signals for it
@@ -443,6 +449,8 @@ impl Assessment {
             Some(other) => vec![level, other],
             None => vec![level],
         };
+        // M-D-0005, shadow only: computed beside `level`, published nowhere.
+        let score_level = crate::verdict::level_from_score(sheet, score_bps, coverage);
 
         Self {
             findings,
@@ -452,6 +460,7 @@ impl Assessment {
             critical_gaps: sheet.unknown.clone(),
             level,
             admissible,
+            score_level,
         }
     }
 }
@@ -657,6 +666,7 @@ mod tests {
                 "level",
                 "risk_index",
                 "score_bps",
+                "score_level",
             ]
         );
     }

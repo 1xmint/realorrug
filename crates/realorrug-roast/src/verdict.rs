@@ -124,11 +124,7 @@ const LIVE_RISK_SIGNALS: &[Signal] = &[
 ///    signal at all.
 #[must_use]
 pub fn level(sheet: &FactSheet) -> Level {
-    let rugged = (sheet.signals.contains(&Signal::LiquidityGone)
-        && sheet.signals.contains(&Signal::HolderConcentration))
-        || (sheet.signals.contains(&Signal::CreatorSoldOut)
-            && sheet.signals.contains(&Signal::BuyersCannotSell));
-    if rugged {
+    if rugged_pair(sheet) {
         return Level::Rugged;
     }
 
@@ -160,6 +156,78 @@ pub fn level(sheet: &FactSheet) -> Level {
     }
 
     Level::NothingUglyYet
+}
+
+/// Whether the sheet shows an observed, completed rug -- design 0020 §3's
+/// pair, shared by [`level`] and [`level_from_score`] so the two gates can
+/// never drift apart (research 0052 §4.2: "`Rugged` ... stay gates, never
+/// bands").
+#[must_use]
+fn rugged_pair(sheet: &FactSheet) -> bool {
+    (sheet.signals.contains(&Signal::LiquidityGone)
+        && sheet.signals.contains(&Signal::HolderConcentration))
+        || (sheet.signals.contains(&Signal::CreatorSoldOut)
+            && sheet.signals.contains(&Signal::BuyersCannotSell))
+}
+
+/// Coverage below this share of applicable facts also forces `CantTell`
+/// (research 0052 §4.2's second `CantTell` clause, beside `sheet.unknown`).
+const MIN_COVERAGE_BPS: usize = 6_000;
+
+/// The score bps at and above which the score path reaches
+/// `RugMechanicsLive` (research 0052 §4.2's table). The boundary is
+/// inclusive -- `2,500` itself reaches it -- which is why the mutant-killing
+/// tests sit at `2,499` and `2,500` rather than either side alone.
+const SCORE_RUG_MECHANICS_LIVE_BPS: u32 = 2_500;
+
+/// Research 0052 §4.2, M-D-0005: the level `score_bps` alone would publish,
+/// computed beside [`level`] but **not** published by it yet -- shadow mode.
+/// The published level stays [`level`] until a later step flips a flag,
+/// which research 0052 §9 says must wait for the owner to confirm the one
+/// fixture-visible change (S1 + S3 reading `Sketchy` instead of today's
+/// `RugMechanicsLive`).
+///
+/// Shares [`level`]'s two gates exactly through [`rugged_pair`] and
+/// `sheet.unknown`, so the two functions cannot drift apart, plus the one
+/// gate this document adds: coverage below 6,000 bps of applicable facts
+/// also forces `CantTell`. Between the gates, `score_bps` alone decides:
+///
+/// | level | rule |
+/// |---|---|
+/// | `RugMechanicsLive` | `score_bps >= 2,500` |
+/// | `Sketchy` | at least one signal fired and `score_bps < 2,500` |
+/// | `NothingUglyYet` | no signal fired |
+///
+/// `score_bps` and `coverage` are the caller's, not recomputed here --
+/// `crate::assessment::Assessment::from` already builds both once per sheet,
+/// and handing them in keeps this function from reading the sheet's facts a
+/// second time to reconstruct a number the caller already has.
+#[must_use]
+pub fn level_from_score(
+    sheet: &FactSheet,
+    score_bps: crate::assessment::Weight,
+    coverage: crate::assessment::Coverage,
+) -> Level {
+    if rugged_pair(sheet) {
+        return Level::Rugged;
+    }
+
+    if !sheet.unknown.is_empty() {
+        return Level::CantTell;
+    }
+
+    // Compared as a cross-multiplication (`read * 10_000` against
+    // `6_000 * applicable`) rather than a division, so there is no rounding
+    // step to second-guess.
+    if coverage.read * 10_000 < MIN_COVERAGE_BPS * coverage.applicable {
+        return Level::CantTell;
+    }
+
+    match score_bps.bps() {
+        _ if sheet.signals.is_empty() => Level::NothingUglyYet,
+        SCORE_RUG_MECHANICS_LIVE_BPS..=u32::MAX => Level::RugMechanicsLive,
+        _ => Level::Sketchy,
+    }
 }
 
 /// What the rule concluded, as reasons rather than a score.
@@ -593,6 +661,7 @@ fn short(label: &str) -> &str {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::assessment::Weight;
     use crate::clause::Kind;
     use crate::sheet::{About, Fact};
 
@@ -1241,6 +1310,184 @@ pub(crate) mod tests {
         // discriminant or merged them by accident -- `PartialEq` must treat
         // them as different, always.
         assert_ne!(Level::CantTell, Level::NothingUglyYet);
+    }
+
+    /// Full coverage -- every applicable fact read, nothing skipped or
+    /// unknown -- so [`level_from_score`]'s coverage gate never fires in a
+    /// test that is not about that gate specifically.
+    fn full_coverage() -> crate::assessment::Coverage {
+        crate::assessment::Coverage {
+            read: 10,
+            applicable: 10,
+        }
+    }
+
+    #[test]
+    fn two_no_factor_launch_signals_reach_rug_mechanics_live() {
+        // Research 0052 §4.2: S2 (`LaunchBlockInStrongestBand`, base 1,500)
+        // and S5 (`HolderConcentration`, base 1,200), no factors, noisy-OR
+        // to 2,520 bps -- above the 2,500 line. These are two distinct
+        // episodes (`LaunchBlock` and `Holders`), so `Assessment::from`'s
+        // per-episode-max fold never collapses them -- unlike S1 + S2, which
+        // share `Episode::LaunchBlock` and stay `Sketchy` on both paths
+        // (ADR 0032; see `two_live_signals_in_one_episode_stay_sketchy`).
+        let sheet = sheet_with(
+            vec![
+                Signal::LaunchBlockInStrongestBand,
+                Signal::HolderConcentration,
+            ],
+            Vec::new(),
+        );
+        let assessment = crate::assessment::Assessment::from(&sheet);
+        assert_eq!(assessment.score_bps.bps(), 2_520);
+        assert_eq!(
+            level_from_score(&sheet, assessment.score_bps, assessment.coverage),
+            Level::RugMechanicsLive
+        );
+        assert_eq!(level(&sheet), Level::RugMechanicsLive);
+    }
+
+    #[test]
+    fn s1_and_s3_no_factors_score_2080_is_sketchy() {
+        // Research 0052 §4.2: S1 `CreatorBoughtOwnLaunch` (1,200) + S3
+        // `RepeatLauncher` (1,000), no factors, noisy-OR to 2,080 bps --
+        // below the 2,500 line, so the score path reads `Sketchy` where
+        // today's `level` reads `RugMechanicsLive` (two distinct episodes,
+        // so `level`'s episode-count gate still fires). Shadow only:
+        // `level` itself is untouched.
+        let sheet = sheet_with(
+            vec![Signal::CreatorBoughtOwnLaunch, Signal::RepeatLauncher],
+            Vec::new(),
+        );
+        let assessment = crate::assessment::Assessment::from(&sheet);
+        assert_eq!(assessment.score_bps.bps(), 2_080);
+        assert_eq!(
+            level_from_score(&sheet, assessment.score_bps, assessment.coverage),
+            Level::Sketchy
+        );
+        assert_eq!(level(&sheet), Level::RugMechanicsLive);
+    }
+
+    #[test]
+    fn score_level_boundary_is_inclusive_at_2500() {
+        // Mutant hygiene: a signal is fired (so the "no signal" arm cannot
+        // hide a `>=` mutated to `>`), and the score sits exactly either
+        // side of the line. 2,499 must read `Sketchy`; 2,500 must read
+        // `RugMechanicsLive`.
+        let sheet = sheet_with(vec![Signal::OwnerCanStillMintOrPause], Vec::new());
+        assert_eq!(
+            level_from_score(
+                &sheet,
+                crate::assessment::Weight::from_bps(2_499),
+                full_coverage()
+            ),
+            Level::Sketchy
+        );
+        assert_eq!(
+            level_from_score(
+                &sheet,
+                crate::assessment::Weight::from_bps(2_500),
+                full_coverage()
+            ),
+            Level::RugMechanicsLive
+        );
+    }
+
+    #[test]
+    fn no_signal_reads_nothing_ugly_yet_regardless_of_score() {
+        // The "no signal fired" arm must win even when the caller hands in
+        // a high score (a mismatched or synthetic caller, not one derived
+        // from `sheet.signals`) -- checked at both boundary values and the
+        // extremes so a match-arm-order mutant cannot hide behind a single
+        // low score.
+        let sheet = sheet_with(Vec::new(), Vec::new());
+        for score in [
+            Weight::ZERO,
+            Weight::from_bps(2_499),
+            Weight::from_bps(2_500),
+            Weight::MAX,
+        ] {
+            assert_eq!(
+                level_from_score(&sheet, score, full_coverage()),
+                Level::NothingUglyYet,
+                "{score:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rugged_and_cant_tell_are_unreachable_from_the_score_path() {
+        // Research 0052 §4.2: "`Rugged` and `CantTell` stay gates, never
+        // bands." No score, high or low, can produce either once the gates
+        // are clear, and no score can escape either gate once it fires.
+        for score in [
+            Weight::ZERO,
+            Weight::from_bps(1),
+            Weight::from_bps(2_499),
+            Weight::from_bps(2_500),
+            Weight::MAX,
+        ] {
+            let clean = sheet_with(Vec::new(), Vec::new());
+            let level = level_from_score(&clean, score, full_coverage());
+            assert_ne!(level, Level::Rugged, "{score:?}");
+            assert_ne!(level, Level::CantTell, "{score:?}");
+
+            let rugged = sheet_with(
+                vec![Signal::LiquidityGone, Signal::HolderConcentration],
+                Vec::new(),
+            );
+            assert_eq!(
+                level_from_score(&rugged, score, full_coverage()),
+                Level::Rugged
+            );
+
+            let cant_tell = sheet_with(Vec::new(), vec!["a fact".to_owned()]);
+            assert_eq!(
+                level_from_score(&cant_tell, score, full_coverage()),
+                Level::CantTell
+            );
+        }
+    }
+
+    #[test]
+    fn coverage_below_six_thousand_bps_is_cant_tell() {
+        // Research 0052 §4.2's second `CantTell` clause, beside
+        // `sheet.unknown`: 5,999 read of 10,000 applicable is 5,999 bps,
+        // below the line; 6,000 of 10,000 is exactly 6,000 bps and clears
+        // it.
+        let sheet = sheet_with(Vec::new(), Vec::new());
+        let below = crate::assessment::Coverage {
+            read: 5_999,
+            applicable: 10_000,
+        };
+        assert_eq!(
+            level_from_score(&sheet, Weight::ZERO, below),
+            Level::CantTell
+        );
+        let at = crate::assessment::Coverage {
+            read: 6_000,
+            applicable: 10_000,
+        };
+        assert_eq!(
+            level_from_score(&sheet, Weight::ZERO, at),
+            Level::NothingUglyYet
+        );
+    }
+
+    #[test]
+    fn rugged_wins_over_the_low_coverage_gate() {
+        // Gate order matters: `rugged_pair` is checked before the coverage
+        // gate, so an observed completed rug still reads `Rugged` even when
+        // coverage is too thin to trust anything else on the sheet.
+        let sheet = sheet_with(
+            vec![Signal::LiquidityGone, Signal::HolderConcentration],
+            Vec::new(),
+        );
+        let below = crate::assessment::Coverage {
+            read: 5_999,
+            applicable: 10_000,
+        };
+        assert_eq!(level_from_score(&sheet, Weight::ZERO, below), Level::Rugged);
     }
 
     /// The sheet the box actually produced for

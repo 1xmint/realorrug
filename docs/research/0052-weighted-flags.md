@@ -306,12 +306,43 @@ Robinhood today), which are named in the reply instead. Between the gates:
 | `Sketchy` | at least one signal fired and score < 2,500 |
 | `NothingUglyYet` | no signal fired, every required fact read; the reply carries the age and the "yet" |
 
-Two no-factor launch-shape signals (S1 1,200 + S2 1,500) give 2,520 →
-`RugMechanicsLive`, matching today's "two episodes" rung. S1 + S3 with no
-factors gives 2,080 → `Sketchy`, which today reads `RugMechanicsLive`; that
-is intended (a 0.001 ETH dev buy plus a second launch is not two live rug
-mechanics), and it is the one fixture-visible change (§8, M-D-0005
-stop-and-ask).
+Two no-factor launch-shape signals in different episodes (S2
+`LaunchBlockInStrongestBand` 1,500 + S5 `HolderConcentration` 1,200) give
+2,520 → `RugMechanicsLive`, matching today's "two episodes" rung. S1 + S3
+with no factors gives 2,080 → `Sketchy`, which today reads
+`RugMechanicsLive`; that is intended (a 0.001 ETH dev buy plus a second
+launch is not two live rug mechanics). It is one of several pairs this flag
+moves from `RugMechanicsLive` to `Sketchy` once it publishes -- every pair
+below is a no-factor noisy-OR that clears today's 2,500 line but not this
+one (verified against `assessment.rs`'s `noisy_or`, §8, M-D-0005
+stop-and-ask):
+
+- S1 `CreatorBoughtOwnLaunch` 1,200 + S3 `RepeatLauncher` 1,000 → 2,080
+- S1 1,200 + S5 `HolderConcentration` 1,200 → 2,256 (the sheet in
+  `the_template_states_a_twin_at_rug_mechanics_live_and_none_at_rugged`)
+- S3 1,000 + S5 1,200 → 2,080
+- S2 `LaunchBlockInStrongestBand` 1,500 + S3 1,000 → 2,350
+
+**M-D-0005 built, shadow only (2026-09-18).**
+`crates/realorrug-roast/src/verdict.rs::level_from_score` computes this
+table's rule beside `level`, sharing its `Rugged` and `CantTell` gates
+exactly (a private `rugged_pair` helper the two now call, so they cannot
+drift apart) plus one this document adds: coverage under 6,000 bps of
+`crate::assessment::Coverage` also forces `CantTell`. It is exposed on
+`Assessment::score_level` (a new JSON key, `score_bps`'s neighbour) and on
+`realorrug roast --sheet`'s printed "provisional" line; **`level` itself is
+still what publishes**, per §9's "the level should still come from
+`verdict::level`" -- nothing reads `score_level` to decide anything yet.
+`Assessment::admissible` was left alone rather than rebuilt from bands: the
+band set it offers today already brackets `level`, and rebuilding it from
+`score_level` while `level` stays the published one would let a model reach
+for a band the shadow score chose over the one the ladder chose, which is a
+behaviour change this slice does not need to make.
+
+S1 (`CreatorBoughtOwnLaunch`) and S2 (`LaunchBlockInStrongestBand`) are one
+episode per ADR 0032 (`assessment.rs`'s `episode` function) and read
+`Sketchy` on both the `level` and `level_from_score` paths -- not the S2+S5
+pair used above.
 
 ### 4.3 Score to the daily-five odds q
 
