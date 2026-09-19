@@ -351,10 +351,10 @@ fn z_hundredths(total: i64, variance: u128) -> Option<i64> {
     let total_u = u128::from(total.unsigned_abs());
     let scaled = total_u.checked_mul(total_u)?.checked_mul(10_000)? / variance;
     let magnitude = i64::try_from(u128::isqrt(scaled)).unwrap_or(i64::MAX);
-    // `total < 0` vs `total <= 0` are equivalent here (not tested apart): at
-    // `total == 0`, `magnitude` is always `0`, so negating it changes
-    // nothing either way.
-    Some(if total < 0 { -magnitude } else { magnitude })
+    // `signum` rather than `if total < 0`: the comparison had a boundary
+    // (`<` vs `<=` at zero) that no test could tell apart, since zero
+    // negated is zero.
+    Some(total.signum() * magnitude)
 }
 
 /// The result of scoring one run of settled calls (design 0028 §4).
@@ -585,17 +585,15 @@ impl DummyStrategy {
 /// id into a deterministic coin flip. Not a dependency: the whole point of
 /// `CoinFlip` is that it needs no RNG and no crate, just a stable function of
 /// the id.
-const fn fnv1a64(bytes: &[u8]) -> u64 {
+///
+/// A fold, not an indexed `while` loop: a hand-kept index is one slip
+/// (`i *= 1`) away from never ending.
+fn fnv1a64(bytes: &[u8]) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    let mut i = 0;
-    while i < bytes.len() {
-        hash ^= bytes[i] as u64;
-        hash = hash.wrapping_mul(PRIME);
-        i += 1;
-    }
-    hash
+    bytes
+        .iter()
+        .fold(OFFSET, |hash, &b| (hash ^ u64::from(b)).wrapping_mul(PRIME))
 }
 
 /// Scores all four dummy players (design 0028 §5) over the same coins.
