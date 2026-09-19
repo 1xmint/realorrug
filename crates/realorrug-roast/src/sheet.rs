@@ -3609,9 +3609,6 @@ mod tests {
         assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
     }
 
-    /// research 0052 §3.1's S7 row: 2 linked sellers is not yet a cluster
-    /// worth raising over (the signal itself needs `>= 2` to fire at all,
-    /// but the `+800` factor's own threshold is `>= 3`) -- no factor fires.
     #[test]
     fn one_linked_seller_says_nothing_and_fires_nothing() {
         let dossier = robinhood_launch_with_correlated_selling(1, Some(5_000), Some(0));
@@ -3636,6 +3633,9 @@ mod tests {
         assert!(fact_of(&sheet, Kind::CorrelatedSellWallets).is_none());
     }
 
+    /// research 0052 §3.1's S7 row: 2 linked sellers is not yet a cluster
+    /// worth raising over (the signal itself needs `>= 2` to fire at all,
+    /// but the `+800` factor's own threshold is `>= 3`) -- no factor fires.
     #[test]
     fn two_linked_sellers_does_not_raise_the_wallet_count_factor() {
         let dossier = robinhood_launch_with_correlated_selling(2, None, None);
