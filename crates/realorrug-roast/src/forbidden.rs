@@ -1911,6 +1911,7 @@ mod tests {
             unknown,
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 
@@ -1932,6 +1933,7 @@ mod tests {
             unknown,
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         };
         sheet.facts.push(Fact {
             about: crate::sheet::About::Measurement,

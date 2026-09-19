@@ -39,6 +39,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod assessment;
 pub mod baserates;
 pub mod clause;
 pub mod creator;
@@ -51,6 +52,7 @@ pub mod sheet;
 pub mod verdict;
 pub mod voice;
 
+pub use assessment::Assessment;
 pub use baserates::BaseRates;
 pub use clause::{Clause, Kind, Selection, Voice};
 pub use creator::{CreatorIndex, Population};
