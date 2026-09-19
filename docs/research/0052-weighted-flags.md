@@ -538,6 +538,21 @@ Tracer bullet: **0001 → 0002 → 0005 (shadow)** is the thinnest slice that
 scores a real sheet end to end and prints the number beside today's level.
 0003, 0004, 0009 run alongside. 0006 then 0007 widen it into the daily five.
 
+**M-D-0009 built (2026-09-19).** `crates/realorrug-onchain/src/memory.rs`
+gained the `buyer_index` table (`Forever` in spirit, keyed `(chain, buyer,
+token)`, `INSERT OR IGNORE` idempotent), `Memory::record_buy` and
+`Memory::launches_bought_by`, documented in design 0021's new "Buyer index"
+subsection. `robinhood.rs` writes into it from `dossier.funding.checked` --
+the launch-window buyers `wallets::investigate` already reads -- once a
+`funding` read succeeds and a memory is present; no new RPC read, and a
+write failure is dropped rather than failing the sheet. The recorded amount
+is `Candidate::bought_wei` (the quote in wei `wallets::investigate` already
+computed), not a re-derived ERC-20 token count -- `wallets.rs` is outside
+this task's allowed files, so no new decode of the launched token's own
+amount was added; a later slice that wants that number reads it from
+`wallets.rs` and passes it through the same `record_buy` call this task
+added.
+
 ## 9. Where this is weak
 
 - **False precision.** Every base and delta in §3 is hand-set today; the
