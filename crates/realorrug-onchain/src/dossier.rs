@@ -85,6 +85,14 @@ pub struct QuoteAsset {
     /// How many decimal places the smallest unit has (9 for a lamport, 18 for
     /// a wei).
     pub decimals: u8,
+    /// The token's own contract address, for an ERC-20 pair named by S1
+    /// ("name the pair"). `None` for a chain's native asset (SOL, ETH),
+    /// which has no contract to cite. Carried so the sheet can state the
+    /// pair with the address it named it from, never a symbol alone --
+    /// `symbol()` is untrusted launcher-chosen text (AGENTS.md §3 rule 3),
+    /// and the address is what lets a reader check it rather than take the
+    /// name on faith.
+    pub address: Option<ChainAddress>,
 }
 
 impl QuoteAsset {
@@ -94,6 +102,7 @@ impl QuoteAsset {
         Self {
             symbol: "SOL".to_owned(),
             decimals: 9,
+            address: None,
         }
     }
 
@@ -103,6 +112,21 @@ impl QuoteAsset {
         Self {
             symbol: "ETH".to_owned(),
             decimals: 18,
+            address: None,
+        }
+    }
+
+    /// An ERC-20 pair token, named by its own `symbol()`/`decimals()`
+    /// (S1, "name the pair"). `symbol` is the caller's job to sanitise
+    /// first -- this constructor does not re-check it, so that the one
+    /// sanitiser (`realorrug_onchain::robinhood::sanitised_symbol`) stays
+    /// the single place that decision is made.
+    #[must_use]
+    pub fn token(address: ChainAddress, symbol: String, decimals: u8) -> Self {
+        Self {
+            symbol,
+            decimals,
+            address: Some(address),
         }
     }
 }

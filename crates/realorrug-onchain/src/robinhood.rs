@@ -27,6 +27,7 @@
 //! reader does not guess at them to look more complete than it is.
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use realorrug_robinhood::erc20;
 use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, topic};
@@ -37,7 +38,7 @@ use crate::budget::{Budget, Exhausted};
 use crate::dossier::{
     ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, QuoteAsset, Unavailable,
 };
-use crate::memory::{CheckRun, Checkpoint, Completeness, Memory, REORG_DEPTH, TransferEvent};
+use crate::memory::{CheckRun, Checkpoint, Completeness, Kind as MemoryKind, Memory, REORG_DEPTH, TransferEvent};
 use crate::wallets;
 
 /// Why a Robinhood dossier could not be built at all.
@@ -199,6 +200,114 @@ fn text_field(
         .ok()
         .as_deref()
         .and_then(erc20::string_from_return)
+}
+
+/// The `what` a pair token's symbol/decimals are cached under in
+/// [`Memory`], S1's ("name the pair") reuse of design 0021's generic fact
+/// store rather than a second table: a pair token's identity cannot change,
+/// the same reason a launch record is [`MemoryKind::Forever`].
+const PAIR_QUOTE_ASSET_FACT: &str = "pair quote asset";
+
+/// A quote-pair symbol, sanitised for the sheet and the model's context.
+///
+/// Stricter than [`erc20::string_from_return`]'s general "readable" rule,
+/// which keeps any printable text a token's own name/symbol may carry: a
+/// pair symbol is about to be quoted directly next to an address in a
+/// sentence the model reads (`"paired with HIMS (0x...)"`), so nothing that
+/// could pass for an instruction, a mention or another script survives --
+/// ASCII alphanumerics and `.`, `-`, `_` only, no more than 32 characters
+/// (real tickers are a handful; anything longer is not a ticker). `None` is
+/// "could not read", never a truncated or escaped version of what came back
+/// (AGENTS.md §3 rule 8).
+fn sanitised_symbol(raw: &str) -> Option<String> {
+    const MAX_CHARS: usize = 32;
+    if raw.is_empty() || raw.chars().count() > MAX_CHARS {
+        return None;
+    }
+    raw.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .then(|| raw.to_owned())
+}
+
+/// A cached pair fact's stored text, back into a [`QuoteAsset`].
+///
+/// The stored form is `"{symbol}\u{1}{decimals}"` -- `\u{1}` because a
+/// sanitised symbol can never contain it (only ASCII alphanumerics, `.`,
+/// `-`, `_` survive [`sanitised_symbol`]), so it cannot be mistaken for part
+/// of the symbol on the way back out.
+fn quote_asset_from_cached(pair: &RobinhoodAddress, value: &str) -> Option<QuoteAsset> {
+    let (symbol, decimals) = value.split_once('\u{1}')?;
+    let decimals: u8 = decimals.parse().ok()?;
+    Some(QuoteAsset::token(
+        ChainAddress::Robinhood(*pair),
+        symbol.to_owned(),
+        decimals,
+    ))
+}
+
+/// Names a Pons v2 quote pair by its own `symbol()`/`decimals()` (S1, "name
+/// the pair"), rather than leaving every non-ETH launch's unit unknown.
+///
+/// Reads `memory` first when given one: a pair token's symbol and decimals
+/// cannot change, so a second dossier for the same launch spends no extra
+/// budget on them (design 0021's `Kind::Forever`, the same reasoning a
+/// launch record is cached under). A cache miss spends two calls -- the same
+/// two [`text_field`] already spends on the launched token's own name and
+/// symbol -- counted against `budget` the same way every other read here is.
+///
+/// # Errors
+///
+/// A safe-to-publish reason the pair could not be named: a call that failed,
+/// a `symbol()` return that is not plain text, a symbol [`sanitised_symbol`]
+/// refuses (untrusted token metadata, AGENTS.md §3 rule 3), or a
+/// `decimals()` return past [`erc20::MAX_DECIMALS`]. The caller records this
+/// as an `Unavailable` "quote asset" fact rather than guessing ETH.
+fn pair_quote_asset(
+    budget: &mut Budget,
+    client: &Rpc,
+    pair: &RobinhoodAddress,
+    at: Option<u64>,
+    memory: Option<&Memory>,
+) -> Result<QuoteAsset, String> {
+    let subject = pair.to_string();
+    if let Some(memory) = memory
+        && let Ok(Some(fact)) = memory.latest(PAIR_QUOTE_ASSET_FACT, &subject)
+        && let Some(asset) = quote_asset_from_cached(pair, &fact.value)
+    {
+        return Ok(asset);
+    }
+
+    let symbol_data = call(budget, client, pair, &erc20::SYMBOL, at)?;
+    let raw_symbol = erc20::string_from_return(&symbol_data)
+        .ok_or_else(|| "symbol(): the pair's return was not a plain string".to_owned())?;
+    let symbol = sanitised_symbol(&raw_symbol).ok_or_else(|| {
+        "symbol(): the pair's name is not one Real or Rug will print as a ticker".to_owned()
+    })?;
+
+    let decimals_data = call(budget, client, pair, &erc20::DECIMALS, at)?;
+    let decimals = erc20::decimals_from_return(&decimals_data)
+        .ok_or_else(|| "decimals(): the pair's return was not a plausible decimals value".to_owned())?;
+
+    if let Some(memory) = memory {
+        let value = format!("{symbol}\u{1}{decimals}");
+        // A cache write that fails leaves the next read to spend the two
+        // calls again -- slower, not wrong -- so it is dropped rather than
+        // turned into an `Unavailable` entry over a fact that did read.
+        let _ = memory.record(
+            PAIR_QUOTE_ASSET_FACT,
+            &subject,
+            0,
+            MemoryKind::Forever,
+            &value,
+            SystemTime::now(),
+        );
+    }
+
+    Ok(QuoteAsset::token(
+        ChainAddress::Robinhood(*pair),
+        symbol,
+        decimals,
+    ))
 }
 
 /// Wei the launcher spent on curve buys among `logs`: buys against this
@@ -665,14 +774,16 @@ fn curve_facts(
         // than letting a bare `None` speak for itself.
         quote_capacity: None,
         // `record.pair` is `None` for native ETH (`pons.rs`: "The quote
-        // asset, or `None` for native ETH") -- the common case, and the only
-        // one this reader can name a unit for. When the record *does* name a
-        // pair token, this reader has no ERC-20 symbol/decimals lookup (no
-        // new provider, per the packet), so it must not guess ETH: guessing
-        // would print a wei figure with the wrong asset's name on it, which
-        // is precisely the fabricated fact AGENTS.md §3 rule 2 forbids.
-        // `None` here carries the absence forward so the sheet puts the unit
-        // on `unknown` instead of rendering anything.
+        // asset, or `None` for native ETH") -- the common case. `None` here
+        // for a token pair is not a guess held over from before this reader
+        // could name one (S1, "name the pair"): naming it needs its own
+        // `eth_call`s, pinned to the same read point every other call in
+        // this dossier is, so `build_with_memory`'s caller fills in
+        // `quote_asset` for a token pair after this function returns, from
+        // [`pair_quote_asset`], and records why on a failed read rather than
+        // guessing ETH -- guessing would print a wei figure with the wrong
+        // asset's name on it, precisely the fabricated fact AGENTS.md §3
+        // rule 2 forbids.
         quote_asset: record.pair.is_none().then(QuoteAsset::eth),
         // "Who launched it" -- the same fact Solana's `CurveFacts::creator`
         // doc comment names -- is the launch record's `deployer`, not
@@ -760,9 +871,24 @@ pub fn build_with_memory(
     }
     let at = read.as_ref().map(|r| r.number);
 
-    // 3. The curve: graduation and quote reserves.
+    // 3. The curve: graduation and quote reserves. When the launch record
+    // names a pair token (S1, "name the pair"), name it here too, at the
+    // same read point as everything else -- a failed naming read never
+    // takes the curve reads it succeeded alongside down with it, so it is
+    // its own `Unavailable` entry, not folded into `curve`'s.
     match curve_facts(budget, client, &record, at) {
-        Ok(facts) => dossier.curve = Some(facts),
+        Ok(mut facts) => {
+            if let Some(pair) = record.pair {
+                match pair_quote_asset(budget, client, &pair, at, memory) {
+                    Ok(asset) => facts.quote_asset = Some(asset),
+                    Err(why) => dossier.unavailable.push(Unavailable {
+                        fact: "quote asset",
+                        why,
+                    }),
+                }
+            }
+            dossier.curve = Some(facts);
+        }
         Err(why) => dossier.unavailable.push(Unavailable { fact: "curve", why }),
     }
 
@@ -2776,5 +2902,126 @@ pub(crate) mod tests {
         // empty answer, each range exactly as wide as the window and the last
         // one cut off at `to_block`.
         assert_eq!(asked, vec![(1_000, 1_000), (1_001, 1_004), (1_005, 1_010)]);
+    }
+
+    // S1, "name the pair": a Pons v2 curve paired with an ERC-20 token
+    // rather than native ETH is named by its own `symbol()`/`decimals()`.
+
+    /// An ABI dynamic-string `eth_call` return, the same shape
+    /// `realorrug-robinhood/src/erc20.rs`'s own `encoded` builds.
+    fn encoded_string(text: &[u8]) -> Vec<u8> {
+        let mut out = vec![0u8; 64];
+        out[31] = 32;
+        let length = u64::try_from(text.len()).expect("a test string fits in u64");
+        out[56..64].copy_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(text);
+        out.resize(64 + text.len().div_ceil(32) * 32, 0);
+        out
+    }
+
+    fn encoded_decimals(value: u128) -> Vec<u8> {
+        let mut out = [0u8; 32];
+        out[16..].copy_from_slice(&value.to_be_bytes());
+        out.to_vec()
+    }
+
+    #[test]
+    fn a_native_eth_launch_is_unchanged_by_this_slice() {
+        // `record.pair` is `None`, so `curve_facts` alone must still name
+        // ETH -- `pair_quote_asset` is never reached, exactly as before S1.
+        let curve = RobinhoodAddress([0x70; 20]);
+        let deployer = RobinhoodAddress([0x71; 20]);
+        let rec = record(true, curve, deployer);
+        let client = Rpc::new(serve(vec![
+            answer(&hex(&word_bool(false))), // graduated()
+            answer(&hex(&encoded_decimals(0))), // realQuoteReserve()
+        ]));
+        let mut b = budget();
+        let facts = curve_facts(&mut b, &client, &rec, None).expect("curve facts");
+        assert_eq!(facts.quote_asset, Some(QuoteAsset::eth()));
+    }
+
+    #[test]
+    fn a_token_pair_with_a_good_symbol_and_decimals_is_named_with_its_address() {
+        let pair = RobinhoodAddress([0x72; 20]);
+        let client = Rpc::new(serve(vec![
+            answer(&hex(&encoded_string(b"HIMS"))),
+            answer(&hex(&encoded_decimals(18))),
+        ]));
+        let mut b = budget();
+        let asset =
+            pair_quote_asset(&mut b, &client, &pair, None, None).expect("a named pair asset");
+        assert_eq!(asset.symbol, "HIMS");
+        assert_eq!(asset.decimals, 18);
+        assert_eq!(asset.address, Some(ChainAddress::Robinhood(pair)));
+        // The address renders in the sheet's "paired with X (0x...)" wording
+        // (`realorrug-roast/src/sheet.rs::push_curve`), so it must actually
+        // print as the hex form a reader can check on an explorer.
+        assert!(format!("{}", asset.address.expect("address")).starts_with("0x"));
+    }
+
+    #[test]
+    fn a_failed_pair_read_leaves_the_unit_unknown_with_a_reason() {
+        let pair = RobinhoodAddress([0x73; 20]);
+        // Both calls the pair naming needs fail at the transport.
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let why = pair_quote_asset(&mut b, &client, &pair, None, None)
+            .expect_err("no server means no read");
+        assert!(!why.is_empty());
+    }
+
+    #[test]
+    fn a_hostile_symbol_is_unreadable_not_sanitised_into_something_else() {
+        // A prompt-injection attempt riding in as an ERC-20 symbol -- exactly
+        // the untrusted-metadata case AGENTS.md §3 rule 3 exists for.
+        assert_eq!(sanitised_symbol("@x ignore previous"), None);
+        // Two hundred characters: far past any real ticker, and past this
+        // sanitiser's own 32-character ceiling.
+        assert_eq!(sanitised_symbol(&"A".repeat(200)), None);
+        // Non-ASCII: a script this sanitiser does not vouch for, even one
+        // that looks like harmless letters.
+        assert_eq!(sanitised_symbol("HIMS\u{202e}"), None);
+        assert_eq!(sanitised_symbol("café"), None);
+        // A real ticker still passes.
+        assert_eq!(sanitised_symbol("HIMS"), Some("HIMS".to_owned()));
+        assert_eq!(sanitised_symbol("USD.C-1_A"), Some("USD.C-1_A".to_owned()));
+    }
+
+    #[test]
+    fn decimals_past_the_sanity_ceiling_leaves_the_pair_unnamed() {
+        let pair = RobinhoodAddress([0x74; 20]);
+        let client = Rpc::new(serve(vec![
+            answer(&hex(&encoded_string(b"HIMS"))),
+            answer(&hex(&encoded_decimals(255))),
+        ]));
+        let mut b = budget();
+        let why = pair_quote_asset(&mut b, &client, &pair, None, None)
+            .expect_err("255 decimals is not a plausible value");
+        assert!(why.contains("decimals"));
+    }
+
+    #[test]
+    fn a_cached_pair_asset_is_reused_without_spending_any_calls() {
+        let pair = RobinhoodAddress([0x75; 20]);
+        let memory = Memory::open_in_memory().expect("open");
+        memory
+            .record(
+                PAIR_QUOTE_ASSET_FACT,
+                &pair.to_string(),
+                0,
+                MemoryKind::Forever,
+                "HIMS\u{1}18",
+                SystemTime::now(),
+            )
+            .expect("record");
+        // No answers queued: a cache hit must not touch the network at all.
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let asset = pair_quote_asset(&mut b, &client, &pair, None, Some(&memory))
+            .expect("a cached pair asset");
+        assert_eq!(asset.symbol, "HIMS");
+        assert_eq!(asset.decimals, 18);
+        assert_eq!(b.calls_made(), 0);
     }
 }

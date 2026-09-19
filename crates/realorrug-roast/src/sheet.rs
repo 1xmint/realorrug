@@ -702,9 +702,20 @@ impl FactSheet {
             // on a holder-concentration read for that chain, and a failed
             // sample of the largest accounts must not be the read that
             // starts requiring one.
+            // `quote asset` (S1, "name the pair") joins the same list: a
+            // failed `symbol()`/`decimals()` read on a Pons v2 pair token is
+            // an off-chain-shaped miss the same way `market` is -- the curve
+            // itself still read fine, only its unit's name did not, and a
+            // launcher whose pair token answers slowly must not be scored
+            // worse than one whose pair reads cleanly.
             if matches!(
                 miss.fact,
-                "capacity" | "fees" | "creator transactions" | "market" | "token ownership"
+                "capacity"
+                    | "fees"
+                    | "creator transactions"
+                    | "market"
+                    | "token ownership"
+                    | "quote asset"
             ) {
                 // Recorded here, not dropped: `assessment.rs`'s coverage
                 // figure needs to know this gap exists even though
@@ -1930,6 +1941,29 @@ fn push_curve(
                 format!("{amount} in the curve, as of {moment}."),
             ),
         );
+
+        // S1, "name the pair": when this curve's quote asset is an ERC-20
+        // token rather than native ETH, state which one by its symbol AND
+        // its address, never the symbol alone -- `asset.symbol` is the
+        // launcher-chosen text `sanitised_symbol` cleared, and the address
+        // is what lets a reader check that name rather than take it on
+        // faith (AGENTS.md §3 rule 3: untrusted metadata is data, and data
+        // a reader can verify is safer data than data they cannot).
+        if let Some(address) = &asset.address {
+            let pair = format!("{} ({address})", asset.symbol);
+            facts.push(
+                Fact {
+                    about: About::Measurement,
+                    kind: Kind::QuotePair,
+                    label: "the ERC-20 token this curve is paired with, not ETH".to_owned(),
+                    rendered: pair.clone(),
+                    values: Vec::new(),
+                    clauses: Vec::new(),
+                }
+                .saying(Voice::Plain, format!("This curve is paired with {pair}, not ETH."))
+                .saying(Voice::Blunt, format!("Paired with {pair}. Not ETH.")),
+            );
+        }
     }
 
     match (curve.quote_capacity, &curve.quote_asset) {
