@@ -2137,6 +2137,22 @@ mod link_confidence_tests {
     }
 
     #[test]
+    fn same_block_or_fresh_alone_is_not_a_link() {
+        // Both are needed: a shared block is common in a busy launch, and
+        // two fresh wallets on different blocks are just two new buyers.
+        let block_only = LinkEvidence {
+            same_block: true,
+            ..LinkEvidence::default()
+        };
+        let fresh_only = LinkEvidence {
+            both_fresh: true,
+            ..LinkEvidence::default()
+        };
+        assert_eq!(link_confidence(block_only), 0);
+        assert_eq!(link_confidence(fresh_only), 0);
+    }
+
+    #[test]
     fn no_evidence_gives_zero() {
         assert_eq!(link_confidence(LinkEvidence::default()), 0);
     }
