@@ -2263,7 +2263,7 @@ fn push_window_holdings_and_freshness(
                 let bps_f64 = f64::from(bps);
                 let note = if excluded > 0 {
                     format!(
-                        ", {excluded} of {} checked candidates excluded (no token amount read)",
+                        ", {excluded} of {} checked candidates excluded (no token amount or address read)",
                         funding.checked.len()
                     )
                 } else {
@@ -7196,6 +7196,65 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         let f = fact_of(&sheet, Kind::AllWindowBuyersDeclaredExempt).expect("full window known");
         assert_eq!(f.rendered, "not all declared-exempt");
+    }
+
+    #[test]
+    fn a_declared_exemption_for_another_address_does_not_cover_the_buyer() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(1, vec![s2_candidate(1, 1, Some(1), Some(0))]));
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![s2_exemption(9, ExemptionSource::Declared)],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let f = fact_of(&sheet, Kind::AllWindowBuyersDeclaredExempt).expect("full window known");
+        assert_eq!(f.rendered, "not all declared-exempt");
+    }
+
+    #[test]
+    fn fresh_window_buyers_counts_only_zero_nonce_candidates() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(
+            3,
+            vec![
+                s2_candidate(1, 1, Some(1), Some(0)),
+                s2_candidate(2, 1, Some(1), Some(0)),
+                s2_candidate(3, 1, Some(1), Some(5)),
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let f = fact_of(&sheet, Kind::FreshWindowBuyers).expect("every nonce read");
+        assert_eq!(f.values, [2.0]);
+    }
+
+    #[test]
+    fn a_candidate_with_an_unreadable_address_is_excluded_from_the_holdings_sum() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.chain_launch = Some(realorrug_onchain::ChainLaunch {
+            block: 64,
+            age_seconds: None,
+            dev_buy_wei: None,
+            dev_buy_tokens: None,
+            supply: Some(10_000),
+            name: None,
+            symbol: None,
+            correlated_selling: None,
+        });
+        let mut unreadable = s2_candidate(2, 1, Some(1_000), Some(0));
+        unreadable.address = "not an address".to_owned();
+        dossier.funding = Some(funding_with(
+            2,
+            vec![s2_candidate(1, 1, Some(1_000), Some(0)), unreadable],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let bps = fact_of(&sheet, Kind::WindowBuyersLinkedHoldingsBps).expect("one readable");
+        assert_eq!(bps.values, [1_000.0]);
+        assert!(
+            bps.rendered.contains("1 of 2 checked candidates excluded"),
+            "{}",
+            bps.rendered
+        );
     }
 
     #[test]
