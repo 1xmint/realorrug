@@ -947,6 +947,7 @@ mod tests {
             unknown: Vec::new(),
             signals: Vec::new(),
             twins: Vec::new(),
+            skipped: Vec::new(),
         };
 
         let price = price_facts(&sheet);
