@@ -209,6 +209,10 @@ fn launch_facts(
             supply,
             name: text_field(budget, client, token, erc20::NAME, at),
             symbol: text_field(budget, client, token, erc20::SYMBOL, at),
+            // Needs the read-point block, which this function is not given
+            // (it only sees the launch); `build_with_memory` fills it in
+            // after this call returns, on the same `ChainLaunch` (step 5d).
+            correlated_selling: None,
         },
         log.transaction,
         receipt,
@@ -1315,6 +1319,32 @@ pub fn build_with_memory(
         }),
     }
 
+    // 5d. S7 "correlated selling" (research 0052 §3, M-D-0008): whether
+    // wallets linked by how they bought also sold in a tight cluster. Needs
+    // the same launch window as 5b/5c, plus the supply already read in step
+    // 4 for the volume-share factor; it is written onto `dossier.chain_launch`
+    // (rather than passed to `launch_facts`) because `launch_facts` runs
+    // before the read point is known and cannot bound the window itself.
+    // `wallets::correlated_selling` never fails outright, the same as
+    // `creator_cash_flow` -- a window that could not be established here is
+    // the only named miss.
+    match (dossier.chain_launch.as_mut(), read.as_ref()) {
+        (Some(launch), Some(header)) => {
+            launch.correlated_selling = Some(wallets::correlated_selling(
+                client,
+                budget,
+                &record,
+                launch.block,
+                header.number,
+                launch.supply,
+            ));
+        }
+        _ => dossier.unavailable.push(Unavailable {
+            fact: "correlated selling",
+            why: "the launch window needs both the launch block and the read point".to_owned(),
+        }),
+    }
+
     // 6. Facts this reader cannot supply at all yet, regardless of budget.
     // AGENTS.md §3 rule 8: absent is not zero, so each is named rather than
     // left as a silent `None`.
@@ -1959,6 +1989,16 @@ pub(crate) mod tests {
                 // these the share card drew its verdict over a blank.
                 name: Some("Pepe Token".to_owned()),
                 symbol: Some("PEPE".to_owned()),
+                // `full_bodies`' script is spent by holders (step 5); steps
+                // 5b/5c/5d all run past it and every read they attempt is a
+                // refused connection, which S7 degrades the same way
+                // `creator_cash_flow` does: a named "not read", not a zero.
+                correlated_selling: Some(wallets::CorrelatedSelling {
+                    linked_sellers: 0,
+                    sold_bps_of_supply: None,
+                    spread_seconds: None,
+                    sells_read: false,
+                }),
             })
         );
         // The launcher 100, Alice 200, Bob 100. The curve and the factory are

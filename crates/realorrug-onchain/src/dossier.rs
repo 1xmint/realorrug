@@ -236,6 +236,16 @@ pub struct ChainLaunch {
     pub name: Option<String>,
     /// The token's `symbol()`, on the same terms as [`ChainLaunch::name`].
     pub symbol: Option<String>,
+    /// S7 "correlated selling" (research 0052 §3, M-D-0008): the largest
+    /// cluster of linked wallets that sold within one 50-block window, read
+    /// from `CurveSell` logs. `None` when it could not be read: the chain has
+    /// no such read (Solana), or the read the signal depends on failed --
+    /// never "no correlated selling" (rule 8).
+    ///
+    /// Pre-graduation only. After graduation the pool address is unknown
+    /// (research 0044), so there is nothing to read and this stays `None`
+    /// with no claim either way.
+    pub correlated_selling: Option<crate::wallets::CorrelatedSelling>,
 }
 
 /// Who holds the token, summed from every `Transfer` it ever emitted.
