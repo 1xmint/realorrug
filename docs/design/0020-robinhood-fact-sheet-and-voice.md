@@ -307,6 +307,39 @@ default when config, or here identification, is missing).
 | `HolderConcentration` | largest non-curve holder's share | `Transfer`-log sum (research 0040 §4), largest balance divided by circulating (total minus curve) | threshold **not yet measured** for Pons v2 — no distribution of real holder-concentration outcomes has been gathered (open question, §8) | a vesting contract, a bridge, an exchange — none of which this design can currently tell apart from a whale, because no label list for Robinhood-chain contracts exists yet (the EVM equivalent of research 0042's "exchange hot wallet, bridge contract, known deployer" label-list idea, itself flagged there as needed and not yet built for Solana either) |
 | `OwnerCanStillMintOrPause` | owner-only mint/pause/blacklist selectors present and ownership not renounced | deployed bytecode scan, or a verified-source ABI read | **blocked on research 0044**; this design names the slot the signal fills (a `Signal` variant, a fact pair "owner address" + "selector present") without designing the bytecode check itself | a stock template with an owner nobody uses — most ERC-20 templates ship an `Ownable` ancestor whether or not the deployer ever calls it |
 
+### Factors that raise or lower a signal's weight (research 0052)
+
+Each signal above starts at the base weight research 0052 §3.1 gives it, then
+`crate::sheet::factors` (M-D-0002) adds or subtracts named, graded factors
+before `assessment::adjusted_weight` folds the result into the noisy-OR
+score. Per §3.3, self-reported factors may only lower a signal (never raise
+one) and are capped at −200 bps total; no factor set may take a signal below
+25% of its base. Only factors whose input is already on the sheet today are
+wired:
+
+| signal | factor | delta | grade | input |
+|---|---|---|---|---|
+| `RepeatLauncher` | lifetime launches ≥ 10 | +800 bps | Measured | `Kind::CreatorLaunches`, from the creator index |
+| `CreatorNeverGraduatedOrganically` | measured launches ≥ 5 | +400 bps | Measured | `Kind::CreatorMeasured`, from the creator index |
+| `CreatorNeverGraduatedOrganically` | measured launches ≤ 2 (thin denominator) | −400 bps | Measured | `Kind::CreatorMeasured`, from the creator index |
+
+The rest of research 0052 §3.1's catalogue is **not yet wired**, each for a
+named reason rather than left silent:
+
+- `CreatorBoughtOwnLaunch`'s dev-buy-share factors (research 0052 §6 cases A
+  and B both turn on these) need the launch-block price; `ChainLaunch`
+  (`realorrug-onchain/src/dossier.rs`) has no such field, and this task does
+  not add an RPC call to manufacture one (AGENTS.md §3 rule 2).
+- `LaunchBlockInStrongestBand`'s fresh-wallet, linked-wallet, exemption and
+  thin-sample factors need per-recipient wallet history and `baserates.rs`'s
+  `Band` carries no sample-size field to key a thin-sample factor on.
+- `HolderConcentration`, `LiquidityGone`, `CreatorSoldOut`, `BuyersCannotSell`
+  and `OwnerCanStillMintOrPause` are declared `Signal` variants but
+  `FactSheet::build` does not fire any of them yet (see the table above), so
+  there is no live instance on the Robinhood sheet to attach a factor to;
+  wiring their factors ahead of the signals themselves was out of scope here
+  and risked changing behaviour beyond this task.
+
 ### The levels, as a rule over that set
 
 - **`Rugged`** — an observed, completed event, never on one reading alone:

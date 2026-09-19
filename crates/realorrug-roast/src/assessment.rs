@@ -247,6 +247,80 @@ impl Weight {
     }
 }
 
+/// Research 0052 §3.1's base weight for one signal, before any factor.
+///
+/// **Per signal, not per episode.** [`weight`] above is the coarser
+/// per-episode number `risk_index` sums (unchanged by this packet); this is
+/// the finer, per-signal number the catalogue actually names, because a
+/// [`crate::sheet::Factor`] is anchored to one signal and has to add to
+/// something of the same shape. Two signals sharing an episode (`S1`, `S2`
+/// in the paper) still fold to that episode's *maximum* before
+/// [`noisy_or`], the same as before -- only the number being maxed changed.
+#[must_use]
+const fn signal_base_bps(signal: Signal) -> u32 {
+    match signal {
+        // These base weights are independently drawn from research 0052
+        // §3.1's catalogue; a few signals happen to share a value today,
+        // and clippy's match_same_arms requires the shared ones written on
+        // one line below. That is a syntactic merge only: a later
+        // re-measurement of one must not be assumed to move the other.
+        Signal::LaunchBlockInStrongestBand => 1_500,
+        Signal::RepeatLauncher => 1_000,
+        Signal::CreatorNeverGraduatedOrganically => 600,
+        Signal::CreatorBoughtOwnLaunch | Signal::HolderConcentration => 1_200,
+        Signal::LiquidityGone | Signal::BuyersCannotSell => 4_000,
+        Signal::CreatorSoldOut => 2_500,
+        Signal::OwnerCanStillMintOrPause => 800,
+    }
+}
+
+/// A self-reported factor may lower a signal by at most this many basis
+/// points in total, and never raise it (research 0052 §3.3).
+const SELF_REPORTED_FLOOR_BPS: i64 = -200;
+
+/// No factor set may take a signal below this share of its base (research
+/// 0052 §3.3): a measured fact always leaves a mark, but factors alone
+/// cannot erase a signal that fired.
+const MIN_SHARE_OF_BASE_PERCENT: i64 = 25;
+
+/// One signal's weight: its research 0052 §3.1 base, adjusted by every
+/// [`crate::sheet::Factor`] on `factors` whose [`crate::sheet::Factor::signal`]
+/// matches, with two rules enforced here rather than trusted from the
+/// caller (both from research 0052 §3.3):
+///
+/// 1. A [`crate::sheet::Grade::SelfReported`] factor's `delta_bps` is
+///    clamped to at most 0 before it is summed -- a positive self-reported
+///    delta is a caller bug, not a value this function exists to reject at
+///    a distance ([`Weight::from_bps`]'s own pattern) -- and the *summed*
+///    self-reported delta for this signal is then clamped to
+///    [`SELF_REPORTED_FLOOR_BPS`].
+/// 2. The result never falls below 25% of the signal's base, computed
+///    before any factor is applied.
+///
+/// Measured and inferred deltas carry no cap of their own: research 0052's
+/// catalogue already sizes them (a `LiquidityGone` twin's `-1,500` on a
+/// 4,000 base does not need a second ceiling here).
+#[must_use]
+pub fn adjusted_weight(signal: Signal, factors: &[crate::sheet::Factor]) -> Weight {
+    let base = i64::from(signal_base_bps(signal));
+    let mut other_delta: i64 = 0;
+    let mut self_reported_delta: i64 = 0;
+    for factor in factors.iter().filter(|factor| factor.signal == signal) {
+        match factor.grade {
+            crate::sheet::Grade::SelfReported => {
+                self_reported_delta += i64::from(factor.delta_bps).min(0);
+            }
+            crate::sheet::Grade::Measured | crate::sheet::Grade::Inferred => {
+                other_delta += i64::from(factor.delta_bps);
+            }
+        }
+    }
+    let self_reported_delta = self_reported_delta.max(SELF_REPORTED_FLOOR_BPS);
+    let floor = base * MIN_SHARE_OF_BASE_PERCENT / 100;
+    let total = (base + other_delta + self_reported_delta).max(floor);
+    Weight::from_bps(u32::try_from(total).unwrap_or(0))
+}
+
 /// Combines weights the way independent chances combine: the chance none of
 /// them holds is the product of each one's absence, so the combined weight is
 /// `10_000 - product_i(10_000 - w_i)`, scaled back to bps at every step
@@ -332,14 +406,28 @@ impl Assessment {
             .iter()
             .fold(0u32, |total, &ep| total + weight(ep))
             .min(100) as u8;
-        // `weight(ep)` is on the 0-100 scale `risk_index` sums; `* 100`
-        // rebases it to basis points for `noisy_or`, which is the unit
-        // research 0052 §4 specifies and the unit fitted per-signal weights
-        // (future work, ADR 0032 decision 5) will land in directly.
+        // M-D-0002: `score_bps` now folds research 0052 §3.1's per-signal
+        // base weight, adjusted by whatever factors the sheet's own facts
+        // support (`crate::sheet::factors`), rather than `risk_index`'s
+        // coarser per-episode placeholder above -- `risk_index` itself is
+        // untouched (a pinned JSON value this packet was told not to move).
+        // Two signals sharing an episode still fold to that episode's
+        // *maximum* adjusted weight before `noisy_or`, same as before
+        // (module doc "Correlated flags count once"); a `BTreeMap` keyed on
+        // the episode's own ordinal keeps the fold deterministic the same
+        // way `episodes.sort_by_key` above does for `risk_index`.
+        let sheet_factors = crate::sheet::factors(sheet);
+        let mut episode_bps: std::collections::BTreeMap<u8, u32> =
+            std::collections::BTreeMap::new();
+        for finding in &findings {
+            let adjusted = adjusted_weight(finding.signal, &sheet_factors).bps();
+            let entry = episode_bps.entry(finding.episode as u8).or_insert(0);
+            *entry = (*entry).max(adjusted);
+        }
         let score_bps = noisy_or(
-            &episodes
-                .iter()
-                .map(|&ep| Weight::from_bps(weight(ep) * 100))
+            &episode_bps
+                .into_values()
+                .map(Weight::from_bps)
                 .collect::<Vec<_>>(),
         );
 
@@ -371,7 +459,7 @@ impl Assessment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sheet::Signal;
+    use crate::sheet::{Factor, Grade, Signal};
 
     /// A sheet carrying only signals and unknowns -- the facts and skipped
     /// gaps are what each test below sets, when it cares about them. Mirrors
@@ -448,8 +536,14 @@ mod tests {
             assessment.risk_index,
             u8::try_from(WEIGHT_LAUNCH_BLOCK + WEIGHT_CREATOR_HISTORY).unwrap()
         );
-        // The 0-100 weights rebased to bps, then combined by noisy-OR.
-        let (a, b) = (WEIGHT_LAUNCH_BLOCK * 100, WEIGHT_CREATOR_HISTORY * 100);
+        // `score_bps` folds research 0052 §3.1's per-signal base weights (no
+        // factors on this bare sheet), combined by noisy-OR -- a different
+        // number from `risk_index`'s coarser per-episode placeholder above,
+        // by design (M-D-0002).
+        let (a, b) = (
+            signal_base_bps(Signal::LaunchBlockInStrongestBand),
+            signal_base_bps(Signal::RepeatLauncher),
+        );
         let expected = 10_000 - (10_000 - a) * (10_000 - b) / 10_000;
         assert_eq!(assessment.score_bps.bps(), expected);
     }
@@ -680,5 +774,105 @@ mod tests {
     fn weight_clamps_above_ten_thousand() {
         assert_eq!(Weight::from_bps(10_001), Weight::MAX);
         assert_eq!(Weight::from_bps(u32::MAX), Weight::MAX);
+    }
+
+    fn self_reported(delta_bps: i32) -> Factor {
+        Factor {
+            signal: Signal::RepeatLauncher,
+            name: "self reported".to_owned(),
+            delta_bps,
+            grade: Grade::SelfReported,
+            evidence: "the creator's own claim".to_owned(),
+        }
+    }
+
+    fn measured(delta_bps: i32) -> Factor {
+        Factor {
+            signal: Signal::RepeatLauncher,
+            name: "measured".to_owned(),
+            delta_bps,
+            grade: Grade::Measured,
+            evidence: "counted from the record".to_owned(),
+        }
+    }
+
+    // Research 0052 §3.3: "Self-reported factors ... may never raise" a
+    // signal above its base. A positive self-reported delta must be dropped
+    // entirely, not merely capped below the raise it claims.
+    #[test]
+    fn factors_never_raise_from_self_reported() {
+        let base = signal_base_bps(Signal::RepeatLauncher);
+        let raising = [self_reported(500)];
+        assert_eq!(
+            adjusted_weight(Signal::RepeatLauncher, &raising).bps(),
+            base
+        );
+
+        let lowering = [self_reported(-150)];
+        assert_eq!(
+            adjusted_weight(Signal::RepeatLauncher, &lowering).bps(),
+            base - 150
+        );
+    }
+
+    // Research 0052 §3.3: self-reported factors together may lower a signal
+    // by at most 200 bps. -200 total is the boundary case that must still
+    // apply in full; -201 must clamp to exactly -200, not -201.
+    #[test]
+    fn self_reported_total_holds_at_the_two_hundred_cap() {
+        let base = i64::from(signal_base_bps(Signal::RepeatLauncher));
+
+        let at_cap = [self_reported(-200)];
+        assert_eq!(
+            adjusted_weight(Signal::RepeatLauncher, &at_cap).bps(),
+            u32::try_from(base - 200).expect("base exceeds 200")
+        );
+
+        let past_cap = [self_reported(-201)];
+        assert_eq!(
+            adjusted_weight(Signal::RepeatLauncher, &past_cap).bps(),
+            u32::try_from(base - 200).expect("base exceeds 200"),
+            "a -201 bps self-reported claim must clamp to the -200 cap, not apply in full"
+        );
+    }
+
+    // Research 0052 §3.3: "No factor set may take a signal below 25% of its
+    // base." Landing exactly on the floor from measured/inferred deltas is
+    // allowed unclamped; one bps past it must clamp back up to the floor.
+    #[test]
+    fn measured_factors_hold_at_the_twenty_five_percent_floor() {
+        let base = i64::from(signal_base_bps(Signal::RepeatLauncher));
+        let floor = base * 25 / 100;
+
+        let at_floor = [measured(-750)];
+        assert_eq!(
+            adjusted_weight(Signal::RepeatLauncher, &at_floor).bps(),
+            u32::try_from(floor).expect("floor is non-negative")
+        );
+
+        let past_floor = [measured(-751)];
+        assert_eq!(
+            adjusted_weight(Signal::RepeatLauncher, &past_floor).bps(),
+            u32::try_from(floor).expect("floor is non-negative"),
+            "one bps past the floor must clamp back up to 25% of base, not sit below it"
+        );
+    }
+
+    // Research 0052 §6 cases A (600 bps) and B (2,000 bps) are both driven by
+    // `CreatorBoughtOwnLaunch`'s dev-buy-share factors, which key off the
+    // launch-block price. `ChainLaunch` (realorrug-onchain/src/dossier.rs)
+    // has no such field today, and M-D-0002 is not adding an RPC call to
+    // invent one (AGENTS.md §3 rule 2: an unread input is an absent factor,
+    // never a guessed one). So neither case can be reproduced by the sheet
+    // yet; this is recorded here rather than faked.
+    #[test]
+    fn research_0052_cases_a_and_b_are_not_reproducible_without_dev_buy_share() {
+        let base = signal_base_bps(Signal::CreatorBoughtOwnLaunch);
+        assert_eq!(base, 1_200, "base weight is unchanged by this task");
+        assert_ne!(base, 600, "case A's 600 bps needs the dev-buy-share factor");
+        assert_ne!(
+            base, 2_000,
+            "case B's 2,000 bps needs the dev-buy-share factor"
+        );
     }
 }
