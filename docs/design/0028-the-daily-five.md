@@ -158,6 +158,12 @@ Each post type is Josh's gate until he approves its rule once.
   only (research 0051 §2).
 - A post describes a coin and a count of calls. It never calls a person a
   scammer (AGENTS rule 3.4) and never states a price.
+- Players' own posts on X are not read or kept for the game (Josh,
+  2026-09-18): calls and rewards live on the site, so nothing about a
+  player's standing depends on what they post. X stays a possible *signal*
+  source about a launch, read as data only; research 0052 §7.3 finds it not
+  worth a reader yet, because what a dev can honestly declare is declared
+  on-chain in the launch calldata.
 
 ## 9. The crowd signal (later)
 
