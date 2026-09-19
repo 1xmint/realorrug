@@ -301,6 +301,51 @@ pub struct TokenOwnership {
     pub freeze_authority: Option<Address>,
 }
 
+/// One address the launch or the factory exempted from the snipe tax (or, for
+/// [`Powers::pending_creator_fee_recipient`], is about to receive creator
+/// fees), classified by research 0047 §3's list before any numeric floor
+/// judges it.
+pub type ExemptionSource = realorrug_robinhood::pons::powers::Source;
+
+/// An address the reader found exempt from the snipe tax, and where it
+/// stands: [`ExemptionSource::FirstParty`] (Pons's own infrastructure, per
+/// research 0047 §3), [`ExemptionSource::Declared`] (named in the launcher's
+/// own `launchToken` calldata, research 0048 §3), or
+/// [`ExemptionSource::Undeclared`] -- on neither list, which is what S13
+/// (research 0052 §3) weighs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Exemption {
+    /// The exempt address.
+    pub address: ChainAddress,
+    /// Why it is exempt, or that no reason could be found for it.
+    pub source: ExemptionSource,
+}
+
+/// S13's "owner powers live": creator tax, the pending creator-fee timelock,
+/// and every address the curve holds exempt from the snipe tax, classified.
+/// Pons v2 / Robinhood only today (research 0052 §3; task packet M-D-0004).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Powers {
+    /// The creator's cut of every trade, in basis points (0-1,000 on Pons
+    /// v2). Read once, from the factory's `getLaunchedToken`, at zero extra
+    /// RPC cost -- the same call [`ChainLaunch`]'s sibling facts already pay
+    /// for.
+    pub creator_tax_bps: u16,
+    /// The address a pending 3-day timelock would hand creator fees to, or
+    /// `None` when no change is pending. `Some(None)` is impossible to
+    /// express here; a failed read is instead named in
+    /// [`Dossier::unavailable`] and this field left off the dossier
+    /// entirely, so "nothing pending" and "could not read" are never
+    /// conflated (AGENTS.md §3 rule 8).
+    pub pending_creator_fee_recipient: Option<ChainAddress>,
+    /// Every address exempted from the snipe tax on this launch, classified.
+    /// Never a default when a candidate's current exemption could not be
+    /// confirmed on-chain -- an unconfirmed candidate is left out of this
+    /// list and out of the count entirely, not assumed exempt or assumed
+    /// clear.
+    pub exemptions: Vec<Exemption>,
+}
+
 /// Everything the analyst may assert about one token.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dossier {
@@ -359,6 +404,13 @@ pub struct Dossier {
     /// `unavailable`. Solana has no reader for this yet -- see
     /// `SolanaReader`'s own doc on `creator_cash_flow` below.
     pub creator_cash_flow: Option<crate::wallets::CreatorCashFlow>,
+    /// The creator's live powers over this token -- tax, the pending
+    /// fee-recipient timelock, and classified snipe-tax exemptions
+    /// (`crate::dossier::Powers`, Pons v2 / Robinhood only today, research
+    /// 0052 §3). `None` is "not investigated"; a reader that tried and
+    /// failed names "powers" (or the specific sub-fact, e.g. "pending
+    /// creator fee recipient") in `unavailable`.
+    pub powers: Option<Powers>,
     /// Facts that could not be read, and why.
     pub unavailable: Vec<Unavailable>,
     /// RPC calls this dossier cost.
@@ -423,6 +475,7 @@ pub fn build(
         market: None,
         token_ownership: None,
         creator_cash_flow: None,
+        powers: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -1069,6 +1122,7 @@ mod tests {
             market: None,
             token_ownership: None,
             creator_cash_flow: None,
+            powers: None,
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
@@ -1350,6 +1404,7 @@ mod tests {
                 market: None,
                 token_ownership: None,
                 creator_cash_flow: None,
+                powers: None,
                 unavailable: vec![Unavailable {
                     fact: "robinhood reads",
                     why: format!("fake reader, token {:?}", token.0),

@@ -121,6 +121,9 @@ compute-unit-costs page).
 | trade counts and unique traders | `CurveBuy`/`CurveSell` logs on the curve, from launch to now (research 0036 §2's `Trade` type) | 1 `eth_getLogs`, cost scales with trade count; can hit the 10,000-log cap on a very active curve (research 0038 §4) | 20+ | 60+ | optional |
 | creator track record | our own index, keyed on `creator_fee_recipient` per research 0038 §2's recommendation | 0 (local read) | — | — | optional |
 | simulated sell / `BuyersCannotSell` | `eth_call` a sell against the curve at a fixed size, reverts or not (§3) | 1 `eth_call` | 20 | 26 | optional |
+| pending creator-fee recipient (S13 owner powers, research 0052 §3) | `pendingCreatorFeeRecipient(token)` on `FACTORY`; zero means nothing pending (`robinhood.rs` `pending_creator_fee_recipient`) | 1 `eth_call` | 20 | 26 | optional |
+| declared snipe-tax exemptions | the launch transaction's own `launchToken` calldata (research 0048 §3), fetched by hash and decoded by `pons.rs` `powers::declared_exemptions` | 1 `eth_getTransactionByHash` | 20 (flat rate, inferred as above) | not listed in research 0039 | optional |
+| confirmed snipe-tax exemptions, each classed first-party, declared or undeclared | candidates from the `SnipeTaxExempted` events on the launch receipt already fetched, then `snipeTaxExempt(address)` on the curve for each distinct one, because an event at launch does not prove the exemption still stands (research 0047 §3) | 1 `eth_call` per distinct candidate | 20 each | 26 each | optional |
 
 **Recommended required set: launch record, phase, launch block/age, reserves,
 holders.** This differs from the owner's starting position (launch record,

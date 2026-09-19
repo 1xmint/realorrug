@@ -30,13 +30,18 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use realorrug_robinhood::erc20;
-use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, topic};
-use realorrug_robinhood::{Address as RobinhoodAddress, BlockHeader, Hash32, Log, LogsError, Rpc};
+use realorrug_robinhood::pons::{
+    FACTORY, Launched, LaunchedToken, Side, Trade, curve, powers, topic,
+};
+use realorrug_robinhood::{
+    Address as RobinhoodAddress, BlockHeader, Hash32, Log, LogsError, Receipt, Rpc,
+};
 use realorrug_types::{ChainAddress, ReadAt};
 
 use crate::budget::{Budget, Exhausted};
 use crate::dossier::{
-    ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, QuoteAsset, Unavailable,
+    ChainLaunch, ChainReader, CurveFacts, Dossier, Exemption, Holders, Powers, QuoteAsset,
+    Unavailable,
 };
 use crate::memory::{
     CheckRun, Checkpoint, Completeness, Kind as MemoryKind, Memory, REORG_DEPTH, TransferEvent,
@@ -139,13 +144,19 @@ fn address_topic(address: &RobinhoodAddress) -> Hash32 {
 /// and an unreadable receipt leaves the buy `None`, each "could not see", and
 /// the launch is still returned: dropping a block that did read because a
 /// second read failed would report less than was known.
+///
+/// Also hands back the launch transaction's hash and its receipt (already
+/// paid for above, to compute `dev_buy_wei`): [`powers_facts`] needs the
+/// same receipt's `SnipeTaxExempted` events and the same transaction's
+/// calldata, and re-fetching either there would spend budget this read
+/// already spent.
 fn launch_facts(
     budget: &mut Budget,
     client: &Rpc,
     token: &RobinhoodAddress,
     record: &LaunchedToken,
     read: Option<&BlockHeader>,
-) -> Result<ChainLaunch, String> {
+) -> Result<(ChainLaunch, Hash32, Option<Receipt>), String> {
     let read_time = read.map(|r| r.timestamp);
     let at = read.map(|r| r.number);
     take(budget)?;
@@ -160,26 +171,244 @@ fn launch_facts(
         .zip(read_time)
         .and_then(|((_, launched_at), read_at)| read_at.checked_sub(launched_at));
 
-    let dev_buy_wei = take(budget)
+    let receipt = take(budget)
         .and_then(|()| client.receipt(&log.transaction))
         .ok()
-        .flatten()
-        .map(|receipt| {
-            // A reverted transaction's logs never happened.
-            if receipt.succeeded {
-                launcher_buy(&receipt.logs, record)
-            } else {
-                0
-            }
-        });
+        .flatten();
 
-    Ok(ChainLaunch {
-        block: log.block,
-        age_seconds,
-        dev_buy_wei,
-        name: text_field(budget, client, token, erc20::NAME, at),
-        symbol: text_field(budget, client, token, erc20::SYMBOL, at),
-    })
+    let dev_buy_wei = receipt.as_ref().map(|receipt| {
+        // A reverted transaction's logs never happened.
+        if receipt.succeeded {
+            launcher_buy(&receipt.logs, record)
+        } else {
+            0
+        }
+    });
+
+    Ok((
+        ChainLaunch {
+            block: log.block,
+            age_seconds,
+            dev_buy_wei,
+            name: text_field(budget, client, token, erc20::NAME, at),
+            symbol: text_field(budget, client, token, erc20::SYMBOL, at),
+        },
+        log.transaction,
+        receipt,
+    ))
+}
+
+/// The `launch_facts` outputs `powers_facts` classifies against: the
+/// launched-token record (for `creator_tax_bps` and the curve address), the
+/// launch transaction's hash (to fetch its calldata for the declared
+/// exemption list) and its receipt (to find snipe-tax-exemption candidates
+/// for free, without a log search of its own).
+struct LaunchContext<'a> {
+    token: &'a RobinhoodAddress,
+    record: &'a LaunchedToken,
+    transaction: &'a Hash32,
+    receipt: Option<&'a Receipt>,
+}
+
+/// S13's "owner powers live" (research 0052 §3; task packet M-D-0004):
+/// creator tax (free -- already on `record`, from the same `getLaunchedToken`
+/// call every dossier already pays for), the pending creator-fee timelock,
+/// and every address the curve holds exempt from the snipe tax, classified
+/// against research 0047 §3's first-party list and the launch's own declared
+/// list (research 0048 §3).
+///
+/// Never fails outright, the same shape `wallets::creator_cash_flow` uses: a
+/// sub-read that fails is named in `unavailable` and the rest of `Powers`
+/// still returned, rather than a single failure erasing every field that did
+/// read (AGENTS.md §3 rule 8).
+///
+/// # Extra RPC calls
+///
+/// Two fixed, beyond what `launch_facts` already paid for: one
+/// `pendingCreatorFeeRecipient` `eth_call`, and one
+/// `eth_getTransactionByHash` for the launch transaction's calldata (the
+/// declared list). Then one `snipeTaxExempt` `eth_call` per *distinct*
+/// candidate address the launch receipt's `SnipeTaxExempted` events name --
+/// confirmed rather than assumed, because an event at launch is not proof
+/// nothing has revoked the exemption since. Candidates are found for free:
+/// the receipt is the one `launch_facts` already fetched.
+fn powers_facts(
+    budget: &mut Budget,
+    client: &Rpc,
+    launch: &LaunchContext<'_>,
+    at: Option<u64>,
+    unavailable: &mut Vec<Unavailable>,
+) -> Powers {
+    let pending_creator_fee_recipient =
+        pending_creator_fee_recipient(budget, client, launch.token, at, unavailable);
+    let declared = declared_exemptions(budget, client, launch.transaction, unavailable);
+    let exemptions =
+        confirmed_snipe_tax_exemptions(budget, client, launch, declared.as_ref(), at, unavailable);
+
+    Powers {
+        creator_tax_bps: launch.record.creator_tax_bps,
+        pending_creator_fee_recipient: pending_creator_fee_recipient.map(ChainAddress::Robinhood),
+        exemptions,
+    }
+}
+
+/// The curve's `pendingCreatorFeeRecipient` timelock target, or `None` for
+/// every way that read can fail (rule 8: named in `unavailable`, not
+/// defaulted).
+fn pending_creator_fee_recipient(
+    budget: &mut Budget,
+    client: &Rpc,
+    token: &RobinhoodAddress,
+    at: Option<u64>,
+    unavailable: &mut Vec<Unavailable>,
+) -> Option<RobinhoodAddress> {
+    let mut pending_creator_fee_recipient = None;
+    match call(
+        budget,
+        client,
+        &FACTORY,
+        &powers::pending_creator_fee_recipient_call_data(token),
+        at,
+    ) {
+        Ok(data) => match powers::pending_recipient_from_return(&data) {
+            Some(value) => pending_creator_fee_recipient = value,
+            None => unavailable.push(Unavailable {
+                fact: "pending creator fee recipient",
+                why: "pendingCreatorFeeRecipient returned a malformed word".to_owned(),
+            }),
+        },
+        Err(why) => unavailable.push(Unavailable {
+            fact: "pending creator fee recipient",
+            why,
+        }),
+    }
+    pending_creator_fee_recipient
+}
+
+/// The snipe-tax exemptions `launchToken`'s own calldata declared, decoded
+/// from the launch transaction research 0048 §3 already named. `None` for
+/// every way the read or decode can fail (rule 8).
+fn declared_exemptions(
+    budget: &mut Budget,
+    client: &Rpc,
+    transaction: &Hash32,
+    unavailable: &mut Vec<Unavailable>,
+) -> Option<Vec<RobinhoodAddress>> {
+    match take(budget).and_then(|()| client.transaction(transaction)) {
+        Ok(Some(tx)) => {
+            let list = powers::declared_exemptions(&tx.input);
+            if list.is_none() {
+                unavailable.push(Unavailable {
+                    fact: "declared snipe-tax exemptions",
+                    why: "the launch transaction's calldata did not decode under \
+                          launchToken's confirmed shape (research 0048 §3)"
+                        .to_owned(),
+                });
+            }
+            list
+        }
+        Ok(None) => {
+            unavailable.push(Unavailable {
+                fact: "declared snipe-tax exemptions",
+                why: "the launch transaction could not be found".to_owned(),
+            });
+            None
+        }
+        Err(why) => {
+            unavailable.push(Unavailable {
+                fact: "declared snipe-tax exemptions",
+                why,
+            });
+            None
+        }
+    }
+}
+
+/// Every address the launch receipt's `SnipeTaxExempted` events name,
+/// re-confirmed against the curve (an event at launch is not proof nothing
+/// has revoked the exemption since) and classified against `declared` and
+/// research 0047 §3's first-party list.
+fn confirmed_snipe_tax_exemptions(
+    budget: &mut Budget,
+    client: &Rpc,
+    launch: &LaunchContext<'_>,
+    declared: Option<&Vec<RobinhoodAddress>>,
+    at: Option<u64>,
+    unavailable: &mut Vec<Unavailable>,
+) -> Vec<Exemption> {
+    let mut exemptions = Vec::new();
+    let mut seen: Vec<RobinhoodAddress> = Vec::new();
+    let Some(receipt) = launch.receipt else {
+        return exemptions;
+    };
+    for log in &receipt.logs {
+        if log.address != launch.record.curve
+            || log.topics.first().copied() != Some(topic::SNIPE_TAX_EXEMPTED)
+        {
+            continue;
+        }
+        let Some(address) = log.topic_address(1) else {
+            unavailable.push(Unavailable {
+                fact: "snipe tax exemption",
+                why: "a SnipeTaxExempted event carried no address topic".to_owned(),
+            });
+            continue;
+        };
+        if seen.contains(&address) {
+            // Already confirmed and classified this address from an
+            // earlier event in the same receipt -- a second confirmation
+            // call would answer the same question again.
+            continue;
+        }
+        seen.push(address);
+
+        let confirmed = call(
+            budget,
+            client,
+            &launch.record.curve,
+            &curve::call_data_for(curve::SNIPE_TAX_EXEMPT, &address),
+            at,
+        )
+        .ok()
+        .as_deref()
+        .and_then(curve::bool_return);
+
+        match confirmed {
+            Some(true) => {
+                // `classify` already checks the first-party list before
+                // the declared one; when the declared list itself could
+                // not be read, a non-first-party address cannot be told
+                // apart from declared vs. undeclared, so it is named
+                // rather than guessed either way (rule 8).
+                let source = if let Some(list) = declared {
+                    Some(powers::classify(&address, list))
+                } else if powers::FIRST_PARTY.contains(&address) {
+                    Some(powers::Source::FirstParty)
+                } else {
+                    unavailable.push(Unavailable {
+                        fact: "snipe tax exemption classification",
+                        why: format!(
+                            "{address} is exempt but the declared list could not be \
+                             read, so declared and undeclared cannot be told apart"
+                        ),
+                    });
+                    None
+                };
+                if let Some(source) = source {
+                    exemptions.push(Exemption {
+                        address: ChainAddress::Robinhood(address),
+                        source,
+                    });
+                }
+            }
+            Some(false) => {}
+            None => unavailable.push(Unavailable {
+                fact: "snipe tax exemption",
+                why: format!("snipeTaxExempt could not be confirmed for {address}"),
+            }),
+        }
+    }
+    exemptions
 }
 
 /// One ERC-20 string field of `token`, or `None` for every way that can fail.
@@ -844,6 +1073,7 @@ pub fn build_with_memory(
         market: None,
         token_ownership: None,
         creator_cash_flow: None,
+        powers: None,
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
@@ -897,11 +1127,45 @@ pub fn build_with_memory(
 
     // 4. The launch block, its age and the launcher's own buy. Required by
     // design 0020 §1, so a miss is named and the sheet treats it as unread.
+    let mut launch_transaction = None;
+    let mut launch_receipt = None;
     match launch_facts(budget, client, token, &record, read.as_ref()) {
-        Ok(launch) => dossier.chain_launch = Some(launch),
+        Ok((launch, transaction, receipt)) => {
+            dossier.chain_launch = Some(launch);
+            launch_transaction = Some(transaction);
+            launch_receipt = receipt;
+        }
         Err(why) => dossier.unavailable.push(Unavailable {
             fact: "launch block",
             why,
+        }),
+    }
+
+    // 4b. S13's "owner powers live" (research 0052 §3; task packet
+    // M-D-0004). Needs the launch transaction's hash to read the declared
+    // exemption list from its calldata; without it (step 4 above failed)
+    // there is nothing to classify against, so the whole fact is named once
+    // rather than built on an empty declared list that would read as "no
+    // wallet was ever declared" instead of "unknown".
+    match launch_transaction {
+        Some(transaction) => {
+            let launch = LaunchContext {
+                token,
+                record: &record,
+                transaction: &transaction,
+                receipt: launch_receipt.as_ref(),
+            };
+            dossier.powers = Some(powers_facts(
+                budget,
+                client,
+                &launch,
+                at,
+                &mut dossier.unavailable,
+            ));
+        }
+        None => dossier.unavailable.push(Unavailable {
+            fact: "powers",
+            why: "the launch transaction hash could not be read".to_owned(),
         }),
     }
 
@@ -1506,6 +1770,10 @@ pub(crate) mod tests {
     const DAVE: RobinhoodAddress = RobinhoodAddress([0xd0; 20]);
     const DEV_BUY: u128 = 500_000_000_000_000_000;
 
+    /// Where the holders read sits in [`full_bodies`]'s script: after the
+    /// launch reads, the name and symbol, and the two token-powers reads.
+    const HOLDERS: usize = 11;
+
     /// Every answer a full read of `rec` takes, in order, with the launch
     /// transaction's status `status`.
     pub(crate) fn full_bodies(rec: &LaunchedToken, status: &str) -> Vec<String> {
@@ -1544,6 +1812,10 @@ pub(crate) mod tests {
             answer(&receipt),
             answer(&hex(&abi_string(b"Pepe Token"))),
             answer(&hex(&abi_string(b"PEPE"))),
+            // The token-powers reads: nothing pending on the creator fee,
+            // and a launch that declared no exempt wallets.
+            answer(&hex(&[0u8; 32])),
+            answer(&transaction_json(&launch_token_calldata(&[]))),
             answer(&transfers),
         ]
     }
@@ -1606,7 +1878,8 @@ pub(crate) mod tests {
         // are present. Pinned rather than left loose because the default
         // budget is sixty calls and a read that quietly grows is how a
         // plan's daily quota goes without anyone choosing to spend it.
-        assert_eq!(dossier.calls, 13);
+        // Plus the two token-powers reads (M-D-0004).
+        assert_eq!(dossier.calls, 15);
     }
 
     // ---- slice 3: who funded the first buyers -------------------------
@@ -1724,8 +1997,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             dossier.calls,
-            10 + 1 + 4 * 3 + 2,
-            "the core reads, the window, three per candidate, and \
+            12 + 1 + 4 * 3 + 2,
+            "the core reads (two of them token powers), the window, three per candidate, and \
              creator_cash_flow's two eth_getLogs reads (design 0027 slice 5)"
         );
 
@@ -1879,8 +2152,8 @@ pub(crate) mod tests {
         assert!(funding.checked[1].funding_complete);
         assert_eq!(
             dossier.calls,
-            10 + 1 + 4 + 3 + 2,
-            "plus creator_cash_flow's two reads"
+            12 + 1 + 4 + 3 + 2,
+            "the core reads, two of them token powers, plus creator_cash_flow's two reads"
         );
     }
 
@@ -1944,9 +2217,10 @@ pub(crate) mod tests {
             .filter(|r: &serde_json::Value| r["method"] == "eth_call")
             .collect();
         // The factory record is read before the read point exists, so it is
-        // the one unpinned call; the curve's two reads and the token's name
-        // and symbol all name the read point's block.
-        assert_eq!(calls.len(), 5, "{calls:?}");
+        // the one unpinned call; the curve's two reads, the token's name
+        // and symbol, and the pending creator-fee recipient all name the
+        // read point's block.
+        assert_eq!(calls.len(), 6, "{calls:?}");
         assert_eq!(calls[0]["params"][1], "latest");
         for call in &calls[1..] {
             assert_eq!(call["params"][1], "0x64", "{call}");
@@ -1978,8 +2252,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            first.calls, 13,
-            "remembering costs no extra call; eleven core reads plus \
+            first.calls, 15,
+            "remembering costs no extra call; thirteen core reads (two of them token powers) plus \
              creator_cash_flow's two (design 0027 slice 5)"
         );
         assert_eq!(
@@ -1998,7 +2272,7 @@ pub(crate) mod tests {
         // what it never saw him receive and refuse the count.
         let mut bodies = full_bodies(&rec, "0x1");
         bodies[1] = block(0x70, 10_600);
-        bodies[9] = block(0x64, 10_000);
+        bodies[HOLDERS] = block(0x64, 10_000);
         bodies.push(answer(&serde_json::json!([transfer_at(
             &BOB, &ALICE, 100, 0x68
         )])));
@@ -2015,8 +2289,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            second.calls, 14,
-            "thirteen as before plus the checkpoint's header; the walk itself is one page"
+            second.calls, 16,
+            "fifteen as before plus the checkpoint's header; the walk itself is one page"
         );
         assert_eq!(
             memory
@@ -2058,7 +2332,7 @@ pub(crate) mod tests {
         // walk. No transfers page is served, so a reader that walked anyway
         // (or rolled back and re-read) would find nothing to answer it.
         let mut bodies = full_bodies(&rec, "0x1");
-        bodies.truncate(9);
+        bodies.truncate(HOLDERS);
         let client = Rpc::new(serve(bodies));
         let again = reader
             .read(&client, &mut budget(), &token())
@@ -2071,8 +2345,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            again.calls, 12,
-            "ten as before plus creator_cash_flow's two reads"
+            again.calls, 14,
+            "ten as before, the two token-powers reads, plus creator_cash_flow's two reads"
         );
         let run = memory
             .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
@@ -2104,7 +2378,7 @@ pub(crate) mod tests {
         // The chain is one block on, and Alice gave Dave 100 in it. The
         // walk must cover that single block, not skip it as already read.
         let mut bodies = full_bodies(&rec, "0x1");
-        bodies[9] = block(0x63, 9_999);
+        bodies[HOLDERS] = block(0x63, 9_999);
         bodies.push(answer(&serde_json::json!([transfer_at(
             &ALICE, &DAVE, 100, 0x64
         )])));
@@ -2138,7 +2412,7 @@ pub(crate) mod tests {
         // The provider errors on the transfers page: not "nothing happened".
         let memory = Memory::open_in_memory().expect("a memory");
         let mut bodies = full_bodies(&rec, "0x1");
-        bodies[9] =
+        bodies[HOLDERS] =
             r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom"}}"#.to_owned();
         let dossier = RobinhoodReader {
             memory: Some(&memory),
@@ -2164,7 +2438,7 @@ pub(crate) mod tests {
         // which is a truncated read and not a failed one.
         let memory = Memory::open_in_memory().expect("a memory");
         let mut bodies = full_bodies(&rec, "0x1");
-        bodies.truncate(9);
+        bodies.truncate(HOLDERS);
         bodies.extend((0..20).map(|_| too_many_results_error()));
         let dossier = RobinhoodReader {
             memory: Some(&memory),
@@ -2219,7 +2493,7 @@ pub(crate) mod tests {
 
         let mut bodies = full_bodies(&rec, "0x1");
         bodies[1] = block(0x70, 10_600);
-        let transfers = bodies.remove(9);
+        let transfers = bodies.remove(HOLDERS);
         bodies.push(block(0x64, 10_000)); // the canonical 0x64: another hash
         bodies.push(transfers);
         let client = Rpc::new(serve(bodies));
@@ -2237,7 +2511,10 @@ pub(crate) mod tests {
                 largest_share_bps: Some(5_000),
             })
         );
-        assert_eq!(dossier.calls, 14, "plus creator_cash_flow's two reads");
+        assert_eq!(
+            dossier.calls, 16,
+            "plus the two token-powers reads and creator_cash_flow's two reads"
+        );
         assert_eq!(
             memory
                 .token_checkpoint(MEMORY_CHAIN, &key)
@@ -3029,5 +3306,555 @@ pub(crate) mod tests {
         assert_eq!(asset.symbol, "HIMS");
         assert_eq!(asset.decimals, 18);
         assert_eq!(b.calls_made(), 0);
+    }
+
+    // -- S13 "owner powers live" (task packet M-D-0004, part 2) -----------
+
+    /// A `getLaunchedToken` record plus a curve address distinct from the
+    /// deployer, so a `SnipeTaxExempted` log's `address` and a launch
+    /// event's own topics are never confused with each other in these
+    /// tests.
+    fn powers_record() -> LaunchedToken {
+        record(
+            true,
+            RobinhoodAddress([0x61; 20]),
+            RobinhoodAddress([0x62; 20]),
+        )
+    }
+
+    fn powers_transaction() -> Hash32 {
+        LAUNCH_TX.parse().expect("a valid hash")
+    }
+
+    /// A synthetic `launchToken` calldata declaring exactly the given
+    /// wallets, in the confirmed shape [`powers::declared_exemptions`]
+    /// decodes: four head words (only the fourth used, an offset to the
+    /// dynamic array), then the array's length and its addresses.
+    fn launch_token_calldata(declared: &[RobinhoodAddress]) -> Vec<u8> {
+        let mut input = powers::LAUNCH_TOKEN.to_vec();
+        input.extend(word_u(0));
+        input.extend(word_u(0));
+        input.extend(word_u(0));
+        input.extend(word_u(128)); // offset to the length word, in bytes
+        input.extend(word_u(declared.len() as u128));
+        for address in declared {
+            input.extend(word_addr(address));
+        }
+        input
+    }
+
+    fn transaction_json(input: &[u8]) -> serde_json::Value {
+        serde_json::json!({
+            "hash": LAUNCH_TX,
+            "from": powers_record().deployer.to_string(),
+            "to": FACTORY.to_string(),
+            "value": "0x0",
+            "input": realorrug_robinhood::to_hex(input),
+            "nonce": "0x0",
+            "blockNumber": format!("{LAUNCH_BLOCK:#x}"),
+        })
+    }
+
+    fn snipe_tax_exempted_log(curve: &RobinhoodAddress, exempt: &RobinhoodAddress) -> Value {
+        log_json(
+            curve,
+            &[topic::SNIPE_TAX_EXEMPTED, topic_of(exempt)],
+            &[],
+            LAUNCH_BLOCK,
+        )
+    }
+
+    fn receipt_with_logs(logs: &[Value]) -> Receipt {
+        let json = serde_json::json!({
+            "status": "0x1",
+            "transactionHash": LAUNCH_TX,
+            "blockNumber": format!("{LAUNCH_BLOCK:#x}"),
+            "from": powers_record().deployer.to_string(),
+            "to": FACTORY.to_string(),
+            "logs": logs,
+        });
+        Receipt::from_json(&json).expect("a valid receipt")
+    }
+
+    use serde_json::Value;
+
+    /// `pendingCreatorFeeRecipient` returning the zero address means
+    /// nothing is pending, not a recipient of `0x0…0` -- catches a mutant
+    /// that drops the zero check in [`pending_creator_fee_recipient`].
+    #[test]
+    fn pending_creator_fee_recipient_reads_zero_as_nothing_pending() {
+        let client = Rpc::new(serve(vec![answer(&hex(&word_addr(
+            &RobinhoodAddress::ZERO,
+        )))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result =
+            pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
+        assert_eq!(result, None);
+        assert!(unavailable.is_empty());
+    }
+
+    /// A genuinely pending recipient reads back as that address, not as
+    /// nothing.
+    #[test]
+    fn pending_creator_fee_recipient_reads_a_nonzero_pending_recipient() {
+        let pending = RobinhoodAddress([0x77; 20]);
+        let client = Rpc::new(serve(vec![answer(&hex(&word_addr(&pending)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result =
+            pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
+        assert_eq!(result, Some(pending));
+        assert!(unavailable.is_empty());
+    }
+
+    /// A malformed return (not exactly one word) is refused outright, not
+    /// defaulted to "nothing pending" (AGENTS.md §3 rule 8).
+    #[test]
+    fn pending_creator_fee_recipient_names_a_malformed_return() {
+        let client = Rpc::new(serve(vec![answer(&hex(&[0u8; 16]))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result =
+            pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
+        assert_eq!(result, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "pending creator fee recipient")
+        );
+    }
+
+    /// A transport failure is named too, not silently treated as "nothing
+    /// pending".
+    #[test]
+    fn pending_creator_fee_recipient_names_a_transport_failure() {
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result =
+            pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
+        assert_eq!(result, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "pending creator fee recipient")
+        );
+    }
+
+    /// A launch that declared no bundle wallets -- the same shape
+    /// `pons::powers_tests` decodes directly from the real capture
+    /// (`docs/research/data/0036-pons-v2-clean-launch.json`) -- now read
+    /// the way [`declared_exemptions`] actually reads it: over the wire,
+    /// through `Rpc::transaction`.
+    #[test]
+    fn declared_exemptions_reads_a_clean_launch_as_empty() {
+        let input = launch_token_calldata(&[]);
+        let client = Rpc::new(serve(vec![answer(&transaction_json(&input))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, Some(Vec::new()));
+        assert!(unavailable.is_empty());
+    }
+
+    /// A launch that declared two wallets decodes to exactly those two, in
+    /// order.
+    #[test]
+    fn declared_exemptions_reads_two_declared_wallets() {
+        let one = RobinhoodAddress([0x81; 20]);
+        let two = RobinhoodAddress([0x82; 20]);
+        let input = launch_token_calldata(&[one, two]);
+        let client = Rpc::new(serve(vec![answer(&transaction_json(&input))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, Some(vec![one, two]));
+        assert!(unavailable.is_empty());
+    }
+
+    /// Calldata that does not decode under `launchToken`'s confirmed shape
+    /// (research 0048 §3) is refused outright, not read as "declared
+    /// nothing" -- the exact failure a mutant flipping `is_none()` to
+    /// `is_some()` would hide.
+    #[test]
+    fn declared_exemptions_names_calldata_that_does_not_decode() {
+        let mut input = launch_token_calldata(&[]);
+        input[0] = 0xff; // not launchToken's selector
+        let client = Rpc::new(serve(vec![answer(&transaction_json(&input))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "declared snipe-tax exemptions"
+                    && u.why.contains("did not decode"))
+        );
+    }
+
+    /// A transaction the node does not know about is named as unread, not
+    /// as an empty declared list.
+    #[test]
+    fn declared_exemptions_names_a_transaction_the_node_does_not_know() {
+        let client = Rpc::new(serve(vec![answer(&Value::Null)]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "declared snipe-tax exemptions"
+                    && u.why.contains("could not be found"))
+        );
+    }
+
+    /// A transport failure reading the transaction is named with its own
+    /// reason, distinct from "not found".
+    #[test]
+    fn declared_exemptions_names_a_transport_failure() {
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
+        assert_eq!(result, None);
+        assert_eq!(
+            unavailable
+                .iter()
+                .filter(|u| u.fact == "declared snipe-tax exemptions")
+                .count(),
+            1
+        );
+    }
+
+    /// A `SnipeTaxExempted` log naming a first-party address (research 0047
+    /// §3) is confirmed and classified `FirstParty`, even though it is not
+    /// on the declared list either -- `classify` checks first-party first.
+    #[test]
+    fn confirmed_exemptions_classifies_a_first_party_address() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert_eq!(exemptions.len(), 1);
+        assert_eq!(exemptions[0].source, powers::Source::FirstParty);
+        assert!(unavailable.is_empty());
+    }
+
+    /// An address the launcher declared, and that is not first-party
+    /// infrastructure, is classified `Declared`.
+    #[test]
+    fn confirmed_exemptions_classifies_a_declared_address() {
+        let rec = powers_record();
+        let address = RobinhoodAddress([0x83; 20]);
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let declared = vec![address];
+        let exemptions = confirmed_snipe_tax_exemptions(
+            &mut b,
+            &client,
+            &launch,
+            Some(&declared),
+            None,
+            &mut unavailable,
+        );
+        assert_eq!(exemptions.len(), 1);
+        assert_eq!(exemptions[0].source, powers::Source::Declared);
+        assert!(unavailable.is_empty());
+    }
+
+    /// An exempt address on neither list, with a fully read declared list,
+    /// is classified `Undeclared` -- research 0052 §1's heaviest-weighted
+    /// case.
+    #[test]
+    fn confirmed_exemptions_classifies_an_undeclared_address() {
+        let rec = powers_record();
+        let address = RobinhoodAddress([0x84; 20]);
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let declared = Vec::new();
+        let exemptions = confirmed_snipe_tax_exemptions(
+            &mut b,
+            &client,
+            &launch,
+            Some(&declared),
+            None,
+            &mut unavailable,
+        );
+        assert_eq!(exemptions.len(), 1);
+        assert_eq!(exemptions[0].source, powers::Source::Undeclared);
+        assert!(unavailable.is_empty());
+    }
+
+    /// When the declared list itself could not be read, a non-first-party
+    /// exempt address cannot be told apart from declared vs. undeclared, so
+    /// it is named rather than guessed either way (rule 8) -- and not
+    /// silently added as an exemption with an invented source.
+    #[test]
+    fn confirmed_exemptions_names_a_non_first_party_address_when_declared_list_is_unknown() {
+        let rec = powers_record();
+        let address = RobinhoodAddress([0x85; 20]);
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "snipe tax exemption classification")
+        );
+    }
+
+    /// `snipeTaxExempt` confirming `false` for a candidate the launch event
+    /// once named is not an exemption -- an event at launch is not proof
+    /// nothing has revoked it since. Catches a mutant that flips this
+    /// `Some(true)`/`Some(false)` match.
+    #[test]
+    fn confirmed_exemptions_drops_a_candidate_no_longer_exempt() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(false)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.is_empty());
+    }
+
+    /// A confirmation call that fails at the transport is named, not
+    /// treated as "not exempt".
+    #[test]
+    fn confirmed_exemptions_names_a_failed_confirmation() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.iter().any(|u| u.fact == "snipe tax exemption"));
+    }
+
+    /// The same address named twice in one receipt (two events, or one
+    /// event this test double-counts on purpose) is confirmed once, not
+    /// twice -- catches a mutant that drops the `seen` de-duplication.
+    #[test]
+    fn confirmed_exemptions_confirms_a_repeated_address_only_once() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[
+            snipe_tax_exempted_log(&rec.curve, &address),
+            snipe_tax_exempted_log(&rec.curve, &address),
+        ]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        // Only one answer queued: a second confirmation call would find no
+        // server and fail.
+        let client = Rpc::new(serve(vec![answer(&hex(&word_bool(true)))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert_eq!(exemptions.len(), 1);
+        assert!(unavailable.is_empty());
+        assert_eq!(b.calls_made(), 1);
+    }
+
+    /// A `SnipeTaxExempted` log from a contract that is not this launch's
+    /// curve is not a candidate -- catches a mutant that drops the address
+    /// half of the log filter's `||`.
+    #[test]
+    fn confirmed_exemptions_ignores_a_log_from_a_different_contract() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let not_the_curve = RobinhoodAddress([0x99; 20]);
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&not_the_curve, &address)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        // No answers queued: a candidate would try to confirm and fail at
+        // the transport, so an empty `unavailable` also proves no call was
+        // attempted.
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.is_empty());
+        assert_eq!(b.calls_made(), 0);
+    }
+
+    /// A log on this launch's curve, but for some other event entirely, is
+    /// not a candidate -- catches a mutant that drops the topic half of the
+    /// log filter's `||`.
+    #[test]
+    fn confirmed_exemptions_ignores_a_log_with_a_different_topic() {
+        let rec = powers_record();
+        let address = powers::FIRST_PARTY[0];
+        let other_event = log_json(
+            &rec.curve,
+            &[topic::TRANSFER, topic_of(&address)],
+            &[],
+            LAUNCH_BLOCK,
+        );
+        let receipt = receipt_with_logs(&[other_event]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.is_empty());
+        assert_eq!(b.calls_made(), 0);
+    }
+
+    /// No receipt at all (the launch transaction's receipt could not be
+    /// read) means no candidates, not a failure of its own -- the missing
+    /// receipt is already named where it was read.
+    #[test]
+    fn confirmed_exemptions_with_no_receipt_finds_nothing() {
+        let rec = powers_record();
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: None,
+        };
+        let client = Rpc::new(serve(vec![]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let exemptions =
+            confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
+        assert!(exemptions.is_empty());
+        assert!(unavailable.is_empty());
+    }
+
+    /// `powers_facts` end to end: creator tax comes straight off the launch
+    /// record, the pending recipient and the classified exemption both
+    /// read through their own sub-calls, in one `Powers`.
+    #[test]
+    fn powers_facts_reads_every_field_end_to_end() {
+        let rec = powers_record();
+        let pending = RobinhoodAddress([0x86; 20]);
+        let exempt = powers::FIRST_PARTY[0];
+        let receipt = receipt_with_logs(&[snipe_tax_exempted_log(&rec.curve, &exempt)]);
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: Some(&receipt),
+        };
+        let client = Rpc::new(serve(vec![
+            answer(&hex(&word_addr(&pending))),
+            answer(&transaction_json(&launch_token_calldata(&[]))),
+            answer(&hex(&word_bool(true))),
+        ]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let powers = powers_facts(&mut b, &client, &launch, None, &mut unavailable);
+        assert_eq!(powers.creator_tax_bps, rec.creator_tax_bps);
+        assert_eq!(
+            powers.pending_creator_fee_recipient,
+            Some(ChainAddress::Robinhood(pending))
+        );
+        assert_eq!(powers.exemptions.len(), 1);
+        assert_eq!(powers.exemptions[0].source, powers::Source::FirstParty);
+        assert!(unavailable.is_empty());
+    }
+
+    /// A failed sub-read does not erase the rest: the pending recipient
+    /// read failing still leaves the creator tax and any exemptions
+    /// [`powers_facts`] could read (AGENTS.md §3 rule 8).
+    #[test]
+    fn powers_facts_keeps_what_read_when_one_sub_read_fails() {
+        let rec = powers_record();
+        let launch = LaunchContext {
+            token: &rec.token,
+            record: &rec,
+            transaction: &powers_transaction(),
+            receipt: None,
+        };
+        // The pending-recipient call fails at the transport; the
+        // transaction read (empty declared list) still succeeds.
+        let client = Rpc::new(serve(vec![answer(&transaction_json(
+            &launch_token_calldata(&[]),
+        ))]));
+        let mut b = budget();
+        let mut unavailable = Vec::new();
+        let powers = powers_facts(&mut b, &client, &launch, None, &mut unavailable);
+        assert_eq!(powers.creator_tax_bps, rec.creator_tax_bps);
+        assert_eq!(powers.pending_creator_fee_recipient, None);
+        assert!(
+            unavailable
+                .iter()
+                .any(|u| u.fact == "pending creator fee recipient")
+        );
     }
 }

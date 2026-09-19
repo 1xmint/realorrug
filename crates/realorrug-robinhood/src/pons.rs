@@ -88,6 +88,156 @@ pub fn balance_of_call_data(account: &Address) -> Vec<u8> {
     curve::call_data_for(BALANCE_OF, account)
 }
 
+/// S13, "owner powers live": the factory's `pendingCreatorFeeRecipient`, the
+/// launch's declared snipe-tax exemption list, and the addresses research
+/// 0047 §3 names as the protocol's own infrastructure -- what
+/// `crates/realorrug-onchain/src/robinhood.rs` reads to fill
+/// `realorrug_onchain::dossier::Powers` (task packet M-D-0004).
+pub mod powers {
+    use crate::{Address, word, word_address, word_u128};
+
+    /// The selector of the factory's `pendingCreatorFeeRecipient(address)`,
+    /// keyed by the launched token. Verified present, [research
+    /// 0047](../../../docs/research/0047-pons-v2-admin-surface-from-bytecode.md)
+    /// §3: `0x9beacf4a`.
+    pub const PENDING_CREATOR_FEE_RECIPIENT: [u8; 4] = [0x9b, 0xea, 0xcf, 0x4a];
+
+    /// The selector of the factory's four-argument `launchToken`, whose last
+    /// argument is the launcher's declared snipe-tax exemption list --
+    /// [research 0048](../../../docs/research/0048-pons-v2-from-verified-source.md)
+    /// §3, settled from `PonsV2LaunchFactory.sol:705-711`'s docstring: "a
+    /// creator-declared list of wallets exempted from the snipe tax before
+    /// trading opens to anyone else". Captured live in
+    /// `docs/research/data/0036-pons-v2-clean-launch.json`'s `input`, which
+    /// [`declared_exemptions`]'s test decodes.
+    pub const LAUNCH_TOKEN: [u8; 4] = [0xa7, 0x21, 0x01, 0xaf];
+
+    /// Call data for `pendingCreatorFeeRecipient(token)`: the selector, then
+    /// `token` left-zero-padded to a word. Same shape as every other
+    /// one-address call in this crate.
+    #[must_use]
+    pub fn pending_creator_fee_recipient_call_data(token: &Address) -> Vec<u8> {
+        crate::pons::curve::call_data_for(PENDING_CREATOR_FEE_RECIPIENT, token)
+    }
+
+    /// `pendingCreatorFeeRecipient`'s return: `None` when the timelock has
+    /// nothing pending (the getter reads the zero address, research 0047
+    /// §3's "no ownership transfer pending" reading of the same pattern on
+    /// `pendingOwner()`), `Some` while a change is partway through its 3-day
+    /// window. A return that is not exactly one word is refused outright --
+    /// not defaulted to "nothing pending" -- because a malformed read is not
+    /// evidence of an empty timelock (AGENTS.md §3 rule 8).
+    #[must_use]
+    pub fn pending_recipient_from_return(data: &[u8]) -> Option<Option<Address>> {
+        if data.len() != 32 {
+            return None;
+        }
+        let address = word(data, 0).and_then(word_address)?;
+        Some((address != Address::ZERO).then_some(address))
+    }
+
+    /// The research 0047 §3 table, verified 2026-09-15: named first-party
+    /// addresses that must be excluded before any exemption is treated as a
+    /// signal at all (§3's own framing, quoted in this crate's module doc).
+    /// An exempt address that matches none of these, and is not on the
+    /// launch's own declared list either, is what
+    /// [`classify`] reports [`Source::Undeclared`].
+    pub const FIRST_PARTY: [Address; 11] = [
+        // graduationExecutor()
+        Address::from_hex("0xc7819b64a1daecd7ec19856d026cb14efbd89046"),
+        // graduationGuard()
+        Address::from_hex("0xf5695117b99b6f6401e67d4195bd653628176c6c"),
+        // buybackVault()
+        Address::from_hex("0x42df2a798f82289e177311362e8f5ccc45c1219c"),
+        // feeEscrow()
+        Address::from_hex("0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e"),
+        // locker()
+        Address::from_hex("0x267444d099b10fb5ed7c3cc7b7c767adca574952"),
+        // launchDeployer()
+        Address::from_hex("0x3711cea4feade896c913c68f01eda97cb06d1a42"),
+        // launchForwarder()
+        Address::from_hex("0xe33e9e479df8802cb0866d5d05258bec4cf62948"),
+        // memeHook()
+        Address::from_hex("0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"),
+        // poolManager()
+        Address::from_hex("0x8366a39cc670b4001a1121b8f6a443a643e40951"),
+        // positionManager()
+        Address::from_hex("0x58daec3116aae6d93017baaea7749052e8a04fa7"),
+        // permit2()
+        Address::from_hex("0x000000000022d473030f116ddee9f6b43ac78ba3"),
+    ];
+
+    /// Where an exempt address falls, in the order [`classify`] checks them.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Source {
+        /// Matches [`FIRST_PARTY`]: the protocol's own infrastructure, not a
+        /// signal (research 0047 §3, quoted above).
+        FirstParty,
+        /// Not first-party, but present in the launch's own
+        /// `launchToken` calldata (research 0048 §3): the launcher declared
+        /// it in public, on-chain, before trading opened.
+        Declared,
+        /// Neither first-party nor declared: exempt with no stated reason.
+        Undeclared,
+    }
+
+    /// Classifies one address a curve reports as snipe-tax exempt, checking
+    /// [`FIRST_PARTY`] before `declared` -- research 0047 §3's rule that the
+    /// exclusion list applies "before any numeric floor", so an address that
+    /// happens to sit on both lists reads as first-party infrastructure, not
+    /// as a merely-declared bundle wallet.
+    #[must_use]
+    pub fn classify(address: &Address, declared: &[Address]) -> Source {
+        if FIRST_PARTY.contains(address) {
+            Source::FirstParty
+        } else if declared.contains(address) {
+            Source::Declared
+        } else {
+            Source::Undeclared
+        }
+    }
+
+    /// The declared snipe-tax exemption list from a `launchToken` transaction's
+    /// own call data, per [research 0048](../../../docs/research/0048-pons-v2-from-verified-source.md)
+    /// §3's confirmed shape: four head words after the selector, the last of
+    /// which is an offset (relative to the start of the arguments) to the
+    /// `address[]`'s length word, followed by that many address words.
+    ///
+    /// `None` for anything that is not this exact shape: a different
+    /// selector (`launchTokenFor`'s five-argument overload is not this
+    /// function's job), too few head words, an offset that runs past the end
+    /// of `input`, or a declared length that would read past the end of
+    /// `input` -- a truncated or malformed decode is refused outright, never
+    /// read as an empty list (AGENTS.md §3 rule 8: a launch whose calldata
+    /// this cannot parse is "could not check", not "declared nothing").
+    ///
+    /// Verified against the real `launchToken` transaction captured in
+    /// `docs/research/data/0036-pons-v2-clean-launch.json`, which declares an
+    /// empty list (length `0`) -- see this function's test.
+    #[must_use]
+    pub fn declared_exemptions(input: &[u8]) -> Option<Vec<Address>> {
+        // `strip_prefix` rather than a length check and a slice: shorter
+        // input than the selector simply does not match, with no index to
+        // get wrong.
+        let args = input.strip_prefix(&LAUNCH_TOKEN[..])?;
+        // Four head words: the fourth (index 3) is the byte offset,
+        // relative to the start of `args`, to the dynamic `address[]`'s
+        // length word -- per the confirmed shape above. A real offset is
+        // always word-aligned; one that is not is not this shape.
+        let offset = usize::try_from(word(args, 3).and_then(word_u128)?).ok()?;
+        if offset % 32 != 0 {
+            return None;
+        }
+        let length_index = offset / 32;
+        let length = usize::try_from(word(args, length_index).and_then(word_u128)?).ok()?;
+        let mut out = Vec::with_capacity(length);
+        for i in 0..length {
+            out.push(word(args, length_index + 1 + i).and_then(word_address)?);
+        }
+        Some(out)
+    }
+}
+
 /// A `TokenLaunched` event.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launched {
@@ -1074,5 +1224,148 @@ mod creator_role_tests {
         let both = Address([0xdd; 20]);
         let record = record(both, both);
         assert_eq!(creator_role(&both, &record), Some(CreatorRole::Deployer));
+    }
+}
+
+/// S13 -- task packet M-D-0004. Named tests against the real capture,
+/// `docs/research/data/0036-pons-v2-clean-launch.json`, plus the three
+/// classifications research 0047 §3 and research 0048 §3 together settle.
+#[cfg(test)]
+mod powers_tests {
+    use super::powers::{
+        FIRST_PARTY, LAUNCH_TOKEN, Source, classify, declared_exemptions,
+        pending_recipient_from_return,
+    };
+    use crate::{Address, hex_bytes};
+
+    /// The exact `input` field of the captured `launchToken` transaction
+    /// (research 0048 §3, `docs/research/data/0036-pons-v2-clean-launch.json`):
+    /// a real launch that declared zero bundle wallets.
+    const CLEAN_LAUNCH_INPUT: &str = "0xa72101af00000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004400000000000000000000000000000000000000000000000000000000000000140000000000000000000000000000000000000000000000000000000000000018000000000000000000000000000000000000000000000000000000000000001c000000000000000000000000000000000000000000000000000000000000002400000000000000000000000000000000000000000000000000000000000000260000000000000000000000000139f144b5187df68a1580ac614da02f0a04233a700000000000000000000000000000000000000000000000000000000000000c80000000000000000000000000000000000000000000000000000000000000000a9fc75d4203a33fe660e8fa32c74c3aa41c1fda4bf23d3a39b6bc22a1f8b1ca73bded3e903dcca3842ac5e46130ae0bb3bec5f4590fb607abc48b62ec6c56349000000000000000000000000000000000000000000000000000000000000000553746f6d70000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000553544f4d500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000042697066733a2f2f6261666b72656961646e7572676b6a6864616c336a7a37686b797579647978356e35787277707734767668617937343533376c707a6a33346b6f34000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e0000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001200000000000000000000000000000000000000000000000000000000000000140000000000000000000000000000000000000000000000000000000000000001868747470733a2f2f782e636f6d2f73746f6d70646f746767000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+
+    /// The captured clean launch's own `address[]` argument decodes, and it
+    /// is empty -- the fixture research 0048 §3 confirmed the shape from,
+    /// declaring no bundle wallets.
+    #[test]
+    fn declared_exemptions_decodes_the_captured_clean_launch_as_empty() {
+        let input = hex_bytes(CLEAN_LAUNCH_INPUT).expect("valid hex");
+        assert_eq!(declared_exemptions(&input), Some(Vec::new()));
+    }
+
+    /// A selector that is not `launchToken`'s (e.g. `launchTokenFor`'s
+    /// five-argument overload) must not be decoded under this shape --
+    /// catches a mutant that drops or weakens the selector check.
+    #[test]
+    fn declared_exemptions_refuses_a_different_selector() {
+        let mut input = hex_bytes(CLEAN_LAUNCH_INPUT).expect("valid hex");
+        input[0] = 0xff;
+        assert_eq!(declared_exemptions(&input), None);
+    }
+
+    /// Input shorter than the selector itself is refused, not indexed past
+    /// its end.
+    #[test]
+    fn declared_exemptions_refuses_input_shorter_than_the_selector() {
+        assert_eq!(declared_exemptions(&LAUNCH_TOKEN[..3]), None);
+        assert_eq!(declared_exemptions(&[]), None);
+    }
+
+    /// Calldata cut short before the fourth head word is not a shorter list,
+    /// it is unreadable -- catches a mutant that treats a truncated read as
+    /// zero declared wallets.
+    #[test]
+    fn declared_exemptions_refuses_calldata_shorter_than_the_head() {
+        let full = hex_bytes(CLEAN_LAUNCH_INPUT).expect("valid hex");
+        let truncated = &full[..4 + 3 * 32];
+        assert_eq!(declared_exemptions(truncated), None);
+    }
+
+    /// A synthetic `launchToken` call (same confirmed shape, minimal head
+    /// words) declaring two wallets: the decode reads exactly those two, in
+    /// order.
+    #[test]
+    fn declared_exemptions_decodes_two_declared_wallets() {
+        let one = Address([0x11; 20]);
+        let two = Address([0x22; 20]);
+        let mut input = LAUNCH_TOKEN_SELECTOR.to_vec();
+        // Three head words this decode does not use (offset/value irrelevant
+        // to it), then the fourth: the byte offset to the array, i.e. word
+        // index 4 * 32 = 128 bytes in.
+        input.extend_from_slice(&[0u8; 32]);
+        input.extend_from_slice(&[0u8; 32]);
+        input.extend_from_slice(&[0u8; 32]);
+        input.extend_from_slice(&word_of(128));
+        input.extend_from_slice(&word_of(2)); // length
+        input.extend_from_slice(&address_word(&one));
+        input.extend_from_slice(&address_word(&two));
+        assert_eq!(declared_exemptions(&input), Some(vec![one, two]));
+    }
+
+    const LAUNCH_TOKEN_SELECTOR: [u8; 4] = super::powers::LAUNCH_TOKEN;
+
+    fn word_of(value: u128) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        w[16..].copy_from_slice(&value.to_be_bytes());
+        w
+    }
+
+    fn address_word(address: &Address) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(&address.0);
+        w
+    }
+
+    /// `classify` checks [`FIRST_PARTY`] before the launch's own declared
+    /// list -- research 0047 §3's "must be applied before any numeric
+    /// floor" rule -- so an address on both lists still reads as
+    /// first-party, not merely declared.
+    #[test]
+    fn classify_reports_first_party_even_when_also_declared() {
+        let address = FIRST_PARTY[0];
+        assert_eq!(classify(&address, &[address]), Source::FirstParty);
+    }
+
+    /// An address the launcher put in the `launchToken` calldata, and that
+    /// is not first-party infrastructure, is declared -- not undeclared.
+    #[test]
+    fn classify_reports_declared_for_a_calldata_only_address() {
+        let declared = Address([0x33; 20]);
+        assert_eq!(classify(&declared, &[declared]), Source::Declared);
+    }
+
+    /// An exempt address on neither list has no stated reason: undeclared.
+    /// This is the case research 0052 §1's S13 row weights heaviest.
+    #[test]
+    fn classify_reports_undeclared_for_an_address_on_neither_list() {
+        let stranger = Address([0x44; 20]);
+        assert_eq!(classify(&stranger, &[]), Source::Undeclared);
+        assert_eq!(
+            classify(&stranger, &[Address([0x55; 20])]),
+            Source::Undeclared
+        );
+    }
+
+    /// `pendingCreatorFeeRecipient`'s zero-address return means nothing is
+    /// pending, not a recipient of `0x0…0`.
+    #[test]
+    fn pending_recipient_zero_address_is_none() {
+        let data = [0u8; 32];
+        assert_eq!(pending_recipient_from_return(&data), Some(None));
+    }
+
+    /// A non-zero return is the pending recipient, read plainly.
+    #[test]
+    fn pending_recipient_nonzero_address_is_some() {
+        let recipient = Address([0x77; 20]);
+        let data = address_word(&recipient);
+        assert_eq!(pending_recipient_from_return(&data), Some(Some(recipient)));
+    }
+
+    /// A return that is not exactly one word is refused outright -- never
+    /// read as "nothing pending" (AGENTS.md §3 rule 8).
+    #[test]
+    fn pending_recipient_malformed_return_is_none() {
+        assert_eq!(pending_recipient_from_return(&[0u8; 31]), None);
+        assert_eq!(pending_recipient_from_return(&[]), None);
     }
 }
