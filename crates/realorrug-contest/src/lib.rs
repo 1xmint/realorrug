@@ -36,6 +36,7 @@
 #![forbid(unsafe_code)]
 
 pub mod calls;
+pub mod daily;
 pub mod hunter;
 pub mod ledger;
 pub mod score;
@@ -45,6 +46,7 @@ pub use calls::{
     DailyFiveRanking, DummyStrategy, Odds, OddsRefused, Outcome, PlayerRecord, SettledCall,
     SettledCoin, Side, score_calls, score_dummy_players,
 };
+pub use daily::{DailyFive, Launch, Level, NotPicked, Pick, pick};
 pub use ledger::{
     Balance, Claim, Paid, Payout, Record, Refusal, Vault, Voided, Wei, Winner, records_in,
 };

@@ -207,3 +207,30 @@ shows most rugs land inside three.
   gate (20 calls, 10 creators, age) is its own rule with its own thresholds,
   not the weekly contest's operator list and cooldown, so only the age floor
   is shared, by convention rather than by sharing the type.
+
+### G3 as built
+
+`crates/realorrug-contest/src/daily.rs`, exported from the crate root.
+
+- §2.1 asks for the launches that "took in the most money ... across every
+  chain the bot reads", but a chain's raw intake is not a cross-chain number.
+  `Launch::intake_usd_cents` makes that explicit: the caller converts to a
+  common unit at a stated moment before calling in, the same way `q` is
+  fixed at listing and handed in rather than recomputed (§3). This is not a
+  change to §2.1's rule, only to what the input type is honest about.
+  `Launch::level` mirrors `realorrug_roast::verdict::Level`'s five variant
+  names by hand rather than by a dependency: this crate is pure and the
+  model-facing side of the tree is not something a pure crate can depend on
+  (AGENTS §4, "no path from a model-side crate to the payout").
+  `Launch::token_address` is the field the packet calls "token address"; the
+  design's own §2.1 does not name a field, so no departure there.
+- A launch already `Rugged` at listing is excluded as `NotPicked::AlreadyRugged`
+  rather than merely being unpickable by falling through the odds/intake
+  checks: §2.5 settles a "rug" call the moment the level reaches `Rugged`,
+  so a call made on a coin already at that level would be settled before it
+  was made, and that is worth its own stated reason rather than folding it
+  into "unknown odds".
+- A launch that clears every gate but ranks sixth or worse on intake is
+  reported `NotPicked::OutsideTopFive` rather than silently dropped, keeping
+  the "excluded with reasons, not dropped" discipline (score.rs) for the one
+  kind of exclusion that is about ranking rather than missing data.
