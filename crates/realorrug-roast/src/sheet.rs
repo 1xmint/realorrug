@@ -423,11 +423,11 @@ fn fact_value(sheet: &FactSheet, kind: crate::clause::Kind) -> Option<f64> {
 /// Research 0052 §3.1's catalogue, wired to the facts a [`FactSheet`]
 /// already carries.
 ///
-/// **Three rows are wired today.** Most of the catalogue's raise and lower
+/// **Four rows are wired today.** Most of the catalogue's raise and lower
 /// factors still need an input this sheet does not hold yet -- a
 /// linked-wallet sum, a fresh-wallet count, a declared-exemption list, a
-/// band's own sample size. None of those are invented here (AGENTS.md §3
-/// rule 2). What is already on the sheet:
+/// band's own sample size, a role-proven holder. None of those are invented
+/// here (AGENTS.md §3 rule 2). What is already on the sheet:
 ///
 /// - [`Signal::RepeatLauncher`]'s `+800` (>= 10 lifetime launches, M),
 ///   read from `Kind::CreatorLaunches`.
@@ -441,10 +441,27 @@ fn fact_value(sheet: &FactSheet, kind: crate::clause::Kind) -> Option<f64> {
 ///   `Kind::DevBuyShare` in bps: `+1500` if `>= 1,000`, else `+800` if
 ///   `>= 500`, else `-400` if `< 100`. The declared-in-calldata `-300` and
 ///   the announced-on-X `-200` are out of this packet's scope.
+/// - [`Signal::HolderConcentration`]'s two raises (research 0052 §3.1's S5
+///   row): `+1000` if `>= 2,000` bps, else `+600` if `>= 1,000` bps, read
+///   from `Kind::LargestHolderShare` -- the same "share of supply outside
+///   the curve" fact [`push_holders`] already renders. **Not the S5 row's
+///   `largest_non_infrastructure`**: that name is `roles::Concentration`'s
+///   role-proven reading, which nothing projects onto this sheet yet, so
+///   these two raises read the coarser, already-published share instead.
+///   That substitution is what the row's own "0 for 'may be a pool'" line
+///   asks for -- an unresolved large balance keeps full weight -- so the
+///   raises are the *default* reading and the row's `-600` lower (which
+///   needs a `Proof` this sheet does not carry) is the only piece left out.
+///   The row's third raise (`+800` for a top-10 share) is also left out:
+///   nothing here computes a top-10 sum, only the single largest address.
 ///
-/// All three fire only when the signal itself already fired -- a factor
+/// All four fire only when the signal itself already fired -- a factor
 /// with no signal to adjust would have nothing to attach to on the sheet
-/// the model reads.
+/// the model reads. [`Signal::HolderConcentration`] is declared but not yet
+/// pushed by [`FactSheet::build`] on any chain (its own threshold is not
+/// measured for Pons v2, design 0020 §3), so this factor is exercised by a
+/// sheet built directly in a test today, the same way
+/// [`crate::assessment`]'s per-episode base weight for it already is.
 #[must_use]
 pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
     let mut factors = Vec::new();
@@ -538,11 +555,60 @@ pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
         }
     }
 
+    if sheet.signals.contains(&Signal::HolderConcentration) {
+        holder_concentration_factors(sheet, &mut factors);
+    }
+
     if sheet.signals.contains(&Signal::CorrelatedSelling) {
         correlated_selling_factors(sheet, &mut factors);
     }
 
     factors
+}
+
+/// The two wired S5 raise factors (research 0052 §3.1), split out of
+/// [`factors`] itself so that function stays under clippy's line count.
+///
+/// Only the two raises keyed on `Kind::LargestHolderShare` are wired: the
+/// table's top-10 raise and its `Proof`-gated lower both need facts
+/// (`largest_non_infrastructure`/a role `Proof`) that are never projected
+/// onto the sheet today, so they stay out rather than being approximated.
+fn holder_concentration_factors(sheet: &FactSheet, factors: &mut Vec<Factor>) {
+    let Some(ratio) = fact_value(sheet, crate::clause::Kind::LargestHolderShare) else {
+        return;
+    };
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "LargestHolderShare's first value is a ratio in [0, 1] built by \
+                  Fact::share from an integer bps count, so *10_000 rounds back to that \
+                  same small integer"
+    )]
+    let bps = (ratio * 10_000.0).round() as i64;
+    // A `match` on ranges, not a chain of `>=`/`<` comparisons: see the S1
+    // block above for why.
+    match bps {
+        2_000..=i64::MAX => factors.push(Factor {
+            signal: Signal::HolderConcentration,
+            name: "largest holder >= 2,000 bps".to_owned(),
+            delta_bps: 1_000,
+            grade: Grade::Measured,
+            evidence: format!(
+                "the largest single address holds {:.2}% of the supply outside the curve",
+                ratio * 100.0
+            ),
+        }),
+        1_000..=1_999 => factors.push(Factor {
+            signal: Signal::HolderConcentration,
+            name: "largest holder >= 1,000 bps".to_owned(),
+            delta_bps: 600,
+            grade: Grade::Measured,
+            evidence: format!(
+                "the largest single address holds {:.2}% of the supply outside the curve",
+                ratio * 100.0
+            ),
+        }),
+        _ => {}
+    }
 }
 
 /// The three S7 raise/lower factors (research 0052 §3.1), split out of
@@ -3611,6 +3677,87 @@ mod tests {
             robinhood_launch_with_share(Some(3_600), Some(1), Some(500), Some(0), None, None);
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert!(fact_of(&sheet, Kind::DevBuyShare).is_none());
+        assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
+    }
+
+    /// A sheet built directly with [`Signal::HolderConcentration`] already
+    /// fired, the way a test has to today: [`FactSheet::build`] never pushes
+    /// it yet (its own threshold is not measured for Pons v2, design 0020
+    /// §3), but `factors` must still grade a [`Kind::LargestHolderShare`]
+    /// fact once the signal is on the sheet.
+    fn sheet_with_largest_holder_share(bps: u32) -> FactSheet {
+        FactSheet {
+            mint: "MintOne".to_owned(),
+            read_at: None,
+            facts: vec![Fact::share(
+                Kind::LargestHolderShare,
+                "share of the supply outside the curve held by the single largest address",
+                f64::from(bps) / 10_000.0,
+            )],
+            untrusted: Vec::new(),
+            unknown: Vec::new(),
+            signals: vec![Signal::HolderConcentration],
+            twins: vec![String::new()],
+            skipped: Vec::new(),
+        }
+    }
+
+    /// research 0052 §3.1's S5 row, top raise: a largest holder at or above
+    /// 2,000 bps raises `HolderConcentration` by 1,000.
+    #[test]
+    fn largest_holder_share_of_2000_bps_raises_holder_concentration_factor_by_1000() {
+        let sheet = sheet_with_largest_holder_share(2_000);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::HolderConcentration,
+                name: "largest holder >= 2,000 bps".to_owned(),
+                delta_bps: 1_000,
+                grade: Grade::Measured,
+                evidence: "the largest single address holds 20.00% of the supply outside the \
+                           curve"
+                    .to_owned(),
+            }]
+        );
+    }
+
+    /// One bps short of the 2,000-bps boundary: it must land in the
+    /// `>= 1,000` arm (`+600`), not the `>= 2,000` arm (`+1,000`), pinning
+    /// the boundary from the raise side.
+    #[test]
+    fn largest_holder_share_of_1999_bps_lands_in_the_1000_bps_band_not_the_2000_bps_band() {
+        let sheet = sheet_with_largest_holder_share(1_999);
+        let found = factors(&sheet);
+        assert_eq!(
+            found,
+            vec![Factor {
+                signal: Signal::HolderConcentration,
+                name: "largest holder >= 1,000 bps".to_owned(),
+                delta_bps: 600,
+                grade: Grade::Measured,
+                evidence: "the largest single address holds 19.99% of the supply outside the \
+                           curve"
+                    .to_owned(),
+            }]
+        );
+    }
+
+    /// research 0052 §3.1's S5 row, lower raise: a largest holder at or
+    /// above 1,000 bps raises `HolderConcentration` by 600.
+    #[test]
+    fn largest_holder_share_of_1000_bps_raises_holder_concentration_factor_by_600() {
+        let sheet = sheet_with_largest_holder_share(1_000);
+        let found = factors(&sheet);
+        assert_eq!(found[0].delta_bps, 600, "{found:?}");
+    }
+
+    /// One bps short of the 1,000-bps boundary: no factor fires at all, so
+    /// `HolderConcentration` stays at base weight. Paired with the test
+    /// above so a mutant moving the `1,000` bound is caught either way.
+    #[test]
+    fn largest_holder_share_of_999_bps_fires_no_factor() {
+        let sheet = sheet_with_largest_holder_share(999);
         assert!(factors(&sheet).is_empty(), "{:?}", factors(&sheet));
     }
 
