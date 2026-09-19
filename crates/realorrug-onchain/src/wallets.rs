@@ -2666,6 +2666,41 @@ mod creator_cash_flow_tests {
         assert_eq!(read.spread_seconds, Some(0));
         assert_eq!(read.sold_bps_of_supply, None);
     }
+
+    /// A curve that was read but has no sells is read, with nothing to
+    /// report -- not unread, which the sheet would count as a gap.
+    #[test]
+    fn a_read_curve_with_no_sells_is_read_and_reports_no_cluster() {
+        let logs = serde_json::Value::Array(vec![
+            trade_json(false, 0x11, 100, 400, 10, 0),
+            trade_json(false, 0x22, 100, 300, 10, 1),
+        ]);
+        let client = Rpc::new(crate::robinhood::tests::serve(vec![answer(&logs)]));
+        let read = correlated_selling(
+            &client,
+            &mut s7_budget(),
+            &record(0xaa, 0xbb, 0xcc),
+            1,
+            700,
+            Some(10_000),
+        );
+        assert!(read.sells_read);
+        assert_eq!(read.linked_sellers, 0);
+    }
+
+    /// Only sells, and only on this token's own curve, are sales: a buy on
+    /// the same curve and a sell on another curve are both left out.
+    #[test]
+    fn sells_from_keeps_only_this_curves_sells() {
+        let logs = vec![
+            trade_log(true, 0xcc, 0x11, 0x11, 90, 400),
+            trade_log(false, 0xcc, 0x22, 0x22, 100, 300),
+            trade_log(true, 0xdd, 0x33, 0x33, 70, 300),
+        ];
+        let sales = sells_from(&logs, &addr(0xcc));
+        assert_eq!(sales.len(), 1);
+        assert_eq!(sales[0].seller, addr(0x11));
+    }
 }
 
 #[cfg(test)]
