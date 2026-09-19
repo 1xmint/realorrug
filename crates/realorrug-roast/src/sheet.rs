@@ -4942,6 +4942,41 @@ mod tests {
     }
 
     #[test]
+    fn any_one_unread_exemption_read_withholds_the_undeclared_count() {
+        // The count needs all three exemption reads; any single one failing
+        // leaves it off the sheet, so an undeclared exemption the dossier
+        // does hold is never published on a half-read basis (rule 8).
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![Exemption {
+                address: robinhood_address(1),
+                source: ExemptionSource::Undeclared,
+            }],
+        ));
+        for fact_name in [
+            "declared snipe-tax exemptions",
+            "snipe tax exemption",
+            "snipe tax exemption classification",
+        ] {
+            let mut missed = dossier.clone();
+            missed.unavailable.push(realorrug_onchain::Unavailable {
+                fact: fact_name,
+                why: "the read did not complete".to_owned(),
+            });
+            let sheet = FactSheet::build(&missed, None, None, None, None);
+            assert!(
+                !sheet
+                    .facts
+                    .iter()
+                    .any(|f| f.kind == Kind::UndeclaredExemptions),
+                "{fact_name} unread must withhold the undeclared count"
+            );
+        }
+    }
+
+    #[test]
     fn a_market_candidate_never_outranks_concentration() {
         // AGENTS.md §3 rule 5: price never leads a reply. `salience::rank`
         // is the one ranking every reader shares, so pinning the order here
