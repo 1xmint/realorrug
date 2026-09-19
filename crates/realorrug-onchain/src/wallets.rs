@@ -1437,7 +1437,8 @@ struct SellCluster {
     last_block: u64,
 }
 
-/// The largest cluster of mutually linked sellers whose sells all landed
+/// The largest cluster of sellers, each linked by how it bought to the
+/// cluster's earliest seller (the anchor), whose first sells all landed
 /// inside one [`SELL_CLUSTER_WINDOW_BLOCKS`]-block window, or `None` when
 /// `sells` is empty.
 ///
@@ -1602,7 +1603,8 @@ pub fn correlated_selling(
         };
     };
 
-    let sold_bps_of_supply = supply.filter(|s| *s > 0).and_then(|supply| {
+    // `checked_div` is the zero-supply guard: no share of nothing.
+    let sold_bps_of_supply = supply.and_then(|supply| {
         cluster
             .tokens_sold
             .saturating_mul(10_000)
@@ -1610,8 +1612,10 @@ pub fn correlated_selling(
             .map(|bps| u16::try_from(bps).unwrap_or(u16::MAX))
     });
 
-    let spread_seconds = if cluster.members.len() < 2 {
-        None
+    // A cluster whose sells share one block (a lone seller always does)
+    // spread over no time at all, measured without a timestamp read.
+    let spread_seconds = if cluster.first_block == cluster.last_block {
+        Some(0)
     } else {
         // `eth_getBlockByNumber` costs a call but no named CU here, the same
         // terms `robinhood.rs`'s own `block_time` wrapper reads it on.
@@ -2234,6 +2238,32 @@ mod tests {
     }
 
     #[test]
+    fn sellers_whose_buys_only_share_a_window_do_not_link() {
+        // Same 30-block window but sizes 2x apart: 2,000 bps, under the
+        // 4,000 bps "window + matched sizes" line.
+        let buyers = vec![buyer(1, 100, 10), buyer(2, 200, 20)];
+        let sells = vec![sale(1, 10, 100), sale(2, 10, 110)];
+        let cluster = largest_sell_cluster(&sells, &buyers).unwrap();
+        assert_eq!(cluster.members.len(), 1);
+    }
+
+    #[test]
+    fn a_seller_with_no_buy_on_record_joins_no_cluster() {
+        let sells = vec![sale(1, 10, 100), sale(3, 10, 110)];
+        let cluster = largest_sell_cluster(&sells, &linked_buyers()).unwrap();
+        assert_eq!(cluster.members, vec![addr(1)]);
+    }
+
+    #[test]
+    fn a_seller_in_the_anchors_own_block_joins_the_cluster() {
+        let sells = vec![sale(2, 10, 100), sale(1, 10, 100)];
+        let cluster = largest_sell_cluster(&sells, &linked_buyers()).unwrap();
+        assert_eq!(cluster.members.len(), 2);
+        assert_eq!((cluster.first_block, cluster.last_block), (100, 100));
+        assert_eq!(cluster.tokens_sold, 20);
+    }
+
+    #[test]
     fn a_sell_landing_51_blocks_after_the_anchor_does_not_join_the_cluster() {
         let sells = vec![sale(1, 10, 100), sale(2, 10, 151)];
         let cluster = largest_sell_cluster(&sells, &linked_buyers()).unwrap();
@@ -2430,6 +2460,126 @@ mod creator_cash_flow_tests {
         assert_eq!(flow.proceeds_wei(), None);
         assert_eq!(flow.gaps.len(), 1, "gaps: {:?}", flow.gaps);
         assert!(flow.gaps[0].starts_with("creator transfer history"));
+    }
+
+    /// A `CurveBuy`/`CurveSell` log as an `eth_getLogs` result entry.
+    fn trade_json(
+        sell: bool,
+        trader: u8,
+        quote: u128,
+        tokens: u128,
+        block: u64,
+        index: u8,
+    ) -> serde_json::Value {
+        let log = trade_log(sell, 0xcc, trader, trader, quote, tokens);
+        serde_json::json!({
+            "address": log.address.to_string(),
+            "topics": log.topics.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "data": realorrug_robinhood::to_hex(&log.data),
+            "blockNumber": format!("{block:#x}"),
+            "transactionHash": Hash32([index; 32]).to_string(),
+            "transactionIndex": "0x0",
+            "logIndex": format!("{index:#x}"),
+        })
+    }
+
+    fn answer(result: &serde_json::Value) -> String {
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "result": result }).to_string()
+    }
+
+    fn block_answer(number: u64, timestamp: u64) -> String {
+        answer(&serde_json::json!({
+            "number": format!("{number:#x}"),
+            "hash": Hash32([0xbb; 32]).to_string(),
+            "timestamp": format!("{timestamp:#x}"),
+        }))
+    }
+
+    fn s7_budget() -> Budget {
+        Budget::with_compute_units(60, 60, std::time::Duration::from_secs(30), 10_000)
+    }
+
+    /// Research 0052 §3.1's S7 case, captured as one curve read: three
+    /// wallets bought matched sizes inside one link window, then sold inside
+    /// one 50-block window; a fourth, unlinked wallet sold in the same
+    /// window and is not counted.
+    #[test]
+    fn a_captured_sell_cluster_of_three_linked_wallets_reads_its_size_share_and_spread() {
+        let logs = serde_json::Value::Array(vec![
+            trade_json(false, 0x11, 100, 400, 10, 0),
+            trade_json(false, 0x22, 100, 300, 10, 1),
+            trade_json(false, 0x33, 100, 300, 12, 2),
+            trade_json(false, 0x44, 5, 50, 500, 3),
+            trade_json(true, 0x11, 90, 400, 600, 4),
+            trade_json(true, 0x44, 4, 50, 610, 5),
+            trade_json(true, 0x22, 70, 300, 620, 6),
+            trade_json(true, 0x33, 70, 300, 650, 7),
+        ]);
+        let client = Rpc::new(crate::robinhood::tests::serve(vec![
+            answer(&logs),
+            block_answer(600, 1_000),
+            block_answer(650, 1_600),
+        ]));
+        let read = correlated_selling(
+            &client,
+            &mut s7_budget(),
+            &record(0xaa, 0xbb, 0xcc),
+            1,
+            700,
+            Some(10_000),
+        );
+        assert_eq!(
+            read,
+            CorrelatedSelling {
+                linked_sellers: 3,
+                sold_bps_of_supply: Some(1_000),
+                spread_seconds: Some(600),
+                sells_read: true,
+            }
+        );
+    }
+
+    /// Rule 8: a read the provider refuses is unknown, never "no
+    /// correlated selling".
+    #[test]
+    fn a_refused_curve_read_is_unread_not_zero() {
+        let client = Rpc::new(crate::robinhood::tests::serve(vec![
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"no"}}"#.to_owned(),
+        ]));
+        let read = correlated_selling(
+            &client,
+            &mut s7_budget(),
+            &record(0xaa, 0xbb, 0xcc),
+            1,
+            700,
+            Some(10_000),
+        );
+        assert!(!read.sells_read);
+    }
+
+    /// Sells in one block spread over zero seconds, measured without a
+    /// timestamp read (the mock has none to give); zero supply gives no
+    /// share rather than a division by zero.
+    #[test]
+    fn a_same_block_cluster_spreads_over_zero_seconds_and_zero_supply_gives_no_share() {
+        let logs = serde_json::Value::Array(vec![
+            trade_json(false, 0x11, 100, 400, 10, 0),
+            trade_json(false, 0x22, 100, 300, 10, 1),
+            trade_json(true, 0x11, 90, 400, 600, 2),
+            trade_json(true, 0x22, 70, 300, 600, 3),
+        ]);
+        let client = Rpc::new(crate::robinhood::tests::serve(vec![answer(&logs)]));
+        let read = correlated_selling(
+            &client,
+            &mut s7_budget(),
+            &record(0xaa, 0xbb, 0xcc),
+            1,
+            700,
+            Some(0),
+        );
+        assert_eq!(read.linked_sellers, 2, "same-block sellers join each other");
+        assert_eq!(read.spread_seconds, Some(0));
+        assert_eq!(read.sold_bps_of_supply, None);
     }
 }
 

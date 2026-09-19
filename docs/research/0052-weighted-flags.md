@@ -194,7 +194,7 @@ fixtures roughly stable until the replay in §5 moves them.
 | S4 | **creator never graduated organically** (`CreatorNeverGraduatedOrganically`) | 600 | +400 if measured >= 5 (M) | -400 if measured <= 2 (M, thin denominator) | none; it is history | yes |
 | S5 | **holder concentration** (`HolderConcentration`) | 1,200 | +1,000 if largest non-infrastructure >= 2,000 bps (M); +600 if >= 1,000 bps (M); +800 if top-10 >= 5,000 bps (M) | 0 for "may be a pool": an unresolved large balance keeps full weight with unresolved-role wording; -600 only with a `Proof` (`roles.rs`) that the balance is curve, pool, factory or locker | split across wallets / linked-wallet sum (§3.2) | partly: `largest_share_bps` reads; holder-read paging bug (research 0050 §5); top-10 not computed |
 | S6 | **linked-wallet holdings** (new) | 0 alone | feeds S1, S2, S5 as the sum over linked wallets scaled by link confidence (§3.2) | -- | see §2.3 | link kinds: same-window + fresh + size (yes); ERC-20 transfer graph (yes); ETH funding (no) |
-| S7 | **correlated selling** (new) | 1,000 | +800 if >= 3 linked wallets sold within 50 blocks (M); +600 if the sold volume >= 1,000 bps of supply (M) | -300 if the sells spread over > 1 hour (M) | cannot be hidden: the sell is the point | pre-graduation yes (`CurveSell`); post-graduation blocked on the pool address |
+| S7 | **correlated selling** (new) | 1,000 | +800 if >= 3 linked wallets sold within 50 blocks (M); +600 if the sold volume >= 1,000 bps of supply (M) | -300 if the sells spread over > 1 hour (M) | cannot be hidden: the sell is the point | **wired, pre-graduation only** (`wallets.rs` `correlated_selling`; fires at 2 linked sellers, link confidence ≥ 4,000 bps from buy-side evidence); post-graduation blocked on the pool address |
 | S8 | **fresh-wallet share** (new) | 800 | +600 if >= 5,000 bps of launch-window buy volume came from wallets with `nonce_before_launch == 0` (M) | -400 if < 2,000 bps (M) | pre-age wallets / cross-token recurrence (needs a buyer index, §8) | yes for the candidates checked; `coverage_bps` states how much volume was checked |
 | S9 | **funding from a known rug-linked wallet** (new) | 1,500 | +1,000 if the funder deployed a token that hit `LiquidityGone` (M) | -- | CEX hop / nothing today | **no**: needs traces or an ERC-20 path; declared but not pushed, like today's five |
 | S10 | **liquidity gone pre-graduation** (`LiquidityGone`) | 4,000 | +2,000 if holders still hold >= 1,000 bps (M) | -1,500 if every buyer sold back (the innocent twin, M via `CurveSell` sum) | none | not pushed today; `quote_reserves` reads; the twin needs the sell sum |
@@ -480,7 +480,7 @@ concealment raises (+800, +500, +1,000).
 | S8 fresh wallets | `eth_getTransactionCount` per candidate at launch block − 1 | ~20 CU each, 4 candidates (`wallets.rs` selection) |
 | S3, S4 | creator index | already held |
 | S5 | holder walk (`Transfer` sum; paging bug, research 0050 §5) | 60 CU + fix |
-| S7 | `CurveSell` logs, 50-block windows | 60 CU per window |
+| S7 | `CurveBuy`/`CurveSell` logs, launch to read point, one ranged read; then the first and last sell block's timestamps | 60 CU + 80 CU × 2 (as built: one read covers every window) |
 | S13 | `snipeTaxExempt` × (creator + top 5), `pendingCreatorFeeRecipient`, tax | 26 CU × 7 |
 | link c | derived from the above | 0 |
 

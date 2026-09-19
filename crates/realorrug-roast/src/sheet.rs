@@ -1483,8 +1483,12 @@ fn push_correlated_selling(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, lau
     let Some(cs) = launch.correlated_selling.as_ref() else {
         return;
     };
-    if !cs.sells_read {
-        return;
+    // Unread is unknown (rule 8), and one seller is not correlated with
+    // anything: nothing is said below a linked pair, so a fact about "1
+    // linked seller" never reaches a reply.
+    match (cs.sells_read, cs.linked_sellers) {
+        (true, 2..) => {}
+        _ => return,
     }
 
     facts.push(
@@ -1547,12 +1551,7 @@ fn push_correlated_selling(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, lau
         );
     }
 
-    // One seller is not correlated with anything; the signal needs at least
-    // a pair before research 0052's raise/lower factors have anything to
-    // grade.
-    if cs.linked_sellers >= 2 {
-        signals.push(Signal::CorrelatedSelling);
-    }
+    signals.push(Signal::CorrelatedSelling);
 }
 
 /// The launcher's own launch-block buy as a share of the token's total
@@ -3613,6 +3612,30 @@ mod tests {
     /// research 0052 §3.1's S7 row: 2 linked sellers is not yet a cluster
     /// worth raising over (the signal itself needs `>= 2` to fire at all,
     /// but the `+800` factor's own threshold is `>= 3`) -- no factor fires.
+    #[test]
+    fn one_linked_seller_says_nothing_and_fires_nothing() {
+        let dossier = robinhood_launch_with_correlated_selling(1, Some(5_000), Some(0));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CorrelatedSelling));
+        assert!(fact_of(&sheet, Kind::CorrelatedSellWallets).is_none());
+        assert!(fact_of(&sheet, Kind::CorrelatedSellVolumeBps).is_none());
+    }
+
+    #[test]
+    fn unread_sells_say_nothing_and_fire_nothing() {
+        let mut dossier = robinhood_launch_with_correlated_selling(3, Some(5_000), Some(0));
+        if let Some(cs) = dossier
+            .chain_launch
+            .as_mut()
+            .and_then(|launch| launch.correlated_selling.as_mut())
+        {
+            cs.sells_read = false;
+        }
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CorrelatedSelling));
+        assert!(fact_of(&sheet, Kind::CorrelatedSellWallets).is_none());
+    }
+
     #[test]
     fn two_linked_sellers_does_not_raise_the_wallet_count_factor() {
         let dossier = robinhood_launch_with_correlated_selling(2, None, None);
