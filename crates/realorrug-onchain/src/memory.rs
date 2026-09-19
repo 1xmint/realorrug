@@ -563,6 +563,21 @@ pub struct CreatorTradeEvent {
     pub unique_id: String,
 }
 
+/// One launch [`Memory::launches_bought_by`] reports for a wallet: it
+/// bought this token's launch, first seen at this block, for this amount.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BuyerLaunch {
+    /// The token whose launch was bought, in the chain's own canonical text
+    /// form.
+    pub token: String,
+    /// The block of the buy [`Memory::record_buy`] was given -- the launch
+    /// window's already-read first purchase, not a re-derived one.
+    pub block: u64,
+    /// The amount recorded with the buy, in the chain's smallest unit for
+    /// whatever was paid (wei for Robinhood's launch-window quote).
+    pub amount: u128,
+}
+
 /// What [`Memory::extend_transfers`] did with the events it was handed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Extended {
@@ -707,9 +722,91 @@ impl Memory {
                 PRIMARY KEY (chain, unique_id)
              );
              CREATE INDEX IF NOT EXISTS creator_trades_by_token
-                ON creator_trades (chain, token);",
+                ON creator_trades (chain, token);
+             CREATE TABLE IF NOT EXISTS buyer_index (
+                chain  TEXT    NOT NULL,
+                buyer  TEXT    NOT NULL,
+                token  TEXT    NOT NULL,
+                block  INTEGER NOT NULL,
+                amount TEXT    NOT NULL,
+                PRIMARY KEY (chain, buyer, token)
+             );
+             CREATE INDEX IF NOT EXISTS buyer_index_by_buyer
+                ON buyer_index (chain, buyer);",
         )?;
         Ok(())
+    }
+
+    /// Remembers that `buyer` bought `token`'s launch, once per
+    /// `(chain, buyer, token)` (design 0021, buyer index; research 0052
+    /// §7.2 and §8, task M-D-0009).
+    ///
+    /// The primary key is `(chain, buyer, token)`, not an event id the way
+    /// [`Memory::record_funding_edges`] and [`Memory::record_creator_trades`]
+    /// key theirs -- S8's cross-token recurrence counter (research 0052
+    /// §3, row S8) only ever asks "did this wallet buy this launch", so a
+    /// second buy by the same wallet in the same launch window is the same
+    /// fact, not a second one. `INSERT OR IGNORE` makes a re-record of the
+    /// same key a no-op: the first-seen block and amount stand, and a
+    /// retried write (the sheet runs again over the same launch) never
+    /// fails or overwrites.
+    ///
+    /// Returns `true` when this call inserted a new row, `false` when the
+    /// key was already present.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn record_buy(
+        &self,
+        chain: &str,
+        buyer: &str,
+        token: &str,
+        block: u64,
+        amount: u128,
+    ) -> Result<bool, Error> {
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO buyer_index (chain, buyer, token, block, amount)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![chain, buyer, token, to_i64(block), amount.to_string()],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Every launch `buyer` is on record as having bought, oldest first --
+    /// the query S8's pre-aged-wallet / cross-token-recurrence factor needs:
+    /// given a wallet address, which launches has it bought, and how many.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails, or a stored amount no longer
+    /// parses.
+    pub fn launches_bought_by(&self, chain: &str, buyer: &str) -> Result<Vec<BuyerLaunch>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT token, block, amount FROM buyer_index
+             WHERE chain = ?1 AND buyer = ?2
+             ORDER BY block, token",
+        )?;
+        let rows = stmt.query_map(params![chain, buyer], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut launches = Vec::new();
+        for row in rows {
+            let (token, block, amount) = row?;
+            launches.push(BuyerLaunch {
+                token: token.clone(),
+                block: u64::try_from(block).unwrap_or(0),
+                amount: amount.parse().map_err(|_| Error::Ledger {
+                    token,
+                    why: format!("buyer index amount {amount:?} does not parse"),
+                })?,
+            });
+        }
+        Ok(launches)
     }
 
     /// Remembers funding edges as events, once each.
@@ -1892,5 +1989,122 @@ mod tests {
         assert_eq!(back, first.to_vec());
         // Scoped to the token asked about.
         assert!(mem.creator_trades(CHAIN, "other").expect("read").is_empty());
+    }
+
+    #[test]
+    fn a_wallet_seen_buying_two_launches_is_retrievable_by_address() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.record_buy(CHAIN, "wallet", "TOKEN_A", 10, 111)
+            .expect("record A");
+        mem.record_buy(CHAIN, "wallet", "TOKEN_B", 20, 222)
+            .expect("record B");
+        // A different wallet buying the same launch must not show up here --
+        // the index is scoped by buyer, not by launch.
+        mem.record_buy(CHAIN, "someone else", "TOKEN_A", 10, 999)
+            .expect("record other buyer");
+
+        let launches = mem.launches_bought_by(CHAIN, "wallet").expect("read");
+        assert_eq!(
+            launches,
+            vec![
+                BuyerLaunch {
+                    token: "TOKEN_A".to_owned(),
+                    block: 10,
+                    amount: 111,
+                },
+                BuyerLaunch {
+                    token: "TOKEN_B".to_owned(),
+                    block: 20,
+                    amount: 222,
+                },
+            ]
+        );
+
+        // A wallet never recorded gets an empty list, not an error --
+        // "never bought" and "unread" both settle to nothing here, and the
+        // list length is the count S8's recurrence factor needs.
+        assert!(
+            mem.launches_bought_by(CHAIN, "nobody")
+                .expect("read")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn re_recording_the_same_buy_is_idempotent() {
+        let mem = Memory::open_in_memory().expect("open");
+        assert!(
+            mem.record_buy(CHAIN, "wallet", TOKEN, 10, 111)
+                .expect("first record"),
+            "the first record of a key must insert"
+        );
+        // Same (chain, buyer, token) key, even with a different block or
+        // amount than the first call: the sheet re-running over the same
+        // launch window must not fail or overwrite the first-seen buy.
+        assert!(
+            !mem.record_buy(CHAIN, "wallet", TOKEN, 999, 1)
+                .expect("re-record"),
+            "a re-record of the same key must be a no-op, not a second insert"
+        );
+
+        let launches = mem.launches_bought_by(CHAIN, "wallet").expect("read");
+        assert_eq!(
+            launches,
+            vec![BuyerLaunch {
+                token: TOKEN.to_owned(),
+                block: 10,
+                amount: 111,
+            }],
+            "the first-seen block and amount must stand"
+        );
+    }
+
+    #[test]
+    fn opening_a_pre_buyer_index_database_gains_the_table_without_losing_facts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("old.sqlite3");
+
+        // A database created with only the schema that predates the buyer
+        // index (the `facts` table this module always had) -- standing in
+        // for a memory file on disk before this migration shipped.
+        {
+            let conn = Connection::open(&path).expect("create old db");
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS facts (
+                    what     TEXT    NOT NULL,
+                    subject  TEXT    NOT NULL,
+                    block    INTEGER NOT NULL,
+                    read_at  INTEGER NOT NULL,
+                    kind     TEXT    NOT NULL,
+                    value    TEXT    NOT NULL,
+                    PRIMARY KEY (what, subject, block)
+                 );",
+            )
+            .expect("old schema");
+            conn.execute(
+                "INSERT INTO facts (what, subject, block, read_at, kind, value)
+                 VALUES ('launch record', 'TOKEN', 100, 1000, 'forever', 'creator=ABC')",
+                [],
+            )
+            .expect("seed old row");
+        }
+
+        // Opening it through today's `Memory::open` must add the buyer
+        // index table alongside the pre-existing one, and must not touch
+        // the row that was already there.
+        let mem = Memory::open(&path).expect("open old db");
+        let fact = mem
+            .latest("launch record", "TOKEN")
+            .expect("read")
+            .expect("the pre-existing row must survive the migration");
+        assert_eq!(fact.value, "creator=ABC");
+        assert_eq!(fact.block, 100);
+
+        mem.record_buy(CHAIN, "wallet", "TOKEN", 100, 5)
+            .expect("the buyer index table must now exist");
+        assert_eq!(
+            mem.launches_bought_by(CHAIN, "wallet").expect("read").len(),
+            1
+        );
     }
 }
