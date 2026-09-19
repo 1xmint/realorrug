@@ -1437,81 +1437,65 @@ struct SellCluster {
     last_block: u64,
 }
 
-/// The largest cluster of sellers, each linked by how it bought to the
-/// cluster's earliest seller (the anchor), whose first sells all landed
-/// inside one [`SELL_CLUSTER_WINDOW_BLOCKS`]-block window, or `None` when
-/// `sells` is empty.
+/// The largest cluster of linked sellers inside one
+/// [`SELL_CLUSTER_WINDOW_BLOCKS`]-block window, or `None` when no seller has
+/// a buy on record.
 ///
-/// A seller with no matching [`Buyer`] record (it never bought inside the
-/// launch window this dossier read -- a transfer-in, or a buy before the
-/// window) has no evidence to link it to anything, so it can only ever form
-/// a cluster of one: absent buy-side evidence is not evidence of no link
-/// (rule 8), but it is not evidence of a link either.
+/// Built from individual sales, never from a wallet's lifetime: every sale
+/// whose seller bought inside the launch window is tried as the start (the
+/// anchor) of a window running `anchor.block ..= anchor.block + 50`, and the
+/// cluster is the sales in that window whose seller is the anchor's own
+/// wallet or links to it by how it bought. `tokens_sold`, `first_block` and
+/// `last_block` describe those sales only. A wallet-level summary would let
+/// linked wallets hide a same-block dump behind one tiny earlier sell each,
+/// and would credit the cluster with sales made days outside its window.
 ///
-/// Deterministic: sellers are aggregated by address first (so a wallet that
-/// sold in several transactions counts once), then every seller is tried as
-/// the earliest member of a candidate cluster, in address order, and the
-/// largest candidate wins ties by being found first -- the same run over the
-/// same logs always returns the same cluster.
+/// A seller with no matching [`Buyer`] record (a transfer-in, or a buy
+/// before the window this dossier read) has no evidence to link it to
+/// anything, so it never joins another seller's cluster and never anchors
+/// one: absent buy-side evidence is not evidence of no link (rule 8), but it
+/// is not evidence of a link either.
+///
+/// Deterministic: sales are ordered by block then seller, and a later
+/// cluster replaces the kept one only when it has strictly more distinct
+/// sellers, so the same logs always give the same cluster.
 fn largest_sell_cluster(sells: &[Sale], buyers: &[Buyer]) -> Option<SellCluster> {
-    let mut by_seller: BTreeMap<[u8; 20], (Address, u128, u64, u64)> = BTreeMap::new();
-    for s in sells {
-        let entry = by_seller
-            .entry(s.seller.0)
-            .or_insert((s.seller, 0u128, s.block, s.block));
-        entry.1 = entry.1.saturating_add(s.tokens);
-        entry.2 = entry.2.min(s.block);
-        entry.3 = entry.3.max(s.block);
-    }
     let by_buyer: BTreeMap<[u8; 20], &Buyer> = buyers.iter().map(|b| (b.address.0, b)).collect();
-    let sellers: Vec<(Address, u128, u64, u64)> = by_seller.into_values().collect();
+    let mut ordered: Vec<&Sale> = sells.iter().collect();
+    ordered.sort_by_key(|sale| (sale.block, sale.seller.0));
 
     let mut best: Option<SellCluster> = None;
-    for anchor in &sellers {
-        let Some(anchor_buy) = by_buyer.get(&anchor.0.0) else {
+    for anchor in &ordered {
+        let Some(anchor_buy) = by_buyer.get(&anchor.seller.0) else {
             continue;
         };
-        let mut members = vec![anchor.0];
-        let mut tokens = anchor.1;
-        let mut first_block = anchor.2;
-        let mut last_block = anchor.3;
-        for other in &sellers {
-            if other.0 == anchor.0 || other.2 < anchor.2 {
-                // Only ever grow forward from the earliest seller in a pair,
-                // so each pair is considered once and the result cannot
-                // depend on iteration order.
-                continue;
-            }
-            // The boundary itself is inside the window: "within 50 blocks"
-            // is a closed bound, the same reading `sizes_within_ten_percent`
+        let mut members: Vec<Address> = Vec::new();
+        let mut tokens = 0u128;
+        let mut last_block = anchor.block;
+        for sale in &ordered {
+            // The window's far edge is inside it: "within 50 blocks" is a
+            // closed bound, the same reading `sizes_within_ten_percent`
             // gives "within 10%". A named test pins both sides.
-            if other.2 - anchor.2 > SELL_CLUSTER_WINDOW_BLOCKS {
+            match sale.block.checked_sub(anchor.block) {
+                Some(0..=SELL_CLUSTER_WINDOW_BLOCKS) => {}
+                _ => continue,
+            }
+            let joins = sale.seller == anchor.seller
+                || by_buyer
+                    .get(&sale.seller.0)
+                    .is_some_and(|buy| buys_link(anchor_buy, buy));
+            if !joins {
                 continue;
             }
-            let Some(other_buy) = by_buyer.get(&other.0.0) else {
-                continue;
-            };
-            let evidence = LinkEvidence {
-                same_block: anchor_buy.first_block == other_buy.first_block,
-                same_window: anchor_buy.first_block.abs_diff(other_buy.first_block)
-                    <= LINK_WINDOW_BLOCKS,
-                sizes_within_10_percent: sizes_within_ten_percent(
-                    anchor_buy.quote,
-                    other_buy.quote,
-                ),
-                ..LinkEvidence::default()
-            };
-            if link_confidence(evidence) >= SELL_CLUSTER_LINK_THRESHOLD_BPS {
-                members.push(other.0);
-                tokens = tokens.saturating_add(other.1);
-                first_block = first_block.min(other.2);
-                last_block = last_block.max(other.3);
+            if !members.contains(&sale.seller) {
+                members.push(sale.seller);
             }
+            tokens = tokens.saturating_add(sale.tokens);
+            last_block = last_block.max(sale.block);
         }
-        // `>` rather than `>=`: the first cluster of a given size found (in
-        // address order, since `sellers` came out of a `BTreeMap`) is the
-        // one kept, so re-running this over the same logs cannot silently
-        // pick a different same-size cluster.
+        // `>` rather than `>=`: the first cluster of a given size found is
+        // the one kept, so re-running this over the same logs cannot pick a
+        // different same-size cluster.
         let better = best
             .as_ref()
             .is_none_or(|b| members.len() > b.members.len());
@@ -1519,12 +1503,27 @@ fn largest_sell_cluster(sells: &[Sale], buyers: &[Buyer]) -> Option<SellCluster>
             best = Some(SellCluster {
                 members,
                 tokens_sold: tokens,
-                first_block,
+                first_block: anchor.block,
                 last_block,
             });
         }
     }
     best
+}
+
+/// Whether two buyers look linked by how they bought, at
+/// [`SELL_CLUSTER_LINK_THRESHOLD_BPS`] or more.
+///
+/// Only the window and size evidence is set. Same-block buying adds weight
+/// in [`link_confidence`] only alongside "both fresh", which S7 does not
+/// read, so setting it here would change nothing and hide that.
+fn buys_link(a: &Buyer, b: &Buyer) -> bool {
+    let evidence = LinkEvidence {
+        same_window: a.first_block.abs_diff(b.first_block) <= LINK_WINDOW_BLOCKS,
+        sizes_within_10_percent: sizes_within_ten_percent(a.quote, b.quote),
+        ..LinkEvidence::default()
+    };
+    link_confidence(evidence) >= SELL_CLUSTER_LINK_THRESHOLD_BPS
 }
 
 /// S7's result: the largest linked-seller cluster, its share of supply, and
@@ -1543,8 +1542,9 @@ pub struct CorrelatedSelling {
     /// `true`.
     pub sold_bps_of_supply: Option<u16>,
     /// Seconds between the cluster's earliest and latest sell, by the
-    /// chain's own block timestamps. `None` when a timestamp could not be
-    /// read, or the cluster has one member.
+    /// chain's own block timestamps. `Some(0)` when every sell in the
+    /// cluster shares one block; `None` when a timestamp read failed or
+    /// could not be afforded.
     pub spread_seconds: Option<u64>,
     /// Whether the `CurveSell` logs behind every field above were actually
     /// read.
@@ -1556,8 +1556,9 @@ pub struct CorrelatedSelling {
 /// One `eth_getLogs` read over the whole window, the same cost and shape as
 /// [`creator_cash_flow`]'s: `record.curve`'s own logs, unfiltered by topic,
 /// decode into both buys (for link evidence, via [`buyers_of`]) and sells
-/// (via [`sells_from`]), so this never issues a second read for buys the
-/// dossier already needed elsewhere. Naturally pre-graduation only: a
+/// (via [`sells_from`]), so buys and sells come from one read. It repeats
+/// the read [`creator_cash_flow`] makes (same curve, same range); sharing
+/// that one read is the obvious saving, left for when the budget needs it. Naturally pre-graduation only: a
 /// graduated curve prices nothing and stops emitting `CurveSell` at all
 /// (research 0044), so a window that runs past graduation still only picks
 /// up the sells that happened before it, with no special case needed here.
@@ -1612,8 +1613,8 @@ pub fn correlated_selling(
             .map(|bps| u16::try_from(bps).unwrap_or(u16::MAX))
     });
 
-    // A cluster whose sells share one block (a lone seller always does)
-    // spread over no time at all, measured without a timestamp read.
+    // A cluster whose sells share one block spread over no time at all,
+    // measured without a timestamp read.
     let spread_seconds = if cluster.first_block == cluster.last_block {
         Some(0)
     } else {
@@ -2234,6 +2235,90 @@ mod tests {
             cluster.members.len(),
             2,
             "50 blocks apart is inside the window"
+        );
+    }
+
+    fn linked_trio_and_pair() -> Vec<Buyer> {
+        // 1, 2 bought together; 3, 4, 5 bought together 190 blocks later,
+        // too far from 1 and 2 to link to them.
+        vec![
+            buyer(1, 100, 10),
+            buyer(2, 100, 10),
+            buyer(3, 100, 200),
+            buyer(4, 100, 200),
+            buyer(5, 100, 200),
+        ]
+    }
+
+    #[test]
+    fn a_later_bigger_cluster_replaces_an_earlier_smaller_one() {
+        let sells = vec![
+            sale(1, 10, 100),
+            sale(2, 10, 100),
+            sale(3, 10, 500),
+            sale(4, 10, 500),
+            sale(5, 10, 510),
+        ];
+        let cluster = largest_sell_cluster(&sells, &linked_trio_and_pair()).unwrap();
+        assert_eq!(cluster.members, vec![addr(3), addr(4), addr(5)]);
+    }
+
+    #[test]
+    fn of_two_same_size_clusters_the_earlier_is_kept() {
+        let sells = vec![
+            sale(1, 10, 100),
+            sale(2, 10, 100),
+            sale(3, 10, 500),
+            sale(4, 10, 500),
+        ];
+        let cluster = largest_sell_cluster(&sells, &linked_trio_and_pair()).unwrap();
+        assert_eq!(cluster.members, vec![addr(1), addr(2)]);
+    }
+
+    #[test]
+    fn a_tiny_early_sell_per_wallet_does_not_hide_a_later_joint_dump() {
+        let buyers = vec![buyer(1, 100, 10), buyer(2, 100, 10), buyer(3, 100, 10)];
+        let sells = vec![
+            sale(1, 1, 100),
+            sale(2, 1, 1_000),
+            sale(3, 1, 2_000),
+            sale(1, 100, 10_000),
+            sale(2, 100, 10_000),
+            sale(3, 100, 10_000),
+        ];
+        let cluster = largest_sell_cluster(&sells, &buyers).unwrap();
+        assert_eq!(cluster.members.len(), 3);
+        assert_eq!(cluster.tokens_sold, 300);
+        assert_eq!((cluster.first_block, cluster.last_block), (10_000, 10_000));
+    }
+
+    #[test]
+    fn a_members_sale_outside_the_window_counts_neither_tokens_nor_spread() {
+        let sells = vec![sale(1, 10, 100), sale(2, 10, 100), sale(1, 1_000, 5_000)];
+        let cluster = largest_sell_cluster(&sells, &linked_buyers()).unwrap();
+        assert_eq!(cluster.members.len(), 2);
+        assert_eq!(cluster.tokens_sold, 20);
+        assert_eq!(cluster.last_block, 100);
+    }
+
+    #[test]
+    fn buys_exactly_30_blocks_apart_link_and_31_do_not() {
+        let sells = vec![sale(1, 10, 100), sale(2, 10, 100)];
+        let at_edge = vec![buyer(1, 100, 10), buyer(2, 100, 40)];
+        let past_edge = vec![buyer(1, 100, 10), buyer(2, 100, 41)];
+        assert_eq!(
+            largest_sell_cluster(&sells, &at_edge)
+                .unwrap()
+                .members
+                .len(),
+            2
+        );
+        assert_eq!(
+            largest_sell_cluster(&sells, &past_edge)
+                .unwrap()
+                .members
+                .len(),
+            1
         );
     }
 

@@ -1326,18 +1326,26 @@ pub fn build_with_memory(
     // (rather than passed to `launch_facts`) because `launch_facts` runs
     // before the read point is known and cannot bound the window itself.
     // `wallets::correlated_selling` never fails outright, the same as
-    // `creator_cash_flow` -- a window that could not be established here is
-    // the only named miss.
+    // `creator_cash_flow` -- but a window that could not be established, or
+    // trade logs that could not be read, is named as a miss so the sheet
+    // counts it as a coverage gap rather than a quiet "no cluster" (rule 8).
     match (dossier.chain_launch.as_mut(), read.as_ref()) {
         (Some(launch), Some(header)) => {
-            launch.correlated_selling = Some(wallets::correlated_selling(
+            let result = wallets::correlated_selling(
                 client,
                 budget,
                 &record,
                 launch.block,
                 header.number,
                 launch.supply,
-            ));
+            );
+            if !result.sells_read {
+                dossier.unavailable.push(Unavailable {
+                    fact: "correlated selling",
+                    why: "the curve's trade logs could not be read".to_owned(),
+                });
+            }
+            launch.correlated_selling = Some(result);
         }
         _ => dossier.unavailable.push(Unavailable {
             fact: "correlated selling",
@@ -2024,8 +2032,16 @@ pub(crate) mod tests {
         // are present. Pinned rather than left loose because the default
         // budget is sixty calls and a read that quietly grows is how a
         // plan's daily quota goes without anyone choosing to spend it.
-        // Plus the two token-powers reads (M-D-0004).
-        assert_eq!(dossier.calls, 15);
+        // Plus the two token-powers reads (M-D-0004) and S7's curve read
+        // (M-D-0008), refused here because the script has run out.
+        assert_eq!(dossier.calls, 16);
+        // That refused read is named, so the sheet can count it as a gap.
+        assert!(
+            dossier
+                .unavailable
+                .iter()
+                .any(|u| u.fact == "correlated selling")
+        );
     }
 
     #[test]
@@ -2166,9 +2182,9 @@ pub(crate) mod tests {
         );
         assert_eq!(
             dossier.calls,
-            12 + 1 + 4 * 3 + 2,
-            "the core reads (two of them token powers), the window, three per candidate, and \
-             creator_cash_flow's two eth_getLogs reads (design 0027 slice 5)"
+            12 + 1 + 4 * 3 + 2 + 1,
+            "the core reads (two of them token powers), the window, three per candidate, \
+             creator_cash_flow's two eth_getLogs reads (design 0027 slice 5), and S7's curve read"
         );
 
         let key = token().to_string();
@@ -2321,8 +2337,9 @@ pub(crate) mod tests {
         assert!(funding.checked[1].funding_complete);
         assert_eq!(
             dossier.calls,
-            12 + 1 + 4 + 3 + 2,
-            "the core reads, two of them token powers, plus creator_cash_flow's two reads"
+            12 + 1 + 4 + 3 + 2 + 1,
+            "the core reads, two of them token powers, creator_cash_flow's two reads and S7's \
+             curve read"
         );
     }
 
@@ -2421,9 +2438,9 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            first.calls, 15,
-            "remembering costs no extra call; thirteen core reads (two of them token powers) plus \
-             creator_cash_flow's two (design 0027 slice 5)"
+            first.calls, 16,
+            "remembering costs no extra call; thirteen core reads (two of them token powers), \
+             creator_cash_flow's two (design 0027 slice 5) and S7's curve read"
         );
         assert_eq!(
             memory
@@ -2458,8 +2475,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            second.calls, 16,
-            "fifteen as before plus the checkpoint's header; the walk itself is one page"
+            second.calls, 17,
+            "sixteen as before plus the checkpoint's header; the walk itself is one page"
         );
         assert_eq!(
             memory
@@ -2514,8 +2531,9 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            again.calls, 14,
-            "ten as before, the two token-powers reads, plus creator_cash_flow's two reads"
+            again.calls, 15,
+            "ten as before, the two token-powers reads, creator_cash_flow's two reads and S7's \
+             curve read"
         );
         let run = memory
             .latest_check_run(MEMORY_CHAIN, &key, TRANSFERS_CHECK)
@@ -2681,8 +2699,8 @@ pub(crate) mod tests {
             })
         );
         assert_eq!(
-            dossier.calls, 16,
-            "plus the two token-powers reads and creator_cash_flow's two reads"
+            dossier.calls, 17,
+            "plus the two token-powers reads, creator_cash_flow's two reads and S7's curve read"
         );
         assert_eq!(
             memory

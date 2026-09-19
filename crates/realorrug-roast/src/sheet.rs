@@ -974,6 +974,10 @@ impl FactSheet {
             // itself still read fine, only its unit's name did not, and a
             // launcher whose pair token answers slowly must not be scored
             // worse than one whose pair reads cleanly.
+            // `correlated selling` (S7, research 0052 §3) joins it too: the
+            // signal can only raise the risk score, so an unread S7 is a gap
+            // in coverage, never a reason to fall to `CantTell` -- a token
+            // must not score worse because its trade logs were slow to read.
             if matches!(
                 miss.fact,
                 "capacity"
@@ -982,6 +986,7 @@ impl FactSheet {
                     | "market"
                     | "token ownership"
                     | "quote asset"
+                    | "correlated selling"
             ) {
                 // Recorded here, not dropped: `assessment.rs`'s coverage
                 // figure needs to know this gap exists even though
@@ -4289,6 +4294,23 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert_eq!(sheet.skipped, vec!["quote asset".to_owned()]);
         assert!(!sheet.unknown.iter().any(|u| u.contains("quote asset")));
+    }
+
+    #[test]
+    fn an_unread_correlated_selling_is_a_coverage_gap_not_an_unknown_line() {
+        // S7 can only raise the score, so logs that could not be read must
+        // show as a gap in coverage and leave `unknown` (which can push the
+        // level to `CantTell`) exactly as it was.
+        let dossier = dossier_for([3u8; 32]);
+        let baseline = FactSheet::build(&dossier, None, None, None, None);
+        let mut missed = dossier.clone();
+        missed.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "correlated selling",
+            why: "the curve's trade logs could not be read".to_owned(),
+        });
+        let sheet = FactSheet::build(&missed, None, None, None, None);
+        assert_eq!(sheet.skipped, vec!["correlated selling".to_owned()]);
+        assert_eq!(sheet.unknown, baseline.unknown);
     }
 
     #[test]
