@@ -16,10 +16,12 @@
 //!
 //! A call's points are whole basis points, and a player's total is an `i64`
 //! sum of them: an integer, exactly reproducible. The luck line (design
-//! 0028 §4) is defined with a `ln`, which genuinely needs a float, but the
-//! float is used **once per ranking** to build a threshold, never per call
-//! and never to accumulate a total. [`clears_luck_line`] explains the bound
-//! that keeps that one float from being able to flip a real decision.
+//! 0028 §4) is defined with a `ln`, which is a transcendental function, but
+//! `ln` itself is never called: [`ln_fx`] computes it as a deterministic
+//! `Q32` fixed-point integer (bit-length log2 plus a fixed-point `ln(2)`
+//! constant), and [`clears_luck_line`] compares against it with checked
+//! integer arithmetic. No `f64` appears anywhere on the path that decides
+//! whether a player clears the line or how cleared players are ordered.
 //!
 //! # Unknown is not eligible
 //!
@@ -45,6 +47,12 @@ pub const MAX_ODDS_BP: u16 = 10_000;
 
 impl Odds {
     /// Basis points, refusing anything above [`MAX_ODDS_BP`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OddsRefused`] when `basis_points` is above [`MAX_ODDS_BP`]:
+    /// a value that could not be a real basis-point odds is refused rather
+    /// than clamped or scored as a certainty.
     pub fn new(basis_points: u16) -> Result<Self, OddsRefused> {
         if basis_points > MAX_ODDS_BP {
             return Err(OddsRefused { basis_points });
@@ -222,54 +230,128 @@ pub struct PlayerRecord {
     /// `Σ q(10 000 − q)` over the player's calls: the spread a zero-edge
     /// player's total would have. Exact, integer, order-independent.
     pub variance: u128,
-    /// `total / sqrt(variance)`: how many spreads above zero this player
-    /// sits. `None` when `variance` is zero -- every one of the player's
-    /// calls was made at `q = 0` or `q = 10 000`, a "certainty" the bot
-    /// itself gave no spread to, so no luck-adjusted record can be computed
-    /// from it. Used only to order players who already cleared the line by
-    /// the exact integer test in [`clears_luck_line`]; never used to decide
-    /// whether they cleared it.
-    pub z: Option<f64>,
+    /// `100 * total / sqrt(variance)`, rounded to the nearest integer and
+    /// signed to match `total`: how many spreads above (or below) zero this
+    /// player sits, in hundredths. `None` when `variance` is zero -- every
+    /// one of the player's calls was made at `q = 0` or `q = 10 000`, a
+    /// "certainty" the bot itself gave no spread to, so no luck-adjusted
+    /// record can be computed from it. Display only, computed with
+    /// [`u128::isqrt`] (exact integer square root, no float): neither
+    /// whether a player clears the luck line ([`clears_luck_line`]) nor how
+    /// players above it are ordered (the cross-multiplication comparator in
+    /// [`score_calls`]) reads this field.
+    pub z_hundredths: Option<i64>,
     /// The earliest `called_at` among this player's settled calls. A tie
     /// breaker only (design 0028 §4: "ties ... then the earlier first
     /// call").
     pub first_call_at: u64,
 }
 
+/// Fixed-point fractional bits used by [`luck_line_sq_fx`] and
+/// [`clears_luck_line`]. Design 0028 §3: no floating point decides a rank, so
+/// `ln` is computed as a deterministic integer instead of an `f64`.
+const FRAC: u32 = 32;
+/// `1.0` in `Q(FRAC)` fixed point.
+const ONE_FX: u128 = 1u128 << FRAC;
+/// `ln(2)` in `Q(FRAC)` fixed point: `round(0.693_147_180_559_945_3 * 2^32)`.
+const LN2_FX: u128 = 2_977_044_472;
+
+/// `log2(n)` as `Q(FRAC)` fixed point, for `n >= 1`.
+///
+/// The integer part is `floor(log2(n))`, read off the bit length. The
+/// fractional part comes from the classic shift-and-square method: normalize
+/// `n` to a mantissa in `[1, 2)`, then repeatedly square it and note whether
+/// it crosses back above `2`, one output bit per iteration -- the same
+/// technique a fixed-point CORDIC-style `log2` uses, needing only integer
+/// multiplication and shifts.
+fn log2_fx(n: u64) -> u128 {
+    debug_assert!(n >= 1, "log2 is undefined at 0");
+    let k = u128::from(n.ilog2());
+    // Normalize `n` into a `Q(FRAC)` mantissa in `[ONE_FX, 2*ONE_FX)`. `n` is
+    // at most 64 bits and `FRAC` is 32, so `n << FRAC` fits in a `u128` with
+    // no loss before the shift back down by `k`.
+    let mut mantissa = (u128::from(n) << FRAC) >> k;
+    let mut frac: u128 = 0;
+    let mut bit = ONE_FX >> 1;
+    for _ in 0..FRAC {
+        // `mantissa < 2 * ONE_FX = 2^33`, so squaring fits comfortably in a
+        // `u128` before rescaling back down to `Q(FRAC)`.
+        let squared = (mantissa * mantissa) >> FRAC;
+        if squared >= ONE_FX << 1 {
+            frac |= bit;
+            mantissa = squared >> 1;
+        } else {
+            mantissa = squared;
+        }
+        bit >>= 1;
+    }
+    (k << FRAC) + frac
+}
+
+/// `ln(n)` as `Q(FRAC)` fixed point, for `n >= 1`, via `ln(n) = log2(n) *
+/// ln(2)`. The product of two `Q(FRAC)` values needing a `>> FRAC` to land
+/// back in `Q(FRAC)` fits in a `u128` for any `n` this module sees (`n` is at
+/// most a basis-point-weighted call count times 20, nowhere near `u64::MAX`).
+fn ln_fx(n: u64) -> u128 {
+    (log2_fx(n) * LN2_FX) >> FRAC
+}
+
+/// `z*^2 = 2 ln(N / 0.05) = 2 ln(20 N)`, the squared luck line for `n`
+/// ranking-eligible players (design 0028 §4), as `Q(FRAC)` fixed point. `n`
+/// is always at least 1 where this is called (an empty ranking has no line
+/// to clear), so `20 n >= 20` and the log is always positive.
+fn luck_line_sq_fx(n: u32) -> u128 {
+    ln_fx(20 * u64::from(n)) << 1
+}
+
 /// Whether a player's record clears the luck line, without computing `z`.
 ///
 /// Design 0028 §4 defines the line as `z >= z* = sqrt(2 ln(N / 0.05))`.
 /// Squaring both sides of `total / sqrt(variance) >= z*` and multiplying
-/// through by `variance` (positive whenever this function is called) gives
-/// the equivalent, division- and sqrt-free test `total^2 >= z*^2 * variance`,
-/// which only needs one `f64` value (`z*^2`) rather than a `sqrt` per player.
+/// through by `variance` (positive whenever this function does not take the
+/// early return below) gives the equivalent, division- and sqrt-free test
+/// `total^2 >= z*^2 * variance`. `z*^2` is [`luck_line_sq_fx`], an exact
+/// `Q(FRAC)` fixed-point integer (see its doc), so this comparison is done
+/// entirely in integers: no `f64` anywhere decides a rank (design 0028 §3).
 ///
-/// `z*^2 = 2 ln(N / 0.05)` still needs a transcendental function, so this is
-/// not free of floating point, but it is computed **once per ranking**
-/// rather than once per player, and the two sides of the comparison
-/// (`total^2` as an exact `i128`, cast to `f64`, against `z*^2 * variance`)
-/// stay far enough below `f64`'s 2^53-bit exact-integer range for any
-/// realistic call volume (`variance <= 2.5*10^7` per call; thousands of calls
-/// would need to run for years) that a last-bit difference in `ln` between
-/// platforms cannot change which side of `>=` the comparison lands on for
-/// any record that is not itself within a few parts in 10^15 of the line --
-/// and a record that close is, by construction, not distinguishable from
-/// lucky noise anyway.
+/// The two conditions in the guard are independent and both must hold for a
+/// record to be worth testing (a non-positive total cannot clear a
+/// non-negative line at all; a zero variance divides by zero above), so they
+/// are combined with `||`, not `&&`: either one failing alone is enough to
+/// return `false` early, without evaluating the multiplication below.
+///
+/// Overflow in the checked arithmetic (astronomically many calls or basis
+/// points) is treated as "does not clear" rather than panicking or wrapping
+/// into an arbitrary comparison: silence is the safer failure for a prize
+/// payout than a wrong "yes" (design 0028 §3, "unknown is not eligible"
+/// applied to an overflowed computation as much as to a missing fact).
 #[must_use]
-fn clears_luck_line(total: i64, variance: u128, luck_line_sq: f64) -> bool {
+fn clears_luck_line(total: i64, variance: u128, luck_line_sq_fx: u128) -> bool {
     if total <= 0 || variance == 0 {
         return false;
     }
-    let total_sq = i128::from(total) * i128::from(total);
-    (total_sq as f64) >= luck_line_sq * (variance as f64)
+    // `total > 0` here, so it always fits `u128`.
+    let total_u = u128::from(total.unsigned_abs());
+    let lhs = total_u
+        .checked_mul(total_u)
+        .and_then(|sq| sq.checked_mul(ONE_FX));
+    let rhs = luck_line_sq_fx.checked_mul(variance);
+    matches!((lhs, rhs), (Some(lhs), Some(rhs)) if lhs >= rhs)
 }
 
-/// `z*^2 = 2 ln(N / 0.05)`, the squared luck line for `n` ranking-eligible
-/// players (design 0028 §4). `n` is always at least 1 where this is called
-/// (an empty ranking has no line to clear), so `n / 0.05` is always `> 1`
-/// and the log is always positive.
-fn luck_line_sq(n: u32) -> f64 {
-    2.0 * (f64::from(n) / 0.05).ln()
+/// `100 * total / sqrt(variance)`, rounded down, for display (see
+/// [`PlayerRecord::z_hundredths`]). `None` when `variance` is zero. Uses
+/// [`u128::isqrt`] (exact integer square root) rather than `f64::sqrt`, so
+/// this, too, has no floating point in it; unlike [`clears_luck_line`] it is
+/// never on the path that decides a rank.
+fn z_hundredths(total: i64, variance: u128) -> Option<i64> {
+    if variance == 0 {
+        return None;
+    }
+    let total_u = u128::from(total.unsigned_abs());
+    let scaled = total_u.checked_mul(total_u)?.checked_mul(10_000)? / variance;
+    let magnitude = i64::try_from(u128::isqrt(scaled)).unwrap_or(i64::MAX);
+    Some(if total < 0 { -magnitude } else { magnitude })
 }
 
 /// The result of scoring one run of settled calls (design 0028 §4).
@@ -335,14 +417,10 @@ pub fn score_calls(calls: &[SettledCall], min_account_age_days: u32) -> DailyFiv
     let mut above_line = Vec::new();
     let mut within_luck = Vec::new();
     if n > 0 {
-        let line_sq = luck_line_sq(n);
+        let line_sq_fx = luck_line_sq_fx(n);
         for mut record in eligible {
-            record.z = if record.variance > 0 {
-                Some(record.total as f64 / (record.variance as f64).sqrt())
-            } else {
-                None
-            };
-            if clears_luck_line(record.total, record.variance, line_sq) {
+            record.z_hundredths = z_hundredths(record.total, record.variance);
+            if clears_luck_line(record.total, record.variance, line_sq_fx) {
                 above_line.push(record);
             } else {
                 within_luck.push(record);
@@ -351,15 +429,20 @@ pub fn score_calls(calls: &[SettledCall], min_account_age_days: u32) -> DailyFiv
     }
 
     above_line.sort_by(|a, b| {
-        // `z` decides first; a `NaN` cannot occur (both operands are finite
-        // whenever `z` is `Some`, which every record in `above_line` has,
-        // since `clears_luck_line` already required `variance > 0`), but
-        // `total_cmp` is used anyway so a future change to this function
-        // cannot introduce a panic-on-uncomparable here.
-        let by_z =
-            b.z.unwrap_or(f64::NEG_INFINITY)
-                .total_cmp(&a.z.unwrap_or(f64::NEG_INFINITY));
-        by_z.then_with(|| tie_break(a, b))
+        // Exact cross-multiplication order, no float and no `z` field
+        // involved: `total_a / sqrt(var_a) >= total_b / sqrt(var_b)` (both
+        // totals positive, both variances positive -- guaranteed by
+        // `clears_luck_line` for every record in `above_line`) is equivalent
+        // to `total_a^2 * var_b >= total_b^2 * var_a`. Saturating rather than
+        // checked: an overflow here would need call totals far past anything
+        // this contest can produce, and falling back to "as if maximal"
+        // keeps the sort total instead of panicking on it.
+        let a_sq = u128::from(a.total.unsigned_abs()) * u128::from(a.total.unsigned_abs());
+        let b_sq = u128::from(b.total.unsigned_abs()) * u128::from(b.total.unsigned_abs());
+        let lhs = a_sq.saturating_mul(b.variance);
+        let rhs = b_sq.saturating_mul(a.variance);
+        // Descending: the bigger cross-product (higher `z`) sorts first.
+        rhs.cmp(&lhs).then_with(|| tie_break(a, b))
     });
     within_luck.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| tie_break(a, b)));
     excluded.sort();
@@ -398,8 +481,8 @@ fn eligibility(calls: &[&SettledCall], min_account_age_days: u32) -> Option<Excl
     None
 }
 
-/// Builds one player's record from their settled calls. `z` is left `None`
-/// here; `score_calls` fills it in once it knows `variance`.
+/// Builds one player's record from their settled calls. `z_hundredths` is
+/// left `None` here; `score_calls` fills it in once it knows `variance`.
 fn record_for(player: &str, calls: &[&SettledCall]) -> PlayerRecord {
     let mut total: i64 = 0;
     let mut variance: u128 = 0;
@@ -417,7 +500,7 @@ fn record_for(player: &str, calls: &[&SettledCall]) -> PlayerRecord {
         settled: u32::try_from(calls.len()).unwrap_or(u32::MAX),
         distinct_creators: u32::try_from(creators.len()).unwrap_or(u32::MAX),
         variance,
-        z: None,
+        z_hundredths: None,
         first_call_at,
     }
 }
@@ -543,9 +626,11 @@ mod tests {
         }
 
         /// A uniform value in `[0, 1)`.
+        // Test-only random test-data generation, not the ranking decision
+        // design 0028 §3 forbids floating point in; the top 53 bits are
+        // exactly the mantissa `f64` can hold, so the cast is lossless.
+        #[allow(clippy::cast_precision_loss)]
         fn next_f64(&mut self) -> f64 {
-            // Top 53 bits: exactly the mantissa `f64` can hold, so this is a
-            // uniform draw with no bias from the conversion.
             (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
         }
 
@@ -553,7 +638,7 @@ mod tests {
         fn next_bp(&mut self, low: u16, high: u16) -> Odds {
             let span = u64::from(high - low) + 1;
             let bp = u64::from(low) + self.next_u64() % span;
-            Odds::new(bp as u16).expect("bp within range")
+            Odds::new(u16::try_from(bp).expect("bp within range")).expect("bp within range")
         }
 
         fn outcome_with_prob(&mut self, q: Odds) -> Outcome {
@@ -615,6 +700,9 @@ mod tests {
         // without being so loose it would pass a broken sign or a dropped
         // factor.
         let bound = 300.0;
+        // Test-only assertion tolerance, not the ranking decision design
+        // 0028 §3 forbids floating point in.
+        #[allow(clippy::cast_precision_loss)]
         for (strategy, total) in scores {
             let mean = total as f64 / f64::from(n);
             assert!(
@@ -679,7 +767,9 @@ mod tests {
             edge_calls.push(SettledCall {
                 player: "edge".to_string(),
                 coin_id: format!("edge-coin-{i}"),
-                creator_id: edge_creators[i as usize % edge_creators.len()].clone(),
+                creator_id: edge_creators
+                    [usize::try_from(i).expect("i < 60 fits usize") % edge_creators.len()]
+                .clone(),
                 side,
                 q,
                 outcome,
@@ -782,5 +872,49 @@ mod tests {
                 Excluded::TooFewCreators { creators: 3 }
             )]
         );
+    }
+
+    // --- fixed-point luck line: pinned values and the `||`/`&&` mutant ---
+
+    /// Compares the fixed-point `luck_line_sq_fx(n)` against a value
+    /// computed independently (an ordinary `ln`, not this module's
+    /// fixed-point code), within 1e-6 -- the tolerance the coordinator's fix
+    /// request asked this be pinned to. The cast back to `f64` here is test
+    /// verification of production integer code, not the ranking decision
+    /// design 0028 §3 forbids floating point in.
+    #[allow(clippy::cast_precision_loss)]
+    fn assert_luck_line_close(n: u32, expected: f64) {
+        let got_f = luck_line_sq_fx(n) as f64 / ONE_FX as f64;
+        assert!(
+            (got_f - expected).abs() < 1e-6,
+            "luck_line_sq_fx({n}) = {got_f}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn luck_line_sq_fx_matches_known_values() {
+        // 2*ln(20*100) = 2*ln(2000) = 15.201804919084165...
+        assert_luck_line_close(100, 15.201_804_919_084_165);
+        // 2*ln(20*1000) = 2*ln(20000) = 19.806975105072256...
+        assert_luck_line_close(1_000, 19.806_975_105_072_256);
+    }
+
+    #[test]
+    fn clears_luck_line_needs_both_conditions() {
+        // The early guard is `total <= 0 || variance == 0`: either condition
+        // alone must be enough to refuse, which is exactly what `||` (and
+        // not `&&`) means. A mutant that swaps in `&&` survives unless a
+        // test exercises a record where exactly one of the two is true.
+        let line_sq_fx = luck_line_sq_fx(10);
+
+        // Zero variance, positive total: `total <= 0` is false, so an `&&`
+        // guard would fall through to the multiplication below, and
+        // `total^2 * ONE_FX >= luck_line_sq_fx * 0` is always true --
+        // wrongly clearing the line.
+        assert!(!clears_luck_line(1_000, 0, line_sq_fx));
+
+        // Negative total, nonzero variance: `variance == 0` is false, so an
+        // `&&` guard would likewise fall through instead of refusing early.
+        assert!(!clears_luck_line(-1_000, 10_000, line_sq_fx));
     }
 }

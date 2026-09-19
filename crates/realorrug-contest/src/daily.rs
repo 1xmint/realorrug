@@ -140,6 +140,13 @@ pub const PICKS_PER_DAY: usize = 5;
 /// `day_start` and `day_end` bound the window, inclusive of `day_start` and
 /// exclusive of `day_end`, mirroring `Week::opens_at`/`closes_at`'s
 /// half-open convention in [`crate::week`].
+///
+/// # Panics
+///
+/// Never, in practice: the internal `.expect` reads `launch.q` back out only
+/// for launches the loop above already filtered to `Some` via
+/// `NotPicked::UnknownOdds`, so every launch reaching that line has a known
+/// `q`.
 #[must_use]
 pub fn pick(launches: &[Launch], day_start: u64, day_end: u64) -> DailyFive {
     let mut eligible: Vec<(u64, &Launch)> = Vec::new();

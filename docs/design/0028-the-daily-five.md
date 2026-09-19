@@ -188,15 +188,21 @@ shows most rugs land inside three.
 
 `crates/realorrug-contest/src/calls.rs`, exported from the crate root.
 
-- The luck line is compared without a `sqrt` or a division: `total^2 >=
-  z*^2 * variance` is equivalent to `z >= z*` whenever `total > 0` and
-  `variance > 0`, and needs one `f64` (`z*^2 = 2 ln(N / 0.05)`) computed once
-  per ranking rather than a `sqrt` computed once per player. `z` itself is
-  still reported on each player record (§4 says "ordered by z desc"), but only
-  to order players who already cleared the line by the integer test; a
-  boundary case close enough to be sensitive to that ordering is, by
-  construction, statistically indistinguishable from noise. See the doc
-  comment on `clears_luck_line` for the precision bound this rests on.
+- The luck line is compared without a `sqrt`, a division, or any float: `z >=
+  z*` is equivalent to `total^2 >= z*^2 * variance` whenever `total > 0` and
+  `variance > 0`, and `z*^2 = 2 ln(N / 0.05) = 2 ln(20 N)` is computed once
+  per ranking as a deterministic `Q32` fixed-point integer (`ln_fx`,
+  `log2_fx`: integer log2 by bit length, then fractional bits by repeated
+  squaring, times a fixed-point `ln(2)` constant), not an `f64`. The
+  comparison itself (`clears_luck_line`) uses checked `u128` arithmetic;
+  overflow is treated as "does not clear" rather than panicking or wrapping.
+  Players who cleared the line are ordered by an exact cross-multiplication
+  (`total_a^2 * var_b` vs `total_b^2 * var_a`, `u128`, saturating), never by
+  reading `z` back out. `z` is still reported on each player record, as
+  `z_hundredths: Option<i64>` (`100 * total / sqrt(variance)`, via
+  `u128::isqrt`, never `f64::sqrt`), but purely for display -- design 0028 §3
+  ("no floating point decides a rank") applies to every step here, not just
+  the final compare.
 - A player whose every call was made at `q = 0` or `q = 10 000` has
   `variance = 0` and is placed "within luck" rather than treated as clearing
   the line automatically (dividing by zero variance is not "infinitely
