@@ -6014,6 +6014,7 @@ mod tests {
         let candidate = |i: u32| realorrug_onchain::Candidate {
             address: realorrug_robinhood::Address([u8::try_from(i).unwrap_or(0); 20]).to_string(),
             bought_wei: 1,
+            bought_tokens: Some(1),
             first_purchase_block: 64,
             is_contract: Some(false),
             nonce_before_launch: Some(0),
