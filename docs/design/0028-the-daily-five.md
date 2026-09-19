@@ -183,3 +183,58 @@ moves the bot's score or level.
 Until G1 lands, G2 and G3 are built and tested against an odds table given in
 the test. The window defaults to fourteen days and becomes three if the replay
 shows most rugs land inside three.
+
+### G2 as built
+
+`crates/realorrug-contest/src/calls.rs`, exported from the crate root.
+
+- The luck line is compared without a `sqrt` or a division: `total^2 >=
+  z*^2 * variance` is equivalent to `z >= z*` whenever `total > 0` and
+  `variance > 0`, and needs one `f64` (`z*^2 = 2 ln(N / 0.05)`) computed once
+  per ranking rather than a `sqrt` computed once per player. `z` itself is
+  still reported on each player record (§4 says "ordered by z desc"), but only
+  to order players who already cleared the line by the integer test; a
+  boundary case close enough to be sensitive to that ordering is, by
+  construction, statistically indistinguishable from noise. See the doc
+  comment on `clears_luck_line` for the precision bound this rests on.
+- A player whose every call was made at `q = 0` or `q = 10 000` has
+  `variance = 0` and is placed "within luck" rather than treated as clearing
+  the line automatically (dividing by zero variance is not "infinitely
+  good"). §4 does not name this edge case; it cannot arise from the
+  published odds table (§3, "the replay ... gives ... the share"), which
+  never actually reaches the two ends of the scale.
+- The coin-flip dummy strategy (§5) is a stable hash (FNV-1a) of the coin id,
+  not `splitmix64`: the design note only rules out an RNG dependency, and
+  FNV-1a needs no seed and no crate, just the coin id.
+- `min_account_age_days` is threaded through as a caller-supplied parameter
+  rather than reusing `score::Rules` directly: the daily five's eligibility
+  gate (20 calls, 10 creators, age) is its own rule with its own thresholds,
+  not the weekly contest's operator list and cooldown, so only the age floor
+  is shared, by convention rather than by sharing the type.
+
+### G3 as built
+
+`crates/realorrug-contest/src/daily.rs`, exported from the crate root.
+
+- §2.1 asks for the launches that "took in the most money ... across every
+  chain the bot reads", but a chain's raw intake is not a cross-chain number.
+  `Launch::intake_usd_cents` makes that explicit: the caller converts to a
+  common unit at a stated moment before calling in, the same way `q` is
+  fixed at listing and handed in rather than recomputed (§3). This is not a
+  change to §2.1's rule, only to what the input type is honest about.
+  `Launch::level` mirrors `realorrug_roast::verdict::Level`'s five variant
+  names by hand rather than by a dependency: this crate is pure and the
+  model-facing side of the tree is not something a pure crate can depend on
+  (AGENTS §4, "no path from a model-side crate to the payout").
+  `Launch::token_address` is the field the packet calls "token address"; the
+  design's own §2.1 does not name a field, so no departure there.
+- A launch already `Rugged` at listing is excluded as `NotPicked::AlreadyRugged`
+  rather than merely being unpickable by falling through the odds/intake
+  checks: §2.5 settles a "rug" call the moment the level reaches `Rugged`,
+  so a call made on a coin already at that level would be settled before it
+  was made, and that is worth its own stated reason rather than folding it
+  into "unknown odds".
+- A launch that clears every gate but ranks sixth or worse on intake is
+  reported `NotPicked::OutsideTopFive` rather than silently dropped, keeping
+  the "excluded with reasons, not dropped" discipline (score.rs) for the one
+  kind of exclusion that is about ranking rather than missing data.
