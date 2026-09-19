@@ -378,6 +378,31 @@ inventing one would be introducing a fact AGENTS.md rule 2 forbids, not
 recording one. Row 4 stays open in the table above until a session with
 that verification closes it.
 
+**S1 ("name the pair") as built (2026-09-18).** A Pons v2 curve paired with
+an ERC-20 token rather than native ETH used to leave `CurveFacts.quote_asset`
+`None`, the same "unidentified quote asset" case as an unread Solana mint —
+correct under rule 8, but it meant most non-ETH launches on Robinhood shipped
+with no priced curve figures at all. `crates/realorrug-onchain/src/
+robinhood.rs`'s new `pair_quote_asset` reads the pair token's own
+`symbol()`/`decimals()` (`erc20::DECIMALS`, added alongside the existing
+`SYMBOL`/`NAME` selectors in `crates/realorrug-robinhood/src/erc20.rs`) and
+names it, rather than leaving the unit unknown or guessing ETH. `sanitised_symbol`
+is a second, stricter sanitiser than `erc20::string_from_return`'s general
+"readable" rule — ASCII alphanumerics and `.`/`-`/`_` only, 32 characters or
+fewer — because a pair symbol is about to be quoted directly next to an
+address in a sentence the model reads, the untrusted-metadata case AGENTS.md
+§3 rule 3 exists for. A pair token's identity cannot change, so a successful
+read is cached forever under design 0021's generic fact store (`Kind::Forever`,
+the same reasoning a launch record is cached under) rather than re-read on
+every dossier. `QuoteAsset` gained a third field, `address: Option<ChainAddress>`,
+so the sheet can cite the address it named the pair from rather than print
+the launcher-chosen symbol alone; `crates/realorrug-roast/src/sheet.rs`'s
+`push_curve` renders "paired with SYMBOL (0xaddress)" only when an address is
+present, so ETH and SOL curves are unchanged. A failed pair read joins the
+`market`/`capacity`/`fees` skip-list in `FactSheet::build()`: the curve itself
+still read fine, so a launcher whose pair token answers slowly is not scored
+worse than one whose pair reads cleanly.
+
 ### Slice 6a as built (2026-09-18)
 
 Recording, not recommending. The owner half of row 6:

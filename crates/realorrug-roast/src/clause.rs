@@ -150,6 +150,10 @@ pub enum Kind {
     /// read at, so this kind's clause states the read point rather than
     /// leaving it to the sheet-wide line alone.
     CurveLiquidity,
+    /// The ERC-20 token a Pons v2 curve is paired with, named by its own
+    /// `symbol()` and address (S1, "name the pair"). Absent for native ETH,
+    /// which is not a token to name.
+    QuotePair,
     /// Of N launches shaped like this one, how many hit a stated multiple
     /// within a stated window.
     ///

@@ -702,9 +702,20 @@ impl FactSheet {
             // on a holder-concentration read for that chain, and a failed
             // sample of the largest accounts must not be the read that
             // starts requiring one.
+            // `quote asset` (S1, "name the pair") joins the same list: a
+            // failed `symbol()`/`decimals()` read on a Pons v2 pair token is
+            // an off-chain-shaped miss the same way `market` is -- the curve
+            // itself still read fine, only its unit's name did not, and a
+            // launcher whose pair token answers slowly must not be scored
+            // worse than one whose pair reads cleanly.
             if matches!(
                 miss.fact,
-                "capacity" | "fees" | "creator transactions" | "market" | "token ownership"
+                "capacity"
+                    | "fees"
+                    | "creator transactions"
+                    | "market"
+                    | "token ownership"
+                    | "quote asset"
             ) {
                 // Recorded here, not dropped: `assessment.rs`'s coverage
                 // figure needs to know this gap exists even though
@@ -1930,6 +1941,32 @@ fn push_curve(
                 format!("{amount} in the curve, as of {moment}."),
             ),
         );
+
+        // S1, "name the pair": when this curve's quote asset is an ERC-20
+        // token rather than native ETH, state which one by its symbol AND
+        // its address, never the symbol alone -- `asset.symbol` is the
+        // launcher-chosen text `sanitised_symbol` cleared, and the address
+        // is what lets a reader check that name rather than take it on
+        // faith (AGENTS.md §3 rule 3: untrusted metadata is data, and data
+        // a reader can verify is safer data than data they cannot).
+        if let Some(address) = &asset.address {
+            let pair = format!("{} ({address})", asset.symbol);
+            facts.push(
+                Fact {
+                    about: About::Measurement,
+                    kind: Kind::QuotePair,
+                    label: "the ERC-20 token this curve is paired with, not ETH".to_owned(),
+                    rendered: pair.clone(),
+                    values: Vec::new(),
+                    clauses: Vec::new(),
+                }
+                .saying(
+                    Voice::Plain,
+                    format!("This curve is paired with {pair}, not ETH."),
+                )
+                .saying(Voice::Blunt, format!("Paired with {pair}. Not ETH.")),
+            );
+        }
     }
 
     match (curve.quote_capacity, &curve.quote_asset) {
@@ -3411,6 +3448,39 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_quote_asset_read_is_an_optional_gap_not_an_unknown_line() {
+        // S1, "name the pair": a Pons v2 pair token that failed to name
+        // itself is off-chain-shaped the same way a failed `market` read is
+        // (the curve itself read fine; only its unit's name did not), so it
+        // must not degrade `verdict::level` any more than `market` does.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "quote asset",
+            why: "symbol(): the pair's name is not one Real or Rug will print as a ticker"
+                .to_owned(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("quote asset")),
+            "a failed pair read must not degrade verdict severity: {:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_skipped_quote_asset_lands_in_skipped_and_not_in_unknown() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.unavailable.push(realorrug_onchain::Unavailable {
+            fact: "quote asset",
+            why: "symbol(): the pair's name is not one Real or Rug will print as a ticker"
+                .to_owned(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(sheet.skipped, vec!["quote asset".to_owned()]);
+        assert!(!sheet.unknown.iter().any(|u| u.contains("quote asset")));
+    }
+
+    #[test]
     fn a_market_candidate_never_outranks_concentration() {
         // AGENTS.md §3 rule 5: price never leads a reply. `salience::rank`
         // is the one ranking every reader shares, so pinning the order here
@@ -4024,6 +4094,70 @@ mod tests {
                 .any(|u| u.contains("quote asset") || u.contains("could not be priced")),
             "{:?}",
             sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_robinhood_token_pair_is_named_with_its_symbol_and_address() {
+        // S1, "name the pair": a curve paired with an ERC-20 token rather
+        // than native ETH states which one, by symbol AND address -- the
+        // symbol alone is untrusted launcher-chosen text (AGENTS.md §3 rule
+        // 3), and the address is what lets a reader check it.
+        let pair = realorrug_robinhood::Address([0x72; 20]);
+        let asset = realorrug_onchain::QuoteAsset::token(
+            realorrug_types::ChainAddress::Robinhood(pair),
+            "HIMS".to_owned(),
+            18,
+        );
+        let mut facts = Vec::new();
+        let mut unknown = Vec::new();
+        let curve = realorrug_onchain::CurveFacts {
+            creator: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
+                [0x71; 20],
+            )),
+            complete: false,
+            quote_reserves: 5_000_000_000_000_000_000,
+            quote_capacity: Some(1_000_000_000_000_000_000),
+            quote_asset: Some(asset),
+            fees: None,
+        };
+        push_curve(&mut facts, &mut unknown, &curve, None);
+        let rendered: Vec<String> = facts.iter().map(|f| f.rendered.clone()).collect();
+        let expected = format!("HIMS ({pair})");
+        assert!(
+            rendered.contains(&expected),
+            "expected {expected:?} among {rendered:?}"
+        );
+        assert!(
+            facts
+                .iter()
+                .any(|f| f.kind == Kind::QuotePair && f.rendered == expected),
+            "{facts:?}"
+        );
+        assert!(unknown.is_empty(), "{unknown:?}");
+    }
+
+    #[test]
+    fn a_native_eth_pair_renders_no_quote_pair_fact() {
+        // ETH has no contract to cite (`QuoteAsset::address` is `None`), so
+        // the "paired with" fact must not appear at all -- unchanged from
+        // before S1.
+        let mut facts = Vec::new();
+        let mut unknown = Vec::new();
+        let curve = realorrug_onchain::CurveFacts {
+            creator: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
+                [0x71; 20],
+            )),
+            complete: false,
+            quote_reserves: 5_000_000_000_000_000_000,
+            quote_capacity: Some(1_000_000_000_000_000_000),
+            quote_asset: Some(realorrug_onchain::QuoteAsset::eth()),
+            fees: None,
+        };
+        push_curve(&mut facts, &mut unknown, &curve, None);
+        assert!(
+            !facts.iter().any(|f| f.kind == Kind::QuotePair),
+            "{facts:?}"
         );
     }
 

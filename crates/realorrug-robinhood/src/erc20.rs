@@ -34,6 +34,33 @@ pub const NAME: [u8; 4] = [0x06, 0xfd, 0xde, 0x03];
 /// `symbol()`, the same way.
 pub const SYMBOL: [u8; 4] = [0x95, 0xd8, 0x9b, 0x41];
 
+/// `decimals()`, the same way.
+///
+/// Needed only to name a token used as a Pons v2 pair (S1, "name the pair"):
+/// the amounts `CurveFacts::quote_reserves` carries are meaningless without
+/// knowing how many of the smallest unit make one whole token, the same
+/// reason [`crate::pons`]'s native-ETH path hard-codes 18.
+pub const DECIMALS: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
+
+/// The highest decimals value this will accept.
+///
+/// No real ERC-20 uses more than 18; a value past 36 is not a token with an
+/// unusual choice, it is a malformed or hostile return, and a `u8` cannot
+/// even hold a value the ABI word claimed past 255. Refusing rather than
+/// clamping keeps rule 8: a decimals value this reader will not vouch for
+/// must make the asset unidentified, not identified-with-a-guessed-precision.
+pub const MAX_DECIMALS: u8 = 36;
+
+/// `decimals()`'s return as a `u8`, or `None` for anything that is not
+/// plainly a small non-negative integer within [`MAX_DECIMALS`].
+#[must_use]
+pub fn decimals_from_return(data: &[u8]) -> Option<u8> {
+    let word: &[u8; 32] = data.try_into().ok()?;
+    let value = crate::word_u128(word)?;
+    let decimals = u8::try_from(value).ok()?;
+    (decimals <= MAX_DECIMALS).then_some(decimals)
+}
+
 /// The longest raw string this will decode, in bytes.
 ///
 /// A name past this is not a name that got away from someone; it is a payload
@@ -126,7 +153,9 @@ fn readable(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_BYTES, NAME, SYMBOL, string_from_return};
+    use super::{
+        DECIMALS, MAX_BYTES, MAX_DECIMALS, NAME, SYMBOL, decimals_from_return, string_from_return,
+    };
 
     use sha3::{Digest, Keccak256};
 
@@ -144,6 +173,44 @@ mod tests {
         };
         assert_eq!(selector("name()"), NAME);
         assert_eq!(selector("symbol()"), SYMBOL);
+        assert_eq!(selector("decimals()"), DECIMALS);
+    }
+
+    fn word_u128(value: u128) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[16..].copy_from_slice(&value.to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn a_plain_decimals_return_decodes() {
+        assert_eq!(decimals_from_return(&word_u128(18)), Some(18));
+        assert_eq!(decimals_from_return(&word_u128(6)), Some(6));
+        assert_eq!(
+            decimals_from_return(&word_u128(u128::from(MAX_DECIMALS))),
+            Some(MAX_DECIMALS)
+        );
+    }
+
+    /// Past the sanity ceiling is refused rather than clamped -- a value this
+    /// large is a malformed or hostile return, not an unusual real token.
+    #[test]
+    fn decimals_past_the_ceiling_is_unreadable() {
+        assert_eq!(decimals_from_return(&word_u128(255)), None);
+        assert_eq!(
+            decimals_from_return(&word_u128(u128::from(MAX_DECIMALS) + 1)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_malformed_decimals_return_is_unreadable() {
+        assert_eq!(decimals_from_return(&[]), None);
+        assert_eq!(decimals_from_return(&[0u8; 31]), None);
+        // High half nonzero: not a small integer at all.
+        let mut huge = [0u8; 32];
+        huge[0] = 1;
+        assert_eq!(decimals_from_return(&huge), None);
     }
 
     /// An ABI-encoded dynamic string return, as an honest token gives one.

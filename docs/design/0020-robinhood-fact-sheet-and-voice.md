@@ -840,7 +840,11 @@ silently wrong for anything else. It now carries `quote_asset:
 Option<QuoteAsset>` (a symbol and a decimal count) beside the reserve and
 capacity amounts, set by each chain's own reader; `sheet.rs` renders an amount
 only when the asset was identified, and says the impact budget "could not be
-priced" rather than guess a unit when it was not (rule 8). Both chains render
+priced" rather than guess a unit when it was not (rule 8). S1 ("name the
+pair") added a third field, `address: Option<ChainAddress>`, for a Pons v2
+curve paired with an ERC-20 token rather than native ETH: `sheet.rs` states
+that pair by symbol and address together, never the launcher-chosen symbol
+alone (see [design 0027](0027-the-three-layers.md) slice 4). Both chains render
 through the same integer-arithmetic function, so a Robinhood curve's ETH and
 a Solana curve's SOL differ only in the `decimals` and `symbol` passed in, not
 in a second code path that could drift from the first. The reserve and
