@@ -239,6 +239,24 @@ pub enum Kind {
     /// Seconds between the cluster's earliest and latest sell
     /// (`realorrug_onchain::wallets::CorrelatedSelling::spread_seconds`).
     CorrelatedSellSpreadSeconds,
+    /// The creator's cut of every trade, in basis points
+    /// (`realorrug_onchain::Powers::creator_tax_bps`, S13, research 0052
+    /// §3.1, ADR 0035). Free -- already on the launch record -- so this is
+    /// always pushed when `Dossier::powers` is read at all.
+    CreatorTaxBps,
+    /// Whether the factory's `pendingCreatorFeeRecipient` timelock names a
+    /// non-zero address (S13). `1.0` when a change is pending, `0.0` when
+    /// the read succeeded and found nothing pending -- a measured zero, not
+    /// a default. Never pushed when the sub-read itself failed (rule 8:
+    /// absent is not zero); that failure names `"pending creator fee
+    /// recipient"` in `Dossier::unavailable` instead.
+    PendingCreatorFeeRecipientSet,
+    /// How many of this launch's confirmed snipe-tax exemptions classify as
+    /// `Undeclared` -- neither research 0047 §3's first-party list nor the
+    /// launch's own declared calldata list (S13, ADR 0035). Never pushed
+    /// when any exemption sub-read failed, because an unconfirmed candidate
+    /// would make this an undercount rather than a measurement.
+    UndeclaredExemptions,
 }
 
 /// Which register a clause is written in.

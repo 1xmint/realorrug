@@ -23,8 +23,9 @@
 //! that can be argued into accepting a number nobody measured.
 
 use realorrug_onchain::budget::Count;
+use realorrug_onchain::dossier::{Exemption, ExemptionSource, Powers};
 use realorrug_onchain::market::MarketSnapshot;
-use realorrug_onchain::{ChainLaunch, Dossier, Funding, Holders, LaunchBlock};
+use realorrug_onchain::{ChainLaunch, Dossier, Funding, Holders, LaunchBlock, Unavailable};
 #[cfg(test)]
 use realorrug_types::Slot;
 use realorrug_types::{ReadAt, SlotDelta};
@@ -237,11 +238,16 @@ pub enum Signal {
     ///
     /// Design 0020 §3: threshold not yet measured for Pons v2.
     HolderConcentration,
-    /// An owner-only mint, pause or blacklist selector is present on the
-    /// deployed contract and ownership has not been renounced.
+    /// The owner's live powers over this launch. On Pons v2, per [ADR
+    /// 0035](../../../docs/adr/0035-s13-owner-powers-live-is-the-pons-v2-reads-not-a-bytecode-scan.md):
+    /// a nonzero creator tax, a pending creator-fee-recipient timelock, or a
+    /// snipe-tax exemption granted to an address off both research 0047
+    /// §3's first-party list and the launch's own declared list.
     ///
-    /// Design 0020 §3: blocked on research 0044's bytecode/ABI check, which
-    /// this design names the slot for without designing.
+    /// Design 0020's original firing rule for this variant -- a deployed
+    /// bytecode/ABI scan for an owner-only mint/pause/blacklist selector --
+    /// stays parked behind research 0044 (ADR 0035 decision 2); it is not
+    /// what fires this variant on Pons v2 today.
     OwnerCanStillMintOrPause,
     /// Wallets that bought the launch in a way that links them (research
     /// 0052 §3.2) sold within one [`realorrug_onchain::wallets::
@@ -310,9 +316,9 @@ pub(crate) fn twin_for(signal: Signal) -> &'static str {
              labelled yet"
         }
         Signal::OwnerCanStillMintOrPause => {
-            "an owner-only mint or pause selector being present reads the same whether the \
-             deployer intends to use it or it is simply part of a stock contract template \
-             nobody bothered to strip"
+            "a creator tax, a pending fee-recipient change or a snipe-tax exemption reads the \
+             same whether the creator plans to use that power against buyers or is simply using \
+             the launchpad's own built-in mechanism the way every launch on it does"
         }
         Signal::CorrelatedSelling => {
             "wallets that look linked selling in the same short window reads the same whether \
@@ -351,9 +357,7 @@ impl Signal {
             Signal::BuyersCannotSell => "a test sell into this token failed",
             Signal::RepeatLauncher => "this launcher keeps coming back with new tokens",
             Signal::HolderConcentration => "one address holds most of the supply",
-            Signal::OwnerCanStillMintOrPause => {
-                "the contract can still be minted or paused at will"
-            }
+            Signal::OwnerCanStillMintOrPause => "the creator still holds live powers over it",
             Signal::CorrelatedSelling => "wallets that look linked sold together",
         }
     }
@@ -563,7 +567,87 @@ pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
         correlated_selling_factors(sheet, &mut factors);
     }
 
+    if sheet.signals.contains(&Signal::OwnerCanStillMintOrPause) {
+        owner_powers_factors(sheet, &mut factors);
+    }
+
     factors
+}
+
+/// S13's raise/lower factors (research 0052 §3.1's row, ADR 0035), split out
+/// of [`factors`] itself so that function stays under clippy's line count --
+/// the same split [`holder_concentration_factors`] and
+/// [`correlated_selling_factors`] already use.
+///
+/// Three independent inputs, each only present when [`push_powers`] pushed
+/// it -- a sub-read that failed pushes nothing (rule 8), so this simply does
+/// not find the `Kind` and skips that one factor, the same "gap shows in
+/// coverage, never a zero" discipline [`factors`]'s own doc comment states.
+fn owner_powers_factors(sheet: &FactSheet, factors: &mut Vec<Factor>) {
+    if let Some(tax_f64) = fact_value(sheet, Kind::CreatorTaxBps) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "CreatorTaxBps is pushed from a u16 (0..=1,000 on Pons v2), far inside \
+                      i64's range"
+        )]
+        let tax = tax_f64.round() as i64;
+        if tax >= 500 {
+            factors.push(Factor {
+                signal: Signal::OwnerCanStillMintOrPause,
+                name: "creator tax >= 500 bps".to_owned(),
+                delta_bps: 700,
+                grade: Grade::Measured,
+                evidence: format!("the creator tax on this launch is {tax} bps"),
+            });
+        } else if tax == 0 {
+            factors.push(Factor {
+                signal: Signal::OwnerCanStillMintOrPause,
+                name: "creator tax == 0".to_owned(),
+                delta_bps: -300,
+                grade: Grade::Measured,
+                evidence: "the creator tax on this launch is 0 bps".to_owned(),
+            });
+        }
+    }
+
+    if let Some(pending) = fact_value(sheet, Kind::PendingCreatorFeeRecipientSet)
+        && pending != 0.0
+    {
+        factors.push(Factor {
+            signal: Signal::OwnerCanStillMintOrPause,
+            name: "pending creator fee recipient is non-zero".to_owned(),
+            delta_bps: 500,
+            grade: Grade::Measured,
+            evidence: "the factory's pendingCreatorFeeRecipient timelock names a non-zero \
+                       address"
+                .to_owned(),
+        });
+    }
+
+    if let Some(count_f64) = fact_value(sheet, Kind::UndeclaredExemptions) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "UndeclaredExemptions is a count of confirmed exemptions, never near \
+                      i64's range"
+        )]
+        let count = count_f64.round() as i64;
+        if count >= 1 {
+            // `+600` per address, capped at `+1,200` (research 0052 §3.1's
+            // S13 row) -- two addresses already reach the cap, so a third
+            // and beyond add nothing further.
+            let delta = i32::try_from((count * 600).min(1_200)).unwrap_or(1_200);
+            factors.push(Factor {
+                signal: Signal::OwnerCanStillMintOrPause,
+                name: "exempt address(es) off both lists".to_owned(),
+                delta_bps: delta,
+                grade: Grade::Measured,
+                evidence: format!(
+                    "{count} exempt address(es) on this launch are on neither the first-party \
+                     list nor the launch's own declared list"
+                ),
+            });
+        }
+    }
 }
 
 /// The two wired S5 raise factors (research 0052 §3.1), split out of
@@ -953,6 +1037,18 @@ impl FactSheet {
             push_creator_cash_flow(&mut facts, cash_flow);
         }
 
+        // S13 "owner powers live" (research 0052 §3.1, ADR 0035).
+        // `dossier.powers` is `None` when the launch transaction itself
+        // could not be read (`robinhood.rs` names "powers" on
+        // `dossier.unavailable` in that case) -- nothing further to do here;
+        // that miss is not on the skip list below, so it still counts as a
+        // coverage gap the ordinary way. Once `Some`, `push_powers` reads
+        // `dossier.unavailable` itself to tell a genuine measured zero/none
+        // apart from a sub-read that failed.
+        if let Some(powers) = &dossier.powers {
+            push_powers(&mut facts, &mut signals, powers, &dossier.unavailable);
+        }
+
         if let Some(count) = dossier.creator_transactions {
             let rendered = format!("{count}");
             facts.push(
@@ -1044,6 +1140,14 @@ impl FactSheet {
             // signal can only raise the risk score, so an unread S7 is a gap
             // in coverage, never a reason to fall to `CantTell` -- a token
             // must not score worse because its trade logs were slow to read.
+            // `pending creator fee recipient`, `declared snipe-tax
+            // exemptions`, `snipe tax exemption` and `snipe tax exemption
+            // classification` (S13, research 0052 §3.1, ADR 0035) join for
+            // the same reason as `correlated selling`: each sub-read can
+            // only ever raise `OwnerCanStillMintOrPause`'s weight, so a
+            // failed one is a coverage gap `push_powers` already leaves off
+            // the fact sheet entirely (rule 8), never a reason for
+            // `verdict::level` to fall to `CantTell`.
             if matches!(
                 miss.fact,
                 "capacity"
@@ -1053,6 +1157,10 @@ impl FactSheet {
                     | "token ownership"
                     | "quote asset"
                     | "correlated selling"
+                    | "pending creator fee recipient"
+                    | "declared snipe-tax exemptions"
+                    | "snipe tax exemption"
+                    | "snipe tax exemption classification"
             ) {
                 // Recorded here, not dropped: `assessment.rs`'s coverage
                 // figure needs to know this gap exists even though
@@ -1623,6 +1731,120 @@ fn push_correlated_selling(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, lau
     }
 
     signals.push(Signal::CorrelatedSelling);
+}
+
+/// S13 "owner powers live" (research 0052 §3.1, ADR 0035): creator tax, the
+/// pending creator-fee-recipient timelock, and undeclared snipe-tax
+/// exemptions, projected from `dossier.powers` onto the fact sheet.
+///
+/// Called only when `dossier.powers` is `Some` ([`FactSheet::build`]'s job),
+/// so `creator_tax_bps` -- free on the same `getLaunchedToken` call every
+/// dossier already pays for -- is always pushed and the signal always
+/// fires: Pons v2 gives every launch a creator-tax capability, a
+/// fee-recipient timelock and an exemption mechanism, so the signal is
+/// about what a specific launch does with those built-in powers, not
+/// whether it has them at all (ADR 0035 decision 1).
+///
+/// The other two facts are pushed only when `unavailable` carries no entry
+/// for the sub-read they depend on -- `Powers` has no separate
+/// success/failure flag for either, so this is the only place that can
+/// still tell "the read succeeded and found nothing" apart from "the read
+/// never completed" (rule 8).
+fn push_powers(
+    facts: &mut Vec<Fact>,
+    signals: &mut Vec<Signal>,
+    powers: &Powers,
+    unavailable: &[Unavailable],
+) {
+    let missing = |name: &str| unavailable.iter().any(|miss| miss.fact == name);
+
+    let tax_bps = f64::from(powers.creator_tax_bps);
+    facts.push(
+        Fact::exact(
+            Kind::CreatorTaxBps,
+            "the creator's cut of every trade on this launch, in basis points",
+            tax_bps,
+            format!("{} bps", powers.creator_tax_bps),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "The creator takes {} bps of every trade on this launch.",
+                powers.creator_tax_bps
+            ),
+        )
+        .saying(
+            Voice::Blunt,
+            format!("Creator tax: {} bps.", powers.creator_tax_bps),
+        ),
+    );
+
+    if !missing("pending creator fee recipient") {
+        let pending = powers.pending_creator_fee_recipient.is_some();
+        let rendered = if pending { "pending" } else { "none pending" };
+        facts.push(
+            Fact::exact(
+                Kind::PendingCreatorFeeRecipientSet,
+                "whether the factory's pendingCreatorFeeRecipient timelock names a non-zero \
+                 address",
+                if pending { 1.0 } else { 0.0 },
+                rendered.to_owned(),
+            )
+            .saying(
+                Voice::Plain,
+                if pending {
+                    "A change to who receives creator fees is pending on this launch.".to_owned()
+                } else {
+                    "No change to who receives creator fees is pending on this launch.".to_owned()
+                },
+            )
+            .saying(
+                Voice::Blunt,
+                format!("Pending fee-recipient change: {rendered}."),
+            ),
+        );
+    }
+
+    let exemptions_unread = missing("declared snipe-tax exemptions")
+        || missing("snipe tax exemption")
+        || missing("snipe tax exemption classification");
+    if !exemptions_unread {
+        let undeclared = powers
+            .exemptions
+            .iter()
+            .filter(|exemption: &&Exemption| exemption.source == ExemptionSource::Undeclared)
+            .count();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a count of exemptions on one launch is far inside f64's exact integer \
+                      range"
+        )]
+        let undeclared_f64 = undeclared as f64;
+        facts.push(
+            Fact::exact(
+                Kind::UndeclaredExemptions,
+                "addresses exempt from this launch's snipe tax that are on neither research \
+                 0047 §3's first-party list nor the launch's own declared list",
+                undeclared_f64,
+                undeclared.to_string(),
+            )
+            .saying(
+                Voice::Plain,
+                format!(
+                    "{undeclared} address(es) are exempt from this launch's snipe tax without \
+                     being on the first-party list or the launch's own declared list."
+                ),
+            )
+            .saying(
+                Voice::Blunt,
+                format!("Undeclared exemptions: {undeclared}."),
+            ),
+        );
+    }
+
+    // Fires unconditionally once `Some` -- see this function's own doc
+    // comment.
+    signals.push(Signal::OwnerCanStillMintOrPause);
 }
 
 /// The launcher's own launch-block buy as a share of the token's total
@@ -4458,6 +4680,300 @@ mod tests {
         let sheet = FactSheet::build(&missed, None, None, None, None);
         assert_eq!(sheet.skipped, vec!["correlated selling".to_owned()]);
         assert_eq!(sheet.unknown, baseline.unknown);
+    }
+
+    /// Builds an address distinguishable by its last byte, so several
+    /// exemptions in one test are visibly different addresses.
+    fn robinhood_address(last_byte: u8) -> realorrug_types::ChainAddress {
+        let mut bytes = [0u8; 20];
+        bytes[19] = last_byte;
+        realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(bytes))
+    }
+
+    fn powers_with(
+        creator_tax_bps: u16,
+        pending_creator_fee_recipient: Option<realorrug_types::ChainAddress>,
+        exemptions: Vec<Exemption>,
+    ) -> Powers {
+        Powers {
+            creator_tax_bps,
+            pending_creator_fee_recipient,
+            exemptions,
+        }
+    }
+
+    fn factor_delta(sheet: &FactSheet, name: &str) -> Option<i32> {
+        factors(sheet)
+            .into_iter()
+            .find(|f| f.signal == Signal::OwnerCanStillMintOrPause && f.name == name)
+            .map(|f| f.delta_bps)
+    }
+
+    #[test]
+    fn creator_tax_499_bps_raises_nothing() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(499, None, Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(factor_delta(&sheet, "creator tax >= 500 bps"), None);
+    }
+
+    #[test]
+    fn creator_tax_500_bps_raises_700() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(500, None, Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(factor_delta(&sheet, "creator tax >= 500 bps"), Some(700));
+    }
+
+    #[test]
+    fn creator_tax_501_bps_raises_700() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(501, None, Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(factor_delta(&sheet, "creator tax >= 500 bps"), Some(700));
+    }
+
+    #[test]
+    fn creator_tax_zero_lowers_300() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(0, None, Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(factor_delta(&sheet, "creator tax == 0"), Some(-300));
+    }
+
+    #[test]
+    fn creator_tax_one_bps_moves_neither_factor() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(1, None, Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(factor_delta(&sheet, "creator tax == 0"), None);
+        assert_eq!(factor_delta(&sheet, "creator tax >= 500 bps"), None);
+    }
+
+    #[test]
+    fn no_pending_fee_recipient_raises_nothing() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(0, None, Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            factor_delta(&sheet, "pending creator fee recipient is non-zero"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_pending_fee_recipient_raises_500() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(0, Some(robinhood_address(7)), Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            factor_delta(&sheet, "pending creator fee recipient is non-zero"),
+            Some(500)
+        );
+    }
+
+    #[test]
+    fn zero_undeclared_exemptions_raises_nothing() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(0, None, Vec::new()));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            factor_delta(&sheet, "exempt address(es) off both lists"),
+            None
+        );
+    }
+
+    #[test]
+    fn one_undeclared_exemption_raises_600() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![Exemption {
+                address: robinhood_address(1),
+                source: ExemptionSource::Undeclared,
+            }],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            factor_delta(&sheet, "exempt address(es) off both lists"),
+            Some(600)
+        );
+    }
+
+    #[test]
+    fn two_undeclared_exemptions_raise_1200_and_cap_there() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![
+                Exemption {
+                    address: robinhood_address(1),
+                    source: ExemptionSource::Undeclared,
+                },
+                Exemption {
+                    address: robinhood_address(2),
+                    source: ExemptionSource::Undeclared,
+                },
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            factor_delta(&sheet, "exempt address(es) off both lists"),
+            Some(1_200)
+        );
+    }
+
+    #[test]
+    fn three_undeclared_exemptions_stay_capped_at_1200() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![
+                Exemption {
+                    address: robinhood_address(1),
+                    source: ExemptionSource::Undeclared,
+                },
+                Exemption {
+                    address: robinhood_address(2),
+                    source: ExemptionSource::Undeclared,
+                },
+                Exemption {
+                    address: robinhood_address(3),
+                    source: ExemptionSource::Undeclared,
+                },
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            factor_delta(&sheet, "exempt address(es) off both lists"),
+            Some(1_200)
+        );
+    }
+
+    #[test]
+    fn a_declared_exemption_is_not_counted_as_undeclared() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![Exemption {
+                address: robinhood_address(1),
+                source: ExemptionSource::Declared,
+            }],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            factor_delta(&sheet, "exempt address(es) off both lists"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_first_party_exemption_is_not_counted_as_undeclared() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![Exemption {
+                address: robinhood_address(1),
+                source: ExemptionSource::FirstParty,
+            }],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(
+            factor_delta(&sheet, "exempt address(es) off both lists"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unread_owner_power_sub_read_is_a_coverage_gap_not_an_unknown_line() {
+        // Same discipline as `an_unread_correlated_selling_is_a_coverage_gap...`
+        // above: each of S13's three sub-reads can only ever raise the
+        // score, so a failed one must show up as a coverage gap and leave
+        // `unknown` untouched, never push `verdict::level` toward `CantTell`.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(0, None, Vec::new()));
+        let baseline = FactSheet::build(&dossier, None, None, None, None);
+
+        for fact_name in [
+            "pending creator fee recipient",
+            "declared snipe-tax exemptions",
+            "snipe tax exemption",
+            "snipe tax exemption classification",
+        ] {
+            let mut missed = dossier.clone();
+            missed.unavailable.push(realorrug_onchain::Unavailable {
+                fact: fact_name,
+                why: "the read did not complete".to_owned(),
+            });
+            let sheet = FactSheet::build(&missed, None, None, None, None);
+            assert_eq!(
+                sheet.skipped,
+                vec![fact_name.to_owned()],
+                "expected {fact_name} to land in skipped"
+            );
+            assert_eq!(
+                sheet.unknown, baseline.unknown,
+                "{fact_name} must not degrade verdict severity"
+            );
+        }
+
+        // And the gated fact itself must be absent from the sheet -- never a
+        // zero/clean value standing in for "unread" (rule 8).
+        let mut missed_pending = dossier.clone();
+        missed_pending
+            .unavailable
+            .push(realorrug_onchain::Unavailable {
+                fact: "pending creator fee recipient",
+                why: "the read did not complete".to_owned(),
+            });
+        let sheet = FactSheet::build(&missed_pending, None, None, None, None);
+        assert!(
+            !sheet
+                .facts
+                .iter()
+                .any(|f| f.kind == Kind::PendingCreatorFeeRecipientSet),
+            "an unread pending-recipient sub-read must not publish a fact at all"
+        );
+    }
+
+    #[test]
+    fn any_one_unread_exemption_read_withholds_the_undeclared_count() {
+        // The count needs all three exemption reads; any single one failing
+        // leaves it off the sheet, so an undeclared exemption the dossier
+        // does hold is never published on a half-read basis (rule 8).
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.powers = Some(powers_with(
+            0,
+            None,
+            vec![Exemption {
+                address: robinhood_address(1),
+                source: ExemptionSource::Undeclared,
+            }],
+        ));
+        for fact_name in [
+            "declared snipe-tax exemptions",
+            "snipe tax exemption",
+            "snipe tax exemption classification",
+        ] {
+            let mut missed = dossier.clone();
+            missed.unavailable.push(realorrug_onchain::Unavailable {
+                fact: fact_name,
+                why: "the read did not complete".to_owned(),
+            });
+            let sheet = FactSheet::build(&missed, None, None, None, None);
+            assert!(
+                !sheet
+                    .facts
+                    .iter()
+                    .any(|f| f.kind == Kind::UndeclaredExemptions),
+                "{fact_name} unread must withhold the undeclared count"
+            );
+        }
     }
 
     #[test]
