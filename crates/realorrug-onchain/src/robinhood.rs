@@ -30,7 +30,9 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 
 use realorrug_robinhood::erc20;
-use realorrug_robinhood::pons::{FACTORY, Launched, LaunchedToken, Side, Trade, curve, powers, topic};
+use realorrug_robinhood::pons::{
+    FACTORY, Launched, LaunchedToken, Side, Trade, curve, powers, topic,
+};
 use realorrug_robinhood::{
     Address as RobinhoodAddress, BlockHeader, Hash32, Log, LogsError, Receipt, Rpc,
 };
@@ -196,6 +198,18 @@ fn launch_facts(
     ))
 }
 
+/// The `launch_facts` outputs `powers_facts` classifies against: the
+/// launched-token record (for `creator_tax_bps` and the curve address), the
+/// launch transaction's hash (to fetch its calldata for the declared
+/// exemption list) and its receipt (to find snipe-tax-exemption candidates
+/// for free, without a log search of its own).
+struct LaunchContext<'a> {
+    token: &'a RobinhoodAddress,
+    record: &'a LaunchedToken,
+    transaction: &'a Hash32,
+    receipt: Option<&'a Receipt>,
+}
+
 /// S13's "owner powers live" (research 0052 §3; task packet M-D-0004):
 /// creator tax (free -- already on `record`, from the same `getLaunchedToken`
 /// call every dossier already pays for), the pending creator-fee timelock,
@@ -221,13 +235,33 @@ fn launch_facts(
 fn powers_facts(
     budget: &mut Budget,
     client: &Rpc,
-    token: &RobinhoodAddress,
-    record: &LaunchedToken,
-    transaction: &Hash32,
-    receipt: Option<&Receipt>,
+    launch: &LaunchContext<'_>,
     at: Option<u64>,
     unavailable: &mut Vec<Unavailable>,
 ) -> Powers {
+    let pending_creator_fee_recipient =
+        pending_creator_fee_recipient(budget, client, launch.token, at, unavailable);
+    let declared = declared_exemptions(budget, client, launch.transaction, unavailable);
+    let exemptions =
+        confirmed_snipe_tax_exemptions(budget, client, launch, declared.as_ref(), at, unavailable);
+
+    Powers {
+        creator_tax_bps: launch.record.creator_tax_bps,
+        pending_creator_fee_recipient: pending_creator_fee_recipient.map(ChainAddress::Robinhood),
+        exemptions,
+    }
+}
+
+/// The curve's `pendingCreatorFeeRecipient` timelock target, or `None` for
+/// every way that read can fail (rule 8: named in `unavailable`, not
+/// defaulted).
+fn pending_creator_fee_recipient(
+    budget: &mut Budget,
+    client: &Rpc,
+    token: &RobinhoodAddress,
+    at: Option<u64>,
+    unavailable: &mut Vec<Unavailable>,
+) -> Option<RobinhoodAddress> {
     let mut pending_creator_fee_recipient = None;
     match call(
         budget,
@@ -248,20 +282,31 @@ fn powers_facts(
             why,
         }),
     }
+    pending_creator_fee_recipient
+}
 
-    let declared = match take(budget).and_then(|()| client.transaction(transaction)) {
-        Ok(Some(tx)) => match powers::declared_exemptions(&tx.input) {
-            Some(list) => Some(list),
-            None => {
+/// The snipe-tax exemptions `launchToken`'s own calldata declared, decoded
+/// from the launch transaction research 0048 §3 already named. `None` for
+/// every way the read or decode can fail (rule 8).
+fn declared_exemptions(
+    budget: &mut Budget,
+    client: &Rpc,
+    transaction: &Hash32,
+    unavailable: &mut Vec<Unavailable>,
+) -> Option<Vec<RobinhoodAddress>> {
+    match take(budget).and_then(|()| client.transaction(transaction)) {
+        Ok(Some(tx)) => {
+            let list = powers::declared_exemptions(&tx.input);
+            if list.is_none() {
                 unavailable.push(Unavailable {
                     fact: "declared snipe-tax exemptions",
                     why: "the launch transaction's calldata did not decode under \
                           launchToken's confirmed shape (research 0048 §3)"
                         .to_owned(),
                 });
-                None
             }
-        },
+            list
+        }
         Ok(None) => {
             unavailable.push(Unavailable {
                 fact: "declared snipe-tax exemptions",
@@ -276,87 +321,94 @@ fn powers_facts(
             });
             None
         }
-    };
+    }
+}
 
+/// Every address the launch receipt's `SnipeTaxExempted` events name,
+/// re-confirmed against the curve (an event at launch is not proof nothing
+/// has revoked the exemption since) and classified against `declared` and
+/// research 0047 §3's first-party list.
+fn confirmed_snipe_tax_exemptions(
+    budget: &mut Budget,
+    client: &Rpc,
+    launch: &LaunchContext<'_>,
+    declared: Option<&Vec<RobinhoodAddress>>,
+    at: Option<u64>,
+    unavailable: &mut Vec<Unavailable>,
+) -> Vec<Exemption> {
     let mut exemptions = Vec::new();
     let mut seen: Vec<RobinhoodAddress> = Vec::new();
-    if let Some(receipt) = receipt {
-        for log in &receipt.logs {
-            if log.address != record.curve
-                || log.topics.first().copied() != Some(topic::SNIPE_TAX_EXEMPTED)
-            {
-                continue;
-            }
-            let Some(address) = log.topic_address(1) else {
-                unavailable.push(Unavailable {
-                    fact: "snipe tax exemption",
-                    why: "a SnipeTaxExempted event carried no address topic".to_owned(),
-                });
-                continue;
-            };
-            if seen.contains(&address) {
-                // Already confirmed and classified this address from an
-                // earlier event in the same receipt -- a second confirmation
-                // call would answer the same question again.
-                continue;
-            }
-            seen.push(address);
+    let Some(receipt) = launch.receipt else {
+        return exemptions;
+    };
+    for log in &receipt.logs {
+        if log.address != launch.record.curve
+            || log.topics.first().copied() != Some(topic::SNIPE_TAX_EXEMPTED)
+        {
+            continue;
+        }
+        let Some(address) = log.topic_address(1) else {
+            unavailable.push(Unavailable {
+                fact: "snipe tax exemption",
+                why: "a SnipeTaxExempted event carried no address topic".to_owned(),
+            });
+            continue;
+        };
+        if seen.contains(&address) {
+            // Already confirmed and classified this address from an
+            // earlier event in the same receipt -- a second confirmation
+            // call would answer the same question again.
+            continue;
+        }
+        seen.push(address);
 
-            let confirmed = call(
-                budget,
-                client,
-                &record.curve,
-                &curve::call_data_for(curve::SNIPE_TAX_EXEMPT, &address),
-                at,
-            )
-            .ok()
-            .as_deref()
-            .and_then(curve::bool_return);
+        let confirmed = call(
+            budget,
+            client,
+            &launch.record.curve,
+            &curve::call_data_for(curve::SNIPE_TAX_EXEMPT, &address),
+            at,
+        )
+        .ok()
+        .as_deref()
+        .and_then(curve::bool_return);
 
-            match confirmed {
-                Some(true) => {
-                    // `classify` already checks the first-party list before
-                    // the declared one; when the declared list itself could
-                    // not be read, a non-first-party address cannot be told
-                    // apart from declared vs. undeclared, so it is named
-                    // rather than guessed either way (rule 8).
-                    let source = match &declared {
-                        Some(list) => Some(powers::classify(&address, list)),
-                        None if powers::FIRST_PARTY.contains(&address) => {
-                            Some(powers::Source::FirstParty)
-                        }
-                        None => {
-                            unavailable.push(Unavailable {
-                                fact: "snipe tax exemption classification",
-                                why: format!(
-                                    "{address} is exempt but the declared list could not be \
-                                     read, so declared and undeclared cannot be told apart"
-                                ),
-                            });
-                            None
-                        }
-                    };
-                    if let Some(source) = source {
-                        exemptions.push(Exemption {
-                            address: ChainAddress::Robinhood(address),
-                            source,
-                        });
-                    }
+        match confirmed {
+            Some(true) => {
+                // `classify` already checks the first-party list before
+                // the declared one; when the declared list itself could
+                // not be read, a non-first-party address cannot be told
+                // apart from declared vs. undeclared, so it is named
+                // rather than guessed either way (rule 8).
+                let source = if let Some(list) = declared {
+                    Some(powers::classify(&address, list))
+                } else if powers::FIRST_PARTY.contains(&address) {
+                    Some(powers::Source::FirstParty)
+                } else {
+                    unavailable.push(Unavailable {
+                        fact: "snipe tax exemption classification",
+                        why: format!(
+                            "{address} is exempt but the declared list could not be \
+                             read, so declared and undeclared cannot be told apart"
+                        ),
+                    });
+                    None
+                };
+                if let Some(source) = source {
+                    exemptions.push(Exemption {
+                        address: ChainAddress::Robinhood(address),
+                        source,
+                    });
                 }
-                Some(false) => {}
-                None => unavailable.push(Unavailable {
-                    fact: "snipe tax exemption",
-                    why: format!("snipeTaxExempt could not be confirmed for {address}"),
-                }),
             }
+            Some(false) => {}
+            None => unavailable.push(Unavailable {
+                fact: "snipe tax exemption",
+                why: format!("snipeTaxExempt could not be confirmed for {address}"),
+            }),
         }
     }
-
-    Powers {
-        creator_tax_bps: record.creator_tax_bps,
-        pending_creator_fee_recipient: pending_creator_fee_recipient.map(ChainAddress::Robinhood),
-        exemptions,
-    }
+    exemptions
 }
 
 /// One ERC-20 string field of `token`, or `None` for every way that can fail.
@@ -1097,13 +1149,16 @@ pub fn build_with_memory(
     // wallet was ever declared" instead of "unknown".
     match launch_transaction {
         Some(transaction) => {
+            let launch = LaunchContext {
+                token,
+                record: &record,
+                transaction: &transaction,
+                receipt: launch_receipt.as_ref(),
+            };
             dossier.powers = Some(powers_facts(
                 budget,
                 client,
-                token,
-                &record,
-                &transaction,
-                launch_receipt.as_ref(),
+                &launch,
                 at,
                 &mut dossier.unavailable,
             ));
