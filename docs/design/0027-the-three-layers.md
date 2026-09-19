@@ -256,6 +256,13 @@ tests already run.
 | 11. Engagement-only contest rule | contest `score.rs`, `ledger.rs`; analyst `x.rs`, `daemon.rs`; site `Leaderboard.tsx` | All five metrics count under recorded weights; no anti-gaming score; old weeks replay unchanged; model has no payout authority | Recorded weights/version boundary |
 | 12. Curated daily and review loop | analyst `daily.rs`, `daemon.rs`, `log.rs`; cli observe.rs; site `History.tsx` | Multi-coin report cites packets, corrections and authoritative standings; per-token numbers cannot cross; human-reviewed weekly draft/outcome export | 8–11 |
 
+**Slice 11 is shelved (2026-09-18).** The prize moves off engagement and onto
+a free calling game on the site ([design 0028](0028-the-daily-five.md),
+[ADR 0034](../adr/0034-the-prize-is-a-free-calling-game.md), recommending).
+`score.rs` is kept but no longer decides the prize, and the engagement
+weights are no longer asked for. Design 0028 §10 adds its own build order,
+G1 to G9, which leans on slices 8 and 9 here.
+
 The first three slices are meant to fix the visible failure (label matching
 that can be defeated by renaming a word), make evidence reusable across the
 reply, card and website, and deliver the owner's most distinctive signal
