@@ -354,6 +354,12 @@ async fn handle(
         crate::record::level_name(realorrug_roast::verdict::Verdict::from(&sheet).level),
         "facts",
     );
+    crate::record::token_text(
+        state.memory_path.as_deref(),
+        "robinhood",
+        &address.to_string(),
+        &dossier,
+    );
 
     let mut response = (StatusCode::OK, Json(body)).into_response();
     response.headers_mut().insert(
