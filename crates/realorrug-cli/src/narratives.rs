@@ -154,10 +154,19 @@ mod tests {
     }
 
     /// A cap no smaller than the list prints no footer.
+    ///
+    /// The exactly-full case is here too, because a list of three under a cap
+    /// of three leaves nothing out, and a footer saying "and 0 more" would be
+    /// a lie in the one place a reader is most likely to look.
     #[test]
     fn nothing_is_left_out_when_the_list_fits() {
         let page = report(&[theme("neuro", 3, 100)], 50, 7, 3, 20);
         assert!(!page.contains("more"), "{page}");
+
+        let themes: Vec<Theme> = (0..3).map(|i| theme(&format!("t{i}"), 3, 100)).collect();
+        let exactly_full = report(&themes, 50, 7, 3, 3);
+        assert!(!exactly_full.contains("more"), "{exactly_full}");
+        assert!(exactly_full.contains("t2"), "{exactly_full}");
     }
 
     /// A flag that will not parse is ignored rather than failing the run.
