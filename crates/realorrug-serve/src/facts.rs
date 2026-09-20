@@ -339,6 +339,21 @@ async fn handle(
     };
 
     record_paid_request(&state, &token, &sheet, &response_hash, &receipt);
+    // The parsed address, not the `{token}` path segment, for the same
+    // reason `check.rs` uses it: one token must have one spelling in the
+    // record or its history splits in two.
+    //
+    // The level is computed here for the record alone and never for the body:
+    // ADR 0036 decision 1 holds it back from the paid response until
+    // calibration. Recording it anyway is what makes the calibration possible.
+    crate::record::verdict(
+        state.memory_path.as_deref(),
+        "robinhood",
+        &address.to_string(),
+        &sheet,
+        crate::record::level_name(realorrug_roast::verdict::Verdict::from(&sheet).level),
+        "facts",
+    );
 
     let mut response = (StatusCode::OK, Json(body)).into_response();
     response.headers_mut().insert(

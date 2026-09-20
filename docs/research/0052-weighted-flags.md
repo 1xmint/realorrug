@@ -577,6 +577,38 @@ several. No caller reads it yet -- S1's and S2's linked-wallet raises
 that also carries the `Powers.exemptions`/`Funding.checked` reads those
 factors need.
 
+**The M-D-0006 sample is now being collected (2026-09-20).** §5's replay
+needs labelled launches, and §4 of research 0055 establishes that this one
+input cannot be reconstructed later: recomputing "what would we have said
+then" from today's chain state is a different claim from "what we actually
+said then". So the record starts ahead of the thing that reads it.
+`crates/realorrug-onchain/src/memory.rs` gained two tables -- `verdicts`
+(one row per verdict as published: chain, token, the block it was read at,
+the level, the score in bps, the signals that fired, which surface served
+it, and when) and `verdict_outcomes` (one row per token: `rug`, `failed` or
+`alive` by §5's definition, the block it was observed at, and one line of
+evidence so a disputed label can be re-checked against the chain rather than
+trusted). `Memory::labelled_verdicts` joins them, inner join only: a verdict
+with no outcome yet is not half a pair, and counting it as one would hand
+the fit an unlabelled launch as whatever the missing label defaulted to
+(AGENTS.md rule 8). An outcome is `INSERT OR REPLACE` keyed on the token, so
+a launch called `alive` in May and `rug` in June is one launch that rugged,
+and every verdict already recorded re-pairs against the newer label.
+
+Both serving surfaces write a record: the free checker route
+(`crates/realorrug-serve/src/check.rs`) and the paid facts endpoint
+(`crates/realorrug-serve/src/facts.rs`), tagged `"check"` and `"facts"`, so
+a later fit can hold one surface out -- the two see different tokens for
+different reasons. The record keeps the **score** as well as the level even
+though ADR 0036 decision 1 publishes neither: the whole question M-D-0006
+settles is whether score bands beat the boolean ladder, and a level-only
+record could never test it. Nothing reads the tables yet, and no published
+surface changed -- the level stays on the flag rules, per the owner's
+2026-09-19 hold above. Still missing is the **labelling** side: no job
+observes outcomes yet, so `labelled_verdicts` returns nothing until one is
+built, and §5's 200-per-arm minimum is a count of pairs that do not exist
+today.
+
 ## 9. Where this is weak
 
 - **False precision.** Every base and delta in §3 is hand-set today; the

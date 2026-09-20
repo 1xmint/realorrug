@@ -550,3 +550,26 @@ the free checker route this document describes. It is the same model-free
 The rate limiter and daily budget in §4 govern the free route only; a paid
 call is metered by its payment, which is what a buyer is entitled to for
 having paid.
+
+## 10. Addendum — both routes write down the verdict they published
+
+Every verdict either route serves is written to the daemon's SQLite memory
+(`crates/realorrug-serve/src/record.rs`, storing into `verdicts` in
+`crates/realorrug-onchain/src/memory.rs`): the token, the block the facts
+were read at, the level published, the score behind it, the signals that
+fired, which surface served it, and the moment. Nothing on either page
+changed and nothing reads the table yet.
+
+It is written now because it cannot be written later. Research 0052 §5's
+calibration is waiting on launches whose verdict is paired with what the
+token turned out to be, and a verdict recomputed next year from next year's
+chain state is a different verdict about a different moment — it would
+flatter the model with facts it did not have at the time (research 0055 §4).
+The score is kept even though ADR 0036 decision 1 publishes it nowhere,
+because the question calibration settles is whether the score beats the
+level, and a level-only record cannot answer it.
+
+Deny by default as everywhere else (AGENTS.md rule 7): with no memory path
+configured the routes write nothing and answer exactly as before, and a
+failed write is never allowed to fail a request — a visitor got their answer
+and a buyer got what they paid for; our bookkeeping is not their problem.

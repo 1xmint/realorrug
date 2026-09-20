@@ -10,6 +10,7 @@ pub mod card;
 pub mod check;
 pub mod facts;
 pub mod public;
+mod record;
 
 use std::sync::Arc;
 
