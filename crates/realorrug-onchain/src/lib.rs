@@ -58,6 +58,7 @@ pub mod dossier;
 pub mod launch;
 pub mod market;
 pub mod memory;
+pub mod narrative;
 pub mod outcome;
 pub mod reserves;
 pub mod robinhood;

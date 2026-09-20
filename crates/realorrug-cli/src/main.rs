@@ -14,6 +14,7 @@ mod dossier;
 mod label_outcomes;
 mod launch_check;
 mod model_prices;
+mod narratives;
 mod roast;
 
 use std::process::ExitCode;
@@ -68,6 +69,12 @@ commands:
                                  (research 0052 §5). A launch this reading
                                  cannot settle is left unlabelled, never
                                  guessed. Read-only chain access
+  narratives [--memory PATH] [--days N] [--min N] [--top N]
+                                 which words recent launches share, counted
+                                 from the names already stored when each
+                                 dossier was read. No chain read, no model:
+                                 a count of names, never a claim that the
+                                 launches sharing a word are related
   model-prices <model> [--check] | --list
                                  what to paste into analyst.env for a model,
                                  read from models.dev rather than typed
@@ -119,6 +126,7 @@ fn main() -> ExitCode {
         "launch-check" => launch_check::run(&args),
         "label-outcomes" => label_outcomes::run(&args),
         "model-prices" => model_prices::run(&args),
+        "narratives" => narratives::run(&args),
         "-h" | "--help" | "help" => {
             print!("{}", usage());
             return ExitCode::SUCCESS;

@@ -726,6 +726,32 @@ impl OutcomeLabel {
     }
 }
 
+/// What one launch called itself.
+///
+/// Kept because a launch's chosen words are the cheapest evidence of what
+/// theme it is riding, and because the two strings are already paid for: a
+/// dossier spends two of its sixty calls on `name()` and `symbol()` whether
+/// or not anything stores the answer (research 0055 §3 assumed this text was
+/// already in the launch event; it is not, which is why storing it as it goes
+/// past is what makes the clustering free rather than a new crawl).
+///
+/// Untrusted text, chosen by the launcher (rule 3). Nothing here is ever
+/// quoted into a model's instructions; [`crate::narrative`] only counts words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenText {
+    /// The chain the token is on, the same spelling the verdict record uses.
+    pub chain: String,
+    /// The token's address, lowercased by the caller so one token has one row.
+    pub token: String,
+    /// `name()` from the token contract; `None` means the call failed, never
+    /// that the token has no name (rule 8).
+    pub name: Option<String>,
+    /// `symbol()`, on the same terms as [`TokenText::name`].
+    pub symbol: Option<String>,
+    /// When this machine first saw the token, not when the token launched.
+    pub first_seen: SystemTime,
+}
+
 /// One verdict as it was published, kept so it can be paired with what the
 /// token turned out to be (research 0052 §5, the calibration replay M-D-0006
 /// is waiting on a sample).
@@ -990,6 +1016,70 @@ impl Memory {
         Ok(tokens)
     }
 
+    /// Writes down what a launch called itself, if it has not been written
+    /// down before.
+    ///
+    /// Both strings are optional and both may be `None` at once: a token
+    /// whose `name()` and `symbol()` calls both failed still gets a row, so
+    /// that the next read knows the token was seen and an empty reading is
+    /// never mistaken for a token with no name (rule 8). A row with two
+    /// `None`s simply belongs to no theme.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn record_token_text(&self, text: &TokenText) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO token_texts
+                (chain, token, name, symbol, first_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                text.chain,
+                text.token,
+                text.name,
+                text.symbol,
+                to_unix(text.first_seen)
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every token text first seen at or after `since`, oldest first.
+    ///
+    /// The window is on `first_seen` -- when this machine learned of the
+    /// token -- and not on the launch's own block, for the same reason
+    /// [`Memory::launches_in_window`] is: re-reading an old token is not a
+    /// new token appearing, and a theme is about what is appearing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails.
+    pub fn token_texts_since(
+        &self,
+        chain: &str,
+        since: SystemTime,
+    ) -> Result<Vec<TokenText>, Error> {
+        let mut statement = self.conn.prepare(
+            "SELECT token, name, symbol, first_seen FROM token_texts
+             WHERE chain = ?1 AND first_seen >= ?2
+             ORDER BY first_seen, token",
+        )?;
+        let rows = statement.query_map(params![chain, to_unix(since)], |row| {
+            Ok(TokenText {
+                chain: chain.to_owned(),
+                token: row.get(0)?,
+                name: row.get(1)?,
+                symbol: row.get(2)?,
+                first_seen: from_unix(row.get(3)?),
+            })
+        })?;
+        let mut texts = Vec::new();
+        for text in rows {
+            texts.push(text?);
+        }
+        Ok(texts)
+    }
+
     /// How many verdicts have been recorded for `(chain, token)`.
     #[must_use]
     pub fn verdict_count(&self, chain: &str, token: &str) -> u64 {
@@ -1100,9 +1190,17 @@ impl Memory {
              CREATE INDEX IF NOT EXISTS paid_requests_by_token
                 ON paid_requests (chain, token, id);",
         )?;
-        Self::init_verdicts(conn)?;
+        Self::init_records(conn)?;
         Self::add_buyer_index_token_amount_column(conn)?;
         Ok(())
+    }
+
+    /// The tables nothing serves from: what was judged, what it turned out
+    /// to be, and what it called itself. Grouped behind one call so
+    /// `init_events` stays inside the length lint as the record grows.
+    fn init_records(conn: &Connection) -> Result<(), Error> {
+        Self::init_verdicts(conn)?;
+        Self::init_token_texts(conn)
     }
 
     /// The verdict record's own two tables, kept in their own statement so
@@ -1131,6 +1229,34 @@ impl Memory {
                 observed_at INTEGER NOT NULL,
                 PRIMARY KEY (chain, token)
              );",
+        )?;
+        Ok(())
+    }
+
+    /// The name and symbol a launch chose for itself.
+    ///
+    /// A separate table rather than a `facts` row because it is keyed by the
+    /// token and not by a block: the two strings come from `name()` and
+    /// `symbol()` on the token contract, which a dossier already pays for,
+    /// and nothing about them is a reading of a moment the way a balance is.
+    ///
+    /// `first_seen` and the `INSERT OR IGNORE` in
+    /// [`Memory::record_token_text`] together mean the earliest reading wins.
+    /// A token contract can in principle be upgraded to answer `name()`
+    /// differently later, and the question this table exists to answer --
+    /// what was this launch called -- is about the launch, not about today.
+    fn init_token_texts(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS token_texts (
+                chain      TEXT    NOT NULL,
+                token      TEXT    NOT NULL,
+                name       TEXT,
+                symbol     TEXT,
+                first_seen INTEGER NOT NULL,
+                PRIMARY KEY (chain, token)
+             );
+             CREATE INDEX IF NOT EXISTS token_texts_by_time
+                ON token_texts (chain, first_seen);",
         )?;
         Ok(())
     }
@@ -2723,6 +2849,77 @@ mod tests {
             Some(9),
             "a row written after the migration keeps its token amount"
         );
+    }
+
+    /// What a launch called itself is written once and kept. A second
+    /// reading -- a re-check tomorrow, or a token contract that answers
+    /// `name()` differently after an upgrade -- does not overwrite it: the
+    /// question is what this launch was called, which is about the launch.
+    #[test]
+    fn the_first_name_a_launch_was_seen_under_is_the_one_kept() {
+        let mem = Memory::open_in_memory().expect("open");
+        let first = TokenText {
+            chain: CHAIN.to_owned(),
+            token: TOKEN.to_owned(),
+            name: Some("Neuro Dog".to_owned()),
+            symbol: Some("NEURO".to_owned()),
+            first_seen: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
+        };
+        mem.record_token_text(&first).expect("write");
+        mem.record_token_text(&TokenText {
+            name: Some("Something Else".to_owned()),
+            symbol: Some("ELSE".to_owned()),
+            first_seen: SystemTime::UNIX_EPOCH + Duration::from_secs(2_000),
+            ..first.clone()
+        })
+        .expect("write again");
+
+        let texts = mem
+            .token_texts_since(CHAIN, SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(texts, vec![first]);
+    }
+
+    /// The window is on when this machine first saw the token, and a token
+    /// seen before it is outside.
+    #[test]
+    fn only_launches_seen_inside_the_window_come_back() {
+        let mem = Memory::open_in_memory().expect("open");
+        for (token, seconds) in [("0xold", 1_000_u64), ("0xnew", 9_000)] {
+            mem.record_token_text(&TokenText {
+                chain: CHAIN.to_owned(),
+                token: token.to_owned(),
+                name: Some("Neuro".to_owned()),
+                symbol: None,
+                first_seen: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
+            })
+            .expect("write");
+        }
+        let texts = mem
+            .token_texts_since(CHAIN, SystemTime::UNIX_EPOCH + Duration::from_secs(5_000))
+            .expect("read");
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].token, "0xnew");
+    }
+
+    /// A launch whose name and symbol both failed to read still gets a row,
+    /// so the next read knows it was seen (rule 8).
+    #[test]
+    fn a_launch_with_no_readable_name_still_gets_a_row() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.record_token_text(&TokenText {
+            chain: CHAIN.to_owned(),
+            token: TOKEN.to_owned(),
+            name: None,
+            symbol: None,
+            first_seen: SystemTime::UNIX_EPOCH,
+        })
+        .expect("write");
+        let texts = mem
+            .token_texts_since(CHAIN, SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].name, None);
     }
 
     /// The work queue: judged, old enough, and never labelled. A token still

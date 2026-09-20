@@ -26,7 +26,7 @@ where the token lives.
 | `crates/realorrug-payout` | the week's payout on Robinhood Chain: claims from the escrow and pays the winner, signed through Turnkey |
 | `crates/realorrug-robinhood` | Robinhood Chain, read: receipts, and Pons v2 launches, trades and fee sweeps; the launch check behind `realorrug launch-check`; the fee escrow's credits, claims and claimable balance |
 | `crates/realorrug-serve` | the public site's documents |
-| `crates/realorrug-cli` | `realorrug dossier`, `roast`, `analyst`, `contest`, `launch-check`, `label-outcomes`, `audit`, `model-prices` |
+| `crates/realorrug-cli` | `realorrug dossier`, `roast`, `analyst`, `contest`, `launch-check`, `label-outcomes`, `narratives`, `audit`, `model-prices` |
 | `crates/realorrug-agent`, `crates/realorrug-model`, `crates/realorrug-provider` | the boundary a model sits behind, the model client, the spend meter |
 | `crates/realorrug-types`, `crates/realorrug-decode`, `crates/realorrug-pumpfun`, `crates/realorrug-journal` | shared vocabulary, Solana decoding, pump.fun, the hash-chained journal |
 | `site/` | the public site |

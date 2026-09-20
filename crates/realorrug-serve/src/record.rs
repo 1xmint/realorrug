@@ -25,7 +25,7 @@
 use std::path::Path;
 use std::time::SystemTime;
 
-use realorrug_onchain::memory::{Memory, VerdictRecord};
+use realorrug_onchain::memory::{Memory, TokenText, VerdictRecord};
 use realorrug_roast::assessment::Assessment;
 use realorrug_roast::sheet::{FactSheet, Signal};
 use realorrug_roast::verdict::Level;
@@ -63,6 +63,39 @@ pub(crate) fn verdict(
         fired: sheet.signals.iter().copied().map(signal_name).collect(),
         source: source.to_owned(),
         decided_at: SystemTime::now(),
+    });
+}
+
+/// Writes down what a launch called itself, if a memory is configured.
+///
+/// Called beside [`verdict`] and for the same reason: the two strings are
+/// already paid for (a dossier spends two of its sixty calls reading
+/// `name()` and `symbol()`), so storing them as they go past costs nothing,
+/// and a month of them is what `realorrug narratives` counts themes from.
+/// Nothing published reads this yet.
+///
+/// Deny by default and never fatal, exactly as [`verdict`] is: no memory
+/// path writes nothing, and a failed write is our bookkeeping problem, not
+/// the visitor's.
+pub(crate) fn token_text(
+    memory_path: Option<&Path>,
+    chain: &str,
+    token: &str,
+    dossier: &realorrug_onchain::Dossier,
+) {
+    let Some(path) = memory_path else {
+        return;
+    };
+    let Ok(memory) = Memory::open(path) else {
+        return;
+    };
+    let launch = dossier.chain_launch.as_ref();
+    let _ = memory.record_token_text(&TokenText {
+        chain: chain.to_owned(),
+        token: token.to_owned(),
+        name: launch.and_then(|l| l.name.clone()),
+        symbol: launch.and_then(|l| l.symbol.clone()),
+        first_seen: SystemTime::now(),
     });
 }
 
@@ -127,6 +160,52 @@ mod tests {
     #[test]
     fn no_memory_path_records_nothing() {
         verdict(None, "robinhood", "0xtoken", &sheet(), "Sketchy", "check");
+        token_text(None, "robinhood", "0xtoken", &dossier());
+    }
+
+    /// The name a launch chose is stored as the route serves it, which is
+    /// what makes `realorrug narratives` free to run later.
+    #[test]
+    fn a_served_launchs_name_is_written_down() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("memory.sqlite3");
+        let mut dossier = dossier();
+        dossier.chain_launch = Some(realorrug_onchain::dossier::ChainLaunch {
+            block: 42,
+            age_seconds: None,
+            dev_buy_wei: None,
+            dev_buy_tokens: None,
+            supply: None,
+            name: Some("Neuro Dog".to_owned()),
+            symbol: Some("NEURO".to_owned()),
+            correlated_selling: None,
+        });
+        token_text(Some(&path), "robinhood", "0xtoken", &dossier);
+
+        let memory = Memory::open(&path).expect("open");
+        let texts = memory
+            .token_texts_since("robinhood", SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].name.as_deref(), Some("Neuro Dog"));
+        assert_eq!(texts[0].symbol.as_deref(), Some("NEURO"));
+    }
+
+    /// A dossier whose launch never read still leaves a row, so the token is
+    /// known to have been seen (rule 8) and the theme count's denominator is
+    /// the launches, not only the ones that answered.
+    #[test]
+    fn a_launch_that_did_not_read_still_leaves_a_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("memory.sqlite3");
+        token_text(Some(&path), "robinhood", "0xtoken", &dossier());
+
+        let memory = Memory::open(&path).expect("open");
+        let texts = memory
+            .token_texts_since("robinhood", SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].name, None);
     }
 
     fn sheet() -> FactSheet {

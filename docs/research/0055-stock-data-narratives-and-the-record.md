@@ -245,6 +245,43 @@ computed by code and placed on the sheet before the model ever sees it,
 following the same shape as `level()` in `verdict.rs` already does for the
 rug-check score (research 0054 §2.2, CHECKED there).
 
+**What was built, and one correction to the paragraph above (2026-09-20).**
+The name/symbol clustering described above shipped as
+`crates/realorrug-onchain/src/narrative.rs` (the counting),
+`token_texts` in `crates/realorrug-onchain/src/memory.rs` (the store),
+a write beside the verdict record in `crates/realorrug-serve/src/record.rs`
+(the collection), and `realorrug narratives` in
+`crates/realorrug-cli/src/narratives.rs` (the caller). Nothing published
+reads it.
+
+**The correction: the claim above that clustering "adds no new reads, only
+new analysis of stored rows" was wrong about where the text comes from.**
+`pons::LaunchedToken` (`crates/realorrug-robinhood/src/pons.rs`, read
+2026-09-20) has no name and no symbol field, and `ChainLaunch::name`
+(`crates/realorrug-onchain/src/dossier.rs`) says so plainly: "no Pons event
+or factory record carries a name at all." The two strings are `name()` and
+`symbol()` calls on the token contract, two of a dossier's sixty. So the rows
+did not exist to analyse. What makes the signal free is not that the text was
+already stored -- it was not -- but that every dossier already pays for those
+two calls, so writing the answer down as it goes past costs nothing beyond
+the row. That is what `record::token_text` does.
+
+What the counting is, exactly: how many **different** launches used each word
+in their name or symbol inside a window, whole words only, three characters
+or more, with the handful of words that only mean "this is a token" dropped.
+A launch repeating its own word counts once. Launches whose name never read
+stay in the denominator, so a share cannot be inflated by dropping them
+(rule 8). It is a count of names and never a claim that the launches sharing
+a word are related, which is the whole of what makes it safe under rule 2 --
+code computes it from stored rows before any model sees it.
+
+**Not built, and deliberately:** the DefiLlama volume join and the
+mention-text frequency count from the two bullets above, the dated
+base-rate-shaped file with a stale-after policy, and any rule for what a paid
+customer sees. The counts have never been run against real launches, because
+`token_texts` starts empty and fills as the routes serve; deciding what to
+sell from a signal nobody has looked at yet would be deciding in the dark.
+
 ## 4. "Record everything" — what is recoverable later versus lost if not captured now
 
 **Recoverable later, at a cost, from archive RPC:**
