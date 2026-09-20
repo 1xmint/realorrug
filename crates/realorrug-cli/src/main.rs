@@ -11,6 +11,7 @@ mod bio;
 mod contest;
 mod creator_index;
 mod dossier;
+mod label_outcomes;
 mod launch_check;
 mod model_prices;
 mod roast;
@@ -57,6 +58,16 @@ commands:
                                  is clean (ADR 0029): the mint to the curve,
                                  no trade but the launcher's own stated buy,
                                  no extra snipe-tax exemption. Read-only
+  label-outcomes [--robinhood-rpc URL] [--memory PATH] [--days N] [--max N]
+                 [--dry-run]
+                                 what the launches this analyst already judged
+                                 turned out to be: rug, failed or alive, read
+                                 from the chain and written beside the verdict
+                                 that was published at the time. One verdict
+                                 plus one outcome is one calibration sample
+                                 (research 0052 §5). A launch this reading
+                                 cannot settle is left unlabelled, never
+                                 guessed. Read-only chain access
   model-prices <model> [--check] | --list
                                  what to paste into analyst.env for a model,
                                  read from models.dev rather than typed
@@ -106,6 +117,7 @@ fn main() -> ExitCode {
         "audit" => audit::run(&args),
         "creator-index" => creator_index::run(&args),
         "launch-check" => launch_check::run(&args),
+        "label-outcomes" => label_outcomes::run(&args),
         "model-prices" => model_prices::run(&args),
         "-h" | "--help" | "help" => {
             print!("{}", usage());

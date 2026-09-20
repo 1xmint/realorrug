@@ -558,7 +558,7 @@ Every verdict either route serves is written to the daemon's SQLite memory
 `crates/realorrug-onchain/src/memory.rs`): the token, the block the facts
 were read at, the level published, the score behind it, the signals that
 fired, which surface served it, and the moment. Nothing on either page
-changed and nothing reads the table yet.
+changed.
 
 It is written now because it cannot be written later. Research 0052 §5's
 calibration is waiting on launches whose verdict is paired with what the
@@ -573,3 +573,13 @@ Deny by default as everywhere else (AGENTS.md rule 7): with no memory path
 configured the routes write nothing and answer exactly as before, and a
 failed write is never allowed to fail a request — a visitor got their answer
 and a buyer got what they paid for; our bookkeeping is not their problem.
+
+The other half is an operator command, not a route: `realorrug
+label-outcomes` re-reads the launches that were judged at least a week ago
+and writes what each one became — `rug`, `failed` or `alive` by research
+0052 §5 — beside the verdict that was published at the time. It runs
+nowhere near the serving path and cannot change what either page says. A
+launch it cannot settle (a graduated one, or one whose curve would not read)
+is left unlabelled and stays in the queue, because an `alive` that only
+means "we could not tell" would be counted as a control by the fit that
+eventually reads these rows.
