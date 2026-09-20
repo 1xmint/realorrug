@@ -29,6 +29,11 @@ realorrug-onchain.workspace = true
 realorrug-robinhood.workspace = true
 resvg = "0.48.1"
 tiny-skia = "0.12.0"
+# facts.rs (ADR 0036) only: hashing the response body it records, and
+# calling the operator-configured x402 facilitator over HTTP -- the same
+# `ureq` pattern five other crates already use, not a new dependency shape.
+sha3.workspace = true
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1493,10 +1493,12 @@ dependencies = [
  "realorrug-types",
  "resvg",
  "serde_json",
+ "sha3",
  "tempfile",
  "tiny-skia",
  "tokio",
  "tower",
+ "ureq",
 ]
 
 [[package]]

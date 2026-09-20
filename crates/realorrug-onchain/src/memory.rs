@@ -654,7 +654,77 @@ pub struct CheckRun {
     pub ran_at: SystemTime,
 }
 
+/// One settled request against the paid facts API (ADR 0036).
+///
+/// Recorded only after settlement succeeds -- a verified-but-unsettled or a
+/// failed-read request never reaches [`Memory::record_paid_request`], so this
+/// table is exactly "what the moat is allowed to use later": a request the
+/// buyer actually paid for and actually got an answer to (design 0021's own
+/// discipline, reused here rather than invented for this table).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaidRequest {
+    /// The chain, e.g. `"robinhood"`.
+    pub chain: String,
+    /// The token the request was about.
+    pub token: String,
+    /// The block the served facts were read at, if the chain's read point is
+    /// a block number. `None` when the sheet carried no read point at all
+    /// (AGENTS.md rule 8: absent is not zero).
+    pub read_at_block: Option<u64>,
+    /// A hash of the exact response body served, so a later dispute can
+    /// prove what was sent without storing the whole payload twice.
+    pub response_hash: String,
+    /// The payer's address, as the facilitator's settlement reported it.
+    pub payer: String,
+    /// The settled amount, in the asset's smallest unit, as a decimal string
+    /// (the same "never a float for money" discipline `token_balances`
+    /// already uses for on-chain amounts).
+    pub amount: String,
+    /// The settlement transaction hash the facilitator returned.
+    pub tx_hash: String,
+    /// When this server considered the request served.
+    pub served_at: SystemTime,
+}
+
 impl Memory {
+    /// Records one settled paid-facts request.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn record_paid_request(&self, request: &PaidRequest) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT INTO paid_requests
+             (chain, token, read_at_block, response_hash, payer, amount, tx_hash, served_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                request.chain,
+                request.token,
+                request.read_at_block.map(to_i64),
+                request.response_hash,
+                request.payer,
+                request.amount,
+                request.tx_hash,
+                to_unix(request.served_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// How many paid requests have been recorded for `(chain, token)` --
+    /// exercised by the test below so [`Memory::record_paid_request`]'s
+    /// insert is proved to land, not just proved to return `Ok`.
+    #[must_use]
+    pub fn paid_request_count(&self, chain: &str, token: &str) -> u64 {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM paid_requests WHERE chain = ?1 AND token = ?2",
+                params![chain, token],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_or(0, |n| u64::try_from(n).unwrap_or(0))
+    }
+
     fn init_events(conn: &Connection) -> Result<(), Error> {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS transfers (
@@ -738,7 +808,20 @@ impl Memory {
                 PRIMARY KEY (chain, buyer, token)
              );
              CREATE INDEX IF NOT EXISTS buyer_index_by_buyer
-                ON buyer_index (chain, buyer);",
+                ON buyer_index (chain, buyer);
+             CREATE TABLE IF NOT EXISTS paid_requests (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                chain          TEXT    NOT NULL,
+                token          TEXT    NOT NULL,
+                read_at_block  INTEGER,
+                response_hash  TEXT    NOT NULL,
+                payer          TEXT    NOT NULL,
+                amount         TEXT    NOT NULL,
+                tx_hash        TEXT    NOT NULL,
+                served_at      INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS paid_requests_by_token
+                ON paid_requests (chain, token, id);",
         )?;
         Self::add_buyer_index_token_amount_column(conn)?;
         Ok(())
@@ -1911,6 +1994,30 @@ mod tests {
             mem.token_checkpoint(CHAIN, TOKEN).expect("checkpoint"),
             None
         );
+    }
+
+    /// A settled paid-facts request lands in `paid_requests` and is counted
+    /// -- pins the insert actually happening, not just returning `Ok(())`
+    /// (the same discipline `an_empty_complete_range...` below applies to
+    /// `check_runs`).
+    #[test]
+    fn a_settled_paid_request_is_recorded_and_counted() {
+        let mem = Memory::open_in_memory().expect("open");
+        assert_eq!(mem.paid_request_count(CHAIN, TOKEN), 0);
+        mem.record_paid_request(&PaidRequest {
+            chain: CHAIN.to_owned(),
+            token: TOKEN.to_owned(),
+            read_at_block: Some(42),
+            response_hash: "deadbeef".to_owned(),
+            payer: "0xpayer".to_owned(),
+            amount: "50000".to_owned(),
+            tx_hash: "0xsettlement".to_owned(),
+            served_at: secs(1_000),
+        })
+        .expect("record");
+        assert_eq!(mem.paid_request_count(CHAIN, TOKEN), 1);
+        // A different token has its own count.
+        assert_eq!(mem.paid_request_count(CHAIN, "other-token"), 0);
     }
 
     #[test]
