@@ -686,6 +686,96 @@ pub struct PaidRequest {
     pub served_at: SystemTime,
 }
 
+/// What a launch turned out to be, by research 0052 §5's definition.
+///
+/// Three outcomes, not two. "Everyone lost money" and "someone took it" are
+/// different things, and folding the first into the second is exactly the
+/// mistake research 0052 §5 refuses (the Solidus definition would call 98.6%
+/// of launches a rug and make every weight meaningless).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutcomeLabel {
+    /// An observed extraction.
+    Rug,
+    /// The reserves went to zero with every buyer already sold back: the
+    /// launch died, nobody took anything.
+    Failed,
+    /// Neither, as of the moment it was observed.
+    Alive,
+}
+
+impl OutcomeLabel {
+    /// The stored spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rug => "rug",
+            Self::Failed => "failed",
+            Self::Alive => "alive",
+        }
+    }
+
+    /// Reads a stored spelling back. `None` for anything else.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "rug" => Some(Self::Rug),
+            "failed" => Some(Self::Failed),
+            "alive" => Some(Self::Alive),
+            _ => None,
+        }
+    }
+}
+
+/// One verdict as it was published, kept so it can be paired with what the
+/// token turned out to be (research 0052 §5, the calibration replay M-D-0006
+/// is waiting on a sample).
+///
+/// Written at the moment the verdict is served, never rebuilt afterwards. A
+/// verdict recomputed later from today's chain state is a different verdict
+/// about a different moment, and scoring the model against one would flatter
+/// it with facts it did not have.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerdictRecord {
+    /// The chain, e.g. `"robinhood"`.
+    pub chain: String,
+    /// The token the verdict was about.
+    pub token: String,
+    /// The block the facts behind it were read at, or `None` when the sheet
+    /// carried no read point (AGENTS.md rule 8: absent is not zero).
+    pub read_at_block: Option<u64>,
+    /// The published ladder level, e.g. `"Sketchy"`.
+    pub level: String,
+    /// The weighted score in bps, when the caller computed one. `None` from a
+    /// caller that publishes the level alone -- and `None` is the honest
+    /// answer there, never `0`, which would read as "measured, and clean".
+    pub score_bps: Option<u32>,
+    /// The signals that fired, by name.
+    pub fired: Vec<String>,
+    /// Which surface served it, e.g. `"check"` or `"facts"`, so a later fit
+    /// can hold one surface out.
+    pub source: String,
+    /// When the verdict was served.
+    pub decided_at: SystemTime,
+}
+
+/// What a token turned out to be, and what settled it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Outcome {
+    /// The chain, e.g. `"robinhood"`.
+    pub chain: String,
+    /// The token.
+    pub token: String,
+    /// The label itself.
+    pub label: OutcomeLabel,
+    /// The block the observation was made at, when there is one.
+    pub at_block: Option<u64>,
+    /// What settled it, in one line, so a disputed label can be re-checked
+    /// against the chain rather than trusted.
+    pub evidence: String,
+    /// When it was observed.
+    pub observed_at: SystemTime,
+}
+
 impl Memory {
     /// Records one settled paid-facts request.
     ///
@@ -719,6 +809,152 @@ impl Memory {
         self.conn
             .query_row(
                 "SELECT COUNT(*) FROM paid_requests WHERE chain = ?1 AND token = ?2",
+                params![chain, token],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_or(0, |n| u64::try_from(n).unwrap_or(0))
+    }
+
+    /// Records one verdict exactly as it was published.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn record_verdict(&self, verdict: &VerdictRecord) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT INTO verdicts
+             (chain, token, read_at_block, level, score_bps, fired, source, decided_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                verdict.chain,
+                verdict.token,
+                verdict.read_at_block.map(to_i64),
+                verdict.level,
+                verdict.score_bps,
+                verdict.fired.join(" "),
+                verdict.source,
+                to_unix(verdict.decided_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Records what a token turned out to be, superseding any earlier label
+    /// for it.
+    ///
+    /// `INSERT OR REPLACE`, keyed on the token alone: a launch called `Alive`
+    /// last week and `Rug` today is not two outcomes, it is one outcome
+    /// observed later and better. Every verdict already recorded keeps its own
+    /// row and its own moment, so replacing the label re-pairs the whole
+    /// history rather than losing it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn record_outcome(&self, outcome: &Outcome) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO verdict_outcomes
+             (chain, token, label, at_block, evidence, observed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                outcome.chain,
+                outcome.token,
+                outcome.label.as_str(),
+                outcome.at_block.map(to_i64),
+                outcome.evidence,
+                to_unix(outcome.observed_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every verdict on `chain` whose token now has an outcome, oldest first.
+    ///
+    /// The inner join is the point: a verdict with no outcome yet is not half
+    /// a pair, it is not a pair, and calibration must never count it as one
+    /// (AGENTS.md rule 8 -- an unobserved outcome is unknown, not `Alive`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails, or if a stored label is not one
+    /// [`OutcomeLabel::parse`] knows -- which only a hand-edited file can
+    /// produce, since [`Memory::record_outcome`] is the sole writer.
+    pub fn labelled_verdicts(&self, chain: &str) -> Result<Vec<(VerdictRecord, Outcome)>, Error> {
+        let mut statement = self.conn.prepare(
+            "SELECT v.token, v.read_at_block, v.level, v.score_bps, v.fired, v.source,
+                    v.decided_at, o.label, o.at_block, o.evidence, o.observed_at
+             FROM verdicts v
+             JOIN verdict_outcomes o ON o.chain = v.chain AND o.token = v.token
+             WHERE v.chain = ?1
+             ORDER BY v.id",
+        )?;
+        let rows = statement.query_map(params![chain], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, i64>(10)?,
+            ))
+        })?;
+        let mut pairs = Vec::new();
+        for row in rows {
+            let (
+                token,
+                read_at_block,
+                level,
+                score_bps,
+                fired,
+                source,
+                decided_at,
+                label,
+                at_block,
+                evidence,
+                observed_at,
+            ) = row?;
+            let label = OutcomeLabel::parse(&label).ok_or_else(|| {
+                Error::Sqlite(rusqlite::Error::InvalidColumnType(
+                    7,
+                    "label".to_owned(),
+                    rusqlite::types::Type::Text,
+                ))
+            })?;
+            pairs.push((
+                VerdictRecord {
+                    chain: chain.to_owned(),
+                    token: token.clone(),
+                    read_at_block: read_at_block.map(from_i64),
+                    level,
+                    score_bps: score_bps.map(from_i64),
+                    fired: fired.split_whitespace().map(str::to_owned).collect(),
+                    source,
+                    decided_at: from_unix(decided_at),
+                },
+                Outcome {
+                    chain: chain.to_owned(),
+                    token,
+                    label,
+                    at_block: at_block.map(from_i64),
+                    evidence,
+                    observed_at: from_unix(observed_at),
+                },
+            ));
+        }
+        Ok(pairs)
+    }
+
+    /// How many verdicts have been recorded for `(chain, token)`.
+    #[must_use]
+    pub fn verdict_count(&self, chain: &str, token: &str) -> u64 {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM verdicts WHERE chain = ?1 AND token = ?2",
                 params![chain, token],
                 |row| row.get::<_, i64>(0),
             )
@@ -823,7 +1059,38 @@ impl Memory {
              CREATE INDEX IF NOT EXISTS paid_requests_by_token
                 ON paid_requests (chain, token, id);",
         )?;
+        Self::init_verdicts(conn)?;
         Self::add_buyer_index_token_amount_column(conn)?;
+        Ok(())
+    }
+
+    /// The verdict record's own two tables, kept in their own statement so
+    /// `init_events` stays readable rather than growing without end.
+    fn init_verdicts(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS verdicts (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                chain         TEXT    NOT NULL,
+                token         TEXT    NOT NULL,
+                read_at_block INTEGER,
+                level         TEXT    NOT NULL,
+                score_bps     INTEGER,
+                fired         TEXT    NOT NULL,
+                source        TEXT    NOT NULL,
+                decided_at    INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS verdicts_by_token
+                ON verdicts (chain, token, id);
+             CREATE TABLE IF NOT EXISTS verdict_outcomes (
+                chain       TEXT    NOT NULL,
+                token       TEXT    NOT NULL,
+                label       TEXT    NOT NULL,
+                at_block    INTEGER,
+                evidence    TEXT    NOT NULL,
+                observed_at INTEGER NOT NULL,
+                PRIMARY KEY (chain, token)
+             );",
+        )?;
         Ok(())
     }
 
@@ -1444,6 +1711,12 @@ fn to_i64(n: u64) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
+/// Reads a stored count back. A negative value can only come from a
+/// hand-edited file, and `0` is the nearest honest reading of one.
+fn from_i64<T: TryFrom<i64> + Default>(n: i64) -> T {
+    T::try_from(n).unwrap_or_default()
+}
+
 /// The `what` [`Memory::has_prior_balance`]/[`Memory::record_balance`] use.
 const BALANCE: &str = "balance";
 /// The `what` [`Memory::launches_in_window`]/[`Memory::record_launch`] use.
@@ -2018,6 +2291,115 @@ mod tests {
         assert_eq!(mem.paid_request_count(CHAIN, TOKEN), 1);
         // A different token has its own count.
         assert_eq!(mem.paid_request_count(CHAIN, "other-token"), 0);
+    }
+
+    fn a_verdict(level: &str, at: u64) -> VerdictRecord {
+        VerdictRecord {
+            chain: CHAIN.to_owned(),
+            token: TOKEN.to_owned(),
+            read_at_block: Some(42),
+            level: level.to_owned(),
+            score_bps: Some(2_520),
+            fired: vec!["S1".to_owned(), "S10".to_owned()],
+            source: "check".to_owned(),
+            decided_at: secs(at),
+        }
+    }
+
+    fn an_outcome(label: OutcomeLabel, at: u64) -> Outcome {
+        Outcome {
+            chain: CHAIN.to_owned(),
+            token: TOKEN.to_owned(),
+            label,
+            at_block: Some(9_000),
+            evidence: "reserves fell 9,300 bps in one hour".to_owned(),
+            observed_at: secs(at),
+        }
+    }
+
+    /// A verdict is stored exactly as published and reads back whole: the
+    /// fired signals survive the round trip through one text column, and the
+    /// block it was read at comes back as the block, not as a count.
+    #[test]
+    fn a_published_verdict_is_recorded_and_reads_back_whole() {
+        let mem = Memory::open_in_memory().expect("open");
+        assert_eq!(mem.verdict_count(CHAIN, TOKEN), 0);
+        mem.record_verdict(&a_verdict("Sketchy", 1_000))
+            .expect("record");
+        assert_eq!(mem.verdict_count(CHAIN, TOKEN), 1);
+        // A different token has its own count.
+        assert_eq!(mem.verdict_count(CHAIN, "other-token"), 0);
+
+        mem.record_outcome(&an_outcome(OutcomeLabel::Rug, 2_000))
+            .expect("record");
+        let pairs = mem.labelled_verdicts(CHAIN).expect("pairs");
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, a_verdict("Sketchy", 1_000));
+        assert_eq!(pairs[0].1, an_outcome(OutcomeLabel::Rug, 2_000));
+    }
+
+    /// A verdict with no outcome yet is not half a pair -- it is not a pair,
+    /// and calibration must never see it. An outer join here would hand the
+    /// fit an unlabelled launch and let it be counted as whatever the missing
+    /// label defaulted to.
+    #[test]
+    fn a_verdict_with_no_outcome_is_not_a_pair() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.record_verdict(&a_verdict("Sketchy", 1_000))
+            .expect("record");
+        assert!(
+            mem.labelled_verdicts(CHAIN).expect("pairs").is_empty(),
+            "an unlabelled verdict is not a pair"
+        );
+
+        // A label on a *different* token does not make this one a pair.
+        mem.record_outcome(&Outcome {
+            token: "other-token".to_owned(),
+            ..an_outcome(OutcomeLabel::Alive, 2_000)
+        })
+        .expect("record");
+        assert!(mem.labelled_verdicts(CHAIN).expect("pairs").is_empty());
+    }
+
+    /// A label observed later supersedes the earlier one, and every verdict
+    /// already recorded re-pairs against it. A launch called `Alive` in May
+    /// and `Rug` in June is one launch that rugged, and both verdicts about
+    /// it were about a launch that rugged.
+    #[test]
+    fn a_later_label_supersedes_the_earlier_one_for_every_verdict() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.record_verdict(&a_verdict("NothingUglyYet", 1_000))
+            .expect("record");
+        mem.record_verdict(&a_verdict("Sketchy", 1_500))
+            .expect("record");
+        mem.record_outcome(&an_outcome(OutcomeLabel::Alive, 2_000))
+            .expect("record");
+        mem.record_outcome(&an_outcome(OutcomeLabel::Rug, 3_000))
+            .expect("record");
+
+        let pairs = mem.labelled_verdicts(CHAIN).expect("pairs");
+        assert_eq!(pairs.len(), 2, "both verdicts pair, the label does not");
+        // Oldest verdict first, and both carry the newest label.
+        assert_eq!(pairs[0].0.level, "NothingUglyYet");
+        assert_eq!(pairs[1].0.level, "Sketchy");
+        assert_eq!(pairs[0].1.label, OutcomeLabel::Rug);
+        assert_eq!(pairs[1].1.label, OutcomeLabel::Rug);
+        assert_eq!(pairs[0].1.observed_at, secs(3_000));
+    }
+
+    /// The three labels are distinct and round-trip through storage;
+    /// anything else reads back as unknown rather than as one of them.
+    #[test]
+    fn a_stored_label_reads_back_as_itself_and_nothing_else_parses() {
+        for label in [OutcomeLabel::Rug, OutcomeLabel::Failed, OutcomeLabel::Alive] {
+            assert_eq!(OutcomeLabel::parse(label.as_str()), Some(label));
+        }
+        assert_eq!(OutcomeLabel::Rug.as_str(), "rug");
+        assert_eq!(OutcomeLabel::Failed.as_str(), "failed");
+        assert_eq!(OutcomeLabel::Alive.as_str(), "alive");
+        assert_eq!(OutcomeLabel::parse("Rug"), None, "the spelling is exact");
+        assert_eq!(OutcomeLabel::parse(""), None);
+        assert_eq!(OutcomeLabel::parse("rugged"), None);
     }
 
     #[test]

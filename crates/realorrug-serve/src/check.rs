@@ -56,6 +56,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::record::level_name;
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -119,6 +120,11 @@ pub struct CheckState {
     ip_limits: Mutex<HashMap<String, VecDeque<Instant>>>,
     /// One lock per in-flight or recently-flighted `(chain, address)` key.
     inflight: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// Where the memory file lives, so every published verdict is written
+    /// down for later pairing with what the token turned out to be
+    /// (`record.rs`). Built from the analyst directory the rest of the
+    /// project already uses, so there is no second place to configure.
+    memory_path: Option<std::path::PathBuf>,
     /// Whether `CF-Connecting-IP` may be trusted for the per-IP limit.
     /// `false` unless `REALORRUG_TRUST_CLOUDFLARE` (or the legacy
     /// `RADAR_TRUST_CLOUDFLARE`) is set — AGENTS.md §3 rule 7:
@@ -167,6 +173,11 @@ impl CheckState {
         let trust_cloudflare =
             env_or_legacy("REALORRUG_TRUST_CLOUDFLARE", "RADAR_TRUST_CLOUDFLARE", get)
                 .is_some_and(|v| v == "1");
+        let analyst_dir = env_or_legacy("REALORRUG_ANALYST_DIR", "RADAR_ANALYST_DIR", get)
+            .unwrap_or_else(|| "data/analyst".to_owned());
+        let memory_path = Some(std::path::PathBuf::from(format!(
+            "{analyst_dir}/memory.sqlite3"
+        )));
         Self {
             cache_dir,
             solana_endpoint,
@@ -177,6 +188,7 @@ impl CheckState {
             ip_limits: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashMap::new()),
             trust_cloudflare,
+            memory_path,
         }
     }
 
@@ -402,6 +414,18 @@ pub(crate) async fn check(
 
     let sheet = FactSheet::build(&dossier, state.rates.as_ref(), None, None, None);
     let verdict = Verdict::from(&sheet);
+    // The parsed address, not `raw_address`: what the visitor typed may
+    // differ in case or padding from the same token typed by someone else,
+    // and two spellings of one token would split its record in two. This is
+    // the same key the cache is filed under above.
+    crate::record::verdict(
+        state.memory_path.as_deref(),
+        &chain,
+        &address.to_string(),
+        &sheet,
+        level_name(verdict.level),
+        "check",
+    );
     let measured_at = realorrug_types::civil::timestamp_from_seconds(now_secs());
     let price = price_facts(&sheet);
     let doc = verdict_doc(raw_address, &chain, &verdict, &measured_at, &price);
@@ -587,16 +611,6 @@ fn price_facts(sheet: &FactSheet) -> Vec<Value> {
         .filter(|fact| fact.about == realorrug_roast::sheet::About::Price)
         .map(|fact| json!({ "label": fact.label, "value": fact.rendered }))
         .collect()
-}
-
-fn level_name(level: Level) -> &'static str {
-    match level {
-        Level::Rugged => "Rugged",
-        Level::RugMechanicsLive => "RugMechanicsLive",
-        Level::Sketchy => "Sketchy",
-        Level::NothingUglyYet => "NothingUglyYet",
-        Level::CantTell => "CantTell",
-    }
 }
 
 pub(crate) fn chain_name(address: &ChainAddress) -> String {
