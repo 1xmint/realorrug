@@ -30,8 +30,8 @@ foundation's own page**, not fetched directly this session).
 
 No page fetched this session states a single spec version number. The
 GitHub repository `coinbase/x402` (fetched 2026-09-19) exposes per-scheme
-spec files under `specs/schemes/exact/` (e.g.
-`scheme_exact_evm.md`) rather than a top-level version string in the content
+spec files under `specs/schemes/exact/` (one per chain family, EVM's
+among them) rather than a top-level version string in the content
 retrieved; a version claim would need a direct read of those files or of a
 CHANGELOG, which this pass did not fetch. **Treat "current spec version" as
 open** until that file is read.
@@ -211,7 +211,7 @@ keeps "the legal review runs in parallel" (CHECKED,
 `docs/adr/0023-...md:61`, "Until a lawyer answers, the exposure is Josh's
 personally. Stated once."), and ADR 0034 gates the daily-five prize payout
 entirely on "the lawyer answers the question in design 0028 §7" before any
-money moves (CHECKED, `docs/adr/0034-...md`). A paid x402 API is a new
+money moves (CHECKED, `docs/adr/0034-the-prize-is-a-free-calling-game.md`). A paid x402 API is a new
 instance of the same open question, not a new one: selling access to a
 verdict about a token, in a stablecoin, from an account that also
 (per ADR 0029) may hold a small amount of the project's own token and

@@ -141,7 +141,13 @@ close it, and the rules page says so.
   player's past calls after they delete their X account or remove our
   app?"* X's developer policy as read does not answer it (research 0051 §1).
   Until it is answered, the call log keeps what it must to settle open calls
-  and nothing it cannot delete on request.
+  and nothing it cannot delete on request. A third question goes with them,
+  from ADR 0036: *"Does selling measured, non-advisory on-chain facts about
+  a token for a fixed per-call fee, to automated buyers as well as people,
+  need anything beyond what the free bot already does?"* Nothing in the paid
+  facts endpoint waits on the answer — it ships facts only, the same content
+  the free bot already publishes per token — but the question is recorded
+  rather than assumed away.
 - **Model judgement never moves money** (AGENTS rule 3.1). Scoring, the luck
   line and the winner are pure code. The payout pays what that code permits.
 

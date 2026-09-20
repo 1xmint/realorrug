@@ -523,3 +523,30 @@ whichever visitor happens to ask first.
 - Whether `crates/realorrug-provider`'s existing `Meter`/`Budget`/`Ledger`
   shape, built for metering model spend, extends cleanly to metering RPC
   spend, or needs its own sibling type — not tested here.
+
+## 9. Addendum — the paid sibling (ADR 0036)
+
+`GET /v1/facts/{token}` (`crates/realorrug-serve/src/facts.rs`) sits beside
+the free checker route this document describes. It is the same model-free
+`FactSheet::build` read, sold per call at $0.05 in USDC on Base via x402
+(ADR 0036), and it differs from `/v1/check/{address}` in four ways:
+
+- **It is mounted only when `REALORRUG_X402_PAY_TO` is set.** No pay-to
+  address, no route, and every path under `/v1/facts` 404s — the
+  deny-by-default rule (AGENTS.md rule 7), tested by
+  `no_pay_to_means_no_state_at_all`.
+- **It sells facts, never the score.** The body carries the sheet's facts,
+  its read point, its coverage gaps and the signals with their evidence and
+  grade; it never carries `Assessment`'s `risk_index`, `score_bps` or
+  `level`, and never a factor's `delta_bps`, all of which stay held back
+  until calibration (research 0052).
+- **Money moves last.** Verify the claim, read the chain, build the sheet,
+  and only then settle. A read that fails returns its error and settles
+  nothing, so a buyer is never charged for an answer they did not get
+  (`a_failed_read_is_never_charged_for`).
+- **Every settled request is recorded** in the daemon's existing SQLite
+  memory (`paid_requests`), not a new database — ADR 0036 decision 9.
+
+The rate limiter and daily budget in §4 govern the free route only; a paid
+call is metered by its payment, which is what a buyer is entitled to for
+having paid.

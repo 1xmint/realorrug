@@ -8,7 +8,10 @@
 
 pub mod card;
 pub mod check;
+pub mod facts;
 pub mod public;
+
+use std::sync::Arc;
 
 use axum::routing::get;
 use axum::{Json, Router};
@@ -28,7 +31,7 @@ pub fn app() -> Router {
     // rate limiter and daily budget, not each hold their own (card.rs's own
     // doc comment: "never a second chain read").
     let check_state = check::CheckState::shared();
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
         .route("/v1/public/stats", get(public::stats))
         .route("/v1/public/leaderboard", get(public::leaderboard))
@@ -37,7 +40,14 @@ pub fn app() -> Router {
         .route("/v1/public/hunters", get(public::hunters))
         .route("/v1/public/recent", get(public::recent))
         .merge(check::router(check_state.clone()))
-        .merge(card::router(check_state))
+        .merge(card::router(check_state));
+    // ADR 0036 decision 4: no `REALORRUG_X402_PAY_TO`, no route at all. A
+    // request under `/v1/facts` on an unconfigured box then 404s the
+    // ordinary axum way, the same as any other unrouted path.
+    match facts::FactsState::from_vars(&|k| std::env::var(k).ok()) {
+        Some(state) => router.merge(facts::router(Arc::new(state))),
+        None => router,
+    }
 }
 
 /// `GET /health`: the version and the commit, so "is the running process the
