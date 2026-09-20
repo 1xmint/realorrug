@@ -65,7 +65,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let days = number(args, "--days").unwrap_or(DEFAULT_WAIT_DAYS);
     let max = u32::try_from(number(args, "--max").unwrap_or(u64::from(DEFAULT_MAX)))
         .unwrap_or(DEFAULT_MAX);
-    let dry_run = args.iter().any(|a| a == "--dry-run");
+    let dry_run = has(args, "--dry-run");
 
     let memory = Memory::open(std::path::Path::new(&path))
         .map_err(|e| format!("cannot open {path}: {e}"))?;
@@ -99,34 +99,76 @@ pub fn run(args: &[String]) -> Result<(), String> {
         market: Some(&market),
     };
 
-    let mut settled = 0u32;
-    let mut skipped = 0u32;
+    let mut tally = Tally::default();
     for token in &tokens {
-        match dispatch::read(token, &clients) {
+        let read = dispatch::read(token, &clients);
+        tally.absorb(&memory, token, read, dry_run)?;
+    }
+
+    println!("{}", tally.report(dry_run));
+    Ok(())
+}
+
+/// What one run did, counted as it goes.
+///
+/// A struct rather than three loose counters so the counting can be tested
+/// without a chain behind it: [`Tally::absorb`] takes a read that already
+/// happened, which is the only part of the loop that needs a network.
+#[derive(Default, Debug, PartialEq, Eq)]
+struct Tally {
+    /// Launches this run gave a label to.
+    settled: u32,
+    /// Launches it could not settle, which stay in the queue.
+    skipped: u32,
+    /// Launches it looked at, settled or not.
+    read: usize,
+}
+
+impl Tally {
+    /// Takes one launch's read and records what became of it.
+    ///
+    /// # Errors
+    ///
+    /// Only a failed *write*. A failed read is counted and moved past: one
+    /// unreachable token must not end a batch that has others to do.
+    fn absorb(
+        &mut self,
+        memory: &Memory,
+        token: &str,
+        read: Result<realorrug_onchain::Dossier, dispatch::Error>,
+        dry_run: bool,
+    ) -> Result<(), String> {
+        self.read += 1;
+        match read {
             Ok(dossier) => {
-                if label_one(&memory, token, &dossier, dry_run)? {
-                    settled += 1;
+                if label_one(memory, token, &dossier, dry_run)? {
+                    self.settled += 1;
                 } else {
-                    skipped += 1;
+                    self.skipped += 1;
                 }
             }
             Err(dispatch::Error::NotAnAddress) => {
                 eprintln!("{token}: not a valid address, so it can never be labelled");
-                skipped += 1;
+                self.skipped += 1;
             }
             Err(dispatch::Error::Unreadable(why)) => {
                 eprintln!("{token}: unreadable ({why}); left in the queue");
-                skipped += 1;
+                self.skipped += 1;
             }
         }
+        Ok(())
     }
 
-    let written = if dry_run { "would write" } else { "wrote" };
-    println!(
-        "{written} {settled} outcome(s), left {skipped} unsettled, out of {} read",
-        tokens.len()
-    );
-    Ok(())
+    /// The closing line. `--dry-run` says "would write" rather than "wrote",
+    /// because an operator reading the two lines side by side has to be able
+    /// to tell which run actually settled anything.
+    fn report(&self, dry_run: bool) -> String {
+        let written = if dry_run { "would write" } else { "wrote" };
+        format!(
+            "{written} {} outcome(s), left {} unsettled, out of {} read",
+            self.settled, self.skipped, self.read
+        )
+    }
 }
 
 /// Labels one launch if this reading can settle it, returning whether it did.
@@ -163,6 +205,11 @@ fn label_one(
         })
         .map_err(|e| format!("cannot write the outcome for {token}: {e}"))?;
     Ok(true)
+}
+
+/// Whether a bare flag was passed.
+fn has(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| a == name)
 }
 
 /// A whole-number flag, ignoring one that will not parse rather than inventing
@@ -358,5 +405,79 @@ mod tests {
         label_one(&memory, "0xtoken", &a_dossier(4_000_000), false).expect("label");
         assert_eq!(memory.labelled_verdicts(CHAIN).expect("pairs").len(), 1);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A bare flag is matched whole, not by prefix: `--dry-runner` is not
+    /// `--dry-run`, and a run that wrote rows while the operator believed it
+    /// was rehearsing is the worst version of this bug.
+    #[test]
+    fn a_bare_flag_is_matched_whole() {
+        let args = vec!["label-outcomes".to_owned(), "--dry-run".to_owned()];
+        assert!(has(&args, "--dry-run"));
+        assert!(!has(&args, "--dry-runner"));
+        assert!(!has(&["label-outcomes".to_owned()], "--dry-run"));
+    }
+
+    /// The counting, with the chain read already done: one settled, one it
+    /// could not settle, one bad address and one unreadable token. Each lands
+    /// in its own column, and every token read is counted once.
+    #[test]
+    fn every_read_lands_in_exactly_one_column() {
+        let (path, memory) = memory_at("tally");
+        let mut tally = Tally::default();
+
+        tally
+            .absorb(&memory, "0xalive", Ok(a_dossier(4_000_000)), false)
+            .expect("absorb");
+        let mut unsettleable = a_dossier(0);
+        unsettleable.curve = None;
+        tally
+            .absorb(&memory, "0xunknown", Ok(unsettleable), false)
+            .expect("absorb");
+        tally
+            .absorb(
+                &memory,
+                "nonsense",
+                Err(dispatch::Error::NotAnAddress),
+                false,
+            )
+            .expect("absorb");
+        tally
+            .absorb(
+                &memory,
+                "0xoffline",
+                Err(dispatch::Error::Unreadable("no endpoint".to_owned())),
+                false,
+            )
+            .expect("absorb");
+
+        assert_eq!(
+            tally,
+            Tally {
+                settled: 1,
+                skipped: 3,
+                read: 4,
+            }
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The closing line says what happened, and says something different when
+    /// nothing was written.
+    #[test]
+    fn the_closing_line_distinguishes_a_rehearsal_from_a_run() {
+        let tally = Tally {
+            settled: 2,
+            skipped: 1,
+            read: 3,
+        };
+        assert_eq!(
+            tally.report(false),
+            "wrote 2 outcome(s), left 1 unsettled, out of 3 read"
+        );
+        assert_eq!(
+            tally.report(true),
+            "would write 2 outcome(s), left 1 unsettled, out of 3 read"
+        );
     }
 }
