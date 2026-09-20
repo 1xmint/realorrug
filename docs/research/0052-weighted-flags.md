@@ -602,12 +602,43 @@ a later fit can hold one surface out -- the two see different tokens for
 different reasons. The record keeps the **score** as well as the level even
 though ADR 0036 decision 1 publishes neither: the whole question M-D-0006
 settles is whether score bands beat the boolean ladder, and a level-only
-record could never test it. Nothing reads the tables yet, and no published
-surface changed -- the level stays on the flag rules, per the owner's
-2026-09-19 hold above. Still missing is the **labelling** side: no job
-observes outcomes yet, so `labelled_verdicts` returns nothing until one is
-built, and §5's 200-per-arm minimum is a count of pairs that do not exist
-today.
+record could never test it. No published surface changed -- the level stays
+on the flag rules, per the owner's 2026-09-19 hold above, and nothing reads
+the pairs yet.
+
+**The labelling side (2026-09-20).** `realorrug label-outcomes` closes the
+pair. It takes the tokens that were judged at least `--days` ago (7 by
+default) and have no outcome yet, oldest first and capped by `--max`,
+re-reads each through the ordinary dispatcher, and writes what
+`crates/realorrug-onchain/src/outcome.rs` makes of it. That module is pure
+and holds §5's definitions:
+
+- **`rug`** when the creator sold back at least 5,000 bps of the tokens they
+  bought across a trade history read whole, or when the curve emptied before
+  graduation while holders were still in it.
+- **`failed`** when the curve emptied before graduation with nobody left.
+- **`alive`** when the curve has not completed and still holds quote reserves.
+
+Two whole cases return **no label at all** rather than a guess, and the
+command leaves them in the queue for a later run. A **graduated** launch:
+after graduation the curve holds nothing by design, so its empty reserves
+say nothing, and the AMM pool that does hold the money has no address we can
+find on Pons v2 yet (research 0044) -- which also makes §5's third rug rule,
+reserves falling ≥ 9,000 bps in the hour after graduation, not measurable
+here at all. And a launch whose **curve or holders could not be read**: an
+absent read is not a clean reading. The asymmetry is deliberate (rule 8): a
+wrong `alive` is worse than no row, because the fit counts it as a control
+and learns that the signals which fired on it meant nothing.
+
+The creator rule under-calls on purpose. Its denominator is what the creator
+**bought**, so a free allocation dumped without any purchase is invisible to
+it, and `trades_complete` gates the whole rule, so a partial history never
+calls a rug. A missed rug costs one sample; a fabricated one poisons the
+fit.
+
+§5's 200-per-arm minimum is still a count of pairs that do not exist today:
+the queue only fills as the serving surfaces record verdicts, and the first
+of those can be labelled seven days after it was served.
 
 ## 9. Where this is weak
 

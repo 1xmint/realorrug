@@ -949,6 +949,47 @@ impl Memory {
         Ok(pairs)
     }
 
+    /// Tokens on `chain` that were judged at least once before `settled_by`
+    /// and have never been given an outcome, oldest first.
+    ///
+    /// `settled_by` is a waiting period, not a filter for convenience: a
+    /// launch read an hour after it was judged tells you almost nothing, and
+    /// labelling it early would fill the sample with `Alive` rows that only
+    /// mean "not yet". The caller picks how long to wait; oldest first so a
+    /// capped run works through the backlog instead of re-reading the same
+    /// recent tokens forever.
+    ///
+    /// The `LEFT JOIN ... IS NULL` is the same rule as
+    /// [`Memory::labelled_verdicts`] read the other way: a token with an
+    /// outcome is done, and one without is the work.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails.
+    pub fn tokens_awaiting_outcome(
+        &self,
+        chain: &str,
+        settled_by: SystemTime,
+        limit: u32,
+    ) -> Result<Vec<String>, Error> {
+        let mut statement = self.conn.prepare(
+            "SELECT v.token FROM verdicts v
+             LEFT JOIN verdict_outcomes o ON o.chain = v.chain AND o.token = v.token
+             WHERE v.chain = ?1 AND v.decided_at <= ?2 AND o.token IS NULL
+             GROUP BY v.token
+             ORDER BY MIN(v.id)
+             LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![chain, to_unix(settled_by), limit], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut tokens = Vec::new();
+        for token in rows {
+            tokens.push(token?);
+        }
+        Ok(tokens)
+    }
+
     /// How many verdicts have been recorded for `(chain, token)`.
     #[must_use]
     pub fn verdict_count(&self, chain: &str, token: &str) -> u64 {
@@ -2682,5 +2723,67 @@ mod tests {
             Some(9),
             "a row written after the migration keeps its token amount"
         );
+    }
+
+    /// The work queue: judged, old enough, and never labelled. A token still
+    /// inside its waiting period is left alone, and one already labelled is
+    /// done -- re-reading either would spend a whole dossier read to learn
+    /// nothing.
+    #[test]
+    fn only_old_unlabelled_tokens_are_waiting_for_an_outcome() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.record_verdict(&a_verdict("Sketchy", 1_000))
+            .expect("record");
+        mem.record_verdict(&VerdictRecord {
+            token: "fresh-token".to_owned(),
+            decided_at: secs(9_000),
+            ..a_verdict("Sketchy", 9_000)
+        })
+        .expect("record");
+
+        // Judged before the cutoff and unlabelled: this one is the work.
+        assert_eq!(
+            mem.tokens_awaiting_outcome(CHAIN, secs(5_000), 10)
+                .expect("read"),
+            vec![TOKEN.to_owned()],
+            "the fresh token is still inside its waiting period"
+        );
+
+        // A token judged twice is still one unit of work, not two.
+        mem.record_verdict(&a_verdict("Rugged", 1_500))
+            .expect("record");
+        assert_eq!(
+            mem.tokens_awaiting_outcome(CHAIN, secs(5_000), 10)
+                .expect("read")
+                .len(),
+            1
+        );
+
+        // Labelled, so done.
+        mem.record_outcome(&an_outcome(OutcomeLabel::Rug, 6_000))
+            .expect("record");
+        assert!(
+            mem.tokens_awaiting_outcome(CHAIN, secs(5_000), 10)
+                .expect("read")
+                .is_empty()
+        );
+    }
+
+    /// The cap is what keeps one run from spending an unbounded number of
+    /// chain reads, so it has to actually bind.
+    #[test]
+    fn the_waiting_list_is_capped() {
+        let mem = Memory::open_in_memory().expect("open");
+        for n in 0..5u64 {
+            mem.record_verdict(&VerdictRecord {
+                token: format!("token-{n}"),
+                ..a_verdict("Sketchy", 1_000)
+            })
+            .expect("record");
+        }
+        let batch = mem
+            .tokens_awaiting_outcome(CHAIN, secs(5_000), 2)
+            .expect("read");
+        assert_eq!(batch, vec!["token-0".to_owned(), "token-1".to_owned()]);
     }
 }
