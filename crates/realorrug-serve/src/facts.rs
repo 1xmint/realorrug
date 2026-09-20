@@ -136,14 +136,7 @@ impl Facilitator for HttpFacilitator {
             .send_json(&body)
             .and_then(|mut r| r.body_mut().read_json::<Value>());
         match response {
-            Ok(doc) => VerifyOutcome {
-                valid: doc.get("isValid").and_then(Value::as_bool).unwrap_or(false),
-                payer: doc.get("payer").and_then(Value::as_str).map(str::to_owned),
-                reason: doc
-                    .get("invalidReason")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-            },
+            Ok(doc) => verify_outcome(&doc),
             Err(e) => VerifyOutcome {
                 valid: false,
                 payer: None,
@@ -158,27 +151,50 @@ impl Facilitator for HttpFacilitator {
             .send_json(&body)
             .and_then(|mut r| r.body_mut().read_json::<Value>())
             .map_err(|e| format!("facilitator unreachable: {e}"))?;
-        if !doc.get("success").and_then(Value::as_bool).unwrap_or(false) {
-            return Err(doc
-                .get("errorReason")
-                .and_then(Value::as_str)
-                .unwrap_or("settlement refused")
-                .to_owned());
-        }
-        Ok(SettleReceipt {
-            tx_hash: doc
-                .get("transaction")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            payer: doc
-                .get("payer")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            amount: PRICE_ATOMIC_USDC.to_owned(),
-        })
+        settle_receipt(&doc)
     }
+}
+
+/// Reads a facilitator's `/verify` answer. Split from the HTTP call above so
+/// it can be tested without a network: a facilitator's "no" arriving as a
+/// "yes" is the one reading mistake here that would give facts away free.
+fn verify_outcome(doc: &Value) -> VerifyOutcome {
+    VerifyOutcome {
+        // Absent is not valid (AGENTS rule 8): a body with no `isValid` at
+        // all is refused, never read as approval.
+        valid: doc.get("isValid").and_then(Value::as_bool).unwrap_or(false),
+        payer: doc.get("payer").and_then(Value::as_str).map(str::to_owned),
+        reason: doc
+            .get("invalidReason")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    }
+}
+
+/// Reads a facilitator's `/settle` answer. `Err` whenever it did not say
+/// `success: true` -- including when it said nothing at all, which is the
+/// deny-by-default reading, not an optimistic one.
+fn settle_receipt(doc: &Value) -> Result<SettleReceipt, String> {
+    if !doc.get("success").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(doc
+            .get("errorReason")
+            .and_then(Value::as_str)
+            .unwrap_or("settlement refused")
+            .to_owned());
+    }
+    Ok(SettleReceipt {
+        tx_hash: doc
+            .get("transaction")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        payer: doc
+            .get("payer")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        amount: PRICE_ATOMIC_USDC.to_owned(),
+    })
 }
 
 /// State for the paid facts route.
@@ -301,14 +317,14 @@ async fn handle(
     };
 
     if let Err(refusal) = verify(&facilitator, &payment_header, &requirements).await {
-        return refusal;
+        return *refusal;
     }
 
     // Verified but not yet settled. Build the sheet before touching money --
     // ADR 0036 decision 5.
     let dossier = match read_dossier(&state, &address.to_string()).await {
         Ok(dossier) => dossier,
-        Err(refusal) => return refusal,
+        Err(refusal) => return *refusal,
     };
 
     let sheet = FactSheet::build(&dossier, state.rates.as_ref(), None, None, None);
@@ -319,7 +335,7 @@ async fn handle(
     // returned without reaching this line.
     let receipt = match settle(&facilitator, &payment_header, &requirements).await {
         Ok(receipt) => receipt,
-        Err(refusal) => return refusal,
+        Err(refusal) => return *refusal,
     };
 
     record_paid_request(&state, &token, &sheet, &response_hash, &receipt);
@@ -343,7 +359,7 @@ async fn verify(
     facilitator: &Arc<dyn Facilitator>,
     payment_header: &str,
     requirements: &Value,
-) -> Result<(), Response> {
+) -> Result<(), Box<Response>> {
     let owned = (
         facilitator.clone(),
         payment_header.to_owned(),
@@ -352,14 +368,14 @@ async fn verify(
     let outcome = tokio::task::spawn_blocking(move || owned.0.verify(&owned.1, &owned.2)).await;
     match outcome {
         Ok(outcome) if outcome.valid => Ok(()),
-        Ok(outcome) => Err(payment_required(
+        Ok(outcome) => Err(Box::new(payment_required(
             requirements,
             outcome.reason.as_deref().unwrap_or("payment invalid"),
-        )),
-        Err(_join_error) => Err(payment_required(
+        ))),
+        Err(_join_error) => Err(Box::new(payment_required(
             requirements,
             "payment verification did not finish",
-        )),
+        ))),
     }
 }
 
@@ -369,7 +385,7 @@ async fn verify(
 async fn read_dossier(
     state: &Arc<FactsState>,
     token_text: &str,
-) -> Result<realorrug_onchain::Dossier, Response> {
+) -> Result<realorrug_onchain::Dossier, Box<Response>> {
     let solana_endpoint = state.solana_endpoint.clone();
     let robinhood_endpoint = state.robinhood_endpoint.clone();
     let token_text = token_text.to_owned();
@@ -389,21 +405,27 @@ async fn read_dossier(
 
     match read {
         Ok(Ok(dossier)) => Ok(dossier),
-        Ok(Err(dispatch::Error::NotAnAddress)) => Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "not a Robinhood Chain address" })),
-        )
-            .into_response()),
-        Ok(Err(dispatch::Error::Unreadable(why))) => Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": why })),
-        )
-            .into_response()),
-        Err(_join_error) => Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "the read did not finish" })),
-        )
-            .into_response()),
+        Ok(Err(dispatch::Error::NotAnAddress)) => Err(Box::new(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "not a Robinhood Chain address" })),
+            )
+                .into_response(),
+        )),
+        Ok(Err(dispatch::Error::Unreadable(why))) => Err(Box::new(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": why })),
+            )
+                .into_response(),
+        )),
+        Err(_join_error) => Err(Box::new(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "the read did not finish" })),
+            )
+                .into_response(),
+        )),
     }
 }
 
@@ -413,7 +435,7 @@ async fn settle(
     facilitator: &Arc<dyn Facilitator>,
     payment_header: &str,
     requirements: &Value,
-) -> Result<SettleReceipt, Response> {
+) -> Result<SettleReceipt, Box<Response>> {
     let owned = (
         facilitator.clone(),
         payment_header.to_owned(),
@@ -422,16 +444,20 @@ async fn settle(
     let receipt = tokio::task::spawn_blocking(move || owned.0.settle(&owned.1, &owned.2)).await;
     match receipt {
         Ok(Ok(receipt)) => Ok(receipt),
-        Ok(Err(reason)) => Err((
-            StatusCode::PAYMENT_REQUIRED,
-            Json(json!({ "error": format!("settlement failed: {reason}") })),
-        )
-            .into_response()),
-        Err(_join_error) => Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "settlement did not finish" })),
-        )
-            .into_response()),
+        Ok(Err(reason)) => Err(Box::new(
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(json!({ "error": format!("settlement failed: {reason}") })),
+            )
+                .into_response(),
+        )),
+        Err(_join_error) => Err(Box::new(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "settlement did not finish" })),
+            )
+                .into_response(),
+        )),
     }
 }
 
@@ -777,5 +803,44 @@ mod tests {
                 "{withheld} is held back until calibration, but the body carries it: {serialized}"
             );
         }
+    }
+
+    /// A settlement is a receipt only when the facilitator says so in as many
+    /// words. Reading this backwards -- dropping the `!` -- would turn every
+    /// refusal into a receipt: the endpoint would hand over the facts and
+    /// record a sale for a payment that never cleared.
+    #[test]
+    fn only_an_explicit_success_is_a_receipt() {
+        assert_eq!(
+            settle_receipt(&json!({ "success": false, "errorReason": "insufficient funds" })),
+            Err("insufficient funds".to_owned())
+        );
+        assert_eq!(
+            settle_receipt(&json!({ "transaction": "0xabc" })),
+            Err("settlement refused".to_owned()),
+            "a body that never says success is refused, not assumed good"
+        );
+        let cleared =
+            settle_receipt(&json!({ "success": true, "transaction": "0xabc", "payer": "0xpayer" }))
+                .expect("an explicit success is a receipt");
+        assert_eq!(cleared.tx_hash, "0xabc");
+        assert_eq!(cleared.payer, "0xpayer");
+        assert_eq!(cleared.amount, PRICE_ATOMIC_USDC);
+    }
+
+    /// The same reading rule on the other call: absent is not valid (AGENTS
+    /// rule 8), so a silent or malformed answer never passes as approval.
+    #[test]
+    fn only_an_explicit_is_valid_is_a_verified_payment() {
+        assert!(
+            !verify_outcome(&json!({})).valid,
+            "a body with no isValid is not approval"
+        );
+        let refused = verify_outcome(&json!({ "isValid": false, "invalidReason": "expired" }));
+        assert!(!refused.valid);
+        assert_eq!(refused.reason, Some("expired".to_owned()));
+        let good = verify_outcome(&json!({ "isValid": true, "payer": "0xpayer" }));
+        assert!(good.valid);
+        assert_eq!(good.payer, Some("0xpayer".to_owned()));
     }
 }
