@@ -41,21 +41,26 @@
 
 pub mod assessment;
 pub mod baserates;
+pub mod capture;
 pub mod clause;
 pub mod creator;
 pub mod fidelity;
 pub mod firstparty;
 pub mod forbidden;
 pub mod render;
+pub mod report;
 pub mod salience;
 pub mod sheet;
+pub mod unknown;
 pub mod verdict;
 pub mod voice;
 
 pub use assessment::Assessment;
 pub use baserates::BaseRates;
+pub use capture::Capture;
 pub use clause::{Clause, Kind, Selection, Voice};
 pub use creator::{CreatorIndex, Population};
+pub use report::Report;
 pub use sheet::{About, Fact, FactSheet};
 pub use verdict::{Level, Verdict, level, level_from_score, template};
 pub use voice::{Billed, Fellback, Reply, write};
@@ -63,6 +68,19 @@ pub use voice::{Billed, Fellback, Reply, write};
 use realorrug_model::Provider;
 use realorrug_onchain::Dossier;
 use realorrug_types::Address;
+
+/// The verdict rule's own version, bumped whenever `verdict.rs`,
+/// `assessment.rs` or a signal's firing condition changes in a way that
+/// could move a published level or score for the same fact sheet.
+///
+/// Written onto every capture (`realorrug capture`, `realorrug-cli`) beside
+/// the fact sheet, so a replay months later can say *why* a recomputed
+/// verdict disagrees with the one a capture recorded: the facts did not
+/// change, the rules did. Bump this by hand in the same commit as any change
+/// to the rule it describes -- there is no test that can catch a forgotten
+/// bump, because the rule change and the version are the same author's two
+/// separate edits.
+pub const RULES_VERSION: &str = "2026-09-21";
 
 /// Builds the reply for a dossier.
 ///

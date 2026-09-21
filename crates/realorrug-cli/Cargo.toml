@@ -28,6 +28,10 @@ realorrug-pumpfun.workspace = true
 realorrug-robinhood.workspace = true
 realorrug-model.workspace = true
 realorrug-types.workspace = true
+# `Capture` (behind `realorrug capture`/`realorrug replay`) is the first type
+# in this crate serialized to disk rather than only printed, so this is the
+# first `[dependencies]` line here that names `serde` directly.
+serde.workspace = true
 serde_json.workspace = true
 
 [lints]
