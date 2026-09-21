@@ -8,6 +8,7 @@
 mod analyst;
 mod audit;
 mod bio;
+mod capture;
 mod contest;
 mod creator_index;
 mod dossier;
@@ -39,6 +40,13 @@ commands:
                                  that is not on the fact sheet, and the
                                  deterministic template ships instead. Prints;
                                  never posts
+  capture <mint> --out <dir> [--rpc URL] [--label NAME]
+                                 reads a mint the way `roast` does and freezes
+                                 the fact sheet, the read time, the
+                                 deterministic level/assessment and the rules
+                                 version to <dir>/<mint>.sheet.json. No model
+                                 call, no reply, and nothing is scored twice by
+                                 a later `replay`. Read-only
   analyst --mentions <file.jsonl> [--log <file>] [--robinhood-rpc URL]
                                  the whole summoned-reply loop over mentions
                                  from a file: strict parse, admission gate,
@@ -148,6 +156,7 @@ fn main() -> ExitCode {
 
     let result = match command.as_str() {
         "bio" => bio::run(&args),
+        "capture" => capture::run(&args),
         "contest" => contest::run(&args),
         "dossier" => dossier::run(&args),
         "roast" => roast::run(&args),
