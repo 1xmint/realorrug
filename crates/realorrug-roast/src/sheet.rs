@@ -1040,7 +1040,16 @@ impl FactSheet {
             // refusal for the read point). A Robinhood launch arrives as
             // `chain_launch` below instead, with its age already taken from
             // the two blocks' own timestamps.
-            if let Some(ReadAt::Solana(read_slot)) = dossier.read_at {
+            // Only a read strictly after the launch gives an age. The read
+            // slot equals the launch slot when the curve could not be read
+            // (the reader falls back to the launch's own slot), and a launch
+            // slot past the read slot means two nodes at different heights.
+            // Either way the age is unknown and no fact is pushed; the
+            // template then says it could not be read. Both used to publish
+            // "0 slots (about 0 hours)" as a measurement (research 0056).
+            if let Some(ReadAt::Solana(read_slot)) = dossier.read_at
+                && read_slot > launch.slot
+            {
                 push_age(&mut facts, read_slot.saturating_since(launch.slot));
             }
         } else if let Some(launch) = &dossier.chain_launch {
@@ -1501,6 +1510,10 @@ fn phrase_for(fact: &str) -> String {
         "funding" => "who funded the early buyers could not be read",
         "curve" => "the bonding curve could not be read",
         "creator history" => "the creator's history could not be read",
+        // Solana records this on every read (the reader is not built there
+        // yet), so the fallback put "part of this could not be read" in every
+        // Solana reply (research 0056). "Not checked" is true on both chains.
+        "creator cash flow" => "the creator's own buys and sells were not checked",
         _ => "part of this could not be read",
     }
     .to_owned()
@@ -2333,7 +2346,9 @@ fn push_window_sizes_and_exemption(
     // candidate may lack, see the holdings block above).
     if funding.checked.len() < 2 {
         skipped.push(
-            "whether same-window buy sizes are within 10% of each other needs at least two \
+            // No digits: the report repeats this reason, and the number check
+            // refuses a figure the sheet did not measure.
+            "whether same-window buy sizes are close to each other needs at least two \
              checked candidates"
                 .to_owned(),
         );
@@ -3418,9 +3433,13 @@ fn push_fee(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
                 about: About::Measurement,
                 kind: Kind::VenueFee,
                 label: "venue fee, round trip, read from the on-chain schedule".to_owned(),
+                // The rendered line is shown verbatim by the template, so it
+                // carries the qualifier and nothing else: an instruction to the
+                // model here was printed in public replies, and the 850 bps it
+                // quoted is `push_cost`'s fresh-launch figure, which the reply
+                // already states beside a different measured round trip.
                 rendered: format!(
-                    "{rt} bps -- THE VENUE FEE ONLY. The measured all-in round trip is 850 bps. \
-                     Never present the fee as the cost of trading."
+                    "{rt} bps, the venue's own fee and not the whole cost of a round trip"
                 ),
                 values: vec![rt, rt / 100.0],
                 clauses: Vec::new(),
@@ -3581,6 +3600,10 @@ mod tests {
         );
         // The fallback is deliberately the safe one, for a fact added later by
         // someone who did not read the comment above it.
+        assert_eq!(
+            phrase_for("creator cash flow"),
+            "the creator's own buys and sells were not checked"
+        );
         assert_eq!(
             phrase_for("something new"),
             "part of this could not be read"
@@ -6226,6 +6249,28 @@ mod tests {
 
     fn fact_of(sheet: &FactSheet, kind: Kind) -> Option<&Fact> {
         sheet.facts.iter().find(|f| f.kind == kind)
+    }
+
+    #[test]
+    fn a_read_no_later_than_the_launch_gives_no_age() {
+        // Two reads from nodes at different heights can put the launch after
+        // the read, and a dossier with no curve read carries the launch's own
+        // slot as its read point. Both floored to "0 slots (about 0 hours)",
+        // published as if measured; the age has to be absent instead.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        dossier.read_at = Some(ReadAt::Solana(Slot(444_007_819)));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::Age).is_none());
+
+        dossier.read_at = Some(ReadAt::Solana(Slot(444_007_820)));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::Age).is_none());
+
+        // One slot later is a real age.
+        dossier.read_at = Some(ReadAt::Solana(Slot(444_007_821)));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(fact_of(&sheet, Kind::Age).map(|f| f.values[0]), Some(1.0));
     }
 
     #[test]

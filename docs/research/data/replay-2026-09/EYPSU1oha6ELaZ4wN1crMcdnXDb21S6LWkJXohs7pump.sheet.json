@@ -1,7 +1,7 @@
 {
   "mint": "EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump",
   "label": "incomplete-read-versioned-tx",
-  "captured_at": "2026-09-21T14:04:25Z",
+  "captured_at": "2026-09-21T14:44:03Z",
   "rules_version": "2026-09-21",
   "level": "CantTell",
   "assessment": {
@@ -9,13 +9,12 @@
     "risk_index": 0,
     "score_bps": 0,
     "coverage": {
-      "read": 11,
-      "applicable": 17
+      "read": 16,
+      "applicable": 21
     },
     "critical_gaps": [
-      "the launch block could not be read",
       "who funded the early buyers could not be read",
-      "part of this could not be read"
+      "the creator's own buys and sells were not checked"
     ],
     "level": "CantTell",
     "admissible": [
@@ -26,9 +25,84 @@
   "sheet": {
     "mint": "EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump",
     "read_at": {
-      "Solana": 449076886
+      "Solana": 449085750
     },
     "facts": [
+      {
+        "about": "Measurement",
+        "kind": "launch_recipients",
+        "label": "distinct token accounts receiving the token in its own launch block (token accounts, NOT owners, NOT people)",
+        "rendered": "4",
+        "values": [
+          4.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block put it into 4 token accounts -- accounts, not people."
+          },
+          {
+            "voice": "blunt",
+            "text": "It reached 4 token accounts at birth. Accounts, not owners."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "launch_transactions",
+        "label": "transactions in the launch block",
+        "rendered": "3",
+        "values": [
+          3.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block carried 3 transactions."
+          },
+          {
+            "voice": "blunt",
+            "text": "One block, 3 transactions."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "dev_buy_unseen",
+        "label": "creator's own buy in the launch block",
+        "rendered": "not found -- absent, NOT zero. Do not say the creator bought nothing.",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "No buy by the creator was found in the launch block, which is not the same as none."
+          },
+          {
+            "voice": "blunt",
+            "text": "Real or Rug found no creator buy. Found, not happened."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "11818 slots (about 1.3 hours) since its launch block",
+        "values": [
+          11818.0,
+          1.3
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 1.3 hours ago -- 11818 slots, by the read point."
+          },
+          {
+            "voice": "blunt",
+            "text": "11818 slots old. Roughly 1.3 hours."
+          }
+        ]
+      },
       {
         "about": "Measurement",
         "kind": "graduated",
@@ -49,19 +123,19 @@
       {
         "about": "Price",
         "kind": "curve_liquidity",
-        "label": "quote asset held in the bonding curve now, read at slot 449076886",
-        "rendered": "3.0481 SOL",
+        "label": "quote asset held in the bonding curve now, read at slot 449085750",
+        "rendered": "0.1560 SOL",
         "values": [
-          3.048156784
+          0.156051974
         ],
         "clauses": [
           {
             "voice": "plain",
-            "text": "The curve holds 3.0481 SOL right now, as of slot 449076886."
+            "text": "The curve holds 0.1560 SOL right now, as of slot 449085750."
           },
           {
             "voice": "blunt",
-            "text": "3.0481 SOL in the curve, as of slot 449076886."
+            "text": "0.1560 SOL in the curve, as of slot 449085750."
           }
         ]
       },
@@ -69,18 +143,18 @@
         "about": "Measurement",
         "kind": "capacity",
         "label": "quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN impact budget, NOT a ceiling the venue imposes (research 0022)",
-        "rendered": "0.3337 SOL",
+        "rendered": "0.3045 SOL",
         "values": [
-          0.333786383
+          0.304576124
         ],
         "clauses": [
           {
             "voice": "plain",
-            "text": "0.3337 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
+            "text": "0.3045 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
           },
           {
             "voice": "blunt",
-            "text": "0.3337 SOL before the price moves one percent, by Real or Rug's budget."
+            "text": "0.3045 SOL before the price moves one percent, by Real or Rug's budget."
           }
         ]
       },
@@ -88,7 +162,7 @@
         "about": "Measurement",
         "kind": "venue_fee",
         "label": "venue fee, round trip, read from the on-chain schedule",
-        "rendered": "250 bps -- THE VENUE FEE ONLY. The measured all-in round trip is 850 bps. Never present the fee as the cost of trading.",
+        "rendered": "250 bps, the venue's own fee and not the whole cost of a round trip",
         "values": [
           250.0,
           2.5
@@ -101,6 +175,25 @@
           {
             "voice": "blunt",
             "text": "Venue fee alone: 250 bps round trip. That is the floor, not the bill."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_transactions",
+        "label": "transactions by this creator's address (transactions, not launches)",
+        "rendered": "at least 1977",
+        "values": [
+          1977.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Real or Rug has seen at least 1977 transactions from this creator's address -- transactions, not launches."
+          },
+          {
+            "voice": "blunt",
+            "text": "That address has at least 1977 transactions on it. Transactions, not launches."
           }
         ]
       },
@@ -243,17 +336,25 @@
         ]
       }
     ],
-    "untrusted": [],
+    "untrusted": [
+      [
+        "token name",
+        "Newborn"
+      ],
+      [
+        "token symbol",
+        "Newborn"
+      ]
+    ],
     "unknown": [
-      "the launch block could not be read",
       "who funded the early buyers could not be read",
-      "part of this could not be read"
+      "the creator's own buys and sells were not checked"
     ],
     "signals": [],
     "twins": [],
     "skipped": [
       "same-window buyers' linked holdings needs the launch's total supply",
-      "whether same-window buy sizes are within 10% of each other needs at least two checked candidates",
+      "whether same-window buy sizes are close to each other needs at least two checked candidates",
       "token ownership"
     ]
   }

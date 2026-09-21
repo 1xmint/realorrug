@@ -11,7 +11,9 @@ where, and why it was picked, so that decision has evidence behind it.
 
 ## What was captured
 
-All four were read on 2026-09-21 between 13:59 and 14:06 UTC, with
+All four were first read on 2026-09-21 between 13:59 and 14:06 UTC, and
+read again between 14:43 and 14:45 UTC after the fixes below; the saved
+sheets are the second read. Both times with
 `realorrug capture <mint> --out docs/research/data/replay-2026-09 --label
 <name>`, built once in debug
 (`cargo +stable-x86_64-pc-windows-gnullvm build -p realorrug-cli`) and run
@@ -26,7 +28,7 @@ no key, no account, no paid tier.
 | `GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump` | `graduated-pumpswap` | A token off the pump.fun bonding curve and trading on a PumpSwap AMM pool. |
 | `24RwgHxwu8icT1tcDtgH4RwyaDWao86xfacUo2xHpump` | `ordinary-launch` | A fresh, unremarkable bonding-curve launch: the launch block read cleanly, showing 3 recipient token accounts, 4 transactions, and no dev buy found. |
 | `DsjPNCjFrQDXGZ96UzohaMm9PQJJUxWFQ6Gy6do9CSLT` | `incomplete-read-page-budget` | A bonding-curve token whose launch block could not be reached: `dossier` reports "this token has more history than the page budget allows, so its launch could not be reached," alongside a 429 on the holder read. |
-| `EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump` | `incomplete-read-versioned-tx` | A bonding-curve token with version 1 transactions in its history, which the reader (before the fix below) refused to read: `dossier` reports `rpc error: Transaction version (1) is not supported by the requesting client. Please try the request again with the following configuration parameter: "maxSupportedTransactionVersion": 1`. |
+| `EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump` | `incomplete-read-versioned-tx` | A bonding-curve token with version 1 transactions in its history, which the reader (before the fix below) refused to read: `dossier` reported `rpc error: Transaction version (1) is not supported by the requesting client. Please try the request again with the following configuration parameter: "maxSupportedTransactionVersion": 1`. The second read, after the fix, reads its launch block; the label is kept from the first read, and the case now guards the version 1 reader. |
 
 Each `.sheet.json` under `docs/research/data/replay-2026-09/` is exactly what
 `capture` wrote; none was hand-edited.
@@ -121,8 +123,8 @@ worth a look, independent of which crate they belong to:
    instruction reaching a lookup-table account was dropped and a real
    trade could read as no trade. PR #145 adds the loaded accounts; the
    PR that brings in this note raises the request to version 1. The
-   saved sheet for this mint predates both fixes and still shows the
-   incomplete read.
+   saved sheet for this mint is the second read, after both fixes, and
+   its launch block reads.
 2. **`getTokenLargestAccounts` failed uniformly, every time, all session.**
    Whether or not the public endpoint is expected to serve that method for
    free at all is a question for whoever owns the RPC choice, but a reader
@@ -130,6 +132,42 @@ worth a look, independent of which crate they belong to:
    when the answer is always 429 — see "what's missing," above.
 
 The first is fixed; the second needs an RPC that serves the method.
+
+## What the first replay found in the sheet
+
+Running `realorrug replay` over the first read of these four found three
+faults in what the fact sheet hands the reply, all fixed in the PR after
+this note's first one:
+
+1. **The venue-fee line carried an instruction to the model.** It rendered
+   "250 bps -- THE VENUE FEE ONLY. The measured all-in round trip is 850
+   bps. Never present the fee as the cost of trading." The template prints a
+   fact's line verbatim, so that sentence and a second round-trip figure
+   reached the reply. The line now carries only its qualifier.
+2. **Every report failed its own number check.** A skipped reason quoted
+   "within 10% of each other", and the report repeats skipped reasons, so
+   the fidelity check refused the 10 as a number the sheet never measured.
+   The reason now has no digits.
+3. **Every readable launch was published as "0 slots (about 0 hours)"
+   old.** The Solana reader used the launch block's own slot as the sheet's
+   read point, so the age (read slot minus launch slot) was always zero, and
+   the live curve balance was stamped with a slot from before any trade. The
+   read point is now the curve read, falling back to the launch slot only
+   when the curve cannot be read, and the sheet counts an age only from a
+   read strictly after the launch. On the second read the ordinary launch
+   is 15,231 slots (about 1.7 hours) old and the versioned one 11,818 slots
+   (about 1.3 hours).
+
+All four cases still come out `CantTell`, and on Solana today every case
+will. The reader records "creator cash flow" as unread on every Solana read
+because that read is not built for Solana (`realorrug-onchain`'s
+`dossier.rs`), and the sheet counts any unread fact outside its optional list
+as a required fact that failed, which forces `CantTell`. The reply showed it
+as "part of this could not be read"; it now says "the creator's own buys and
+sells were not checked". Whether a Solana verdict may be earned without that
+read is a rules question for the owner, not changed here. The early buyers'
+funding read also failed on the saved captures, but read cleanly on a
+`dossier` run minutes later, so that one is the public endpoint's rate limit.
 
 ## Sources
 

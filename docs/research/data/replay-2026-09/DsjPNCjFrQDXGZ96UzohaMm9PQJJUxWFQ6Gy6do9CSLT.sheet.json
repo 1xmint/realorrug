@@ -1,7 +1,7 @@
 {
   "mint": "DsjPNCjFrQDXGZ96UzohaMm9PQJJUxWFQ6Gy6do9CSLT",
   "label": "incomplete-read-page-budget",
-  "captured_at": "2026-09-21T14:05:48Z",
+  "captured_at": "2026-09-21T14:43:56Z",
   "rules_version": "2026-09-21",
   "level": "CantTell",
   "assessment": {
@@ -15,7 +15,7 @@
     "critical_gaps": [
       "the launch block could not be read",
       "who funded the early buyers could not be read",
-      "part of this could not be read"
+      "the creator's own buys and sells were not checked"
     ],
     "level": "CantTell",
     "admissible": [
@@ -26,7 +26,7 @@
   "sheet": {
     "mint": "DsjPNCjFrQDXGZ96UzohaMm9PQJJUxWFQ6Gy6do9CSLT",
     "read_at": {
-      "Solana": 449077212
+      "Solana": 449085727
     },
     "facts": [
       {
@@ -49,19 +49,19 @@
       {
         "about": "Price",
         "kind": "curve_liquidity",
-        "label": "quote asset held in the bonding curve now, read at slot 449077212",
-        "rendered": "63.9790 SOL",
+        "label": "quote asset held in the bonding curve now, read at slot 449085727",
+        "rendered": "64.3368 SOL",
         "values": [
-          63.979049127
+          64.336845746
         ],
         "clauses": [
           {
             "voice": "plain",
-            "text": "The curve holds 63.9790 SOL right now, as of slot 449077212."
+            "text": "The curve holds 64.3368 SOL right now, as of slot 449085727."
           },
           {
             "voice": "blunt",
-            "text": "63.9790 SOL in the curve, as of slot 449077212."
+            "text": "64.3368 SOL in the curve, as of slot 449085727."
           }
         ]
       },
@@ -69,18 +69,18 @@
         "about": "Measurement",
         "kind": "capacity",
         "label": "quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN impact budget, NOT a ceiling the venue imposes (research 0022)",
-        "rendered": "0.9491 SOL",
+        "rendered": "0.9528 SOL",
         "values": [
-          0.949188396
+          0.952802142
         ],
         "clauses": [
           {
             "voice": "plain",
-            "text": "0.9491 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
+            "text": "0.9528 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
           },
           {
             "voice": "blunt",
-            "text": "0.9491 SOL before the price moves one percent, by Real or Rug's budget."
+            "text": "0.9528 SOL before the price moves one percent, by Real or Rug's budget."
           }
         ]
       },
@@ -88,7 +88,7 @@
         "about": "Measurement",
         "kind": "venue_fee",
         "label": "venue fee, round trip, read from the on-chain schedule",
-        "rendered": "250 bps -- THE VENUE FEE ONLY. The measured all-in round trip is 850 bps. Never present the fee as the cost of trading.",
+        "rendered": "250 bps, the venue's own fee and not the whole cost of a round trip",
         "values": [
           250.0,
           2.5
@@ -247,13 +247,13 @@
     "unknown": [
       "the launch block could not be read",
       "who funded the early buyers could not be read",
-      "part of this could not be read"
+      "the creator's own buys and sells were not checked"
     ],
     "signals": [],
     "twins": [],
     "skipped": [
       "same-window buyers' linked holdings needs the launch's total supply",
-      "whether same-window buy sizes are within 10% of each other needs at least two checked candidates",
+      "whether same-window buy sizes are close to each other needs at least two checked candidates",
       "token ownership"
     ]
   }

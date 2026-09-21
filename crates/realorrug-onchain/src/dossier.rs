@@ -519,9 +519,8 @@ pub fn build(
     // freshness check and needs no signature-paging call at all -- the
     // memory's whole point, since paging is the read that costs the most.
     // The curve and creator-activity reads below are deliberately NOT given
-    // the same treatment: this is the only read `Dossier::read_at` can name
-    // as this sheet's slot without contradicting a fresher number read
-    // elsewhere in the same build (see `dossier.read_at.is_none()` in step 2).
+    // the same treatment: they change with every trade, so a remembered one
+    // would be a stale number stamped with a fresh slot.
     let launch_result = if let Some(block) = memory.and_then(|mem| cached_launch(mem, &mint_key)) {
         Ok(block)
     } else {
@@ -540,29 +539,29 @@ pub fn build(
         })
     };
     match launch_result {
-        Ok(block) => {
-            dossier.read_at = Some(ReadAt::Solana(block.slot));
-            dossier.launch = Some(block);
-        }
+        Ok(block) => dossier.launch = Some(block),
         Err(why) => dossier.miss("launch block", why),
     }
 
     // 2. The curve, and the fee schedule it is priced under.
     match curve_facts(client, budget, mint) {
         Ok((facts, slot)) => {
-            // The curve read is the *only* slot a graduated coin has, because
-            // its launch block is past the signature-page budget and
-            // `oldest_launch` rightly refuses to guess one. Without this the
-            // coins people actually ask about published every figure with no
-            // slot beside it -- unfalsifiable, which is the one thing this
-            // account may not be. Set only when the launch block did not
-            // already supply one, so the earlier read still wins.
-            if dossier.read_at.is_none() {
-                dossier.read_at = slot.map(ReadAt::Solana);
-            }
+            // The curve read is the sheet's read point. Its reserves change
+            // every trade, so they are only checkable at the slot they were
+            // read at. The launch slot used to win here, which stamped live
+            // reserves with a slot from before any trade and made every
+            // readable launch "0 slots (about 0 hours)" old -- the age is the
+            // read slot minus the launch slot (research 0056).
+            dossier.read_at = slot.map(ReadAt::Solana);
             dossier.curve = Some(facts);
         }
         Err(why) => dossier.miss("curve", why),
+    }
+    // With no curve slot, the launch slot is still a true read point for the
+    // launch block's own facts, which never change after it lands. It gives
+    // no age: the sheet counts an age only from a read after the launch.
+    if dossier.read_at.is_none() {
+        dossier.read_at = dossier.launch.as_ref().map(|l| ReadAt::Solana(l.slot));
     }
 
     // 3. The creator's activity, bounded.
@@ -1683,6 +1682,66 @@ mod tests {
         let second =
             build(&dead_client, &mut second_budget, &mint, Some(&mem)).expect("no transport error");
         assert_eq!(second.launch, Some(launch));
+    }
+
+    /// A launch, then a bonding curve read at a later slot.
+    struct LaunchThenCurve {
+        launch: SuccessfulLaunch,
+        curve: String,
+    }
+
+    impl crate::rpc::Transport for LaunchThenCurve {
+        fn post(&self, url: &str, body: String) -> Result<String, String> {
+            if body.contains("getAccountInfo") {
+                Ok(self.curve.clone())
+            } else {
+                self.launch.post(url, body)
+            }
+        }
+    }
+
+    #[test]
+    fn the_read_slot_is_the_curve_read_and_not_the_launch_block() {
+        // The launch slot used to be the read slot whenever the launch was
+        // readable, so every such token was published as "0 slots (about 0
+        // hours)" old and its live reserves carried a slot from before any
+        // trade (research 0056). The curve is read now; its slot is the one.
+        let mint = Address::new([6u8; 32]);
+        let creator = Address::new([9u8; 32]);
+        let mut create = vec![0x18, 0x1e, 0xc8, 0x28, 0x05, 0x1c, 0x07, 0x77];
+        for s in ["Name", "SYM", "uri"] {
+            create.extend_from_slice(&u32::try_from(s.len()).expect("short").to_le_bytes());
+            create.extend_from_slice(s.as_bytes());
+        }
+        create.extend_from_slice(creator.as_bytes());
+        let data_b58 = base58_encode(&create);
+        let program = realorrug_decode::pumpfun::PROGRAM_ID.to_string();
+        let launch = SuccessfulLaunch {
+            signatures:
+                r#"{"jsonrpc":"2.0","id":1,"result":[{"signature":"launch-sig","slot":10,"err":null}]}"#
+                    .to_owned(),
+            transaction: format!(
+                r#"{{"jsonrpc":"2.0","id":1,"result":{{"slot":10,"meta":{{"err":null}},
+                   "transaction":{{"message":{{"accountKeys":["{creator}"],
+                   "instructions":[{{"programId":"{program}","data":"{data_b58}","accounts":[]}}]}}}}}}}}"#
+            ),
+        };
+        let mut curve = realorrug_pumpfun::curve::DISCRIMINATOR.to_vec();
+        curve.resize(8 + 5 * 8 + 1, 0);
+        curve.extend_from_slice(creator.as_bytes());
+        let curve = account_response(&curve)
+            .replace(r#""result":{"#, r#""result":{"context":{"slot":500},"#);
+
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(LaunchThenCurve { launch, curve }),
+        );
+        let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
+        let dossier = build(&client, &mut budget, &mint, None).expect("no transport error");
+
+        assert_eq!(dossier.launch.as_ref().map(|l| l.slot), Some(Slot(10)));
+        assert!(dossier.curve.is_some(), "{:?}", dossier.unavailable);
+        assert_eq!(dossier.read_at, Some(ReadAt::Solana(Slot(500))));
     }
 
     #[test]
