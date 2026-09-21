@@ -26,7 +26,7 @@ no key, no account, no paid tier.
 | `GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump` | `graduated-pumpswap` | A token off the pump.fun bonding curve and trading on a PumpSwap AMM pool. |
 | `24RwgHxwu8icT1tcDtgH4RwyaDWao86xfacUo2xHpump` | `ordinary-launch` | A fresh, unremarkable bonding-curve launch: the launch block read cleanly, showing 3 recipient token accounts, 4 transactions, and no dev buy found. |
 | `DsjPNCjFrQDXGZ96UzohaMm9PQJJUxWFQ6Gy6do9CSLT` | `incomplete-read-page-budget` | A bonding-curve token whose launch block could not be reached: `dossier` reports "this token has more history than the page budget allows, so its launch could not be reached," alongside a 429 on the holder read. |
-| `EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump` | `incomplete-read-versioned-tx` | A bonding-curve token whose launch transaction is a versioned (v0) transaction the reader cannot parse: `dossier` reports `rpc error: Transaction version (1) is not supported by the requesting client. Please try the request again with the following configuration parameter: "maxSupportedTransactionVersion": 1`. |
+| `EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump` | `incomplete-read-versioned-tx` | A bonding-curve token with version 1 transactions in its history, which the reader (before the fix below) refused to read: `dossier` reports `rpc error: Transaction version (1) is not supported by the requesting client. Please try the request again with the following configuration parameter: "maxSupportedTransactionVersion": 1`. |
 
 Each `.sheet.json` under `docs/research/data/replay-2026-09/` is exactly what
 `capture` wrote; none was hand-edited.
@@ -61,13 +61,11 @@ Each `.sheet.json` under `docs/research/data/replay-2026-09/` is exactly what
   reproducible reader limit, not a guess.
 - **`incomplete-read-versioned-tx`** — found via DexScreener `pumpfun`
   search, filtered for a very active pair (44 buys / 21 sells in the last
-  hour at read time, per DexScreener's `txns.h1`). `dossier` failed to read
-  its launch transaction with a specific RPC error naming an unsupported
-  transaction version. This is worth flagging separately from the
-  page-budget case below, because it is not a rate limit or a size limit —
-  it is the reader's `getTransaction` (or equivalent) call not asking for
-  `maxSupportedTransactionVersion`, so any launch that used a versioned (v0)
-  transaction is unreadable regardless of how much history it has. See
+  hour at read time, per DexScreener's `txns.h1`). `dossier` failed with an
+  RPC error naming an unsupported transaction version. This is a different
+  fault from the page-budget case: not a rate or size limit, but the reader
+  asking for version 0 while some of the token's transactions are version 1.
+  Now fixed; see
   "what the capture command got wrong," below.
 
 ## What's missing, and why
@@ -111,23 +109,27 @@ by hand-editing a sheet.
 Two things `dossier`/`capture` surfaced while working through this that are
 worth a look, independent of which crate they belong to:
 
-1. **The launch-block reader does not request `maxSupportedTransactionVersion`.**
-   `EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump`'s launch transaction is a
-   versioned (v0) transaction, and the RPC call to read it comes back with
-   `rpc error: Transaction version (1) is not supported by the requesting
-   client. Please try the request again with the following configuration
-   parameter: "maxSupportedTransactionVersion": 1`. Versioned transactions
-   are common on Solana now; a reader that cannot ask for them will miss the
-   launch on any mint that used one, not just this one.
+1. **The transaction reader asked for version 0 only, and dropped
+   lookup-table accounts. Both are now fixed.** The capture of
+   `EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump` failed with `rpc error:
+   Transaction version (1) is not supported by the requesting client`.
+   Its launch transaction is version 0 and reads fine; 7 of the token's
+   85 transactions are version 1, and the node refuses those outright
+   when the request says 0. Checking that also found a second fault: the
+   parser read only the message's `accountKeys`, while a versioned
+   transaction lists some accounts in `meta.loadedAddresses`, so any
+   instruction reaching a lookup-table account was dropped and a real
+   trade could read as no trade. PR #145 adds the loaded accounts; the
+   PR that brings in this note raises the request to version 1. The
+   saved sheet for this mint predates both fixes and still shows the
+   incomplete read.
 2. **`getTokenLargestAccounts` failed uniformly, every time, all session.**
    Whether or not the public endpoint is expected to serve that method for
    free at all is a question for whoever owns the RPC choice, but a reader
    that depends on it for every "who holds this" fact has no fallback today
    when the answer is always 429 — see "what's missing," above.
 
-Neither of these is something this task's boundary allowed touching (no
-Rust changes, capture-only); they are reported here, not fixed here, per the
-task.
+The first is fixed; the second needs an RPC that serves the method.
 
 ## Sources
 
