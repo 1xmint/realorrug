@@ -555,9 +555,11 @@ mod tests {
             &mut lane2_gate(),
             &ctx,
         );
-        let counts = memory
-            .mention_terms_since(std::time::UNIX_EPOCH)
-            .expect("read");
+        // The window starts a day before the context's clock, so the row has
+        // to have been written *at that clock* to be inside it. Reading from
+        // the epoch instead would pass however wrong the moment was.
+        let yesterday = std::time::UNIX_EPOCH + std::time::Duration::from_secs(ctx.now - 86_400);
+        let counts = memory.mention_terms_since(yesterday).expect("read");
         assert_eq!(counts.get("neuro"), Some(&1), "{counts:?}");
         assert_eq!(counts.get("narrative"), Some(&1), "{counts:?}");
     }

@@ -1354,7 +1354,7 @@ impl Memory {
         terms: &BTreeSet<String>,
         at: SystemTime,
     ) -> Result<(), Error> {
-        let day = to_unix(at) / 86_400;
+        let day = day_of(at);
         for term in terms {
             self.conn.execute(
                 "INSERT OR IGNORE INTO mention_terms (term, author, day)
@@ -1375,7 +1375,7 @@ impl Memory {
     ///
     /// [`Error::Sqlite`] if the read fails.
     pub fn mention_terms_since(&self, since: SystemTime) -> Result<BTreeMap<String, usize>, Error> {
-        let day = to_unix(since) / 86_400;
+        let day = day_of(since);
         let mut statement = self.conn.prepare(
             "SELECT term, COUNT(DISTINCT author) FROM mention_terms
              WHERE day >= ?1 GROUP BY term",
@@ -2133,6 +2133,15 @@ fn row_to_fact(
         })?,
         value,
     })
+}
+
+/// Which day a moment falls in, counted from the epoch.
+///
+/// The one place the day is worked out, so the writer and the reader cannot
+/// drift apart: a row written under one definition of "day" and looked for
+/// under another would silently return nothing.
+fn day_of(at: SystemTime) -> i64 {
+    to_unix(at) / 86_400
 }
 
 fn to_unix(t: SystemTime) -> i64 {
@@ -3205,6 +3214,20 @@ mod tests {
         list.iter().map(|w| (*w).to_owned()).collect()
     }
 
+    /// Two moments in one day are one day, and the next day is the next
+    /// number. Both the writing and the reading go through this, so getting
+    /// it wrong would not look like a bug -- it would look like nobody ever
+    /// asked anything.
+    #[test]
+    fn a_day_is_a_day_and_the_next_one_is_the_next_number() {
+        let noon = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 10 + 43_200);
+        let evening = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 10 + 79_200);
+        let tomorrow = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 11);
+        assert_eq!(day_of(noon), 10);
+        assert_eq!(day_of(evening), 10, "same day, same number");
+        assert_eq!(day_of(tomorrow), 11, "one day later is one number later");
+    }
+
     /// One person shouting is one person. The count is people, not
     /// appearances, or an account repeating a word all day would look like a
     /// narrative forming.
@@ -3214,8 +3237,12 @@ mod tests {
         let day = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 10);
         mem.record_mention_terms("alice", &words(&["neuro"]), day)
             .expect("write");
-        mem.record_mention_terms("alice", &words(&["neuro"]), day)
-            .expect("write");
+        mem.record_mention_terms(
+            "alice",
+            &words(&["neuro"]),
+            day + Duration::from_secs(3_600),
+        )
+        .expect("write");
         mem.record_mention_terms(
             "alice",
             &words(&["neuro"]),
