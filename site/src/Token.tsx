@@ -1,67 +1,59 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The token, and every rule it is launched under.
 //!
+//! # pump.fun, on Solana, paired with SOL — and it has not launched
+//!
+//! ADR 0037 moves the token off Robinhood Chain and onto pump.fun. There is no
+//! address, no dev buy, no wallet and no price to quote here yet, and this
+//! page says so rather than showing a placeholder that could be mistaken for
+//! one. When the token launches, the facts below are filled in, dated, and
+//! never invented in the meantime.
+//!
 //! # There is no price on this page and there will never be one
 //!
-//! Not a stylistic choice. [ADR 0013](../../docs/adr/0013-a-community-token-exists-and-radar-holds-none-of-it.md)
-//! constraint 5 forbids the *bot* from stating the token's price or market
-//! capitalisation, and a marketing page that prints what the bot is forbidden to
-//! say would make that constraint decorative. `REALORRUG_SELF_MINT` enforces it on
-//! the Rust side by refusing to answer about the token with any price fact; this
-//! page holds the same line by having nothing of the kind to render.
+//! Not a stylistic choice. The bot never states the token's price or market
+//! capitalisation, on any page, for any token including its own — and a
+//! marketing page that printed what the bot is forbidden to say would make
+//! that rule decorative.
 //!
-//! What is here instead is arithmetic a reader can check: the fee schedule, read
-//! off Robinhood Chain, and where the fee goes. `fee-ladder.json` is a fixture
-//! this repository checks by hand against
-//! [research 0036](../../docs/research/0036-pons-v2-read-from-a-real-launch.md),
-//! not a decoder-pinned file the way the old pump.fun ladder was — see that
-//! file's own comment for the sources and the date.
+//! # No prize, no yield, no benefit from holding it
 //!
-//! # ADR 0029: the dev buy and the bot's wallet, disclosed rather than absent
-//!
-//! [ADR 0029](../../docs/adr/0029-the-bot-holds-its-own-token-openly.md)
-//! supersedes ADR 0013 constraints 1 and 2. There is one small dev buy, in the
-//! launch block, and the bot's wallet may hold the token — both stated here
-//! with their size, wallet and transaction from launch day, never before it.
-//! Constraints 3 to 6 stand: the creator tax still becomes the whole prize,
-//! entry is still free, the bot still never states a price, and the token is
-//! still judged exactly like any other.
-//!
-//! # Why this page exists separately from the pool
-//!
-//! `/pool` answers "what is in the pot this week". This answers "what is this
-//! thing and what stops you being the exit liquidity". They are different
-//! questions from different readers, and the second one is the one a stranger
-//! arriving from a reply actually has.
+//! ADR 0038 retires the weekly prize and every other holder benefit. Creator
+//! fees go to a disclosed project treasury and pay disclosed operating costs
+//! — servers, data, model usage — and a reserve. Nothing else. Holding the
+//! token does not change a verdict, does not pay a return, and is not
+//! required to use the bot for anything.
 
-import ladder from "./fixtures/fee-ladder.json";
 import { useTitle } from "./title";
-import { Card, Heading, Nothing, Section, Steps } from "./ui";
+import { Card, Heading, Nothing, Out, Section, Steps } from "./ui";
 
 /**
- * The rules it is launched under, in ADR 0029's own order — the two it
- * changed first, then the four ADR 0013 constraints it left standing.
+ * The rules the token launches under.
  *
- * One sentence each. The ADRs argue them; this states them, because a reader
- * deciding in four seconds needs the constraint, not the reasoning.
+ * One sentence each, in the order a reader deciding in four seconds needs
+ * them: what it is, what it is not, and what happens to the money.
  */
 const RULES: readonly { readonly rule: string; readonly plain: string }[] = [
   {
-    rule: "One small dev buy, in the launch block, stated in public.",
+    rule: "It launches through pump.fun, on Solana, paired with SOL.",
     plain:
-      "Its size, the wallet that made it and the transaction are on this page from launch day. Before then there is no address, size or transaction yet.",
+      "Not Robinhood Chain, not any other chain, and not launched yet. There is no address to check until it is.",
   },
   {
-    rule: "The bot's wallet may hold the token, and its address is public.",
-    plain: "Every token it holds is visible on chain to anyone who looks.",
+    rule: "Project-controlled wallets are published with their addresses.",
+    plain:
+      "Any developer purchase or compensation is disclosed the same way — with its size, its wallet and its transaction, from launch day, not before.",
   },
   {
-    rule: "The creator tax goes to the bot's wallet and funds the weekly prize.",
-    plain: "Nothing is kept back. It leaves again the same week.",
+    rule:
+      "Creator fees pay disclosed operating costs and a reserve. Nothing else.",
+    plain:
+      "Servers, data and model usage, published as categories. No prize, no buyback, no yield, no revenue share to anybody who holds the token.",
   },
   {
-    rule: "Entry is free and never requires holding the token.",
-    plain: "Mention the account with a coin. That is the whole entry.",
+    rule: "Holding the token buys nothing in the product.",
+    plain:
+      "Every answer the bot gives is free to everyone, with or without it. It is not a share, it grants no vote, and it changes no verdict.",
   },
   {
     rule: "The bot never states the token's price or market capitalisation.",
@@ -69,7 +61,8 @@ const RULES: readonly { readonly rule: string; readonly plain: string }[] = [
   },
   {
     rule: "The token is judged like any other.",
-    plain: "Same rule, same fact sheet, same refusals — including the dev buy this page discloses. Ask it.",
+    plain:
+      "Same rule, same fact sheet, same refusals — including about its own launch and its own wallets. Ask it.",
   },
 ];
 
@@ -78,11 +71,11 @@ function Rules() {
     <Section id="rules">
       <Heading kicker="The six rules">What it is launched under</Heading>
       <p className="mb-8 max-w-2xl text-[var(--color-dim)]">
-        A badge, not an investment. It is not a share, it does not grant a vote,
-        and it buys no feature — every answer the bot gives is free to everyone,
-        with or without it. Nothing here buys, sells or swaps the token
-        automatically; any future trading needs its own decision, in public,
-        first.
+        A badge, not an investment. It is not a share, it does not grant a
+        vote, and it buys no feature — every answer the bot gives is free to
+        everyone, with or without it. Nothing here buys, sells or swaps the
+        token automatically; any future trading needs its own decision, in
+        public, first.
       </p>
       <div className="grid gap-4 md:grid-cols-2">
         {RULES.map((r, i) => (
@@ -106,23 +99,22 @@ function Money() {
   return (
     <Section id="money">
       <Heading kicker="Where the money goes">
-        Volume becomes a fee, and the fee becomes the prize
+        A fee on trading pays disclosed costs, and nothing else
       </Heading>
       <div className="max-w-2xl">
         <Steps
           steps={[
             {
-              what: "Somebody trades the token. A base fee and the creator tax are charged on the trade, in ETH.",
+              what: "Somebody trades the token on pump.fun. A creator fee is charged on the trade, in SOL.",
             },
             {
-              what: "The creator's share is credited to a fee escrow the launchpad keeps, not paid out directly.",
+              what: "The fee is credited to the project's own treasury wallet, address published at launch.",
             },
             {
-              what: "The bot's own wallet — the creator fee recipient, address public — claims it. Nothing is kept back.",
+              what: "The treasury pays disclosed operating costs — servers, data, model usage — and holds a reserve.",
             },
             {
-              what: "The week's best question wins the pool, in one public transaction the payout wallet signs and nothing else.",
-              when: "Mondays, 00:00 UTC close · payout 01:00 UTC",
+              what: "Nothing is paid to holders. There is no prize, no buyback and no yield to distribute.",
             },
           ]}
         />
@@ -131,81 +123,61 @@ function Money() {
   );
 }
 
-function Ladder() {
-  const curve = ladder.curve;
+/** pump.fun's own fee schedule, linked rather than quoted. */
+function Fees() {
   return (
     <Section id="fees">
-      <Heading kicker="The fee, read off Robinhood Chain">
-        100 basis points, split, plus a chosen tax
-      </Heading>
-      <p className="mb-6 max-w-2xl text-[var(--color-dim)]">
-        While a coin is still on its bonding curve, every trade pays a base fee
-        of{" "}
-        <strong className="text-[var(--color-text)]">
-          {curve.base_fee_bps} basis points
-        </strong>{" "}
-        of volume — 1%. The protocol keeps{" "}
-        {curve.protocol_share_bps / 100}% of that fee; the creator gets the
-        other {curve.creator_base_share_bps / 100}%. On top of that, the
-        creator sets a tax once, at launch, from 0 up to{" "}
-        {curve.creator_tax_ceiling_bps} basis points, paid to the creator in
-        full. All of it is in ETH, and all of the creator's side is this
-        token's weekly prize.
+      <Heading kicker="The fee">Set by pump.fun, not by this project</Heading>
+      <p className="max-w-2xl text-[var(--color-dim)]">
+        pump.fun's fee rate depends on the launch stage and the token's market
+        capitalisation, and both change as the token trades. Rather than
+        quote a number here that would be wrong by the time somebody reads
+        it, this page links the source instead.
       </p>
-      <Card>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
-          <div>
-            <dt className="text-xs text-[var(--color-faint)]">Base fee</dt>
-            <dd className="tnum mt-1 text-[var(--color-text)]">
-              {curve.base_fee_bps} bps
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-[var(--color-faint)]">
-              Creator's share of it
-            </dt>
-            <dd className="tnum mt-1 font-medium text-[var(--color-signal)]">
-              {curve.creator_base_share_bps / 100}%
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-[var(--color-faint)]">
-              Protocol's share of it
-            </dt>
-            <dd className="tnum mt-1 text-[var(--color-dim)]">
-              {curve.protocol_share_bps / 100}%
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-[var(--color-faint)]">
-              Creator tax ceiling
-            </dt>
-            <dd className="tnum mt-1 text-[var(--color-dim)]">
-              {curve.creator_tax_ceiling_bps} bps
-            </dd>
-          </div>
-        </dl>
-      </Card>
-      <p className="mt-4 max-w-2xl text-sm text-[var(--color-dim)]">
-        {!ladder.after_graduation.established && (
-          <>
-            <strong className="text-[var(--color-text)]">
-              What happens to the fee after graduation is not established
-              here.
-            </strong>{" "}
-            A graduated Pons v2 pool is Uniswap-shaped, with a hook, and its
-            fee split has not been read off chain — so this page states the
-            curve's fee, which is what applies for as long as the coin trades
-            on it, and says nothing about a number it has not checked.
-          </>
-        )}
+      <p className="mt-4">
+        <Out href="https://pump.fun/docs/fees">
+          pump.fun's fee documentation →
+        </Out>
       </p>
-      <p className="mt-4 text-xs text-[var(--color-faint)]">
-        Read from the launchpad's own factory on {ladder.captured}. The
-        factory owner can change these settings for future launches; a
-        launched curve keeps what it snapshotted, which is why this page is
-        dated.
-      </p>
+    </Section>
+  );
+}
+
+/** What can go wrong, stated rather than buried in a footnote. */
+function Risks() {
+  return (
+    <Section id="risks">
+      <Heading kicker="Risks">What this page will not soften</Heading>
+      <ul className="max-w-2xl list-disc space-y-3 pl-5 text-sm text-[var(--color-dim)]">
+        <li>
+          <strong className="text-[var(--color-text)]">
+            It can go to zero.
+          </strong>{" "}
+          A memecoin with no revenue, no product entitlement and no promise
+          behind it can lose all of its value, and most do.
+        </li>
+        <li>
+          <strong className="text-[var(--color-text)]">
+            This is not an investment.
+          </strong>{" "}
+          Nothing here is an offer, a solicitation, or advice to buy, sell or
+          hold anything.
+        </li>
+        <li>
+          <strong className="text-[var(--color-text)]">
+            There is no promise of fee income.
+          </strong>{" "}
+          Fees exist only if the token trades, and the project makes no
+          commitment about how much that will ever be.
+        </li>
+        <li>
+          <strong className="text-[var(--color-text)]">
+            The fee rate is not fixed.
+          </strong>{" "}
+          pump.fun sets it by launch stage and market cap, and can change how
+          it sets it. See the link above rather than a number frozen here.
+        </li>
+      </ul>
     </Section>
   );
 }
@@ -252,8 +224,8 @@ function Status() {
           why="Nothing has been minted, no contract address has been published, and any address claiming to be this token is not. When one exists it will be published here and in the account's own bio, and nowhere else."
         />
         <Nothing
-          what="The dev buy has no size, wallet or transaction yet."
-          why="ADR 0029: there is one small dev buy, in the launch block. Its size, the wallet that made it and the transaction are published on this page on launch day — not before, and not as a guess in the meantime."
+          what="Project-controlled wallets have no addresses yet."
+          why="Any developer purchase or compensation, and the treasury wallet that receives creator fees, are published here on launch day with their size, address and transaction — not before, and not as a guess in the meantime."
         />
       </div>
     </Section>
@@ -279,7 +251,8 @@ export function Token() {
       <Status />
       <Rules />
       <Money />
-      <Ladder />
+      <Fees />
+      <Risks />
       <Gate />
     </>
   );

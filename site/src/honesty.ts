@@ -272,3 +272,22 @@ export function evmShaped(text: string): boolean {
 export function eth(wei: number): string {
   return (wei / 1_000_000_000_000_000_000).toFixed(4);
 }
+
+/**
+ * Wording ADR 0038 retires along with the weekly prize.
+ *
+ * The prize, the pool and every holder benefit are gone; if any of these
+ * words shows up on a page again it is either a leftover sentence from before
+ * the retirement or a new claim nobody decided to make, and either way the
+ * page is wrong before a human reads it. Checked case-insensitively, as a
+ * substring, against rendered page text — see `empty.test.tsx`'s
+ * "no page delivers a verdict" checks, which run this list against every
+ * page rather than trusting each page's author to remember it by hand.
+ */
+export const FORBIDDEN_CLAIMS: readonly string[] = [
+  "prize",
+  "payout",
+  "buyback",
+  "holders earn",
+  "yield",
+];

@@ -47,7 +47,12 @@ export interface Route {
  * landing a stranger on "No such page".
  */
 export const MOVED = [
-  { from: "/leaderboard", to: "/contest" },
+  // The weekly prize is retired (ADR 0038): there is no live leaderboard or
+  // pool any more, only the historical record of the weeks that ran while it
+  // was live. Every old link that used to reach a live page now reaches that
+  // record instead of a 404.
+  { from: "/leaderboard", to: "/payouts" },
+  { from: "/contest", to: "/payouts" },
   { from: "/pool", to: "/payouts" },
   { from: "/history", to: "/payouts" },
   { from: "/token", to: "/tokenomics" },
@@ -55,8 +60,10 @@ export const MOVED = [
 
 export const ROUTES = [
   { path: "/", label: "Home", inNav: true },
-  { path: "/contest", label: "Contest", inNav: true },
-  { path: "/payouts", label: "Payouts", inNav: true },
+  // The live contest and its prize pool are gone (ADR 0037, ADR 0038). What
+  // is left at the same address is the historical record: the weeks that
+  // closed while the prize ran, kept rather than deleted.
+  { path: "/payouts", label: "History", inNav: true },
   { path: "/how-it-works", label: "How it works", short: "How", inNav: true },
   { path: "/tokenomics", label: "Tokenomics", short: "Token", inNav: true },
   { path: "/about", label: "About", inNav: true },

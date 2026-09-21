@@ -6,6 +6,10 @@
 //! way this component fails badly is printing a string that looks like a
 //! contract address when it should not, so that is what every case here
 //! checks for, not just the happy path.
+//!
+//! ADR 0037 launches the token on pump.fun, on Solana, so the shape under
+//! test is a base58 mint address, not the Robinhood Chain `0x` shape this
+//! file checked before the token moved chains.
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +21,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const VALID = "0x22fd1234567890abcdef1234567890abcdef48fa";
+const VALID = "HWvHqvfFVQdLZ1K3kMygpvhivVZEcrzVShgJFgtXpump";
+// Exactly the shape's floor (32 base58 characters), so removing one more
+// character below crosses under `mintShaped`'s minimum length rather than
+// staying inside its 32-44 range like trimming a character off `VALID` would.
+const SHORTEST_VALID = "HWvHqvfFVQdLZ1K3kMygpvhivVZEcrzS";
 
 describe("no address configured", () => {
   it("says the token has not launched, and prints no 0x string", () => {
@@ -40,7 +48,7 @@ describe("an address configured but malformed", () => {
   });
 
   it("also refuses a string one character short of shaped", () => {
-    vi.stubEnv("VITE_TOKEN_ADDRESS", VALID.slice(0, -1));
+    vi.stubEnv("VITE_TOKEN_ADDRESS", SHORTEST_VALID.slice(0, -1));
     render(<TokenAddress />);
     expect(screen.getByText(/has not launched/i)).toBeTruthy();
   });

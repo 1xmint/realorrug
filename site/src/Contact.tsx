@@ -99,10 +99,7 @@ export function Contact() {
             Nobody running this will message you first, ask you for a private key
             or a seed phrase, ask you to connect a wallet, or ask you to send
             anything anywhere. There is nothing here to connect and nothing to
-            sign. If you have won, the account replies to you in your own thread,
-            under the reply that won, and you claim by replying to that post with
-            a Robinhood Chain wallet address — described step by step on{" "}
-            <Here href="/contest">the contest page</Here>.
+            sign, and holding the token buys nothing here either.
           </p>
         </Block>
 

@@ -285,6 +285,16 @@ export function History() {
       </Heading>
 
       <p className="max-w-2xl text-[var(--color-dim)]">
+        <strong className="text-[var(--color-text)]">
+          The weekly prize has ended.
+        </strong>{" "}
+        Nothing new is added here. What follows is the historical record of
+        any week that ran while it was live, kept rather than deleted, on the
+        same rule as everything else this site publishes: the evidence stays
+        up even after the thing it documents stops.
+      </p>
+
+      <p className="mt-4 max-w-2xl text-[var(--color-dim)]">
         Every closed week, newest first. Each row links to the thing it claims:
         the reply that won, the reply that claimed it, and the transaction that
         paid it. Nothing here has to be taken on trust.

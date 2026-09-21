@@ -99,19 +99,20 @@ export function About() {
         <Block title="What it costs you">
           <p>
             Nothing. There is no token you need to hold, no subscription, and
-            nothing to connect. The weekly contest is free to enter and you never
-            need to own anything to win it.
+            nothing to connect. Asking the account a question has never
+            required owning anything, and it still does not.
           </p>
         </Block>
 
         <Block title="The token">
           <p>
-            There is a community token, and its rules are the point of it: one
-            small dev buy, disclosed with its size, wallet and transaction from
-            launch day, and no other allocation, team or treasury supply. The
-            bot's wallet may hold the token, openly, at a public address. The
-            only money that reaches it is the token's creator fee, and all of it
-            becomes the weekly prize.
+            The token launches through pump.fun, on Solana, paired with SOL. It
+            has not launched yet — there is no address to check and no price to
+            quote. Creator fees go to a disclosed project treasury and pay
+            disclosed operating costs and a reserve, nothing else. Holding the
+            token gets you nothing from the product: no revenue share, no
+            yield, no buyback, no prize, no preferential verdict. It is not an
+            investment.
           </p>
           <p>
             The bot answers questions about that token on exactly the same rule
@@ -122,25 +123,7 @@ export function About() {
               href="/tokenomics"
               className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
             >
-              The six rules, the fee ladder, and what has to be true before any
-              of it happens →
-            </Link>
-          </p>
-        </Block>
-
-        <Block title="If you win">
-          <p>
-            The account replies to you, in your own thread, under the reply that
-            won. You claim by replying to <em>that</em> post with a
-            wallet address, within seven days. There is nothing to connect and
-            nothing to sign.
-          </p>
-          <p>
-            <Link
-              href="/contest"
-              className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
-            >
-              The scoring rule and the claim steps in full →
+              The plan, the wallets, and the risks →
             </Link>
           </p>
         </Block>

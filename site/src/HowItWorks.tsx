@@ -105,8 +105,8 @@ export function HowItWorks() {
                 Name a person as a scammer.
               </strong>{" "}
               A verdict describes a token and its launch. Who is behind a
-              wallet is a claim the chain cannot prove, so the account does not
-              make it.
+              wallet is not evidence the chain provides, so the account does
+              not make that judgement.
             </li>
             <li>
               <strong className="text-[var(--color-text)]">
@@ -125,8 +125,8 @@ export function HowItWorks() {
               <strong className="text-[var(--color-text)]">
                 Let a model move money.
               </strong>{" "}
-              Contest payouts follow a fixed rule written in code, and the key
-              that pays them can do nothing else.
+              Holding the token buys nothing in the product, and nothing here
+              trades, swaps or pays out automatically on a model's say-so.
             </li>
             <li>
               <strong className="text-[var(--color-text)]">
