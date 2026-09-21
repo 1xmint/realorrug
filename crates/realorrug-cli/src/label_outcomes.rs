@@ -67,8 +67,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .unwrap_or(DEFAULT_MAX);
     let dry_run = has(args, "--dry-run");
 
-    let memory = Memory::open(std::path::Path::new(&path))
-        .map_err(|e| format!("cannot open {path}: {e}"))?;
+    let memory = crate::open_memory(&path)?;
     let settled_by = SystemTime::now()
         .checked_sub(Duration::from_secs(days.saturating_mul(86_400)))
         .unwrap_or(SystemTime::UNIX_EPOCH);

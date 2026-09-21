@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::{Duration, SystemTime};
 
-use realorrug_onchain::memory::{MarketRead, Memory};
+use realorrug_onchain::memory::MarketRead;
 use realorrug_onchain::narrative::{self, Theme, Trading};
 
 use crate::flag;
@@ -62,8 +62,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let top =
         usize::try_from(number(args, "--top").unwrap_or(DEFAULT_TOP as u64)).unwrap_or(DEFAULT_TOP);
 
-    let memory = Memory::open(std::path::Path::new(&path))
-        .map_err(|e| format!("cannot open {path}: {e}"))?;
+    let memory = crate::open_memory(&path)?;
     let since = SystemTime::now()
         .checked_sub(Duration::from_secs(days.saturating_mul(86_400)))
         .unwrap_or(SystemTime::UNIX_EPOCH);
@@ -192,6 +191,7 @@ fn number(args: &[String], name: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use realorrug_onchain::memory::Memory;
     use realorrug_onchain::memory::TokenText;
 
     fn nobody() -> BTreeMap<String, usize> {

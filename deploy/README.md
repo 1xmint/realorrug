@@ -21,7 +21,15 @@ to `radar-serve`'s on install. **Both binaries were replaced on 2026-09-17 with
 commit `414105c`**, checksums verified against the release's `BUILD-INFO.txt`
 and the previous pair kept beside them as `*.prev-d15cf18`; `/health` reports
 `414105c` and the analyst's journal reports `LIVE -- replies are being posted
-publicly` on it.
+publicly` on it. **Serve, the analyst and the `realorrug` command were replaced
+on 2026-09-21 with commit `4ddeec9`** (`release-linux` run 35549813285),
+checksums verified before and after the copy, the previous three kept as
+`*.prev-a071bc7`; `/health` reports `4ddeec9` and the analyst's journal reports
+`LIVE` on it. That build writes launch names, market readings and mention words
+to `data/analyst/memory.sqlite3`, which the analyst created on its first poll.
+Run `realorrug narratives` with `--memory ~/realorrug/data/analyst/memory.sqlite3`
+(or from `~/realorrug`): run from anywhere else it finds no memory file and
+says so.
 
 **The live site reaches it** since 2026-09-14. The site calls
 `https://radar.heyvera.org`; the root-owned tunnel config
