@@ -1307,7 +1307,62 @@ impl Memory {
         Self::init_verdicts(conn)?;
         Self::init_token_texts(conn)?;
         Self::init_token_market(conn)?;
-        Self::init_mention_terms(conn)
+        Self::init_mention_terms(conn)?;
+        Self::init_walk_cursors(conn)
+    }
+
+    /// Where a named background walk (`realorrug record-launches` today)
+    /// last finished, so the next run starts after that block instead of
+    /// re-walking the whole range every time. One row per walk name -- a
+    /// second walk (a second chain, a second event) gets its own cursor
+    /// rather than fighting this one over a shared row.
+    fn init_walk_cursors(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS walk_cursors (
+                name  TEXT    PRIMARY KEY,
+                block INTEGER NOT NULL
+             );",
+        )?;
+        Ok(())
+    }
+
+    /// The block a named walk last finished, or `None` if it has never
+    /// finished one -- absent, not zero (rule 8): block 0 is a real block,
+    /// and a caller that treated "never run" as "finished through 0" would
+    /// silently skip a launch in the chain's first block.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails.
+    pub fn cursor(&self, name: &str) -> Result<Option<u64>, Error> {
+        let block: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT block FROM walk_cursors WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(block.map(|b| u64::try_from(b).unwrap_or(0)))
+    }
+
+    /// Sets `name`'s cursor to `block`, replacing whatever was there.
+    ///
+    /// The caller's job, not this method's, is to only call it once the rows
+    /// for the range up to `block` are actually written -- a cursor set
+    /// ahead of what was recorded would make the next run skip a launch that
+    /// was never seen.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn set_cursor(&self, name: &str, block: u64) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT INTO walk_cursors (name, block) VALUES (?1, ?2)
+             ON CONFLICT(name) DO UPDATE SET block = excluded.block",
+            params![name, i64::try_from(block).unwrap_or(i64::MAX)],
+        )?;
+        Ok(())
     }
 
     /// Which words people used when they asked, one row per person per word
@@ -3351,5 +3406,37 @@ mod tests {
             .tokens_awaiting_outcome(CHAIN, secs(5_000), 2)
             .expect("read");
         assert_eq!(batch, vec!["token-0".to_owned(), "token-1".to_owned()]);
+    }
+
+    /// A walk that has never finished a range has no cursor -- absent, not
+    /// zero (rule 8), since block 0 is a real block a naive "default to 0"
+    /// would be indistinguishable from.
+    #[test]
+    fn an_absent_cursor_is_none() {
+        let mem = Memory::open_in_memory().expect("open");
+        assert_eq!(mem.cursor("record-launches").expect("read"), None);
+    }
+
+    /// A cursor written is a cursor read back, and a second write replaces
+    /// the first rather than erroring or adding a second row.
+    #[test]
+    fn a_cursor_round_trips_and_a_second_write_replaces_the_first() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.set_cursor("record-launches", 1_000).expect("write");
+        assert_eq!(mem.cursor("record-launches").expect("read"), Some(1_000));
+
+        mem.set_cursor("record-launches", 1_500).expect("write");
+        assert_eq!(mem.cursor("record-launches").expect("read"), Some(1_500));
+    }
+
+    /// Two named walks keep separate cursors -- a second walk must not read
+    /// or overwrite the first's progress.
+    #[test]
+    fn two_named_cursors_do_not_share_a_row() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.set_cursor("record-launches", 10).expect("write");
+        mem.set_cursor("some-other-walk", 20).expect("write");
+        assert_eq!(mem.cursor("record-launches").expect("read"), Some(10));
+        assert_eq!(mem.cursor("some-other-walk").expect("read"), Some(20));
     }
 }

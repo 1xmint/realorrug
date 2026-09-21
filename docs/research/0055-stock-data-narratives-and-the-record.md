@@ -335,6 +335,24 @@ from accounts that mention it, so an empty count is silence, not absence
 word many launchers picked that nobody is asking about, or a word one launch
 used that forty people are.
 
+**Every launch, built 2026-09-21.** Until now, `token_texts` was written only
+from `realorrug-serve/src/record.rs`'s `token_text()`, when a route served a
+dossier -- so the name/symbol side of `narratives` counted only launches
+someone happened to ask this account about, the same asked-about bias the
+mention-word count above measures on purpose but the launch-word count never
+meant to inherit. `realorrug record-launches` closes it: an operator command
+that walks every `TokenLaunched` event on the Pons v2 factory the same way
+`creator-index` does, reads each token's `name()` and `symbol()`, and writes
+one row per token to the same `token_texts` table a served dossier writes to
+(`INSERT OR IGNORE`, so a name read from a served dossier keeps precedence and
+a later run cannot overwrite it). It resumes from a stored cursor rather than
+rewalking the chain each run; with no cursor and no `--from` it starts about
+one day of blocks behind the head (research 0039's measured ~9.8 blocks/second,
+≈846,720 blocks/day). A token whose `name()`/`symbol()` call fails still gets
+a row, with `None` in the unreadable field -- absent is not zero (rule 8), and
+a token that launched but could not be read is not the same as a token that
+never launched. Read-only chain access; it holds no key and posts nothing.
+
 ## 4. "Record everything" — what is recoverable later versus lost if not captured now
 
 **Recoverable later, at a cost, from archive RPC:**
