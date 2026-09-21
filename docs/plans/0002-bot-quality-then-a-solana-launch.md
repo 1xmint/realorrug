@@ -31,7 +31,7 @@ Scope: pump.fun launches and graduated PumpSwap tokens.
 |---|---|
 | `realorrug capture <mint>` saves the fact sheet with its observation time | the replay PR |
 | A report beside every reply: strongest concern and its evidence, alternatives, missing checks and read time, what would change it | the report module in `realorrug-roast` |
-| `realorrug replay <dir>` prints each case's verdict, report, reply and checks into `review.md` | the replay PR |
+| `realorrug replay <dir>` prints each case's verdict, report, reply and checks into a review file | the replay PR |
 | Evidence-fidelity, unsupported-accusation and unknown-data checks run on reply and report | the replay PR |
 | A replay set from real captures: suspicious launch, ordinary launch, graduation, incomplete read, creator sale, misleading concentration | captures under `docs/research/data/` |
 | **Josh reviews real replies**; accepted ones become regression cases that CI replays | accepted cases in the roast crate's tests |
