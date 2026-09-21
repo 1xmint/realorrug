@@ -734,7 +734,7 @@ pub fn parse_transaction(raw: &serde_json::Value) -> Option<Transaction> {
         .is_some_and(|e| !e.is_null());
 
     let message = raw.get("transaction")?.get("message")?;
-    let accounts: Vec<String> = message
+    let mut accounts: Vec<String> = message
         .get("accountKeys")?
         .as_array()?
         .iter()
@@ -746,6 +746,22 @@ pub fn parse_transaction(raw: &serde_json::Value) -> Option<Transaction> {
                 .or_else(|| k.get("pubkey")?.as_str().map(ToOwned::to_owned))
         })
         .collect();
+    // A versioned transaction names some accounts through a lookup table, and
+    // the node returns those in `meta.loadedAddresses`, not in `accountKeys`.
+    // Instruction indexes and the balance arrays count them after the static
+    // keys, writable first, then read-only. Without them an index past the
+    // static list resolves to nothing and the instruction drops out, so a
+    // real trade reads as no trade (research 0056).
+    if let Some(loaded) = meta.and_then(|m| m.get("loadedAddresses")) {
+        for field in ["writable", "readonly"] {
+            if let Some(list) = loaded.get(field).and_then(|l| l.as_array()) {
+                accounts.extend(
+                    list.iter()
+                        .filter_map(|k| k.as_str().map(ToOwned::to_owned)),
+                );
+            }
+        }
+    }
 
     let mut instructions = Vec::new();
     if let Some(list) = message.get("instructions").and_then(|i| i.as_array()) {
@@ -1350,5 +1366,35 @@ mod tests {
         });
         let tx = parse_transaction(&raw).expect("a transaction");
         assert_eq!(tx.accounts, vec!["Bare".to_owned(), "Wrapped".to_owned()]);
+    }
+
+    #[test]
+    fn lookup_table_accounts_follow_the_static_keys_writable_first() {
+        // Trimmed from a mainnet version 0 transaction (research 0056). The
+        // program sits in the lookup table, so its index (3) is past the two
+        // static keys; a parser that ignored `loadedAddresses` dropped the
+        // instruction and the trade with it.
+        let raw = serde_json::json!({
+            "slot": 1u64,
+            "version": 0,
+            "meta": {
+                "err": null,
+                "loadedAddresses": { "writable": ["LoadedW"], "readonly": ["LoadedR"] }
+            },
+            "transaction": { "message": {
+                "accountKeys": ["Signer", "Static"],
+                "addressTableLookups": [],
+                "instructions": [ { "programIdIndex": 3, "data": "2", "accounts": [0, 2] } ]
+            }}
+        });
+        let tx = parse_transaction(&raw).expect("a transaction");
+        assert_eq!(tx.accounts, ["Signer", "Static", "LoadedW", "LoadedR"]);
+        assert_eq!(
+            tx.instructions.len(),
+            1,
+            "the lookup-table instruction survives"
+        );
+        assert_eq!(tx.instructions[0].program, "LoadedR");
+        assert_eq!(tx.instructions[0].accounts, ["Signer", "LoadedW"]);
     }
 }
