@@ -83,9 +83,9 @@ export function Privacy() {
         <Block title="The numbers on the page">
           <p>
             The figures come from small public JSON documents — the population
-            statistics, the week's leaderboard, the prize pool and the past
-            weeks. Your browser asks for them from Radar's own server, which
-            sees that request the same way any web server sees one.
+            statistics and the historical record of past weeks. Your browser
+            asks for them from Radar's own server, which sees that request the
+            same way any web server sees one.
           </p>
           <p>
             Nothing about you travels with it. No cookie, no identifier, no
@@ -109,18 +109,18 @@ export function Privacy() {
         <Block title="The one place a name can appear">
           <p>
             If you mention the account on X, you have posted in public, and X's
-            own terms govern that post. When a week closes, the leaderboard and
-            the past-weeks page republish what that public record holds: the
+            own terms govern that post. While the weekly prize ran, the
+            past-weeks page republished what that public record holds: the
             numeric account id of an entrant, the handle if one was read at the
             close, the coin they asked about, and a link to the reply. Accounts
-            that did not count are published as counts, never as names.
+            that did not count are published as counts, never as names. That
+            record stays up as history now that the prize has ended.
           </p>
           <p>
-            If you win and claim, you reply in public with a Robinhood Chain
-            address and the prize is paid on chain. The site links that transaction, because
-            a prize nobody can check is not evidence of anything. The address is
-            public because the chain is public, not because this site disclosed
-            it.
+            Where a week paid a winner, the page links the transaction, because
+            a payment nobody can check is not evidence of anything. The address
+            is public because the chain is public, not because this site
+            disclosed it.
           </p>
         </Block>
 

@@ -15,9 +15,14 @@
 //!
 //! What replaces it is design 0025 §4a's layout: the paste box (unchanged —
 //! it already reads whatever chain the server tells it to), the product's own
-//! token address (deny-by-default, see `TokenAddress.tsx`), a contest teaser
-//! built from the same `leaderboard()` the `/contest` page uses, and a short
-//! link to `/how-it-works` rather than a restatement of it.
+//! token address (deny-by-default, see `TokenAddress.tsx`), and a short link
+//! to `/how-it-works` rather than a restatement of it.
+//!
+//! # No contest teaser
+//!
+//! ADR 0038 retires the weekly prize, so there is no live leaderboard to tease
+//! here any more. `/payouts` is now the historical record of the weeks that
+//! ran while it did, not a page this page previews.
 //!
 //! # The live feed lists what was posted, and nothing else
 //!
@@ -30,16 +35,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 
-import {
-  leaderboard as fetchLeaderboard,
-  type Leaderboard as Data,
-  recent as fetchRecent,
-  type Recent,
-} from "./api";
-import { count, measuredAgo, safeHref } from "./honesty";
+import { recent as fetchRecent, type Recent } from "./api";
+import { measuredAgo, safeHref } from "./honesty";
 import { LADDER } from "./HowItWorks";
 import { TokenAddress } from "./TokenAddress";
-import { Card, Heading, Nothing, Section, CheckBox, Summoner } from "./ui";
+import { Card, Heading, Nothing, Section, CheckBox } from "./ui";
 
 /** The small label that numbers an act, in the same idiom the rest of the site uses. */
 function Act({ n, children }: { n: string; children: React.ReactNode }) {
@@ -83,71 +83,6 @@ function Hero() {
         <CheckBox />
         <TokenAddress />
       </div>
-    </Section>
-  );
-}
-
-/**
- * This week's top three, or the honest sentence that no week has closed.
- *
- * Worded to match `Leaderboard.tsx`'s own empty state on purpose — a reader
- * who follows "See full contest →" should not land on a page that contradicts
- * what this one just told them.
- */
-function ContestTeaser() {
-  const [data, setData] = useState<Data | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    void fetchLeaderboard().then((next) => {
-      if (live) setData(next);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  const top3 = data?.entries.slice(0, 3) ?? [];
-
-  return (
-    <Section id="contest">
-      <Act n="03">The contest</Act>
-      <Heading>This week&apos;s top three</Heading>
-      {data === null ? null : top3.length === 0 ? (
-        <Nothing
-          what="No week has run yet."
-          why="The account is live and answering, and no week has closed yet. When one does, the summoner whose question produced the reply that travelled furthest takes the whole prize pool."
-        />
-      ) : (
-        <Card className="max-w-2xl">
-          <ol className="space-y-3">
-            {top3.map((e) => (
-              <li
-                key={`${e.rank}-${e.summoner}`}
-                className="flex items-center justify-between gap-4 text-sm"
-              >
-                <span className="flex items-center gap-3">
-                  <span className="tnum text-[var(--color-faint)]">
-                    {e.rank}
-                  </span>
-                  <Summoner id={e.summoner} handle={e.handle} />
-                </span>
-                <span className="tnum text-[var(--color-dim)]">
-                  {e.score === null ? "—" : `${count(e.score)} pts`}
-                </span>
-              </li>
-            ))}
-          </ol>
-        </Card>
-      )}
-      <p className="mt-6">
-        <Link
-          href="/contest"
-          className="text-[var(--color-signal)] underline underline-offset-4 hover:text-[var(--color-text)]"
-        >
-          See full contest →
-        </Link>
-      </p>
     </Section>
   );
 }
@@ -258,7 +193,6 @@ export function Home() {
     <>
       <Hero />
       <JustChecked />
-      <ContestTeaser />
       <NeverSays />
     </>
   );

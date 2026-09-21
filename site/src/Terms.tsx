@@ -133,23 +133,36 @@ export function Terms() {
           </p>
         </Block>
 
-        <Block title="The contest and the token">
+        <Block title="No prize, and no benefit from holding the token">
           <p>
-            Entry to the weekly contest is free and never requires holding
-            anything. The rules, the scoring and the claim steps are on{" "}
-            <Here href="/contest">the contest page</Here>, and the
-            token's rules are on <Here href="/tokenomics">the tokenomics page</Here>.
-            Where those pages and this one differ, those pages are the specific
-            statement and this is the summary.
+            The weekly prize has ended. There is no live contest, no pool, no
+            claim window and no eligibility rule to state here — a historical
+            record of the weeks that ran while it was live is kept on{" "}
+            <Here href="/payouts">the history page</Here>, and nothing new is
+            added to it.
           </p>
           <p>
-            The token is a badge. It is not a share of anything, it grants no
-            vote, it buys no feature, and it entitles you to no part of any
-            revenue. The bot's own wallet may hold it, openly, at a published
-            address — <Here href="/tokenomics">the tokenomics page</Here> states
-            what it holds and why. A prize is paid to whoever the published
-            rule ranks first and who claims within the published window, and a
-            week can be voided with the reason stated in public.
+            The token — launching through pump.fun on Solana, paired with SOL,
+            not yet launched — confers no rights, revenue or benefits of any
+            kind. It is not a share of anything, it grants no vote, it buys no
+            feature in this product, and holding it does not change a verdict,
+            entitle you to a payment, or earn a return. Creator fees pay
+            disclosed operating costs and a reserve; they do not pay you. Full
+            detail, including the risks, is on{" "}
+            <Here href="/tokenomics">the tokenomics page</Here>. Where that
+            page and this one differ, that page is the specific statement and
+            this is the summary.
+          </p>
+        </Block>
+
+        <Block title="Reports are informational, and partly AI-generated">
+          <p>
+            Every reply is a report on public chain data, not financial advice,
+            and not a personal recommendation. The checks behind a verdict are
+            deterministic — the same facts always produce the same score and
+            the same level — but the sentence explaining them is written by a
+            language model. The model may describe what happened; it does not
+            decide the score, the level, or move any money.
           </p>
         </Block>
 

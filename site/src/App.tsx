@@ -6,10 +6,9 @@ import { Link, Redirect, Route, Switch, useLocation } from "wouter";
 import { About } from "./About";
 import { Contact } from "./Contact";
 import { account, handleHref } from "./honesty";
+import { History } from "./History";
 import { Home } from "./Home";
 import { HowItWorks } from "./HowItWorks";
-import { Leaderboard } from "./Leaderboard";
-import { Payouts } from "./Payouts";
 import { Check } from "./Check";
 import { Privacy } from "./Privacy";
 import { footer as footerRoutes, MOVED, nav } from "./routes";
@@ -87,13 +86,6 @@ function Footer() {
             </Link>
           ))}
         </nav>
-        {/* The two appointments the whole contest runs on. A reader who wants
-            to enter needs to know when the week ends before they need anything
-            else on this site. */}
-        <p className="mt-4 text-xs">
-          The week closes <strong>Mondays at 00:00 UTC</strong>. The account
-          posts what it found seven days later, at 12:00 UTC.
-        </p>
         {handle !== null && (
           <p className="mt-4 text-xs">
             <a
@@ -118,8 +110,9 @@ export function App() {
       <main className="flex-1">
         <Switch>
           <Route path="/" component={Home} />
-          <Route path="/contest" component={Leaderboard} />
-          <Route path="/payouts" component={Payouts} />
+          {/* The live contest is retired (ADR 0038). What is left is the
+              historical record of the weeks that ran while it did. */}
+          <Route path="/payouts" component={History} />
           <Route path="/how-it-works" component={HowItWorks} />
           <Route path="/tokenomics" component={Token} />
           <Route path="/about" component={About} />

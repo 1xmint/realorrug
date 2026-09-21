@@ -20,10 +20,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { About } from "./About";
+import { Contact } from "./Contact";
+import { FORBIDDEN_CLAIMS } from "./honesty";
 import { History } from "./History";
 import { Home } from "./Home";
-import { Leaderboard } from "./Leaderboard";
-import { Pool } from "./Pool";
+import { HowItWorks } from "./HowItWorks";
 import { Token } from "./Token";
 import { Summon } from "./ui";
 
@@ -41,70 +42,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("the leaderboard before any week has run", () => {
-  it("says no week has run, in words", async () => {
-    render(<Leaderboard />);
-    await waitFor(() => {
-      expect(screen.getByText(/No week has run yet/i)).toBeTruthy();
-    });
-    // The account went live 2026-09-06 and the page said it was not live for
-    // the rest of that day. An empty leaderboard is now "no week has closed",
-    // which is a different fact and the true one.
-    expect(screen.getByText(/live and answering/i)).toBeTruthy();
-    expect(screen.queryByText(/is not live/i)).toBeNull();
-  });
-
-  it("renders no table at all rather than an empty one", async () => {
-    // An empty table is a claim about the product's reception. The rule beside
-    // it is still shown -- somebody arriving early should be able to read how
-    // it will work -- but the ranking itself is absent, not blank.
-    const { container } = render(<Leaderboard />);
-    await waitFor(() => {
-      expect(screen.getByText(/No week has run yet/i)).toBeTruthy();
-    });
-    expect(container.querySelector("tbody")).toBeNull();
-  });
-
-  it("still publishes the rule, so the contest is legible before it starts", async () => {
-    render(<Leaderboard />);
-    await waitFor(() => {
-      expect(screen.getByText(/3 × reposters/)).toBeTruthy();
-    });
-    // `getAllBy`, because the page says this twice on purpose: once in the
-    // introduction and once in the rule. Somebody who skims one should still
-    // meet it.
-    expect(screen.getAllByText(/Entry is free/i).length).toBeGreaterThan(0);
-    // The sentence the rule turns on. Quoters, not quotes -- one account can
-    // quote without limit, and a reader has to be told that to check the
-    // published numbers against each other.
-    expect(screen.getByText(/Accounts, not actions/i)).toBeTruthy();
-    // And the honest limit, stated rather than implied.
-    expect(screen.getByText(/does not make buying impossible/i)).toBeTruthy();
-  });
-});
-
-describe("the home page before a week has closed and before a token exists", () => {
+describe("the home page before a token exists", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
-  });
-
-  it("says no week has closed, in the leaderboard page's own words", async () => {
-    render(<Home />);
-    await waitFor(() => {
-      expect(screen.getByText(/No week has run yet/i)).toBeTruthy();
-    });
-    // Matches `Leaderboard.tsx`'s empty state on purpose -- a reader following
-    // "See full contest" from here should not land on a page that disagrees
-    // with what this one just told them.
-    expect(screen.getByText(/live and answering/i)).toBeTruthy();
-  });
-
-  it("renders no contest table at all rather than an empty one", async () => {
-    const { container } = render(<Home />);
-    await waitFor(() => {
-      expect(screen.getByText(/No week has run yet/i)).toBeTruthy();
-    });
-    expect(container.querySelector("ol")).toBeNull();
   });
 
   it("says the token has not launched when no address is configured", async () => {
@@ -117,73 +57,25 @@ describe("the home page before a week has closed and before a token exists", () 
   });
 });
 
-describe("the prize pool before a token exists", () => {
-  it("says there is no token, and shows no balance", async () => {
-    render(<Pool />);
-    await waitFor(() => {
-      expect(screen.getByText(/There is no token yet/i)).toBeTruthy();
-    });
-  });
-
-  it("never renders a zero balance", async () => {
-    // The assertion this file exists for. `0.0000 ETH` is the obvious thing to
-    // render from `lamports ?? 0`, it looks completely fine, and it tells a
-    // stranger that a contest exists and is empty.
-    //
-    // Re-apply the bug by replacing the `noToken` branch with the balance
-    // branch and this fails while every other test here still passes.
-    const { container } = render(<Pool />);
-    await waitFor(() => {
-      expect(screen.getByText(/There is no token yet/i)).toBeTruthy();
-    });
-    const text = container.textContent ?? "";
-    expect(text).not.toMatch(/0\.0000\s*ETH/);
-    expect(text).not.toMatch(/\b0\.00\b/);
-  });
-
-  it("states the economics whether or not there is a pool to state them about", async () => {
-    // ADR 0029's constraints are the product rather than the small print, and
-    // they are as true before the launch as after it.
-    render(<Pool />);
-    await waitFor(() => {
-      expect(screen.getByText(/70 basis points of volume/i)).toBeTruthy();
-    });
-    expect(screen.getByText(/bot's wallet may hold the token/i)).toBeTruthy();
-    expect(screen.getByText(/One small dev buy/i)).toBeTruthy();
-    // The Pons v2 curve is a flat 70bps creator share plus a per-launch tax to
-    // 1,000bps, not pump.fun's fixed 30bps with a post-graduation ladder --
-    // a page that quoted the old rate or a ladder would be describing a
-    // different chain's economics as this token's own.
-    const text =
-      screen.getByText(/70 basis points of volume/i).closest("p")
-        ?.textContent ?? "";
-    expect(text).toMatch(/base share/);
-    expect(text).toMatch(/1,000 basis points/);
-    expect(text).toMatch(/100% of it becomes the prize/);
-  });
-
-  it("does the arithmetic on the fee's base share", async () => {
-    // 70 bps is 0.70%, so $10,000 of weekly volume is $70 and $100,000 is
-    // $700 -- the floor before any per-launch tax adds more. A page that
-    // states a single flat dollar figure, the way the old 30bps copy did,
-    // would be inventing a tax rate no launch has set yet.
-    const { container } = render(<Pool />);
-    await waitFor(() => {
-      expect(screen.getByText(/70 basis points of volume/i)).toBeTruthy();
-    });
-    const text = container.textContent ?? "";
-    expect(text).toMatch(/\$70;/);
-    expect(text).toMatch(/\$700\./);
-    expect(text).not.toMatch(/\$7;/);
-  });
-});
-
 describe("the tokenomics page before any token exists", () => {
   it("says no token exists, in words, rather than showing a zero", async () => {
     render(<Token />);
     expect(screen.getByText(/No token exists/i)).toBeTruthy();
     expect(
       screen.getByText(/any address claiming to be this token is not/i),
+    ).toBeTruthy();
+  });
+
+  it("says project wallets have no addresses yet", () => {
+    // ADR 0037: no project-controlled wallet, dev buy or treasury address
+    // exists before launch, and a placeholder that looked like an address
+    // would be exactly the invented fact this page exists to refuse.
+    render(<Token />);
+    expect(
+      screen.getByText(/Project-controlled wallets have no addresses yet/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/published here on launch day/i),
     ).toBeTruthy();
   });
 
@@ -204,21 +96,30 @@ describe("the tokenomics page before any token exists", () => {
     const { container } = render(<Token />);
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/\$\s?[\d.]/);
-    // And it still says, in words, that the bot will not state the price.
-    expect(text).toMatch(/never states the token's price/i);
+    // And it says, in words, that a price comes with its moment and is never
+    // a promise (ADR 0033).
+    expect(text).toMatch(/price is stated with the moment it was read/i);
   });
 
-  it("renders the fee ladder it imports rather than a summary of it", async () => {
+  it("links pump.fun's own fee documentation rather than quoting a rate", () => {
+    // pump.fun's fee depends on launch stage and market cap, and both move.
+    // A number typed onto this page would be wrong before somebody reads it,
+    // so it links the source instead of quoting one.
+    const { container } = render(<Token />);
+    const link = screen.getByText(/pump\.fun's fee documentation/i);
+    expect(link.closest("a")?.getAttribute("href")).toBe(
+      "https://pump.fun/docs/fees",
+    );
+    expect(container.textContent ?? "").not.toMatch(/\d+\s?bps/);
+  });
+
+  it("states the risks rather than softening them", () => {
     render(<Token />);
-    // The figures that matter: the curve's flat base fee and split, read off
-    // the fixture rather than hand-typed into the page.
-    expect(screen.getAllByText(/100 bps/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/70%/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/30%/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/1000 bps/).length).toBeGreaterThan(0);
-    // No post-graduation number was decoded (research 0040), so the page
-    // says so rather than publishing one.
-    expect(screen.getByText(/not established here/i)).toBeTruthy();
+    expect(screen.getByText(/It can go to zero/i)).toBeTruthy();
+    expect(screen.getByText(/This is not an investment/i)).toBeTruthy();
+    expect(
+      screen.getByText(/There is no promise of fee income/i),
+    ).toBeTruthy();
   });
 });
 
@@ -243,8 +144,6 @@ describe("no page delivers a verdict", () => {
 
   const pages: readonly [string, () => React.ReactElement][] = [
     ["home", () => <Home />],
-    ["leaderboard", () => <Leaderboard />],
-    ["pool", () => <Pool />],
     ["token", () => <Token />],
     ["about", () => <About />],
   ];
@@ -259,6 +158,31 @@ describe("no page delivers a verdict", () => {
           new RegExp(`\b${word}\b`).test(text),
           `${name} contains the word "${word}"`,
         ).toBe(false);
+      }
+    });
+  }
+});
+
+describe("no page invents a live prize or holder benefit", () => {
+  // ADR 0038 retires the weekly prize and every other holder benefit. These
+  // pages have no reason to ever mention one -- unlike About, Token, Terms,
+  // Privacy and History, which state the retirement in words and so
+  // legitimately contain "prize" and "payout" inside a sentence that denies
+  // them. A blanket ban across every page would fail on the correct copy;
+  // this list is the pages where the words should never appear at all.
+  const pages: readonly [string, () => React.ReactElement][] = [
+    ["home", () => <Home />],
+    ["how it works", () => <HowItWorks />],
+    ["contact", () => <Contact />],
+  ];
+
+  for (const [name, page] of pages) {
+    it(`${name} names no prize, payout, buyback, yield or holder earnings`, async () => {
+      const { container } = render(page());
+      await waitFor(() => expect(container.textContent).toBeTruthy());
+      const text = (container.textContent ?? "").toLowerCase();
+      for (const claim of FORBIDDEN_CLAIMS) {
+        expect(text, `${name} contains "${claim}"`).not.toContain(claim);
       }
     });
   }
@@ -316,216 +240,6 @@ describe("the summon box", () => {
     expect(screen.getByRole("link").getAttribute("href")).toBe(
       `https://x.com/intent/post?text=%40realorrug%20${token}`,
     );
-  });
-});
-
-describe("a week that ran names its entrants the way the record can", () => {
-  /** A server that answers the leaderboard with one week and two entries. */
-  function withLeaderboard() {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: string) =>
-        String(url).includes("/leaderboard")
-          ? Promise.resolve({
-              ok: true,
-              json: () =>
-                Promise.resolve({
-                  week: "2957",
-                  opens_at: "2026-08-31T00:00:00Z",
-                  closes_at: "2026-09-07T00:00:00Z",
-                  measured_at: "2026-09-07T00:01:00Z",
-                  answered: 2,
-                  published: 2,
-                  entries: [
-                    {
-                      rank: 1,
-                      summoner: "1889496824328880128",
-                      handle: "somebody",
-                      mint: "So11111111111111111111111111111111111111112",
-                      reply_url: "https://x.com/i/web/status/1",
-                      score: 12,
-                    },
-                    {
-                      rank: 2,
-                      summoner: "2005812292693483520",
-                      handle: null,
-                      mint: null,
-                      reply_url: null,
-                      score: 3,
-                    },
-                  ],
-                }),
-            })
-          : Promise.reject(new Error("no server")),
-      ),
-    );
-  }
-
-  it("shows the handle and links the id, never the other way round", async () => {
-    // Finding S4: `public.rs` has sent `handle` since #162 and `api.ts` never
-    // declared the field, so every reader saw `@1889496824328880128` on a live
-    // page. Re-apply by rendering `@{e.summoner}` again and the first
-    // assertion fails.
-    //
-    // The link is by id on purpose (S27). A handle can be freed and taken by
-    // somebody else, and this page would then point a prize -- or an
-    // accusation -- at a stranger. The id cannot be reassigned.
-    withLeaderboard();
-    render(<Leaderboard />);
-    await waitFor(() => {
-      expect(screen.getByText("@somebody")).toBeTruthy();
-    });
-    expect(screen.queryByText("@1889496824328880128")).toBeNull();
-
-    const named = screen.getByText("@somebody").closest("a");
-    expect(named?.getAttribute("href")).toBe(
-      "https://x.com/i/user/1889496824328880128",
-    );
-  });
-
-  it("shows a bare id when no handle was read, not an @ in front of a number", async () => {
-    // Mid-week nothing has read handles at all, so `null` is the ordinary
-    // case rather than an edge one. `@2005812292693483520` reads as a name
-    // somebody chose and it is not one.
-    withLeaderboard();
-    render(<Leaderboard />);
-    await waitFor(() => {
-      expect(screen.getByText("2005812292693483520")).toBeTruthy();
-    });
-    expect(screen.queryByText("@2005812292693483520")).toBeNull();
-    expect(
-      screen
-        .getByText("2005812292693483520")
-        .closest("a")
-        ?.getAttribute("href"),
-    ).toBe("https://x.com/i/user/2005812292693483520");
-  });
-});
-
-describe("a closed week publishes the evidence, not a verdict", () => {
-  /** A week where one account quoted thirty times and ten people reposted. */
-  function withFarmedWeek() {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: string) =>
-        String(url).includes("/leaderboard")
-          ? Promise.resolve({
-              ok: true,
-              json: () =>
-                Promise.resolve({
-                  week: "2957",
-                  measured_at: "2026-09-07T00:01:00Z",
-                  answered: 2,
-                  published: 2,
-                  rule: {
-                    min_account_age_days: 30,
-                    min_engager_age_days: 30,
-                    cooldown_weeks: 3,
-                  },
-                  voided: null,
-                  entries: [
-                    {
-                      rank: 1,
-                      summoner: "111",
-                      handle: "real",
-                      mint: "So11111111111111111111111111111111111111112",
-                      reply_url: "https://x.com/i/web/status/1",
-                      score: 30,
-                      raw: {
-                        reposts: 10,
-                        quotes: 0,
-                        likes: 0,
-                        replies: 0,
-                        score: 30,
-                      },
-                      verified: {
-                        reposts: 10,
-                        quoters: 0,
-                        likes: 0,
-                        engagers: 10,
-                        engagers_under_age: 0,
-                      },
-                    },
-                    {
-                      rank: 2,
-                      summoner: "222",
-                      handle: "farm",
-                      mint: null,
-                      reply_url: null,
-                      score: 3,
-                      raw: {
-                        reposts: 0,
-                        quotes: 30,
-                        likes: 0,
-                        replies: 30,
-                        score: 120,
-                      },
-                      verified: {
-                        reposts: 0,
-                        quoters: 1,
-                        likes: 0,
-                        engagers: 1,
-                        engagers_under_age: 1,
-                      },
-                    },
-                  ],
-                  excluded: { count: 0, reasons: {} },
-                }),
-            })
-          : Promise.reject(new Error("no server")),
-      ),
-    );
-  }
-
-  it("shows what was counted beside what was reported", async () => {
-    // The gap between the two IS the farming, and a reader who cannot see both
-    // numbers is being asked to trust the operator rather than check them.
-    // Design 0011: publish the measurement, never the verdict.
-    //
-    // Re-apply by dropping the raw column: the farm's 120 vanishes and the
-    // page shows a rank nobody can argue with.
-    withFarmedWeek();
-    render(<Leaderboard />);
-    await waitFor(() => {
-      expect(screen.getByText("@real")).toBeTruthy();
-    });
-
-    // The farm reported 30 quotes and scored 3, because thirty quotes came
-    // from one account. Both numbers are on the page.
-    expect(screen.getByTitle("0 reposts / 30 quotes / 0 likes")).toBeTruthy();
-    expect(screen.getByTitle("0 reposts / 1 quotes / 0 likes")).toBeTruthy();
-    // Ten real reposters outrank it, which is the whole point of the rule.
-    // `getAllBy`, because for an honest entry the two columns agree -- and
-    // that agreement is itself the thing a reader is checking for.
-    expect(
-      screen.getAllByTitle("10 reposts / 0 quotes / 0 likes"),
-    ).toHaveLength(2);
-  });
-
-  it("counts new accounts without calling anybody a bot", async () => {
-    // A count a reader weighs, never a threshold that excludes. Design 0011
-    // phase 2 turns a cluster measurement into a rule only by ADR, after four
-    // closed weeks -- until then the page states numbers and stops.
-    withFarmedWeek();
-    const { container } = render(<Leaderboard />);
-    await waitFor(() => {
-      expect(screen.getByText("@real")).toBeTruthy();
-    });
-    expect(screen.getByTitle("1 were under the age floor")).toBeTruthy();
-    // Scoped to the table, not the page. The rule text above it legitimately
-    // says "the pool cannot be farmed by one account" -- that is a statement
-    // about the rule. What must never appear is a verdict about a ROW.
-    const rows = container.querySelector("tbody")?.textContent ?? "";
-    expect(rows).not.toBe("");
-    for (const verdict of [
-      /botted/i,
-      /fake/i,
-      /suspicious/i,
-      /cheat/i,
-      /abuse/i,
-    ]) {
-      expect(rows).not.toMatch(verdict);
-    }
   });
 });
 

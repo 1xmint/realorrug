@@ -11,21 +11,22 @@
 //! to never be the thing that makes one of those look official.
 //!
 //! So the address only renders when `VITE_TOKEN_ADDRESS` is both set and
-//! shaped like a Robinhood Chain contract address ([`evmShaped`]). Unset,
-//! empty, or malformed all fall to the same refusal — AGENTS.md rule 7, "deny
-//! by default when config is missing" — rather than three different ways of
-//! almost showing something.
+//! shaped like a Solana mint address ([`mintShaped`]) — ADR 0037 launches the
+//! token on pump.fun, on Solana, not on Robinhood Chain, so the shape this
+//! component accepts changed with it. Unset, empty, or malformed all fall to
+//! the same refusal — AGENTS.md rule 7, "deny by default when config is
+//! missing" — rather than three different ways of almost showing something.
 
 import { useState } from "react";
 
-import { evmShaped } from "./honesty";
+import { mintShaped } from "./honesty";
 
 /** The configured address, only once it is shaped like one. `null` otherwise. */
 function configuredAddress(): string | null {
   const configured = import.meta.env["VITE_TOKEN_ADDRESS"];
   if (typeof configured !== "string") return null;
   const trimmed = configured.trim();
-  return evmShaped(trimmed) ? trimmed : null;
+  return mintShaped(trimmed) ? trimmed : null;
 }
 
 export function TokenAddress() {

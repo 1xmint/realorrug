@@ -13,6 +13,7 @@ import {
   evmShaped,
   explorerAccount,
   explorerTx,
+  FORBIDDEN_CLAIMS,
   measuredAgo,
   handleHref,
   mintShaped,
@@ -178,5 +179,21 @@ describe("eth", () => {
     expect(eth(3_000_000_000_000_000_000)).toBe("3.0000");
     expect(eth(0)).toBe("0.0000");
     expect(eth(1_500_000_000_000_000)).toBe("0.0015");
+  });
+});
+
+describe("FORBIDDEN_CLAIMS", () => {
+  it("names the holder-benefit wording ADR 0038 retired", () => {
+    // A fixed list, not a computed one: this is a decision (ADR 0038), and a
+    // test that derived the list from itself would prove nothing changed.
+    for (const claim of [
+      "prize",
+      "payout",
+      "buyback",
+      "holders earn",
+      "yield",
+    ]) {
+      expect(FORBIDDEN_CLAIMS).toContain(claim);
+    }
   });
 });
