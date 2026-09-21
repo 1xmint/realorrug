@@ -74,9 +74,11 @@ commands:
                                  from the names already stored when each
                                  dossier was read, beside what those launches
                                  traded, from the aggregator answers stored
-                                 the same way. No chain read, no new HTTP
-                                 call, no model: a count of names and a sum
-                                 of readings, never a claim that the launches
+                                 the same way, beside how many different
+                                 people used the word in a question. No chain
+                                 read, no new HTTP call, no model: a count of
+                                 names, a sum of readings and a count of
+                                 people, never a claim that the launches
                                  sharing a word are related. `--by-volume`
                                  orders by dollars rather than by how many
                                  launchers picked the word
