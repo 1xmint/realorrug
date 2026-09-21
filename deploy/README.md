@@ -127,6 +127,26 @@ The daily "seven days later" post reads a day's file in `data/analyst/daily/`.
 Radar's join wrote those; nothing does now, so the post is silent until
 realorrug's own join writes a day's file from Robinhood Chain.
 
+### Record every launch's name, hourly
+
+`deploy/realorrug-record-launches.service` and its `.timer` run `realorrug
+record-launches` once an hour against the analyst's RPC and memory, so the
+narrative counts cover every Pons launch rather than only the ones someone
+asked about (research 0055). New persistent config: installed only with the
+owner's yes. It needs a `realorrug` CLI built from `0ce8ebc` or later.
+
+```bash
+scp deploy/realorrug-record-launches.service deploy/realorrug-record-launches.timer guardian-vps-tail:/tmp/
+ssh guardian-vps-tail 'sudo install -m 0644 /tmp/realorrug-record-launches.* /etc/systemd/system/ \
+  && sudo systemctl daemon-reload && sudo systemctl start realorrug-record-launches \
+  && journalctl -u realorrug-record-launches -n 20 --no-pager'
+# The one run above reads well? Then:
+ssh guardian-vps-tail 'sudo systemctl enable --now realorrug-record-launches.timer'
+```
+
+To stop it: `sudo systemctl disable --now realorrug-record-launches.timer`.
+The rows it wrote stay; nothing else reads its cursor.
+
 ### Rebuild the Robinhood creator index and base rates
 
 Install the CI-built `realorrug` CLI at
