@@ -360,6 +360,12 @@ async fn handle(
         &address.to_string(),
         &dossier,
     );
+    crate::record::market(
+        state.memory_path.as_deref(),
+        "robinhood",
+        &address.to_string(),
+        &dossier,
+    );
 
     let mut response = (StatusCode::OK, Json(body)).into_response();
     response.headers_mut().insert(

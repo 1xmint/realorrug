@@ -60,6 +60,17 @@ pub struct MarketSnapshot {
     /// aggregator says the pool is roughly this deep in dollars," never as
     /// an amount that can be sized into.
     pub liquidity_usd: Option<f64>,
+    /// USD traded through this token in the aggregator's last 24 hours,
+    /// when it reported one.
+    ///
+    /// A *window*, not a moment, and the window is the aggregator's own: it
+    /// ends whenever the aggregator last recomputed, which is not
+    /// [`MarketSnapshot::observed_at`] and is not this dossier's read block.
+    /// So it is never a price and rule 5's "state the moment" is satisfied
+    /// by saying what it is -- "roughly this much changed hands in the day
+    /// before we asked" -- rather than by pinning it to a block it does not
+    /// belong to.
+    pub volume_24h_usd: Option<f64>,
     /// The pair address the figures came from, when the aggregator named
     /// one -- more than one pool can exist for a token, and this says which
     /// pool these numbers describe.
@@ -140,6 +151,10 @@ fn parse_dexscreener(body: &str) -> Result<MarketSnapshot, String> {
         .get("liquidity")
         .and_then(|l| l.get("usd"))
         .and_then(number);
+    let volume_24h_usd = pair
+        .get("volume")
+        .and_then(|v| v.get("h24"))
+        .and_then(number);
     let pair_address = pair
         .get("pairAddress")
         .and_then(serde_json::Value::as_str)
@@ -149,6 +164,7 @@ fn parse_dexscreener(body: &str) -> Result<MarketSnapshot, String> {
         market_cap_usd,
         cap_basis,
         liquidity_usd,
+        volume_24h_usd,
         pair_address,
         source: Source::DexScreener,
         observed_at: SystemTime::now(),
@@ -176,11 +192,16 @@ fn parse_geckoterminal(body: &str) -> Result<MarketSnapshot, String> {
         None
     };
     let liquidity_usd = attrs.get("total_reserve_in_usd").and_then(number);
+    let volume_24h_usd = attrs
+        .get("volume_usd")
+        .and_then(|v| v.get("h24"))
+        .and_then(number);
     Ok(MarketSnapshot {
         price_usd,
         market_cap_usd,
         cap_basis,
         liquidity_usd,
+        volume_24h_usd,
         pair_address: None,
         source: Source::GeckoTerminal,
         observed_at: SystemTime::now(),
@@ -284,6 +305,7 @@ mod tests {
                 "priceUsd": "0.00042",
                 "marketCap": 420_000,
                 "liquidity": {"usd": 15_000.5},
+                "volume": {"h24": 8_200.25, "h1": 90},
                 "pairAddress": "0xabc"
             }]
         })
@@ -292,8 +314,37 @@ mod tests {
         assert!((snap.price_usd.unwrap() - 0.00042).abs() < 1e-12);
         assert!((snap.market_cap_usd.unwrap() - 420_000.0).abs() < f64::EPSILON);
         assert!((snap.liquidity_usd.unwrap() - 15_000.5).abs() < f64::EPSILON);
+        assert!((snap.volume_24h_usd.unwrap() - 8_200.25).abs() < f64::EPSILON);
         assert_eq!(snap.pair_address.as_deref(), Some("0xabc"));
         assert_eq!(snap.source, Source::DexScreener);
+    }
+
+    /// An aggregator that reports no volume leaves the field empty rather
+    /// than filling in a zero: nothing traded and nobody counted are
+    /// different answers (rule 8), and a theme's dollar total must be able
+    /// to say how many of its launches were actually priced.
+    #[test]
+    fn a_pair_with_no_volume_reports_none_not_zero() {
+        let body = serde_json::json!({
+            "pairs": [{"priceUsd": "1.0", "pairAddress": "0x1"}]
+        })
+        .to_string();
+        assert_eq!(parse_dexscreener(&body).unwrap().volume_24h_usd, None);
+
+        let gecko = serde_json::json!({"data": {"attributes": {"price_usd": "2.0"}}}).to_string();
+        assert_eq!(parse_geckoterminal(&gecko).unwrap().volume_24h_usd, None);
+    }
+
+    /// The day's volume is read from the same response the dossier already
+    /// paid for, on both aggregators, under each one's own spelling.
+    #[test]
+    fn geckoterminal_reports_the_days_volume_too() {
+        let body = serde_json::json!({
+            "data": {"attributes": {"price_usd": "2.0", "volume_usd": {"h24": "1234.5"}}}
+        })
+        .to_string();
+        let snap = parse_geckoterminal(&body).unwrap();
+        assert!((snap.volume_24h_usd.unwrap() - 1_234.5).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -398,6 +449,7 @@ mod tests {
             // A liquidity figure deliberately different from `quote_capacity`
             // so any accidental cross-wiring would change the assertion below.
             liquidity_usd: Some(999_999.0),
+            volume_24h_usd: None,
             pair_address: None,
             source: Source::DexScreener,
             observed_at: SystemTime::now(),
@@ -434,6 +486,7 @@ mod tests {
                 market_cap_usd: None,
                 cap_basis: None,
                 liquidity_usd: Some(1.0),
+                volume_24h_usd: None,
                 pair_address: None,
                 source: Source::GeckoTerminal,
                 observed_at: SystemTime::now(),
