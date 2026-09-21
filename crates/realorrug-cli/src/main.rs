@@ -115,6 +115,20 @@ pub(crate) fn flag(args: &[String], name: &str) -> Option<String> {
         .cloned()
 }
 
+/// Opens a memory file that is already there, and refuses one that is not.
+///
+/// These commands are run by hand, from whatever folder the shell is in.
+/// Opening would quietly create an empty file under the wrong folder and
+/// report "nothing found" -- a wrong answer that reads like a quiet week.
+/// Refusing names the file it looked for instead.
+pub(crate) fn open_memory(path: &str) -> Result<realorrug_onchain::memory::Memory, String> {
+    let file = std::path::Path::new(path);
+    if !file.is_file() {
+        return Err(format!("cannot open {path}: no memory file there"));
+    }
+    realorrug_onchain::memory::Memory::open(file).map_err(|e| format!("cannot open {path}: {e}"))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = args.first() else {
@@ -152,7 +166,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::flag;
+    use super::{flag, open_memory};
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
@@ -169,5 +183,30 @@ mod tests {
     fn a_flag_with_nothing_after_it_is_absent() {
         assert_eq!(flag(&args(&["roast", "--rpc"]), "--rpc"), None);
         assert_eq!(flag(&args(&["roast"]), "--rpc"), None);
+    }
+
+    /// A folder with no memory file in it is refused, and stays empty.
+    #[test]
+    fn a_memory_that_is_not_there_is_not_made() {
+        let dir = std::env::temp_dir().join("realorrug-cli-no-memory");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("memory.sqlite3");
+        let Err(err) = open_memory(path.to_str().expect("path")) else {
+            panic!("an absent memory was opened");
+        };
+        assert!(err.ends_with("no memory file there"), "{err}");
+        assert!(!path.exists());
+    }
+
+    /// A memory file that is there is opened.
+    #[test]
+    fn a_memory_that_is_there_is_opened() {
+        let dir = std::env::temp_dir().join("realorrug-cli-some-memory");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("memory.sqlite3");
+        drop(realorrug_onchain::memory::Memory::open(&path).expect("make"));
+        assert!(open_memory(path.to_str().expect("path")).is_ok());
     }
 }
