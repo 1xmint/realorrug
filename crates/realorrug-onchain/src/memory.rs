@@ -40,6 +40,7 @@
 //! (see its doc), not a second column, so the key shape stays
 //! `(what, subject, block)` everywhere else in the store.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -752,6 +753,39 @@ pub struct TokenText {
     pub first_seen: SystemTime,
 }
 
+/// One dated reading of what a token was worth and how much of it moved.
+///
+/// The aggregator answer a dossier already paid for, kept instead of thrown
+/// away. Unlike [`TokenText`] this is a *series*: every reading is its own
+/// row, keyed by the moment it was read, because a price is only ever true of
+/// a moment (rule 5) and a day's volume read on Tuesday says nothing about
+/// Friday.
+///
+/// Every field but the moment is optional, and a reading where the aggregator
+/// knew the token but reported no numbers is still stored: it says the token
+/// was looked up and had nothing to report, which is not the same as never
+/// having been looked up (rule 8).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarketRead {
+    /// The chain the token is on, the same spelling the other tables use.
+    pub chain: String,
+    /// The token's address.
+    pub token: String,
+    /// USD traded in the aggregator's last 24 hours, as it reported it.
+    pub volume_24h_usd: Option<f64>,
+    /// The pool's reported USD liquidity. Not depth, not capacity -- see
+    /// [`crate::market`]'s own doc.
+    pub liquidity_usd: Option<f64>,
+    /// USD price of one token.
+    pub price_usd: Option<f64>,
+    /// Which aggregator answered, stored because the two do not compute
+    /// these numbers the same way and a later comparison must be able to
+    /// hold one source out.
+    pub source: String,
+    /// Wall-clock time this machine took the reading.
+    pub observed_at: SystemTime,
+}
+
 /// One verdict as it was published, kept so it can be paired with what the
 /// token turned out to be (research 0052 §5, the calibration replay M-D-0006
 /// is waiting on a sample).
@@ -1080,6 +1114,77 @@ impl Memory {
         Ok(texts)
     }
 
+    /// Writes one market reading.
+    ///
+    /// `INSERT OR REPLACE`, so two readings in the same second are one row
+    /// rather than an error: the second is simply the better reading of that
+    /// second. Two readings a minute apart are two rows, which is the point.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn record_market(&self, read: &MarketRead) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO token_market
+                (chain, token, volume_24h_usd, liquidity_usd, price_usd, source, observed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                read.chain,
+                read.token,
+                read.volume_24h_usd,
+                read.liquidity_usd,
+                read.price_usd,
+                read.source,
+                to_unix(read.observed_at)
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The most recent reading of each token that has one at or after
+    /// `since`, keyed by token address.
+    ///
+    /// Latest, not summed: a token read five times in a week traded its
+    /// volume once, and adding the five readings up would count the same
+    /// dollars five times. A token with no reading in the window is simply
+    /// absent from the map, and a caller must treat that as "not read",
+    /// never as zero (rule 8).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails.
+    pub fn latest_market_since(
+        &self,
+        chain: &str,
+        since: SystemTime,
+    ) -> Result<BTreeMap<String, MarketRead>, Error> {
+        let mut statement = self.conn.prepare(
+            "SELECT token, volume_24h_usd, liquidity_usd, price_usd, source, observed_at
+             FROM token_market
+             WHERE chain = ?1 AND observed_at >= ?2
+             ORDER BY observed_at",
+        )?;
+        let rows = statement.query_map(params![chain, to_unix(since)], |row| {
+            Ok(MarketRead {
+                chain: chain.to_owned(),
+                token: row.get(0)?,
+                volume_24h_usd: row.get(1)?,
+                liquidity_usd: row.get(2)?,
+                price_usd: row.get(3)?,
+                source: row.get(4)?,
+                observed_at: from_unix(row.get(5)?),
+            })
+        })?;
+        // Oldest first above, so a later reading of the same token simply
+        // replaces the earlier one as the map is filled.
+        let mut latest = BTreeMap::new();
+        for read in rows {
+            let read = read?;
+            latest.insert(read.token.clone(), read);
+        }
+        Ok(latest)
+    }
+
     /// How many verdicts have been recorded for `(chain, token)`.
     #[must_use]
     pub fn verdict_count(&self, chain: &str, token: &str) -> u64 {
@@ -1200,7 +1305,35 @@ impl Memory {
     /// `init_events` stays inside the length lint as the record grows.
     fn init_records(conn: &Connection) -> Result<(), Error> {
         Self::init_verdicts(conn)?;
-        Self::init_token_texts(conn)
+        Self::init_token_texts(conn)?;
+        Self::init_token_market(conn)
+    }
+
+    /// What the aggregator said, each reading its own row.
+    ///
+    /// Keyed by `(chain, token, observed_at)` rather than by the token alone,
+    /// the opposite of `token_texts`: a name is a fact about a launch and the
+    /// first reading is the true one, while a price is a fact about a moment
+    /// and the *latest* reading is the one anybody wants. Keeping every
+    /// reading rather than overwriting one row costs a few bytes a token a
+    /// day and is the only way a later question about how a theme grew can
+    /// be answered at all.
+    fn init_token_market(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS token_market (
+                chain          TEXT    NOT NULL,
+                token          TEXT    NOT NULL,
+                volume_24h_usd REAL,
+                liquidity_usd  REAL,
+                price_usd      REAL,
+                source         TEXT    NOT NULL,
+                observed_at    INTEGER NOT NULL,
+                PRIMARY KEY (chain, token, observed_at)
+             );
+             CREATE INDEX IF NOT EXISTS token_market_by_time
+                ON token_market (chain, observed_at);",
+        )?;
+        Ok(())
     }
 
     /// The verdict record's own two tables, kept in their own statement so
@@ -2920,6 +3053,70 @@ mod tests {
             .expect("read");
         assert_eq!(texts.len(), 1);
         assert_eq!(texts[0].name, None);
+    }
+
+    fn a_read(token: &str, seconds: u64, volume: Option<f64>) -> MarketRead {
+        MarketRead {
+            chain: CHAIN.to_owned(),
+            token: token.to_owned(),
+            volume_24h_usd: volume,
+            liquidity_usd: Some(1_000.0),
+            price_usd: Some(0.5),
+            source: "DexScreener".to_owned(),
+            observed_at: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
+        }
+    }
+
+    /// The latest reading of a token wins, and the earlier ones are still
+    /// there: the question "what is it doing now" and the question "what was
+    /// it doing on Tuesday" are both answerable.
+    #[test]
+    fn the_newest_reading_of_a_token_is_the_one_returned() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.record_market(&a_read(TOKEN, 100, Some(5.0)))
+            .expect("write");
+        mem.record_market(&a_read(TOKEN, 200, Some(9.0)))
+            .expect("write");
+        let latest = mem
+            .latest_market_since(CHAIN, SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(latest.len(), 1, "one token, one entry");
+        assert_eq!(latest[TOKEN].volume_24h_usd, Some(9.0));
+    }
+
+    /// A token nobody read in the window is absent, not zero: the caller has
+    /// to be able to say how many of a theme's launches were priced at all
+    /// (rule 8).
+    #[test]
+    fn a_token_with_no_reading_in_the_window_is_absent() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.record_market(&a_read(TOKEN, 100, Some(5.0)))
+            .expect("write");
+        let latest = mem
+            .latest_market_since(CHAIN, SystemTime::UNIX_EPOCH + Duration::from_secs(150))
+            .expect("read");
+        assert!(
+            latest.is_empty(),
+            "the only reading is older than the window"
+        );
+    }
+
+    /// A reading where the aggregator reported nothing is still a row: the
+    /// token was looked up, which is not the same as never looking.
+    #[test]
+    fn a_reading_with_no_numbers_is_still_stored() {
+        let mem = Memory::open_in_memory().expect("open");
+        mem.record_market(&MarketRead {
+            liquidity_usd: None,
+            price_usd: None,
+            ..a_read(TOKEN, 100, None)
+        })
+        .expect("write");
+        let latest = mem
+            .latest_market_since(CHAIN, SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[TOKEN].volume_24h_usd, None);
     }
 
     /// The work queue: judged, old enough, and never labelled. A token still

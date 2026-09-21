@@ -275,12 +275,34 @@ stay in the denominator, so a share cannot be inflated by dropping them
 a word are related, which is the whole of what makes it safe under rule 2 --
 code computes it from stored rows before any model sees it.
 
-**Not built, and deliberately:** the DefiLlama volume join and the
-mention-text frequency count from the two bullets above, the dated
-base-rate-shaped file with a stale-after policy, and any rule for what a paid
-customer sees. The counts have never been run against real launches, because
-`token_texts` starts empty and fills as the routes serve; deciding what to
-sell from a signal nobody has looked at yet would be deciding in the dark.
+**Not built, and deliberately:** the mention-text frequency count from the
+bullets above, the dated base-rate-shaped file with a stale-after policy, and
+any rule for what a paid customer sees. The counts have never been run against
+real launches, because `token_texts` starts empty and fills as the routes
+serve; deciding what to sell from a signal nobody has looked at yet would be
+deciding in the dark.
+
+**The volume join, built 2026-09-20, and not from DefiLlama.** The bullet above
+proposed joining DefiLlama's DEX volume, which would have been a new service, a
+new client and a new failure mode. It is not needed. A dossier already calls
+DexScreener (GeckoTerminal on failure) for its market snapshot, and that same
+answer carries the day's volume in a field the parser was throwing away --
+`volume.h24` on DexScreener, `volume_usd.h24` on GeckoTerminal. So the join
+costs one more field off a response already paid for, exactly as the names did.
+
+`crates/realorrug-onchain/src/market.rs` now reads `volume_24h_usd`;
+`memory.rs`'s `token_market` table keeps every reading as its own row keyed by
+the moment (unlike `token_texts`, where the *first* reading wins: a name is a
+fact about a launch, a price is a fact about a moment);
+`crates/realorrug-serve/src/record.rs`'s `market` writes one as each route
+serves; `narrative::trading` sums the latest reading of each launch in a theme;
+and `realorrug narratives` prints the total with `--by-volume` to order by it.
+
+Two numbers travel together and always will: the dollar total and how many of
+the theme's launches had a reading at all. The aggregator only answers for a
+token with a pool, so a new theme is mostly launches nobody has priced yet, and
+a bare total would quietly turn "two of these traded" into "these traded". A
+theme with no reading prints `no reading`, never `$0` (rule 8).
 
 ## 4. "Record everything" — what is recoverable later versus lost if not captured now
 

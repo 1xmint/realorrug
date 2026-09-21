@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::memory::TokenText;
+use crate::memory::{MarketRead, TokenText};
 
 /// The shortest word that can be a theme.
 ///
@@ -99,6 +99,48 @@ pub fn themes(texts: &[TokenText], min_tokens: usize) -> Vec<Theme> {
     themes
 }
 
+/// What a theme's launches traded, and how many of them anybody priced.
+///
+/// Two numbers, never one. A dollar total on its own cannot be read: ten
+/// launches sharing a word with $40,000 between them is a different thing
+/// depending on whether that is ten readings or one, and a reader given only
+/// the total would assume the first.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Trading {
+    /// The sum of the latest 24-hour volume of every launch in the theme
+    /// that had one. Launches nobody priced add nothing rather than zero --
+    /// they are counted in [`Trading::tokens_priced`] by their absence.
+    pub volume_24h_usd: f64,
+    /// How many of the theme's launches had a volume reading at all.
+    pub tokens_priced: usize,
+}
+
+/// What one theme traded, from readings already stored.
+///
+/// The aggregator answers a dossier already paid for, summed across the
+/// launches that share the word. This is the whole reason to join volume at
+/// all: a word ten launches share and nobody trades is a coincidence between
+/// launchers, and the count alone cannot tell that from a theme people are
+/// actually buying.
+///
+/// It stays a sum of *latest* readings, never a sum over time: a token read
+/// five times in a week still traded its volume once.
+#[must_use]
+pub fn trading(theme: &Theme, latest: &BTreeMap<String, MarketRead>) -> Trading {
+    let mut volume_24h_usd = 0.0;
+    let mut tokens_priced = 0;
+    for token in &theme.tokens {
+        if let Some(volume) = latest.get(token).and_then(|read| read.volume_24h_usd) {
+            volume_24h_usd += volume;
+            tokens_priced += 1;
+        }
+    }
+    Trading {
+        volume_24h_usd,
+        tokens_priced,
+    }
+}
+
 /// The distinct words one launch used, across its name and its symbol.
 ///
 /// A [`BTreeSet`], so a launch called `NEURO neuro` counts once for `neuro`:
@@ -151,6 +193,7 @@ fn share_bps(used: usize, total: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::MarketRead;
     use std::time::SystemTime;
 
     fn text(token: &str, name: Option<&str>, symbol: Option<&str>) -> TokenText {
@@ -179,6 +222,59 @@ mod tests {
         assert_eq!(found.len(), 1, "only `neuro` is shared: {found:?}");
         assert_eq!(found[0].term, "neuro");
         assert_eq!(found[0].tokens, vec!["0x1", "0x2", "0x3"]);
+    }
+
+    fn read(token: &str, volume: Option<f64>) -> (String, MarketRead) {
+        (
+            token.to_owned(),
+            MarketRead {
+                chain: "robinhood".to_owned(),
+                token: token.to_owned(),
+                volume_24h_usd: volume,
+                liquidity_usd: None,
+                price_usd: None,
+                source: "DexScreener".to_owned(),
+                observed_at: SystemTime::UNIX_EPOCH,
+            },
+        )
+    }
+
+    /// The join: a theme's dollars are the dollars of the launches in it,
+    /// and the count of priced launches travels with the total so the total
+    /// cannot be read as if every launch were priced.
+    #[test]
+    fn a_themes_dollars_are_its_launches_dollars() {
+        let theme = Theme {
+            term: "neuro".to_owned(),
+            tokens: vec!["0x1".to_owned(), "0x2".to_owned(), "0x3".to_owned()],
+            share_bps: 5_000,
+        };
+        let latest: BTreeMap<String, MarketRead> = [
+            read("0x1", Some(1_000.0)),
+            read("0x2", Some(250.5)),
+            read("0x9", Some(9_999.0)),
+        ]
+        .into_iter()
+        .collect();
+        let traded = trading(&theme, &latest);
+        assert!((traded.volume_24h_usd - 1_250.5).abs() < f64::EPSILON);
+        assert_eq!(traded.tokens_priced, 2, "0x3 was never priced");
+    }
+
+    /// A launch nobody priced adds nothing and is not counted as priced. A
+    /// reading that came back empty is the same: looked up, nothing to
+    /// report, still not a zero anybody measured (rule 8).
+    #[test]
+    fn an_unpriced_launch_adds_nothing_and_says_so() {
+        let theme = Theme {
+            term: "neuro".to_owned(),
+            tokens: vec!["0x1".to_owned(), "0x2".to_owned()],
+            share_bps: 5_000,
+        };
+        let latest: BTreeMap<String, MarketRead> = [read("0x1", None)].into_iter().collect();
+        let traded = trading(&theme, &latest);
+        assert!(traded.volume_24h_usd.abs() < f64::EPSILON);
+        assert_eq!(traded.tokens_priced, 0);
     }
 
     /// A share is measured against every launch in the window, including the

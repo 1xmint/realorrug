@@ -432,6 +432,12 @@ pub(crate) async fn check(
         &address.to_string(),
         &dossier,
     );
+    crate::record::market(
+        state.memory_path.as_deref(),
+        &chain,
+        &address.to_string(),
+        &dossier,
+    );
     let measured_at = realorrug_types::civil::timestamp_from_seconds(now_secs());
     let price = price_facts(&sheet);
     let doc = verdict_doc(raw_address, &chain, &verdict, &measured_at, &price);

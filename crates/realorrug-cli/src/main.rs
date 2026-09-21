@@ -69,12 +69,17 @@ commands:
                                  (research 0052 §5). A launch this reading
                                  cannot settle is left unlabelled, never
                                  guessed. Read-only chain access
-  narratives [--memory PATH] [--days N] [--min N] [--top N]
+  narratives [--memory PATH] [--days N] [--min N] [--top N] [--by-volume]
                                  which words recent launches share, counted
                                  from the names already stored when each
-                                 dossier was read. No chain read, no model:
-                                 a count of names, never a claim that the
-                                 launches sharing a word are related
+                                 dossier was read, beside what those launches
+                                 traded, from the aggregator answers stored
+                                 the same way. No chain read, no new HTTP
+                                 call, no model: a count of names and a sum
+                                 of readings, never a claim that the launches
+                                 sharing a word are related. `--by-volume`
+                                 orders by dollars rather than by how many
+                                 launchers picked the word
   model-prices <model> [--check] | --list
                                  what to paste into analyst.env for a model,
                                  read from models.dev rather than typed

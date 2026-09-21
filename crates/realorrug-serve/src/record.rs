@@ -25,7 +25,7 @@
 use std::path::Path;
 use std::time::SystemTime;
 
-use realorrug_onchain::memory::{Memory, TokenText, VerdictRecord};
+use realorrug_onchain::memory::{MarketRead, Memory, TokenText, VerdictRecord};
 use realorrug_roast::assessment::Assessment;
 use realorrug_roast::sheet::{FactSheet, Signal};
 use realorrug_roast::verdict::Level;
@@ -99,6 +99,43 @@ pub(crate) fn token_text(
     });
 }
 
+/// Writes down what the aggregator said about this token, if a memory is
+/// configured and a reading was taken.
+///
+/// Free for the same reason [`token_text`] is: the dossier already made the
+/// DexScreener or GeckoTerminal call, and the day's volume was in the answer
+/// whether or not anything kept it. `realorrug narratives` joins these rows
+/// to the names, which is what separates a word ten launchers happened to
+/// pick from a word people are buying.
+///
+/// A dossier with no market reading writes nothing -- the aggregator was not
+/// called, or it did not answer, and neither is a reading of zero (rule 8).
+pub(crate) fn market(
+    memory_path: Option<&Path>,
+    chain: &str,
+    token: &str,
+    dossier: &realorrug_onchain::Dossier,
+) {
+    let Some(path) = memory_path else {
+        return;
+    };
+    let Some(snapshot) = dossier.market.as_ref() else {
+        return;
+    };
+    let Ok(memory) = Memory::open(path) else {
+        return;
+    };
+    let _ = memory.record_market(&MarketRead {
+        chain: chain.to_owned(),
+        token: token.to_owned(),
+        volume_24h_usd: snapshot.volume_24h_usd,
+        liquidity_usd: snapshot.liquidity_usd,
+        price_usd: snapshot.price_usd,
+        source: format!("{:?}", snapshot.source),
+        observed_at: snapshot.observed_at,
+    });
+}
+
 /// The stable name of a ladder level.
 ///
 /// This spelling is stored, not only shown: it is the key a later fit groups
@@ -161,6 +198,7 @@ mod tests {
     fn no_memory_path_records_nothing() {
         verdict(None, "robinhood", "0xtoken", &sheet(), "Sketchy", "check");
         token_text(None, "robinhood", "0xtoken", &dossier());
+        market(None, "robinhood", "0xtoken", &dossier());
     }
 
     /// The name a launch chose is stored as the route serves it, which is
@@ -206,6 +244,50 @@ mod tests {
             .expect("read");
         assert_eq!(texts.len(), 1);
         assert_eq!(texts[0].name, None);
+    }
+
+    /// The aggregator's answer is kept as the route serves it, so a theme
+    /// can later be asked what it traded without paying for the call again.
+    #[test]
+    fn a_served_tokens_market_reading_is_written_down() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("memory.sqlite3");
+        let mut dossier = dossier();
+        dossier.market = Some(realorrug_onchain::market::MarketSnapshot {
+            price_usd: Some(0.5),
+            market_cap_usd: None,
+            cap_basis: None,
+            liquidity_usd: Some(1_000.0),
+            volume_24h_usd: Some(8_200.0),
+            pair_address: None,
+            source: realorrug_onchain::market::Source::DexScreener,
+            observed_at: SystemTime::now(),
+        });
+        market(Some(&path), "robinhood", "0xtoken", &dossier);
+
+        let memory = Memory::open(&path).expect("open");
+        let latest = memory
+            .latest_market_since("robinhood", SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(latest["0xtoken"].volume_24h_usd, Some(8_200.0));
+        assert_eq!(latest["0xtoken"].source, "DexScreener");
+    }
+
+    /// A dossier the aggregator never answered for writes no row at all: an
+    /// absent reading must not become a zero anybody could sum (rule 8).
+    #[test]
+    fn a_token_with_no_market_reading_writes_no_row() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("memory.sqlite3");
+        market(Some(&path), "robinhood", "0xtoken", &dossier());
+
+        let memory = Memory::open(&path).expect("open");
+        assert!(
+            memory
+                .latest_market_since("robinhood", SystemTime::UNIX_EPOCH)
+                .expect("read")
+                .is_empty()
+        );
     }
 
     fn sheet() -> FactSheet {
