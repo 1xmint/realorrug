@@ -50,6 +50,7 @@ pub mod render;
 pub mod report;
 pub mod salience;
 pub mod sheet;
+pub mod unknown;
 pub mod verdict;
 pub mod voice;
 

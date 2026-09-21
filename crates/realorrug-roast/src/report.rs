@@ -318,10 +318,19 @@ impl Report {
             }
         }
 
+        // `crate::unknown::check` refuses "probability"/"chance"/"odds" near
+        // the risk index on sight, deliberately as bluntly as
+        // `forbidden::check` refuses "not a scam" (both files' own doc
+        // comments give the same reason: a checker that tried to read a
+        // negation would be a checker arguing about meaning). So this line
+        // states the count and disclaims it as "not the published level"
+        // without naming any of the words the check bans, rather than
+        // writing the disclaimer those words would make and asking the
+        // check to read past it.
         let _ = writeln!(
             out,
-            "\n(risk index {}/100, coverage {}/{} facts read -- not the published level, never \
-             a probability or chance of anything)",
+            "\n(risk index {}/100, coverage {}/{} facts read -- a count of what fired, not the \
+             published level and not a forecast)",
             assessment.risk_index, assessment.coverage.read, assessment.coverage.applicable
         );
 
