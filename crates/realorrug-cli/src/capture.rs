@@ -16,47 +16,10 @@
 use std::path::Path;
 
 use realorrug_onchain::{RpcClient, dispatch};
-use realorrug_roast::{Assessment, BaseRates, FactSheet, Level};
-use serde::{Deserialize, Serialize};
+use realorrug_roast::{Assessment, BaseRates, Capture, FactSheet};
 
 use crate::dossier::safe;
 use crate::flag;
-
-/// One capture: a fact sheet, frozen with the reading it was built from and
-/// the rule version that scored it.
-///
-/// `replay` reads this back and recomputes `level`/`assessment` from `sheet`
-/// to see whether the rules have moved since — so every field here is either
-/// the raw sheet or context about the reading, never a cached opinion `replay`
-/// would otherwise have no way to tell from a fresh one.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Capture {
-    /// The mint this capture is of, as given on the command line.
-    pub mint: String,
-    /// An operator-chosen name for the case, blank when none was given.
-    ///
-    /// A `String` rather than `Option<String>`: an empty label and an absent
-    /// one both display as nothing in `review.md`, and a second field carrying
-    /// only that distinction is not a case a reviewer needs to see.
-    #[serde(default)]
-    pub label: String,
-    /// Wall-clock time this capture was taken, `YYYY-MM-DDTHH:MM:SSZ`.
-    ///
-    /// Distinct from `sheet.read_at` (the chain's own clock, a slot or a
-    /// block): this is when the *operator's machine* asked, which is what a
-    /// reviewer months later needs to judge how stale a capture is against
-    /// today, without knowing how to convert a Solana slot to a date.
-    pub captured_at: String,
-    /// [`realorrug_roast::RULES_VERSION`] at capture time, so a replay months
-    /// later can tell a rule change from a data change.
-    pub rules_version: String,
-    /// The verdict level, computed the same way `roast` computes it.
-    pub level: Level,
-    /// The full risk assessment `roast` builds under that level.
-    pub assessment: Assessment,
-    /// The fact sheet itself — everything a reply or a report may state.
-    pub sheet: FactSheet,
-}
 
 /// Runs the command.
 ///
@@ -197,49 +160,10 @@ mod tests {
         assert!(text.contains('T'), "{text}");
     }
 
-    /// A capture round-trips through JSON: `replay` reads back exactly what
-    /// `capture` wrote, with no field lost to a `#[serde(skip)]` or a type
-    /// that only serializes.
-    fn empty_dossier() -> realorrug_onchain::Dossier {
-        realorrug_onchain::Dossier {
-            mint: "11111111111111111111111111111112"
-                .parse()
-                .expect("an address"),
-            read_at: None,
-            launch: None,
-            curve: None,
-            creator_transactions: None,
-            chain_launch: None,
-            holders: None,
-            funding: None,
-            market: None,
-            token_ownership: None,
-            creator_cash_flow: None,
-            powers: None,
-            unavailable: Vec::new(),
-            calls: 0,
-            elapsed_ms: 0,
-        }
-    }
-
-    #[test]
-    fn a_capture_round_trips_through_json() {
-        let sheet = FactSheet::build(&empty_dossier(), None, None, None, None);
-        let level = realorrug_roast::level(&sheet);
-        let assessment = Assessment::from(&sheet);
-        let capture = Capture {
-            mint: "SoMeMiNt".to_owned(),
-            label: "ordinary launch".to_owned(),
-            captured_at: "2026-09-21T00:00:00Z".to_owned(),
-            rules_version: realorrug_roast::RULES_VERSION.to_owned(),
-            level,
-            assessment,
-            sheet,
-        };
-        let json = serde_json::to_string(&capture).expect("encode");
-        let back: Capture = serde_json::from_str(&json).expect("decode");
-        assert_eq!(back.mint, capture.mint);
-        assert_eq!(back.label, capture.label);
-        assert_eq!(back.rules_version, capture.rules_version);
-    }
+    // `Capture` itself, and its JSON round trip, are `realorrug-roast`'s own
+    // type now (`realorrug-roast/src/capture.rs`), tested there --
+    // `realorrug-roast/tests/accepted_replies_still_pass.rs` (plan 0002
+    // phase 2, unit 5) needs to build one without depending on this crate,
+    // which is why it moved. This file keeps only what is specific to the
+    // command: the argument parsing and the clock above.
 }

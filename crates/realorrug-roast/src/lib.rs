@@ -41,6 +41,7 @@
 
 pub mod assessment;
 pub mod baserates;
+pub mod capture;
 pub mod clause;
 pub mod creator;
 pub mod fidelity;
@@ -56,6 +57,7 @@ pub mod voice;
 
 pub use assessment::Assessment;
 pub use baserates::BaseRates;
+pub use capture::Capture;
 pub use clause::{Clause, Kind, Selection, Voice};
 pub use creator::{CreatorIndex, Population};
 pub use report::Report;
