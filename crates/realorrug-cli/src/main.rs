@@ -17,6 +17,7 @@ mod launch_check;
 mod model_prices;
 mod narratives;
 mod record_launches;
+mod replay;
 mod roast;
 
 use std::process::ExitCode;
@@ -47,6 +48,14 @@ commands:
                                  version to <dir>/<mint>.sheet.json. No model
                                  call, no reply, and nothing is scored twice by
                                  a later `replay`. Read-only
+  replay <dir> [--model]        for every <dir>/*.sheet.json, recomputes the
+                                 level, the report and the reply offline, with
+                                 no chain read -- the deterministic template
+                                 by default, the configured provider only with
+                                 `--model`. Runs the fidelity, forbidden and
+                                 unknown-data checks against both the reply and
+                                 the report, and writes <dir>/review.md with a
+                                 blank accept line per case
   analyst --mentions <file.jsonl> [--log <file>] [--robinhood-rpc URL]
                                  the whole summoned-reply loop over mentions
                                  from a file: strict parse, admission gate,
@@ -159,6 +168,7 @@ fn main() -> ExitCode {
         "capture" => capture::run(&args),
         "contest" => contest::run(&args),
         "dossier" => dossier::run(&args),
+        "replay" => replay::run(&args),
         "roast" => roast::run(&args),
         "analyst" => analyst::run(&args),
         "audit" => audit::run(&args),
