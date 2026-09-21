@@ -1,7 +1,7 @@
 # Accepted replay cases
 
 A case lands in this directory only after the owner has read `realorrug
-replay`'s `review.md` for it and written `yes` on the accept line -- never
+replay`'s review file for it and written `yes` on the accept line -- never
 before, and never from a script.
 
 Each accepted case is two files, sharing one stem:

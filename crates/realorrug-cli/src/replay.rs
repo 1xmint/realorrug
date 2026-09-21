@@ -363,6 +363,34 @@ mod tests {
         assert!(review.contains("differs from current"), "{review}");
     }
 
+    /// A saved level that today's rules no longer reach is called out, so the
+    /// reviewer sees the verdict moved rather than reading the new one as the
+    /// one that was captured.
+    #[test]
+    fn a_level_that_changed_since_capture_is_flagged() {
+        let dir = std::env::temp_dir().join("realorrug-replay-level-moved");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+
+        let mut capture = hand_built_capture("SoMeMiNt", "");
+        assert_ne!(
+            capture.level,
+            realorrug_roast::Level::Rugged,
+            "an empty sheet cannot be Rugged"
+        );
+        capture.level = realorrug_roast::Level::Rugged;
+        let json = serde_json::to_string_pretty(&capture).expect("encode");
+        std::fs::write(dir.join("SoMeMiNt.sheet.json"), json).expect("write capture");
+
+        run(&args(&["replay", dir.to_str().expect("path")])).expect("replay");
+
+        let review = std::fs::read_to_string(dir.join("review.md")).expect("review.md");
+        assert!(
+            review.contains("saved Rugged -- **recomputed as"),
+            "{review}"
+        );
+    }
+
     /// A label-less capture heads its section with the mint alone, not an
     /// empty pair of parentheses.
     #[test]
