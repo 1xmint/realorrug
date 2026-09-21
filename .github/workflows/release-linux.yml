@@ -26,14 +26,14 @@ jobs:
         env:
           # Read by `realorrug_types::build_sha_or_unknown`.
           REALORRUG_BUILD_SHA: ${{ github.sha }}
-        run: cargo build --release --locked -p realorrug-analyst -p realorrug-payout -p realorrug-serve -p realorrug-cli
+        run: cargo build --release --locked -p realorrug-analyst -p realorrug-serve -p realorrug-cli
       - name: Record what was built
         run: |
           {
             echo "commit: ${GITHUB_SHA}"
             echo "built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo
-            for b in realorrug-analyst realorrug-payout realorrug-serve realorrug; do
+            for b in realorrug-analyst realorrug-serve realorrug; do
               printf '%s  %s\n' "$(sha256sum "target/release/$b" | cut -d' ' -f1)" "$b"
             done
           } > target/release/BUILD-INFO.txt
@@ -45,7 +45,6 @@ jobs:
           retention-days: 30
           path: |
             target/release/realorrug-analyst
-            target/release/realorrug-payout
             target/release/realorrug-serve
             target/release/realorrug
             target/release/BUILD-INFO.txt

@@ -10,6 +10,8 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    eprintln!("realorrug-payout: retired -- the weekly prize is off (ADR 0038); fees are spent by hand (ADR 0037)");
+    eprintln!(
+        "realorrug-payout: retired -- the weekly prize is off (ADR 0038); fees are spent by hand (ADR 0037)"
+    );
     ExitCode::FAILURE
 }

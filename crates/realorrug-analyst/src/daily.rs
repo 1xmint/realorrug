@@ -452,7 +452,6 @@ mod tests {
         let sent = post_if_due(
             at,
             &dir,
-            None,
             &crate::publish::DryRun,
             &posts,
             &crate::publish::DryRun,
@@ -469,7 +468,6 @@ mod tests {
         let again = post_if_due(
             at,
             &dir,
-            None,
             &crate::publish::DryRun,
             &posts,
             &crate::publish::DryRun,

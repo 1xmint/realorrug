@@ -65,9 +65,7 @@ pub enum KeyError {
     #[error("the API key file is not 64 hex digits, as Turnkey's CLI writes them")]
     Malformed,
     /// A key Turnkey's CLI marked as another curve.
-    #[error(
-        "the API key is a {curve} key; the payout stamps with P-256 only, so make one with `deploy/make-payout-key.sh`"
-    )]
+    #[error("the API key is a {curve} key; the payout stamps with P-256 only, so make a P-256 key")]
     WrongCurve {
         /// The curve named after the colon.
         curve: String,
