@@ -1,0 +1,219 @@
+{
+  "mint": "GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump",
+  "label": "graduated-pumpswap",
+  "captured_at": "2026-09-21T13:59:45Z",
+  "rules_version": "2026-09-21",
+  "level": "CantTell",
+  "assessment": {
+    "findings": [],
+    "risk_index": 0,
+    "score_bps": 0,
+    "coverage": {
+      "read": 9,
+      "applicable": 15
+    },
+    "critical_gaps": [
+      "the launch block could not be read",
+      "who funded the early buyers could not be read",
+      "part of this could not be read"
+    ],
+    "level": "CantTell",
+    "admissible": [
+      "CantTell"
+    ],
+    "score_level": "CantTell"
+  },
+  "sheet": {
+    "mint": "GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump",
+    "read_at": {
+      "Solana": 449075880
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "graduated",
+        "label": "has the token graduated off the bonding curve",
+        "rendered": "yes",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It has left the bonding curve and trades on an AMM."
+          },
+          {
+            "voice": "blunt",
+            "text": "Off the curve, on an AMM."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "capacity_after_graduation",
+        "label": "exit capacity",
+        "rendered": "graduated off the curve; it trades on the AMM, which Real or Rug does not price. NOT zero, and NOT 'cannot size into this'.",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Real or Rug does not price the AMM it moved to, so it has no exit size for this one."
+          },
+          {
+            "voice": "blunt",
+            "text": "Real or Rug cannot size the AMM it moved to."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "round_trip_kernel",
+        "label": "measured all-in round trip Real or Rug's kernel assumes, on fresh launches",
+        "rendered": "850 bps",
+        "values": [
+          850.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A round trip on a fresh launch costs 850 bps all in, as Real or Rug's kernel measures it."
+          },
+          {
+            "voice": "blunt",
+            "text": "850 bps to get in and out, all in."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "round_trip_bar",
+        "label": "expected edge a strategy must clear before one trade is worth making",
+        "rendered": "456 bps",
+        "values": [
+          456.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A strategy has to clear 456 bps of expected edge before one trade is worth making."
+          },
+          {
+            "voice": "blunt",
+            "text": "Clear 456 bps of edge or do not trade."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $0.20-$2",
+        "rendered": "3042 bps (30.4%)",
+        "values": [
+          3042.0,
+          30.42
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $0.20-$2 pays 3042 bps (30.4%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$0.20-$2 costs 3042 bps (30.4%) round trip."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $2-$20",
+        "rendered": "250 bps (2.5%)",
+        "values": [
+          250.0,
+          2.5
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $2-$20 pays 250 bps (2.5%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$2-$20 costs 250 bps (2.5%) round trip."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $20-$200",
+        "rendered": "456 bps (4.6%)",
+        "values": [
+          456.0,
+          4.56
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $20-$200 pays 456 bps (4.6%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$20-$200 costs 456 bps (4.6%) round trip."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $200-$2,000",
+        "rendered": "450 bps (4.5%)",
+        "values": [
+          450.0,
+          4.5
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $200-$2,000 pays 450 bps (4.5%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$200-$2,000 costs 450 bps (4.5%) round trip."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $2,000+",
+        "rendered": "260 bps (2.6%)",
+        "values": [
+          260.0,
+          2.6
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $2,000+ pays 260 bps (2.6%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$2,000+ costs 260 bps (2.6%) round trip."
+          }
+        ]
+      }
+    ],
+    "untrusted": [],
+    "unknown": [
+      "the launch block could not be read",
+      "who funded the early buyers could not be read",
+      "part of this could not be read"
+    ],
+    "signals": [],
+    "twins": [],
+    "skipped": [
+      "same-window buyers' linked holdings needs the launch's total supply",
+      "whether same-window buy sizes are within 10% of each other needs at least two checked candidates",
+      "token ownership"
+    ]
+  }
+}

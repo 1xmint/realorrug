@@ -1,0 +1,260 @@
+{
+  "mint": "EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump",
+  "label": "incomplete-read-versioned-tx",
+  "captured_at": "2026-09-21T14:04:25Z",
+  "rules_version": "2026-09-21",
+  "level": "CantTell",
+  "assessment": {
+    "findings": [],
+    "risk_index": 0,
+    "score_bps": 0,
+    "coverage": {
+      "read": 11,
+      "applicable": 17
+    },
+    "critical_gaps": [
+      "the launch block could not be read",
+      "who funded the early buyers could not be read",
+      "part of this could not be read"
+    ],
+    "level": "CantTell",
+    "admissible": [
+      "CantTell"
+    ],
+    "score_level": "CantTell"
+  },
+  "sheet": {
+    "mint": "EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump",
+    "read_at": {
+      "Solana": 449076886
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "graduated",
+        "label": "has the token graduated off the bonding curve",
+        "rendered": "no",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It is still on its bonding curve."
+          },
+          {
+            "voice": "blunt",
+            "text": "Still on the curve."
+          }
+        ]
+      },
+      {
+        "about": "Price",
+        "kind": "curve_liquidity",
+        "label": "quote asset held in the bonding curve now, read at slot 449076886",
+        "rendered": "3.0481 SOL",
+        "values": [
+          3.048156784
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The curve holds 3.0481 SOL right now, as of slot 449076886."
+          },
+          {
+            "voice": "blunt",
+            "text": "3.0481 SOL in the curve, as of slot 449076886."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "capacity",
+        "label": "quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN impact budget, NOT a ceiling the venue imposes (research 0022)",
+        "rendered": "0.3337 SOL",
+        "values": [
+          0.333786383
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "0.3337 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
+          },
+          {
+            "voice": "blunt",
+            "text": "0.3337 SOL before the price moves one percent, by Real or Rug's budget."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "venue_fee",
+        "label": "venue fee, round trip, read from the on-chain schedule",
+        "rendered": "250 bps -- THE VENUE FEE ONLY. The measured all-in round trip is 850 bps. Never present the fee as the cost of trading.",
+        "values": [
+          250.0,
+          2.5
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The venue's own round-trip fee, from its on-chain schedule, is 250 bps, which is not the cost of trading it."
+          },
+          {
+            "voice": "blunt",
+            "text": "Venue fee alone: 250 bps round trip. That is the floor, not the bill."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "round_trip_kernel",
+        "label": "measured all-in round trip Real or Rug's kernel assumes, on fresh launches",
+        "rendered": "850 bps",
+        "values": [
+          850.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A round trip on a fresh launch costs 850 bps all in, as Real or Rug's kernel measures it."
+          },
+          {
+            "voice": "blunt",
+            "text": "850 bps to get in and out, all in."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "round_trip_bar",
+        "label": "expected edge a strategy must clear before one trade is worth making",
+        "rendered": "456 bps",
+        "values": [
+          456.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A strategy has to clear 456 bps of expected edge before one trade is worth making."
+          },
+          {
+            "voice": "blunt",
+            "text": "Clear 456 bps of edge or do not trade."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $0.20-$2",
+        "rendered": "3042 bps (30.4%)",
+        "values": [
+          3042.0,
+          30.42
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $0.20-$2 pays 3042 bps (30.4%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$0.20-$2 costs 3042 bps (30.4%) round trip."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $2-$20",
+        "rendered": "250 bps (2.5%)",
+        "values": [
+          250.0,
+          2.5
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $2-$20 pays 250 bps (2.5%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$2-$20 costs 250 bps (2.5%) round trip."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $20-$200",
+        "rendered": "456 bps (4.6%)",
+        "values": [
+          456.0,
+          4.56
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $20-$200 pays 456 bps (4.6%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$20-$200 costs 456 bps (4.6%) round trip."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $200-$2,000",
+        "rendered": "450 bps (4.5%)",
+        "values": [
+          450.0,
+          4.5
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $200-$2,000 pays 450 bps (4.5%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$200-$2,000 costs 450 bps (4.5%) round trip."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "cost_band",
+        "label": "round trip for a position of $2,000+",
+        "rendered": "260 bps (2.6%)",
+        "values": [
+          260.0,
+          2.6
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "A position of $2,000+ pays 260 bps (2.6%) to go round."
+          },
+          {
+            "voice": "blunt",
+            "text": "$2,000+ costs 260 bps (2.6%) round trip."
+          }
+        ]
+      }
+    ],
+    "untrusted": [],
+    "unknown": [
+      "the launch block could not be read",
+      "who funded the early buyers could not be read",
+      "part of this could not be read"
+    ],
+    "signals": [],
+    "twins": [],
+    "skipped": [
+      "same-window buyers' linked holdings needs the launch's total supply",
+      "whether same-window buy sizes are within 10% of each other needs at least two checked candidates",
+      "token ownership"
+    ]
+  }
+}
