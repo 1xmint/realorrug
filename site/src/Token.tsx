@@ -11,10 +11,9 @@
 //!
 //! # There is no price on this page and there will never be one
 //!
-//! Not a stylistic choice. The bot never states the token's price or market
-//! capitalisation, on any page, for any token including its own — and a
-//! marketing page that printed what the bot is forbidden to say would make
-//! that rule decorative.
+//! Not a stylistic choice. The bot states a price only with the moment it was
+//! read (ADR 0033); a marketing page has no such moment, so a figure here
+//! would be a valuation the project is making about its own token.
 //!
 //! # No prize, no yield, no benefit from holding it
 //!
@@ -56,8 +55,9 @@ const RULES: readonly { readonly rule: string; readonly plain: string }[] = [
       "Every answer the bot gives is free to everyone, with or without it. It is not a share, it grants no vote, and it changes no verdict.",
   },
   {
-    rule: "The bot never states the token's price or market capitalisation.",
-    plain: "Not once, not if asked, not on this page either.",
+    rule: "A price is stated with the moment it was read, and never as a promise.",
+    plain:
+      "The bot gives a price or market cap only with the time it read it, never says what the token will do, and never tells anyone to buy, sell or hold.",
   },
   {
     rule: "The token is judged like any other.",
@@ -188,28 +188,34 @@ function Gate() {
       <Heading kicker="Before any of this happens">
         What has to be true first
       </Heading>
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <p className="text-[var(--color-text)]">The demand gate</p>
-          <ul className="mt-3 space-y-2 text-sm text-[var(--color-dim)]">
-            <li>· 30 days of the bot live and answering.</li>
-            <li>· 200 distinct accounts that have summoned it.</li>
-            <li>· 10% of its replies drawing any engagement at all.</li>
-          </ul>
-          <p className="mt-3 text-sm text-[var(--color-faint)]">
-            A token launched into no demand is the thing this account exists to
-            point at.
-          </p>
-        </Card>
-        <Card>
-          <p className="text-[var(--color-text)]">The legal read</p>
-          <p className="mt-3 text-sm text-[var(--color-dim)]">
-            A precondition, not a follow-up. Two questions have to be answered
-            by somebody qualified before anything is minted, and the answer may
-            be no.
-          </p>
-        </Card>
-      </div>
+      <ul className="max-w-2xl space-y-3 text-sm text-[var(--color-dim)]">
+        <li>
+          <strong className="text-[var(--color-text)]">
+            The bot's replies are good enough.
+          </strong>{" "}
+          The operator reviews its answers on real Solana launches and accepts
+          them one by one; accepted answers are re-checked on every change.
+        </li>
+        <li>
+          <strong className="text-[var(--color-text)]">
+            A legal and tax review.
+          </strong>{" "}
+          A precondition, not a follow-up, and the answer may be no.
+        </li>
+        <li>
+          <strong className="text-[var(--color-text)]">
+            X approves automated replies in writing.
+          </strong>{" "}
+          Without it the site runs and the bot stays private.
+        </li>
+        <li>
+          <strong className="text-[var(--color-text)]">
+            The launch is checked and signed by the operator.
+          </strong>{" "}
+          The fee recipient and the token's settings are read back before
+          anything is announced. Nothing on the server holds a key.
+        </li>
+      </ul>
     </Section>
   );
 }

@@ -96,8 +96,9 @@ describe("the tokenomics page before any token exists", () => {
     const { container } = render(<Token />);
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/\$\s?[\d.]/);
-    // And it still says, in words, that the bot will not state the price.
-    expect(text).toMatch(/never states the token's price/i);
+    // And it says, in words, that a price comes with its moment and is never
+    // a promise (ADR 0033).
+    expect(text).toMatch(/price is stated with the moment it was read/i);
   });
 
   it("links pump.fun's own fee documentation rather than quoting a rate", () => {
