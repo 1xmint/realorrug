@@ -1040,12 +1040,15 @@ impl FactSheet {
             // refusal for the read point). A Robinhood launch arrives as
             // `chain_launch` below instead, with its age already taken from
             // the two blocks' own timestamps.
-            // A launch slot past the read slot means the two reads came from
-            // nodes at different heights, so the age is unknown and no fact is
-            // pushed (the template then says the age could not be read).
-            // Flooring it published "0 slots (about 0 hours)" as a measurement.
+            // Only a read strictly after the launch gives an age. The read
+            // slot equals the launch slot when the curve could not be read
+            // (the reader falls back to the launch's own slot), and a launch
+            // slot past the read slot means two nodes at different heights.
+            // Either way the age is unknown and no fact is pushed; the
+            // template then says it could not be read. Both used to publish
+            // "0 slots (about 0 hours)" as a measurement (research 0056).
             if let Some(ReadAt::Solana(read_slot)) = dossier.read_at
-                && read_slot >= launch.slot
+                && read_slot > launch.slot
             {
                 push_age(&mut facts, read_slot.saturating_since(launch.slot));
             }
@@ -1507,6 +1510,10 @@ fn phrase_for(fact: &str) -> String {
         "funding" => "who funded the early buyers could not be read",
         "curve" => "the bonding curve could not be read",
         "creator history" => "the creator's history could not be read",
+        // Solana records this on every read (the reader is not built there
+        // yet), so the fallback put "part of this could not be read" in every
+        // Solana reply (research 0056). "Not checked" is true on both chains.
+        "creator cash flow" => "the creator's own buys and sells were not checked",
         _ => "part of this could not be read",
     }
     .to_owned()
@@ -3593,6 +3600,10 @@ mod tests {
         );
         // The fallback is deliberately the safe one, for a fact added later by
         // someone who did not read the comment above it.
+        assert_eq!(
+            phrase_for("creator cash flow"),
+            "the creator's own buys and sells were not checked"
+        );
         assert_eq!(
             phrase_for("something new"),
             "part of this could not be read"
@@ -6241,20 +6252,25 @@ mod tests {
     }
 
     #[test]
-    fn a_launch_slot_past_the_read_slot_gives_no_age() {
+    fn a_read_no_later_than_the_launch_gives_no_age() {
         // Two reads from nodes at different heights can put the launch after
-        // the read. Flooring that to zero published "0 slots (about 0 hours)"
-        // as if it had been measured; the age has to be absent instead.
+        // the read, and a dossier with no curve read carries the launch's own
+        // slot as its read point. Both floored to "0 slots (about 0 hours)",
+        // published as if measured; the age has to be absent instead.
         let mut dossier = dossier_for([3u8; 32]);
         dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
         dossier.read_at = Some(ReadAt::Solana(Slot(444_007_819)));
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert!(fact_of(&sheet, Kind::Age).is_none());
 
-        // The boundary: a read in the launch slot itself is a real zero.
         dossier.read_at = Some(ReadAt::Solana(Slot(444_007_820)));
         let sheet = FactSheet::build(&dossier, None, None, None, None);
-        assert_eq!(fact_of(&sheet, Kind::Age).map(|f| f.values[0]), Some(0.0));
+        assert!(fact_of(&sheet, Kind::Age).is_none());
+
+        // One slot later is a real age.
+        dossier.read_at = Some(ReadAt::Solana(Slot(444_007_821)));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(fact_of(&sheet, Kind::Age).map(|f| f.values[0]), Some(1.0));
     }
 
     #[test]

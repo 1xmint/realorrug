@@ -1,7 +1,7 @@
 {
   "mint": "GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump",
   "label": "graduated-pumpswap",
-  "captured_at": "2026-09-21T13:59:45Z",
+  "captured_at": "2026-09-21T14:44:09Z",
   "rules_version": "2026-09-21",
   "level": "CantTell",
   "assessment": {
@@ -15,7 +15,7 @@
     "critical_gaps": [
       "the launch block could not be read",
       "who funded the early buyers could not be read",
-      "part of this could not be read"
+      "the creator's own buys and sells were not checked"
     ],
     "level": "CantTell",
     "admissible": [
@@ -26,7 +26,7 @@
   "sheet": {
     "mint": "GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump",
     "read_at": {
-      "Solana": 449075880
+      "Solana": 449085777
     },
     "facts": [
       {
@@ -206,13 +206,13 @@
     "unknown": [
       "the launch block could not be read",
       "who funded the early buyers could not be read",
-      "part of this could not be read"
+      "the creator's own buys and sells were not checked"
     ],
     "signals": [],
     "twins": [],
     "skipped": [
       "same-window buyers' linked holdings needs the launch's total supply",
-      "whether same-window buy sizes are within 10% of each other needs at least two checked candidates",
+      "whether same-window buy sizes are close to each other needs at least two checked candidates",
       "token ownership"
     ]
   }

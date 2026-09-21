@@ -1,7 +1,7 @@
 {
   "mint": "24RwgHxwu8icT1tcDtgH4RwyaDWao86xfacUo2xHpump",
   "label": "ordinary-launch",
-  "captured_at": "2026-09-21T14:03:30Z",
+  "captured_at": "2026-09-21T14:43:50Z",
   "rules_version": "2026-09-21",
   "level": "CantTell",
   "assessment": {
@@ -14,7 +14,7 @@
     },
     "critical_gaps": [
       "who funded the early buyers could not be read",
-      "part of this could not be read"
+      "the creator's own buys and sells were not checked"
     ],
     "level": "CantTell",
     "admissible": [
@@ -25,7 +25,7 @@
   "sheet": {
     "mint": "24RwgHxwu8icT1tcDtgH4RwyaDWao86xfacUo2xHpump",
     "read_at": {
-      "Solana": 449070473
+      "Solana": 449085704
     },
     "facts": [
       {
@@ -254,19 +254,19 @@
         "about": "Measurement",
         "kind": "age",
         "label": "how long ago this token's launch block was, on the chain's own clock",
-        "rendered": "0 slots (about 0 hours) since its launch block",
+        "rendered": "15231 slots (about 1.7 hours) since its launch block",
         "values": [
-          0.0,
-          0.0
+          15231.0,
+          1.7
         ],
         "clauses": [
           {
             "voice": "plain",
-            "text": "It launched about 0 hours ago -- 0 slots, by the read point."
+            "text": "It launched about 1.7 hours ago -- 15231 slots, by the read point."
           },
           {
             "voice": "blunt",
-            "text": "0 slots old. Roughly 0 hours."
+            "text": "15231 slots old. Roughly 1.7 hours."
           }
         ]
       },
@@ -290,19 +290,19 @@
       {
         "about": "Price",
         "kind": "curve_liquidity",
-        "label": "quote asset held in the bonding curve now, read at slot 449070473",
-        "rendered": "4.1487 SOL",
+        "label": "quote asset held in the bonding curve now, read at slot 449085704",
+        "rendered": "1.3535 SOL",
         "values": [
-          4.148703705
+          1.35359149
         ],
         "clauses": [
           {
             "voice": "plain",
-            "text": "The curve holds 4.1487 SOL right now, as of slot 449070473."
+            "text": "The curve holds 1.3535 SOL right now, as of slot 449085704."
           },
           {
             "voice": "blunt",
-            "text": "4.1487 SOL in the curve, as of slot 449070473."
+            "text": "1.3535 SOL in the curve, as of slot 449085704."
           }
         ]
       },
@@ -310,18 +310,18 @@
         "about": "Measurement",
         "kind": "capacity",
         "label": "quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN impact budget, NOT a ceiling the venue imposes (research 0022)",
-        "rendered": "0.3449 SOL",
+        "rendered": "0.3166 SOL",
         "values": [
-          0.344901907
+          0.316671274
         ],
         "clauses": [
           {
             "voice": "plain",
-            "text": "0.3449 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
+            "text": "0.3166 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
           },
           {
             "voice": "blunt",
-            "text": "0.3449 SOL before the price moves one percent, by Real or Rug's budget."
+            "text": "0.3166 SOL before the price moves one percent, by Real or Rug's budget."
           }
         ]
       },
@@ -329,7 +329,7 @@
         "about": "Measurement",
         "kind": "venue_fee",
         "label": "venue fee, round trip, read from the on-chain schedule",
-        "rendered": "250 bps -- THE VENUE FEE ONLY. The measured all-in round trip is 850 bps. Never present the fee as the cost of trading.",
+        "rendered": "250 bps, the venue's own fee and not the whole cost of a round trip",
         "values": [
           250.0,
           2.5
@@ -515,13 +515,13 @@
     ],
     "unknown": [
       "who funded the early buyers could not be read",
-      "part of this could not be read"
+      "the creator's own buys and sells were not checked"
     ],
     "signals": [],
     "twins": [],
     "skipped": [
       "same-window buyers' linked holdings needs the launch's total supply",
-      "whether same-window buy sizes are within 10% of each other needs at least two checked candidates",
+      "whether same-window buy sizes are close to each other needs at least two checked candidates",
       "token ownership"
     ]
   }
