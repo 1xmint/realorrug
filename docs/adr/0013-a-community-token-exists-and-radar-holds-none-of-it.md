@@ -9,6 +9,7 @@ on a measured rate.
 **Constraints 1 and 2 are superseded by
 [ADR 0029](0029-the-bot-holds-its-own-token-openly.md)** (2026-09-17): a small
 disclosed dev buy, and the bot's wallet may hold the token; nothing trades.
+**Constraint 3 ("the fee becomes the prize") superseded 2026-09-21 by [ADR 0038](0038-no-prizes-buybacks-or-holder-benefits.md);** fees pay operating costs ([ADR 0037](0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md)).
 **Status:** accepted. **This is Josh's decision, recorded**, and it reverses
 [GOAL.md](https://github.com/1xmint/theradar/blob/main/GOAL.md)'s "Radar will not launch one, ever" — written
 2026-09-03 and edited in the same commit as this file.

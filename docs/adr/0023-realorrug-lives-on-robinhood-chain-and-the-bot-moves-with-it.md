@@ -2,6 +2,7 @@
 # ADR 0023 — realorrug lives on Robinhood Chain, and the bot moves with it
 
 **Date:** 2026-09-13
+**Decisions 2, 3 and 5 superseded 2026-09-21 by [ADR 0037](0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md):** the token launches on pump.fun paired with SOL, and material legal objections are resolved before launch. The Robinhood readers stay.
 **Status:** accepted. **These are Josh's decisions, recorded**, after a
 discussion session; where he chose against my recommendation, the row says so.
 Nothing is built, bought or launched by this ADR.

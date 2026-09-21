@@ -6,6 +6,7 @@
 [ADR 0033](0033-the-analyst-talks-price-and-hints-only-on-a-measured-rate.md)**
 (2026-09-17): the analyst states price with its block or time, and hints only
 on a measured rate.
+**Its "collect the tax for giveaways" is superseded 2026-09-21 by [ADR 0037](0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md)** and [ADR 0038](0038-no-prizes-buybacks-or-holder-benefits.md): fees pay operating costs; there are no giveaways.
 **Status:** accepted. **Josh's decision, recorded**, in conversation
 2026-09-17: "As dev I will put in a dev buy, small one. The bot will hold the
 token and collect the tax for giveaways, one day it may trade on its own but

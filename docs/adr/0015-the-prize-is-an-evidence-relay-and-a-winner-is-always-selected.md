@@ -2,6 +2,7 @@
 # ADR 0015 — The prize is an evidence relay, and a winner is always selected
 
 **Date:** 2026-09-07
+**Superseded 2026-09-21 by [ADR 0038](0038-no-prizes-buybacks-or-holder-benefits.md):** there is no prize; the weekly week-close is switched off in code and its records are kept as history.
 **Status:** accepted, and **not yet implemented**. This is Josh's decision,
 recorded. The code it describes lives in
 [`crates/realorrug-contest`](../../crates/realorrug-contest) and
