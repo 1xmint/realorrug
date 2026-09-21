@@ -74,7 +74,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .latest_market_since(CHAIN, since)
         .map_err(|e| format!("cannot read the market rows: {e}"))?;
     let mut themes = narrative::themes(&texts, min);
-    if args.iter().any(|a| a == "--by-volume") {
+    if has(args, "--by-volume") {
         by_volume(&mut themes, &latest);
     }
     print!("{}", report(&themes, &latest, texts.len(), days, min, top));
@@ -149,6 +149,15 @@ fn traded(trading: &Trading, tokens: usize) -> String {
         "${:.0} ({} of {} priced)",
         trading.volume_24h_usd, trading.tokens_priced, tokens
     )
+}
+
+/// Whether a bare flag was passed.
+///
+/// Split from [`run`] for the same reason as [`report`]: the comparison here
+/// is the whole of `--by-volume`, and inside `run` no test could reach it
+/// without a database.
+fn has(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| a == name)
 }
 
 /// A numeric flag, ignoring one that will not parse.
@@ -344,5 +353,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
         let err = run(&args(&["--memory", path.to_str().expect("path")])).expect_err("missing");
         assert!(err.starts_with("cannot open "), "{err}");
+    }
+
+    /// A flag counts only when it is the flag asked for. The wrong-name case
+    /// is the point: a comparison that answered "yes" to every other argument
+    /// would sort by dollars whenever anything at all was passed.
+    #[test]
+    fn a_bare_flag_is_seen_only_when_it_is_there() {
+        assert!(has(&args(&["--by-volume"]), "--by-volume"));
+        assert!(!has(&args(&["--days", "7"]), "--by-volume"));
+        assert!(!has(&args(&[]), "--by-volume"));
     }
 }
