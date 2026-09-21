@@ -90,17 +90,39 @@ fn capped_len(total: usize, max: u64) -> usize {
     usize::try_from(max).unwrap_or(usize::MAX).min(total)
 }
 
-/// The cursor to write after processing `processed` (already cut to the cap
-/// by [`capped_len`]) out of a walk that covered up to `range_end`.
+/// The cursor to write after processing the first `done` of `launches` (in
+/// block order) out of a walk that covered up to `range_end`.
 ///
-/// The last processed launch's own block when there was one, so a range the
-/// cap cut short resumes just past the last launch actually written rather
-/// than skipping straight to `range_end`. `range_end` itself only when
-/// nothing needed a row -- an empty range, every launch already in
-/// `token_texts`, or (equivalently for this purpose) a cap of zero -- so an
-/// empty range still counts as finished rather than being re-walked forever.
-fn next_cursor(processed: &[(realorrug_robinhood::Address, u64)], range_end: u64) -> u64 {
-    processed.last().map_or(range_end, |(_, block)| *block)
+/// Every launch written: `range_end`, so blocks with no launch in them are
+/// not walked again. The cap stopped short: the block *before* the first
+/// launch not reached. Not the last launch written -- a second launch in
+/// that same block would sit behind a cursor that had already passed it and
+/// never be read, and a cap of zero would jump straight to `range_end` and
+/// skip every launch in the range. Starting again at the unreached launch's
+/// own block re-reads any earlier launch in that block, which costs two
+/// calls and writes nothing (`INSERT OR IGNORE`).
+fn next_cursor(
+    launches: &[(realorrug_robinhood::Address, u64)],
+    done: usize,
+    range_end: u64,
+) -> u64 {
+    launches
+        .get(done)
+        .map_or(range_end, |(_, block)| block.saturating_sub(1))
+}
+
+/// Whether the walk's start is already past its end.
+///
+/// Equal is not past: a range of one block is still a block to walk.
+fn nothing_to_walk(from: u64, to: u64) -> bool {
+    from > to
+}
+
+/// How many launches had a readable name, and how many did not, in the
+/// order they were read.
+fn tally(readable: &[bool]) -> (usize, usize) {
+    let named = readable.iter().filter(|r| **r).count();
+    (named, readable.len() - named)
 }
 
 /// Writes one launch's row, with whatever `name`/`symbol` this run managed
@@ -173,7 +195,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     let cursor = memory.cursor(CURSOR_NAME).map_err(|e| e.to_string())?;
     let from = explicit_from.unwrap_or_else(|| start_block(cursor, head));
-    if from > to {
+    if nothing_to_walk(from, to) {
         println!("nothing to do: the next block to walk ({from}) is past --to ({to})");
         return Ok(());
     }
@@ -194,27 +216,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let seen = launches.len() as u64;
     let capped = &launches[..capped_len(launches.len(), max)];
 
-    let mut named = 0_u64;
-    let mut unreadable = 0_u64;
+    let mut readable = Vec::with_capacity(capped.len());
     for (token, block) in capped {
         let (name, symbol) = read_text(&rpc, token);
-        if name.is_some() {
-            named += 1;
-        } else {
-            unreadable += 1;
-        }
+        readable.push(name.is_some());
         write_row(&memory, token, *block, name, symbol)
             .map_err(|e| format!("cannot write {token}: {e}"))?;
     }
+    let (named, unreadable) = tally(&readable);
 
-    // The cursor only advances over what was actually written: the last
-    // processed launch's own block, or the range's own end when nothing in
-    // it needed a row (an empty range, or every launch already written by
-    // `realorrug-serve` -- `record_token_text` still runs, `INSERT OR
-    // IGNORE` just makes it a no-op). A failed write above returns before
-    // this line runs, so a range that failed partway leaves the cursor where
-    // it was, never past what was actually recorded.
-    let new_cursor = next_cursor(capped, to);
+    // The cursor only advances over what was actually written (see
+    // `next_cursor`). A failed write above returns before this line runs, so
+    // a range that failed partway leaves the cursor where it was, never past
+    // what was actually recorded.
+    let new_cursor = next_cursor(&launches, capped.len(), to);
     memory
         .set_cursor(CURSOR_NAME, new_cursor)
         .map_err(|e| e.to_string())?;
@@ -242,7 +257,7 @@ mod tests {
     use realorrug_onchain::memory::Memory;
     use realorrug_robinhood::Address;
 
-    use super::{capped_len, next_cursor, start_block, write_row};
+    use super::{capped_len, next_cursor, nothing_to_walk, start_block, tally, write_row};
 
     /// A cursor on file resumes right after it -- the packet's own wording,
     /// "each run starts after the last block it finished". Re-walking the
@@ -286,17 +301,40 @@ mod tests {
     /// from the last one's block, not the range's end -- the whole reason a
     /// capped run does not skip the launches past the cap.
     #[test]
-    fn the_cursor_follows_the_last_processed_launch_or_the_range_end() {
+    fn a_walk_of_one_block_is_walked_and_a_backwards_one_is_not() {
+        assert!(!nothing_to_walk(5, 5));
+        assert!(!nothing_to_walk(4, 5));
+        assert!(nothing_to_walk(6, 5));
+    }
+
+    #[test]
+    fn names_read_and_names_missed_are_counted_apart() {
+        assert_eq!(tally(&[]), (0, 0));
+        assert_eq!(tally(&[true, false, true, true, false]), (3, 2));
+    }
+
+    #[test]
+    fn the_cursor_stops_before_the_first_launch_not_reached() {
+        let launches = [
+            (Address([0x11; 20]), 100),
+            (Address([0x22; 20]), 250),
+            (Address([0x33; 20]), 250),
+        ];
+        assert_eq!(next_cursor(&[], 0, 900), 900, "empty range: its end");
         assert_eq!(
-            next_cursor(&[], 900),
+            next_cursor(&launches, 3, 900),
             900,
-            "nothing processed: the range end"
+            "all written: range end"
         );
-        let processed = [(Address([0x11; 20]), 100), (Address([0x22; 20]), 250)];
         assert_eq!(
-            next_cursor(&processed, 900),
-            250,
-            "something processed: its own block, not the range end"
+            next_cursor(&launches, 2, 900),
+            249,
+            "a second launch in the last block written is not skipped"
+        );
+        assert_eq!(
+            next_cursor(&launches, 0, 900),
+            99,
+            "a cap of zero skips nothing"
         );
     }
 
