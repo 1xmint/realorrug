@@ -211,10 +211,33 @@ pub fn answer(
     lane2: &mut crate::lane2::Gate,
     ctx: &Answering<'_>,
 ) -> Answered {
+    record_words(mention, ctx);
     let mut metrics = DossierMetrics::default();
     let outcome = answer_measured(mention, gate, threads, lane2, ctx, &mut metrics);
     eprintln!("{}", metrics.notice(&mention.id));
     outcome
+}
+
+/// Counts the words in a question, before anything decides whether to answer
+/// it.
+///
+/// Placed here rather than beside the reply so that a refused mention, a
+/// ticker with no address and a question naming no token at all all count the
+/// same: what people are asking about is a fact about the day whether or not
+/// this account had anything to say back.
+///
+/// The text itself is not kept and never was -- `narrative::said` returns the
+/// words and drops the sentence, so the injection surface `mention::read`
+/// closes stays closed. Rule 7: no memory configured writes nothing, and a
+/// failed write never costs a reply.
+fn record_words(mention: &Mention, ctx: &Answering<'_>) {
+    let Some(memory) = ctx.memory else { return };
+    let said = realorrug_onchain::narrative::said(&mention.text);
+    if said.is_empty() {
+        return;
+    }
+    let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(ctx.now);
+    let _ = memory.record_mention_terms(&mention.author, &said, at);
 }
 
 #[derive(Default)]
@@ -509,6 +532,53 @@ mod tests {
             self_mint: None,
             now: 1_788_000_000,
         }
+    }
+
+    /// Every question is counted, including one this account refuses to
+    /// answer: what people are asking about is a fact about the day either
+    /// way, and a count that only included answered questions would be a
+    /// count of what the bot did, not of what people noticed.
+    #[test]
+    fn the_words_of_a_question_are_counted_even_when_nothing_is_answered() {
+        let path = std::env::temp_dir().join("realorrug-answer-words.sqlite3");
+        let _ = std::fs::remove_file(&path);
+        let memory = realorrug_onchain::memory::Memory::open(&path).expect("open");
+        let client = unreachable_client();
+        let ctx = Answering {
+            memory: Some(&memory),
+            ..ctx(&client)
+        };
+        let _ = answer(
+            &mention("is the neuro narrative real"),
+            &mut gate(),
+            &mut threads(),
+            &mut lane2_gate(),
+            &ctx,
+        );
+        // The window starts a day before the context's clock, so the row has
+        // to have been written *at that clock* to be inside it. Reading from
+        // the epoch instead would pass however wrong the moment was.
+        let yesterday = std::time::UNIX_EPOCH + std::time::Duration::from_secs(ctx.now - 86_400);
+        let counts = memory.mention_terms_since(yesterday).expect("read");
+        assert_eq!(counts.get("neuro"), Some(&1), "{counts:?}");
+        assert_eq!(counts.get("narrative"), Some(&1), "{counts:?}");
+    }
+
+    /// No memory configured writes nothing and still answers (rule 7).
+    #[test]
+    fn a_question_with_nowhere_to_write_is_still_answered() {
+        let client = unreachable_client();
+        let outcome = answer(
+            &mention("is the neuro narrative real"),
+            &mut gate(),
+            &mut threads(),
+            &mut lane2_gate(),
+            &ctx(&client),
+        );
+        assert!(
+            !matches!(outcome, Answered::Refused(_)),
+            "a missing memory refuses nothing: {outcome:?}"
+        );
     }
 
     /// A client pointed at an address nothing answers on.

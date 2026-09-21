@@ -73,11 +73,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let latest = memory
         .latest_market_since(CHAIN, since)
         .map_err(|e| format!("cannot read the market rows: {e}"))?;
+    let asked = memory
+        .mention_terms_since(since)
+        .map_err(|e| format!("cannot read the mention words: {e}"))?;
     let mut themes = narrative::themes(&texts, min);
     if has(args, "--by-volume") {
         by_volume(&mut themes, &latest);
     }
-    print!("{}", report(&themes, &latest, texts.len(), days, min, top));
+    print!(
+        "{}",
+        report(&themes, &latest, &asked, texts.len(), days, min, top)
+    );
     Ok(())
 }
 
@@ -88,6 +94,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
 fn report(
     themes: &[Theme],
     latest: &BTreeMap<String, MarketRead>,
+    asked: &BTreeMap<String, usize>,
     launches: usize,
     days: u64,
     min: usize,
@@ -105,12 +112,13 @@ fn report(
     for theme in themes.iter().take(top) {
         let _ = writeln!(
             out,
-            "{:>4}  {:<24} {}.{:02}%  {}",
+            "{:>4}  {:<24} {}.{:02}%  {:<28}  {}",
             theme.tokens.len(),
             theme.term,
             theme.share_bps / 100,
             theme.share_bps % 100,
-            traded(&narrative::trading(theme, latest), theme.tokens.len())
+            traded(&narrative::trading(theme, latest), theme.tokens.len()),
+            asked_about(asked.get(&theme.term).copied())
         );
     }
     if themes.len() > top {
@@ -160,6 +168,22 @@ fn has(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
 }
 
+/// The asking column: how many different people used the word in a question.
+///
+/// A word no one has asked about prints "nobody asked", never "0 people":
+/// the bot only hears from people who mention it, so an empty count is a
+/// thing we did not hear, not a thing that did not happen (rule 8). The two
+/// numbers on a row answer different questions -- the launches column is
+/// what launchers did, and this is what everybody else noticed -- and a
+/// theme that is high in one and low in the other is the interesting row.
+fn asked_about(people: Option<usize>) -> String {
+    match people {
+        None | Some(0) => "nobody asked".to_owned(),
+        Some(1) => "1 person asked".to_owned(),
+        Some(n) => format!("{n} people asked"),
+    }
+}
+
 /// A numeric flag, ignoring one that will not parse.
 fn number(args: &[String], name: &str) -> Option<u64> {
     flag(args, name).and_then(|v| v.parse().ok())
@@ -169,6 +193,10 @@ fn number(args: &[String], name: &str) -> Option<u64> {
 mod tests {
     use super::*;
     use realorrug_onchain::memory::TokenText;
+
+    fn nobody() -> BTreeMap<String, usize> {
+        BTreeMap::new()
+    }
 
     fn no_market() -> BTreeMap<String, MarketRead> {
         BTreeMap::new()
@@ -210,7 +238,15 @@ mod tests {
     /// of themes read off a tiny window cannot look like a finding.
     #[test]
     fn the_page_says_how_many_launches_it_counted() {
-        let page = report(&[theme("neuro", 3, 1_500)], &no_market(), 20, 7, 3, 20);
+        let page = report(
+            &[theme("neuro", 3, 1_500)],
+            &no_market(),
+            &nobody(),
+            20,
+            7,
+            3,
+            20,
+        );
         assert!(
             page.starts_with("20 launch(es) named in the last 7 day(s)\n"),
             "{page}"
@@ -222,7 +258,7 @@ mod tests {
     /// A week with no shared word says so, rather than printing nothing.
     #[test]
     fn a_week_with_no_theme_says_so() {
-        let page = report(&[], &no_market(), 40, 7, 3, 20);
+        let page = report(&[], &no_market(), &nobody(), 40, 7, 3, 20);
         assert!(page.contains("no word is shared by 3 or more"), "{page}");
     }
 
@@ -230,7 +266,7 @@ mod tests {
     #[test]
     fn the_list_is_capped_and_says_what_it_left_out() {
         let themes: Vec<Theme> = (0..5).map(|i| theme(&format!("t{i}"), 3, 100)).collect();
-        let page = report(&themes, &no_market(), 50, 7, 3, 2);
+        let page = report(&themes, &no_market(), &nobody(), 50, 7, 3, 2);
         assert!(page.contains("... and 3 more"), "{page}");
         assert!(!page.contains("t4"), "{page}");
     }
@@ -242,11 +278,19 @@ mod tests {
     /// a lie in the one place a reader is most likely to look.
     #[test]
     fn nothing_is_left_out_when_the_list_fits() {
-        let page = report(&[theme("neuro", 3, 100)], &no_market(), 50, 7, 3, 20);
+        let page = report(
+            &[theme("neuro", 3, 100)],
+            &no_market(),
+            &nobody(),
+            50,
+            7,
+            3,
+            20,
+        );
         assert!(!page.contains("more"), "{page}");
 
         let themes: Vec<Theme> = (0..3).map(|i| theme(&format!("t{i}"), 3, 100)).collect();
-        let exactly_full = report(&themes, &no_market(), 50, 7, 3, 3);
+        let exactly_full = report(&themes, &no_market(), &nobody(), 50, 7, 3, 3);
         assert!(!exactly_full.contains("more"), "{exactly_full}");
         assert!(exactly_full.contains("t2"), "{exactly_full}");
     }
@@ -258,6 +302,7 @@ mod tests {
         let page = report(
             &[theme("neuro", 3, 1_500)],
             &priced(&[("0x0", 8_000.0), ("0x1", 200.0)]),
+            &nobody(),
             20,
             7,
             3,
@@ -269,7 +314,15 @@ mod tests {
     /// A theme nobody priced says so rather than printing a zero.
     #[test]
     fn an_unpriced_theme_says_no_reading() {
-        let page = report(&[theme("neuro", 3, 1_500)], &no_market(), 20, 7, 3, 20);
+        let page = report(
+            &[theme("neuro", 3, 1_500)],
+            &no_market(),
+            &nobody(),
+            20,
+            7,
+            3,
+            20,
+        );
         assert!(page.contains("no reading"), "{page}");
         assert!(!page.contains("$0"), "{page}");
     }
@@ -363,5 +416,33 @@ mod tests {
         assert!(has(&args(&["--by-volume"]), "--by-volume"));
         assert!(!has(&args(&["--days", "7"]), "--by-volume"));
         assert!(!has(&args(&[]), "--by-volume"));
+    }
+
+    /// The asking column counts people, and says so in words rather than
+    /// printing a bare number that could be read as launches.
+    #[test]
+    fn the_asking_column_counts_people() {
+        let asked = [("neuro".to_owned(), 4)].into_iter().collect();
+        let page = report(
+            &[theme("neuro", 3, 1_500)],
+            &no_market(),
+            &asked,
+            20,
+            7,
+            3,
+            20,
+        );
+        assert!(page.contains("4 people asked"), "{page}");
+    }
+
+    /// One person is one person, not "1 people", and a word nobody used says
+    /// nobody asked rather than zero -- the bot only hears from people who
+    /// mention it, so an empty count is silence, not absence.
+    #[test]
+    fn one_person_is_one_person_and_none_is_silence() {
+        assert_eq!(asked_about(Some(1)), "1 person asked");
+        assert_eq!(asked_about(Some(2)), "2 people asked");
+        assert_eq!(asked_about(None), "nobody asked");
+        assert_eq!(asked_about(Some(0)), "nobody asked");
     }
 }

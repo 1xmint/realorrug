@@ -40,7 +40,7 @@
 //! (see its doc), not a second column, so the key shape stays
 //! `(what, subject, block)` everywhere else in the store.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1306,7 +1306,89 @@ impl Memory {
     fn init_records(conn: &Connection) -> Result<(), Error> {
         Self::init_verdicts(conn)?;
         Self::init_token_texts(conn)?;
-        Self::init_token_market(conn)
+        Self::init_token_market(conn)?;
+        Self::init_mention_terms(conn)
+    }
+
+    /// Which words people used when they asked, one row per person per word
+    /// per day.
+    ///
+    /// **The row is the person, not the sentence.** Counting appearances
+    /// would let one account repeating a word four hundred times look like
+    /// four hundred people noticing it, which is the exact thing this table
+    /// exists to tell apart. The primary key collapses a repeat within a day
+    /// on its own, so nothing downstream has to remember to.
+    ///
+    /// **No sentence is kept.** Only words that survive the same tokeniser
+    /// the launch names go through are stored -- lower-case, ASCII letters
+    /// and digits, three to thirty-two characters. A stranger's text is data
+    /// and never an instruction (rule 3); a count of a word is not text at
+    /// all, so nothing that reaches a model can carry a sentence somebody
+    /// wrote.
+    fn init_mention_terms(conn: &Connection) -> Result<(), Error> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS mention_terms (
+                term   TEXT    NOT NULL,
+                author TEXT    NOT NULL,
+                day    INTEGER NOT NULL,
+                PRIMARY KEY (term, author, day)
+             );
+             CREATE INDEX IF NOT EXISTS mention_terms_by_day
+                ON mention_terms (day);",
+        )?;
+        Ok(())
+    }
+
+    /// Writes down the words in one mention, under the day it arrived.
+    ///
+    /// The day, not the second: two questions from one person an hour apart
+    /// are one person asking, and rounding to the day is what makes the
+    /// primary key say so.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the write fails.
+    pub fn record_mention_terms(
+        &self,
+        author: &str,
+        terms: &BTreeSet<String>,
+        at: SystemTime,
+    ) -> Result<(), Error> {
+        let day = day_of(at);
+        for term in terms {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO mention_terms (term, author, day)
+                 VALUES (?1, ?2, ?3)",
+                params![term, author, day],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// How many different people used each word since `since`.
+    ///
+    /// A person who used a word on three days counts once, not three times:
+    /// the question this answers is how many people have noticed a word, and
+    /// somebody asking twice is still one person.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails.
+    pub fn mention_terms_since(&self, since: SystemTime) -> Result<BTreeMap<String, usize>, Error> {
+        let day = day_of(since);
+        let mut statement = self.conn.prepare(
+            "SELECT term, COUNT(DISTINCT author) FROM mention_terms
+             WHERE day >= ?1 GROUP BY term",
+        )?;
+        let rows = statement.query_map(params![day], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut counts = BTreeMap::new();
+        for row in rows {
+            let (term, people) = row?;
+            counts.insert(term, usize::try_from(people).unwrap_or(0));
+        }
+        Ok(counts)
     }
 
     /// What the aggregator said, each reading its own row.
@@ -2051,6 +2133,15 @@ fn row_to_fact(
         })?,
         value,
     })
+}
+
+/// Which day a moment falls in, counted from the epoch.
+///
+/// The one place the day is worked out, so the writer and the reader cannot
+/// drift apart: a row written under one definition of "day" and looked for
+/// under another would silently return nothing.
+fn day_of(at: SystemTime) -> i64 {
+    to_unix(at) / 86_400
 }
 
 fn to_unix(t: SystemTime) -> i64 {
@@ -3117,6 +3208,87 @@ mod tests {
             .expect("read");
         assert_eq!(latest.len(), 1);
         assert_eq!(latest[TOKEN].volume_24h_usd, None);
+    }
+
+    fn words(list: &[&str]) -> BTreeSet<String> {
+        list.iter().map(|w| (*w).to_owned()).collect()
+    }
+
+    /// Two moments in one day are one day, and the next day is the next
+    /// number. Both the writing and the reading go through this, so getting
+    /// it wrong would not look like a bug -- it would look like nobody ever
+    /// asked anything.
+    #[test]
+    fn a_day_is_a_day_and_the_next_one_is_the_next_number() {
+        let noon = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 10 + 43_200);
+        let evening = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 10 + 79_200);
+        let tomorrow = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 11);
+        assert_eq!(day_of(noon), 10);
+        assert_eq!(day_of(evening), 10, "same day, same number");
+        assert_eq!(day_of(tomorrow), 11, "one day later is one number later");
+    }
+
+    /// One person shouting is one person. The count is people, not
+    /// appearances, or an account repeating a word all day would look like a
+    /// narrative forming.
+    #[test]
+    fn a_word_counts_its_people_not_its_repeats() {
+        let mem = Memory::open_in_memory().expect("open");
+        let day = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 10);
+        mem.record_mention_terms("alice", &words(&["neuro"]), day)
+            .expect("write");
+        mem.record_mention_terms(
+            "alice",
+            &words(&["neuro"]),
+            day + Duration::from_secs(3_600),
+        )
+        .expect("write");
+        mem.record_mention_terms(
+            "alice",
+            &words(&["neuro"]),
+            day + Duration::from_secs(86_400),
+        )
+        .expect("write");
+        mem.record_mention_terms("bob", &words(&["neuro"]), day)
+            .expect("write");
+        let counts = mem
+            .mention_terms_since(SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(counts["neuro"], 2, "alice once however often she asked");
+    }
+
+    /// Outside the window is absent, not zero (rule 8): a word nobody has
+    /// used this week has no entry, which is what lets the caller say "no
+    /// reading" rather than print a nought nobody measured.
+    #[test]
+    fn a_word_used_before_the_window_is_absent() {
+        let mem = Memory::open_in_memory().expect("open");
+        let old = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 3);
+        mem.record_mention_terms("alice", &words(&["neuro"]), old)
+            .expect("write");
+        let counts = mem
+            .mention_terms_since(SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 9))
+            .expect("read");
+        assert!(
+            counts.is_empty(),
+            "the only asking is older than the window"
+        );
+    }
+
+    /// Words are counted one at a time, so a question naming two things
+    /// counts for both and neither is lost to the other.
+    #[test]
+    fn every_word_in_one_question_is_counted() {
+        let mem = Memory::open_in_memory().expect("open");
+        let day = SystemTime::UNIX_EPOCH + Duration::from_secs(86_400 * 10);
+        mem.record_mention_terms("alice", &words(&["neuro", "agent"]), day)
+            .expect("write");
+        let counts = mem
+            .mention_terms_since(SystemTime::UNIX_EPOCH)
+            .expect("read");
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts["agent"], 1);
+        assert_eq!(counts["neuro"], 1);
     }
 
     /// The work queue: judged, old enough, and never labelled. A token still

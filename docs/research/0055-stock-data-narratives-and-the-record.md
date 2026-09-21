@@ -275,9 +275,8 @@ stay in the denominator, so a share cannot be inflated by dropping them
 a word are related, which is the whole of what makes it safe under rule 2 --
 code computes it from stored rows before any model sees it.
 
-**Not built, and deliberately:** the mention-text frequency count from the
-bullets above, the dated base-rate-shaped file with a stale-after policy, and
-any rule for what a paid customer sees. The counts have never been run against
+**Not built, and deliberately:** the dated base-rate-shaped file with a
+stale-after policy, and any rule for what a paid customer sees. The counts have never been run against
 real launches, because `token_texts` starts empty and fills as the routes
 serve; deciding what to sell from a signal nobody has looked at yet would be
 deciding in the dark.
@@ -303,6 +302,38 @@ the theme's launches had a reading at all. The aggregator only answers for a
 token with a pool, so a new theme is mostly launches nobody has priced yet, and
 a bare total would quietly turn "two of these traded" into "these traded". A
 theme with no reading prints `no reading`, never `$0` (rule 8).
+
+**The mention-word count, built 2026-09-20.** The bullets above proposed
+counting the words in mention text. It is built, and it is free for the third
+time in the same way: `crates/realorrug-analyst/src/answer.rs` already holds
+the text of every mention it answers, and threw it away.
+
+What is stored is not the text. `narrative::said` runs the mention through
+the *same* tokeniser the launch names go through -- lower-case, ASCII letters
+and digits only, three to thirty-two characters, the "this is a token" words
+dropped -- and returns a set of words. The sentence does not survive it. This
+is what keeps `mention.rs`'s doctrine intact: that module closes the injection
+surface by parsing rather than filtering, and a count of a word is not text, so
+nothing a stranger wrote can reach a model through this path (rule 3).
+
+**The row is the person, not the sentence.** `mention_terms` in `memory.rs` is
+keyed `(term, author, day)`, so one account repeating a word four hundred times
+is one row, and `mention_terms_since` counts distinct authors. Counting
+appearances instead would make one person shouting look exactly like a
+narrative forming, which is the one thing this number exists to tell apart.
+
+The words are counted in `answer()`, before anything decides whether to reply
+-- so a refused mention, a `$TICKER` with no address, and a question naming no
+token at all are all counted. What people ask about is a fact about the day
+whether or not this account had anything to say back; a count that included
+only answered questions would be a count of what the bot did.
+
+`realorrug narratives` prints the count as a fourth column: `4 people asked`,
+or `nobody asked` for a word no one used. Never `0 people`: the bot only hears
+from accounts that mention it, so an empty count is silence, not absence
+(rule 8). The interesting row is the one where the two counts disagree -- a
+word many launchers picked that nobody is asking about, or a word one launch
+used that forty people are.
 
 ## 4. "Record everything" — what is recoverable later versus lost if not captured now
 
