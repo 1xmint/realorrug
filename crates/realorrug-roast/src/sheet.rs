@@ -1040,7 +1040,13 @@ impl FactSheet {
             // refusal for the read point). A Robinhood launch arrives as
             // `chain_launch` below instead, with its age already taken from
             // the two blocks' own timestamps.
-            if let Some(ReadAt::Solana(read_slot)) = dossier.read_at {
+            // A launch slot past the read slot means the two reads came from
+            // nodes at different heights, so the age is unknown and no fact is
+            // pushed (the template then says the age could not be read).
+            // Flooring it published "0 slots (about 0 hours)" as a measurement.
+            if let Some(ReadAt::Solana(read_slot)) = dossier.read_at
+                && read_slot >= launch.slot
+            {
                 push_age(&mut facts, read_slot.saturating_since(launch.slot));
             }
         } else if let Some(launch) = &dossier.chain_launch {
@@ -2333,7 +2339,9 @@ fn push_window_sizes_and_exemption(
     // candidate may lack, see the holdings block above).
     if funding.checked.len() < 2 {
         skipped.push(
-            "whether same-window buy sizes are within 10% of each other needs at least two \
+            // No digits: the report repeats this reason, and the number check
+            // refuses a figure the sheet did not measure.
+            "whether same-window buy sizes are close to each other needs at least two \
              checked candidates"
                 .to_owned(),
         );
@@ -3418,9 +3426,13 @@ fn push_fee(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
                 about: About::Measurement,
                 kind: Kind::VenueFee,
                 label: "venue fee, round trip, read from the on-chain schedule".to_owned(),
+                // The rendered line is shown verbatim by the template, so it
+                // carries the qualifier and nothing else: an instruction to the
+                // model here was printed in public replies, and the 850 bps it
+                // quoted is `push_cost`'s fresh-launch figure, which the reply
+                // already states beside a different measured round trip.
                 rendered: format!(
-                    "{rt} bps -- THE VENUE FEE ONLY. The measured all-in round trip is 850 bps. \
-                     Never present the fee as the cost of trading."
+                    "{rt} bps, the venue's own fee and not the whole cost of a round trip"
                 ),
                 values: vec![rt, rt / 100.0],
                 clauses: Vec::new(),
@@ -6226,6 +6238,23 @@ mod tests {
 
     fn fact_of(sheet: &FactSheet, kind: Kind) -> Option<&Fact> {
         sheet.facts.iter().find(|f| f.kind == kind)
+    }
+
+    #[test]
+    fn a_launch_slot_past_the_read_slot_gives_no_age() {
+        // Two reads from nodes at different heights can put the launch after
+        // the read. Flooring that to zero published "0 slots (about 0 hours)"
+        // as if it had been measured; the age has to be absent instead.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(realorrug_onchain::budget::Count::Exactly(1), None));
+        dossier.read_at = Some(ReadAt::Solana(Slot(444_007_819)));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::Age).is_none());
+
+        // The boundary: a read in the launch slot itself is a real zero.
+        dossier.read_at = Some(ReadAt::Solana(Slot(444_007_820)));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert_eq!(fact_of(&sheet, Kind::Age).map(|f| f.values[0]), Some(0.0));
     }
 
     #[test]
