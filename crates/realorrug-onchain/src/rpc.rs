@@ -630,7 +630,12 @@ impl RpcClient {
             "getTransaction",
             &serde_json::json!([
                 signature,
-                { "encoding": "json", "maxSupportedTransactionVersion": 0 }
+                // 1, not 0: the node refuses a newer transaction outright
+                // rather than returning it in an older shape, and version 1
+                // transactions are already live (7 of 85 on one pump.fun
+                // token, research 0056). Version 1 carries the same
+                // `accountKeys` and `loadedAddresses` the parser reads.
+                { "encoding": "json", "maxSupportedTransactionVersion": 1 }
             ]),
         )?;
         Ok(parse_transaction(&raw))
