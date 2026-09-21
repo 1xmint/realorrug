@@ -2,6 +2,7 @@
 # ADR 0034 — the prize is a free calling game, and mentions earn nothing
 
 **Date:** 2026-09-18
+**Decision 1 and decision 3's prize superseded 2026-09-21** by [ADR 0037](0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md) (SOL pair) and [ADR 0038](0038-no-prizes-buybacks-or-holder-benefits.md) (the daily five has nothing to win).
 **Status:** recommending. Josh chose the direction in conversation on
 2026-09-18; each numbered decision below is my recommendation until he rules
 on it, and the "whose" column changes when he does.

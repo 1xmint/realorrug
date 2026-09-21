@@ -2,6 +2,7 @@
 # ADR 0025 — The Robinhood payout signs through Turnkey
 
 **Date:** 2026-09-14
+**Superseded 2026-09-21 by [ADR 0037](0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md):** no payout signer exists; the payout binary refuses to run and nothing in this repository holds a spending key.
 **Status:** accepted. **Josh's decision, recorded** (2026-09-14): the payout key
 lives in Turnkey, not in a file on the box. The rest is the plan he approved
 for plan 0001 step 6c.

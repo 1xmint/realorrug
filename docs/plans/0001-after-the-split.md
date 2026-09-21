@@ -2,7 +2,7 @@
 # Plan 0001 — After the split
 
 **Date:** 2026-09-13
-**Status:** open. The split itself is done ([ADR 0024](../adr/0024-the-bot-stands-alone.md));
+**Status:** open; its Robinhood launch path is replaced by [plan 0002](0002-bot-quality-then-a-solana-launch.md) (2026-09-21). The split itself is done ([ADR 0024](../adr/0024-the-bot-stands-alone.md));
 this is what follows it, in order, each with what proves it.
 
 ## Done
