@@ -15,6 +15,7 @@ mod label_outcomes;
 mod launch_check;
 mod model_prices;
 mod narratives;
+mod record_launches;
 mod roast;
 
 use std::process::ExitCode;
@@ -82,6 +83,15 @@ commands:
                                  sharing a word are related. `--by-volume`
                                  orders by dollars rather than by how many
                                  launchers picked the word
+  record-launches --rpc URL [--memory PATH] [--from N] [--to N] [--max N]
+                                 every new Pons v2 launch's name and symbol,
+                                 written to the same `token_texts` table a
+                                 served dossier writes to, so `narratives`
+                                 counts what gets launched rather than only
+                                 what a reader happened to ask about. Resumes
+                                 from a stored cursor; an unreadable name
+                                 still writes a row (rule 8). Read-only chain
+                                 access, holds no key, posts nothing
   model-prices <model> [--check] | --list
                                  what to paste into analyst.env for a model,
                                  read from models.dev rather than typed
@@ -148,6 +158,7 @@ fn main() -> ExitCode {
         "label-outcomes" => label_outcomes::run(&args),
         "model-prices" => model_prices::run(&args),
         "narratives" => narratives::run(&args),
+        "record-launches" => record_launches::run(&args),
         "-h" | "--help" | "help" => {
             print!("{}", usage());
             return ExitCode::SUCCESS;
