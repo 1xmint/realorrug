@@ -574,11 +574,12 @@ pub fn run() -> ! {
     // silently leaves the managing account eligible to win the prize, and the
     // only visible difference is this number.
     eprintln!("{}", build_notice(operator_ids(x.as_ref()).len()));
-    // Once, at start, where somebody is looking. See the doc comment: this
-    // failure is silent for six days and then loses a week.
-    if let Some(notice) = contest_writable_notice(&paths.contest_dir) {
-        eprintln!("{notice}");
-    }
+    // No startup probe of `paths.contest_dir` any more: the weekly prize is
+    // off (ADR 0038), so nothing writes there any more either, and a probe
+    // for write access nothing needs would be a false alarm on a read-only
+    // mount. `contest_writable_notice` stays -- it is still correct, just
+    // uncalled from here -- for the day something else in this crate needs
+    // to write beside a contest record again.
     // The bio noticeboard, which is off unless somebody wrote a lead. Said at
     // start either way: "the bio is not being written" and "the bio is being
     // written and you did not know" are both things an operator should be able
@@ -738,45 +739,15 @@ pub fn run() -> ! {
             &mut lane2_gate,
             &paths,
         );
-        // The week closes on the tick after Monday 00:00 UTC, once. The
-        // record is written first; the posts are written from the record.
-        // Every account the operator controls, not just the bot's own.
+        // The weekly prize is off (ADR 0038): no week closes, no winner is
+        // selected or announced, no claim is prompted, no payout runs. This
+        // tick used to call `crate::contest::close_if_due` and, on a freshly
+        // closed week, `announce_week`, then `prompt_claim_if_due` on every
+        // tick regardless of close. Records already written stay readable --
+        // `realorrug_contest::records_in`, the `realorrug contest` replay CLI
+        // and the realorrug-contest crate are untouched -- but nothing new is
+        // ever written to `paths.contest_dir` from here again.
         //
-        // The bot posts as itself and is managed from a person's own account.
-        // Only the bot's id was excluded before 2026-09-06, so the managing
-        // account could have entered its own contest and won -- the operator
-        // paying themselves out of a pool the public is told is theirs.
-        //
-        // `REALORRUG_CONTEST_OPERATORS` is a comma-separated list of numeric ids;
-        // the bot's own id is always in the set whether or not it is listed, so
-        // forgetting the variable cannot make the bot eligible.
-        let rules = realorrug_contest::Rules::published(operator_ids(x.as_ref()));
-        match crate::contest::close_if_due(
-            x.as_ref(),
-            &paths,
-            now(),
-            &rules,
-            limits.per_summoner_daily,
-            &mut spend,
-        ) {
-            Ok(Some(record)) => announce_week(
-                &record,
-                publisher.as_ref(),
-                telegram_publisher.as_ref(),
-                &mut spend,
-                &client,
-                robinhood_client.as_ref(),
-                rates.as_ref(),
-                creators.as_ref(),
-                provider.as_deref(),
-                self_mint.as_ref(),
-                &paths,
-            ),
-            Ok(None) => {}
-            Err(e) => eprintln!("realorrug-analyst: cannot write the week's record: {e}"),
-        }
-        // Every tick, not only at close: see the function's note.
-        prompt_claim_if_due(publisher.as_ref(), &mut spend, &paths);
         // The bio, when one is configured. Last of the three, because it is
         // the only one that overwrites rather than appends, and the cheapest
         // to skip.
@@ -820,81 +791,6 @@ pub fn next_wait(found: usize, found_telegram: usize, previous: Duration) -> Dur
 /// mutants turned this `>` into `==` inside two functions nothing could call
 /// from a test, and a meter that settles the empty case and releases the
 /// real one is a meter that runs out on quiet weeks and never on busy ones.
-/// What to say when the budget covered only part of the thread, or `None`.
-///
-/// A function rather than an `if` inside [`announce_week`], for the reason
-/// [`unfunded_notice`] gives and one more: CI mutated this comparison into
-/// `==`, `>` and `<=` and nothing failed, because `announce_week` needs a
-/// platform to run at all. `>` in particular is the dangerous one -- it prints
-/// a shortfall on every ordinary week and says nothing on the one week that
-/// actually lost a post.
-///
-/// `None` when the whole thread is covered. Silence is the right output for
-/// the ordinary case: a line on every close is a line nobody reads by the
-/// third week.
-#[must_use]
-fn short_thread_notice(reserved: usize, wanted: usize) -> Option<String> {
-    (reserved < wanted).then(|| {
-        format!(
-            "realorrug-analyst: budget covers {reserved} of the week's {wanted} posts; \
-             the rest are not published"
-        )
-    })
-}
-
-/// Reserves a thread: one [`Cost::Post`] and a [`Cost::Reply`] for each post
-/// after it.
-///
-/// Returns **as many reservations as the budget covers**, which may be fewer
-/// than asked for and may be none. The caller cuts the thread to fit rather
-/// than posting what it cannot pay for -- a shorter thread of true posts is a
-/// smaller loss than a spend nobody authorised, and the summary is always
-/// first, so what gets dropped is the least load-bearing end.
-///
-/// Split out and returning a `Vec` because the alternative -- one commitment
-/// for the whole thread -- is what was wrong: `announce_week` charged a single
-/// `Cost::Post` for up to three posts, so the day's cap was computed from a
-/// number smaller than what was actually spent.
-fn reserve_thread(
-    spend: &mut Spend,
-    posts: usize,
-    day: u64,
-) -> Vec<realorrug_provider::Commitment> {
-    let mut out = Vec::with_capacity(posts);
-    for n in 0..posts {
-        let cost = if n == 0 { Cost::Post } else { Cost::Reply };
-        match spend.authorize(cost, day) {
-            Ok(c) => out.push(c),
-            // The first refusal ends it. Reserving past one would leave a hole
-            // in the middle of a thread, and a reply with no parent is not a
-            // shorter thread, it is a different post.
-            Err(_) => break,
-        }
-    }
-    out
-}
-
-/// Settles a thread against what actually landed.
-///
-/// `publish_under` stops the thread when the platform refuses a post, so a
-/// partial thread is an ordinary state and not an error. The posts that landed
-/// are charged and the rest are given back -- the same rule
-/// [`settle_if_sent`] applies to one post, applied per post.
-fn settle_thread(
-    spend: &mut Spend,
-    reservations: Vec<realorrug_provider::Commitment>,
-    sent: usize,
-) {
-    for (n, reservation) in reservations.into_iter().enumerate() {
-        if n < sent {
-            let charged = reservation.reserved();
-            spend.settle(reservation, charged);
-        } else {
-            spend.release(reservation);
-        }
-    }
-}
-
 fn settle_if_sent(spend: &mut Spend, reservation: realorrug_provider::Commitment, sent: usize) {
     if sent > 0 {
         let charged = reservation.reserved();
@@ -915,9 +811,9 @@ fn announce_day(
     if crate::daily::due(at, &paths.daily_dir).is_none() {
         return;
     }
-    let vault = std::fs::read_to_string(format!("{}/pool.json", paths.contest_dir))
-        .ok()
-        .and_then(|text| realorrug_contest::Vault::from_json(&text).ok());
+    // No pool reading any more: the weekly prize is off (ADR 0038), so
+    // `crate::daily::render` no longer has a pool to quote, and
+    // `post_if_due` no longer takes one.
     let Ok(reservation) = spend.authorize(Cost::Post, day_of(at)) else {
         eprintln!("realorrug-analyst: budget spent; today's post is not published");
         return;
@@ -925,7 +821,6 @@ fn announce_day(
     match crate::daily::post_if_due(
         at,
         &paths.daily_dir,
-        vault.as_ref(),
         publisher,
         &paths.posts,
         telegram,
@@ -936,129 +831,6 @@ fn announce_day(
             spend.release(reservation);
             eprintln!("realorrug-analyst: cannot post the day: {e}");
         }
-    }
-}
-
-/// Posts a closed week: the summary, then the winner's coin torn down as a
-/// reply to it, on X and -- when a channel is configured -- on Telegram.
-///
-/// The teardown reads the chain once for the winning mint, the way a summoned
-/// reply would, and is written by the same roaster under the same checks. A
-/// week with no winner posts the summary alone.
-#[allow(clippy::too_many_arguments)]
-fn announce_week(
-    record: &realorrug_contest::Record,
-    publisher: &dyn Publisher,
-    telegram: &dyn Publisher,
-    spend: &mut Spend,
-    client: &realorrug_onchain::RpcClient,
-    robinhood: Option<&realorrug_robinhood::Rpc>,
-    rates: Option<&BaseRates>,
-    creators: Option<&realorrug_roast::CreatorIndex>,
-    provider: Option<&dyn realorrug_model::Provider>,
-    self_mint: Option<&realorrug_types::Address>,
-    paths: &Paths,
-) {
-    let at = now();
-    let vault = std::fs::read_to_string(format!("{}/pool.json", paths.contest_dir))
-        .ok()
-        .and_then(|text| realorrug_contest::Vault::from_json(&text).ok());
-    let mut posts = vec![crate::weekly::summary(record, vault.as_ref())];
-
-    if let Some(winner) = record.ranking.winner() {
-        // The same dispatcher the summoned reply uses: the winning mint is
-        // stored text, on whichever chain it was launched on, and matching on
-        // its shape here a second time would be exactly the duplicated
-        // decision this task exists to remove.
-        let market = realorrug_onchain::market::Http::default();
-        let clients = realorrug_onchain::dispatch::Clients {
-            solana: client,
-            robinhood,
-            market: Some(&market),
-        };
-        match realorrug_onchain::dispatch::read(&winner.entry.mint, &clients) {
-            Ok(dossier) => {
-                let (sheet, reply) =
-                    realorrug_roast::roast(&dossier, rates, creators, provider, self_mint);
-                posts.push(crate::weekly::teardown(&sheet, &reply));
-            }
-            Err(realorrug_onchain::DispatchError::Unreadable(e)) => {
-                eprintln!("realorrug-analyst: no teardown, the chain could not be read: {e}");
-            }
-            Err(realorrug_onchain::DispatchError::NotAnAddress) => {
-                eprintln!("realorrug-analyst: no teardown, the winning mint is not an address");
-            }
-        }
-    }
-
-    // The hunters, from the board the week close already wrote beside the
-    // record. Read rather than recomputed: the board on disk is the one the
-    // public endpoint serves, and a post naming a different three would be a
-    // second answer to the same question.
-    let board: Vec<realorrug_contest::hunter::Placing> =
-        std::fs::read_to_string(crate::contest::hunter_path(&paths.contest_dir, record.week))
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default();
-    if let Some(post) = crate::weekly::hunters(record, &board) {
-        posts.push(post);
-    }
-
-    // A post and a reply for each one after it, priced as what they are. This
-    // charged **one** `Cost::Post` for the whole thread until 2026-09-06 --
-    // already short by the teardown, and short by two once the hunters post
-    // joined it. A meter that under-reports the one billable thing a stranger
-    // can trigger is worse than no meter, because the daily cap is computed
-    // from it.
-    //
-    // The thread is cut to what the budget covers rather than posted in full
-    // and charged for part of it. A thread of two true posts is a smaller loss
-    // than a spend nobody authorised, and the summary is first in the list, so
-    // what gets dropped is the least load-bearing end.
-    let today = day_of(at);
-    let reservations = reserve_thread(spend, posts.len(), today);
-    if reservations.is_empty() {
-        eprintln!("realorrug-analyst: budget spent; the week's post is not published");
-        return;
-    }
-    if let Some(notice) = short_thread_notice(reservations.len(), posts.len()) {
-        eprintln!("{notice}");
-    }
-    // Unconditional, because `truncate` to a length at or past the end is a
-    // no-op. The comparison that decides whether to *say* something lives in
-    // `short_thread_notice`, where it can be tested -- CI mutated it here into
-    // `==`, `>` and `<=` and none of them failed, because nothing can call
-    // `announce_week` without a platform.
-    posts.truncate(reservations.len());
-    match crate::weekly::publish(
-        publisher,
-        &paths.posts,
-        &format!("weekly:{}", record.week.0),
-        &posts,
-        at,
-    ) {
-        Ok(sent) => settle_thread(spend, reservations, sent),
-        Err(e) => {
-            for r in reservations {
-                spend.release(r);
-            }
-            eprintln!("realorrug-analyst: cannot write {}: {e}", paths.posts);
-            return;
-        }
-    }
-    // Free, and recorded in the same file under the same id so a reader sees
-    // both lanes side by side.
-    if let Err(e) = crate::weekly::publish(
-        telegram,
-        &paths.telegram_log,
-        &format!("weekly:{}", record.week.0),
-        &posts,
-        at,
-    ) {
-        eprintln!(
-            "realorrug-analyst: cannot write {}: {e}",
-            paths.telegram_log
-        );
     }
 }
 
@@ -1248,15 +1020,14 @@ fn write_bio_if_changed(x: Option<&X>, bio: &crate::bio::Bio, spend: &mut Spend,
     let previous = std::fs::read_to_string(&path).ok();
     let marker = previous.as_deref().and_then(BioMarker::parse);
 
-    let record = realorrug_contest::records_in(std::path::Path::new(&paths.contest_dir))
-        .into_iter()
-        .max_by_key(|r| r.week);
-    // The same pool reading the daily and weekly posts quote, and the same
-    // reply log the site's leaderboard counts: two local files, no platform
-    // read, so the live line costs nothing until it is actually written.
-    let vault = std::fs::read_to_string(format!("{}/pool.json", paths.contest_dir))
-        .ok()
-        .and_then(|text| realorrug_contest::Vault::from_json(&text).ok());
+    // The weekly prize is off (ADR 0038): no week closes, so there is no
+    // fresh record to read a winner from and no pool left to quote. `record`
+    // and `vault` are always `None` now rather than removed outright,
+    // because `bio_to_write`/`crate::bio::choose` still read them -- a record
+    // written before the switch stays readable, it is just never a *fresh*
+    // one, and `None` is what "nothing new" means to `choose`.
+    let record: Option<realorrug_contest::Record> = None;
+    let vault: Option<realorrug_contest::Vault> = None;
     let replies = crate::log::latest(&paths.log).unwrap_or_default();
     let hunters = hunters_in_week(&replies, at);
     // No leaders yet: the mid-week leaderboard is raw platform engagement
@@ -1301,106 +1072,6 @@ fn write_bio_if_changed(x: Option<&X>, bio: &crate::bio::Bio, spend: &mut Spend,
         Err(e) => {
             spend.release(reservation);
             eprintln!("realorrug-analyst: the bio was refused by the platform: {e}");
-        }
-    }
-}
-
-/// Posts the claim prompt for any week whose winner has not been told yet.
-///
-/// Runs on every tick, not only at close. `try_claim` requires a claim to be a
-/// reply to this post, so a week with no prompt on its record accepts no claim
-/// at all -- and a prompt that failed to post once would otherwise cost the
-/// winner the whole seven days. Retrying is bounded by the claim window.
-///
-/// The prompt goes under the account's own winning reply, so it arrives in the
-/// thread the winner is already in. Its id is written back into the record;
-/// until that write happens no claim is possible, which is the safe direction.
-///
-/// In a dry run the post is recorded and not published, no id comes back,
-/// `claim_prompt` stays `None`, and no claim can land -- correct, because no
-/// winning reply was published for anyone to have seen either.
-/// The post the claim prompt replies to.
-///
-/// **The winner's own summons, not the bot's winning reply.**
-///
-/// Since 2026-02-23 X accepts an API reply only when the author of the post
-/// being replied to mentioned or quoted the bot in that post. A summons did
-/// exactly that by definition, so this is the one reply the platform
-/// guarantees. Replying under the account's own post relies instead on an
-/// exemption reported by a blog and a developer forum and documented nowhere
-/// -- and if it is not real, the winner is never told they won and finds out
-/// when the pool rolls over unclaimed.
-///
-/// It also lands where they will see it: the summons is their own post, so the
-/// prompt reaches their notifications rather than a thread they left.
-///
-/// The winning reply is the fallback, for weeks closed before mention ids were
-/// recorded. Those are the weeks the exemption has to hold for, and there is
-/// exactly one of them.
-///
-/// Split out of [`prompt_claim_if_due`] because the match on the winning reply
-/// is the whole of it and it is one character from being wrong: CI turned the
-/// `==` into a `!=`, which posts the prompt under **a losing entrant's**
-/// summons, and nothing failed -- the only test that reached this code had one
-/// entrant, so the winner and the first non-winner were the same row.
-fn claim_target(ranking: &realorrug_contest::Ranking, winning_reply: &str) -> String {
-    ranking
-        .ranked
-        .iter()
-        .find(|r| r.entry.reply_id == winning_reply)
-        .and_then(|r| r.entry.mention_id.clone())
-        .unwrap_or_else(|| winning_reply.to_owned())
-}
-
-fn prompt_claim_if_due(publisher: &dyn Publisher, spend: &mut Spend, paths: &Paths) {
-    let at = now();
-    let Some(record) = crate::contest::prompt_due(&paths.contest_dir, at) else {
-        return;
-    };
-    let Some(winner) = record.winner.as_ref() else {
-        return;
-    };
-    let Some(post) = crate::weekly::claim_prompt(&record) else {
-        return;
-    };
-
-    let under = claim_target(&record.ranking, &winner.reply_id);
-
-    let Ok(reservation) = spend.authorize(Cost::Reply, day_of(at)) else {
-        eprintln!(
-            "realorrug-analyst: budget spent; week {} claim prompt not posted, retrying next tick",
-            record.week.0
-        );
-        return;
-    };
-    match crate::weekly::publish_under(
-        publisher,
-        &paths.posts,
-        &format!("claim:{}", record.week.0),
-        Some(&under),
-        std::slice::from_ref(&post),
-        at,
-    ) {
-        Ok((sent, first)) => {
-            settle_if_sent(spend, reservation, sent);
-            if let Some(id) = first {
-                let mut updated = record;
-                updated.claim_prompt = Some(id);
-                if let Err(e) = crate::contest::write_record(&paths.contest_dir, &updated) {
-                    // The post went out and the record does not know it. The
-                    // next tick posts a second prompt, which is noisy and
-                    // recoverable; a claim replying to either one is refused
-                    // until a write succeeds, which is the safe failure.
-                    eprintln!(
-                        "realorrug-analyst: week {} claim prompt posted but not recorded: {e}",
-                        updated.week.0
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            spend.release(reservation);
-            eprintln!("realorrug-analyst: cannot write {}: {e}", paths.posts);
         }
     }
 }
@@ -2319,102 +1990,6 @@ mod tests {
         );
     }
 
-    /// A funded meter on its own ledger file, so these tests do not share one.
-    fn a_spend() -> Spend {
-        let dir = std::env::temp_dir().join(format!(
-            "radar-daemon-thread-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&dir).expect("a temp dir");
-        let ledger = dir.join("ledger.json").to_string_lossy().into_owned();
-        let _ = std::fs::remove_file(&ledger);
-        Spend::open(
-            Budget {
-                per_call_max: MicroUsd(50_000),
-                daily_max: MicroUsd(1_000_000),
-            },
-            Prices {
-                mention_read: MicroUsd(1_000),
-                post_read: MicroUsd(5_000),
-                reply: MicroUsd(10_000),
-                post: MicroUsd(15_000),
-                model_call: MicroUsd(2_000),
-                user_read: MicroUsd(20_000),
-            },
-            ledger,
-            1,
-        )
-    }
-
-    #[test]
-    fn a_thread_is_priced_as_a_post_and_a_reply_for_each_one_after_it() {
-        // `announce_week` charged ONE `Cost::Post` for the whole thread until
-        // 2026-09-06 -- already short by the teardown, and short by two once
-        // the hunters post joined it. A meter that under-reports the one
-        // billable thing a stranger can trigger is worse than no meter,
-        // because the daily cap is computed from it.
-        let mut spend = a_spend();
-        let one = reserve_thread(&mut spend, 1, 1);
-        let before = spend.spent_today();
-        assert_eq!(one.len(), 1);
-
-        // A post, and a reply for each one after it. The exact total, not
-        // "more than one": CI turned the `n == 0` into `n != 0`, which prices
-        // the *first* post as a reply and every one after it as a post -- a
-        // different, larger number that still passes any "more than" check.
-        assert_eq!(before, MicroUsd(15_000), "one post is one Post");
-
-        let mut spend = a_spend();
-        let three = reserve_thread(&mut spend, 3, 1);
-        assert_eq!(three.len(), 3);
-        assert_eq!(
-            spend.spent_today(),
-            MicroUsd(15_000 + 10_000 + 10_000),
-            "a post and two replies"
-        );
-    }
-
-    #[test]
-    fn a_thread_the_budget_only_half_covers_says_so_and_says_nothing_otherwise() {
-        // `>` is the dangerous mutation of this comparison: it prints a
-        // shortfall on every ordinary week and stays silent on the one week
-        // that actually lost a post -- an alarm that fires when nothing is
-        // wrong and not when something is.
-        assert_eq!(
-            short_thread_notice(3, 3),
-            None,
-            "the ordinary week is silent"
-        );
-        assert_eq!(short_thread_notice(1, 1), None);
-        let short = short_thread_notice(2, 3).expect("a shortfall is said");
-        assert!(short.contains("2 of the week's 3"), "{short}");
-        // A thread whose reservations somehow exceed its posts is not a
-        // shortfall, and must not be announced as one.
-        assert_eq!(short_thread_notice(4, 3), None);
-    }
-
-    #[test]
-    fn a_thread_that_lands_in_part_is_charged_for_the_part_that_landed() {
-        // `publish_under` stops the thread when the platform refuses a post,
-        // so a partial thread is an ordinary state. Charging for the planned
-        // posts would spend the day's budget on posts nobody received --
-        // which is the failure `settle_if_sent` was written to prevent for
-        // one post, applied per post here.
-        let mut spend = a_spend();
-        let three = reserve_thread(&mut spend, 3, 1);
-        let reserved = spend.spent_today();
-        settle_thread(&mut spend, three, 1);
-        let after_one = spend.spent_today();
-        assert!(after_one < reserved, "{after_one:?} vs {reserved:?}");
-
-        // And a thread where nothing landed costs nothing.
-        let mut spend = a_spend();
-        let three = reserve_thread(&mut spend, 3, 1);
-        settle_thread(&mut spend, three, 0);
-        assert_eq!(spend.spent_today(), realorrug_types::MicroUsd::ZERO);
-    }
-
     #[test]
     fn a_contest_directory_that_cannot_be_written_is_said_at_start_not_at_midnight() {
         // The analyst writes the contest's records once a week. A deployment
@@ -2449,74 +2024,6 @@ mod tests {
         // open, not an strace.
         assert!(notice.contains("ReadWritePaths"), "{notice}");
         assert!(notice.contains("sibling"), "{notice}");
-    }
-
-    /// One entrant, with the summons the claim prompt should reply to.
-    fn entrant(reply_id: &str, mention_id: &str) -> realorrug_contest::Ranked {
-        realorrug_contest::Ranked {
-            entry: realorrug_contest::Entry {
-                reply_id: reply_id.to_owned(),
-                summoner: format!("s{reply_id}"),
-                mention_id: Some(mention_id.to_owned()),
-                handle: None,
-                mint: "M".to_owned(),
-                at: 0,
-                metrics: realorrug_contest::Metrics::default(),
-            },
-            score: 0,
-        }
-    }
-
-    #[test]
-    fn the_claim_prompt_goes_under_the_winners_summons_and_nobody_elses() {
-        // CI turned this `==` into a `!=` and nothing failed, because the only
-        // test reaching the code had one entrant -- so the winner and the first
-        // non-winner were the same row. With two, the inverted match posts the
-        // prompt under a *loser's* summons: the winner is never told, and the
-        // pool rolls over unclaimed while somebody who did not win is invited
-        // to claim it.
-        let ranking = realorrug_contest::Ranking {
-            ranked: vec![
-                entrant("won", "winners-summons"),
-                entrant("lost", "someone-elses"),
-            ],
-            excluded: Vec::new(),
-        };
-        assert_eq!(claim_target(&ranking, "won"), "winners-summons");
-
-        // The order does not decide it either: the winner is matched by reply
-        // id, not by being first.
-        let reversed = realorrug_contest::Ranking {
-            ranked: vec![
-                entrant("lost", "someone-elses"),
-                entrant("won", "winners-summons"),
-            ],
-            excluded: Vec::new(),
-        };
-        assert_eq!(claim_target(&reversed, "won"), "winners-summons");
-    }
-
-    #[test]
-    fn a_week_closed_before_mention_ids_falls_back_to_the_winning_reply() {
-        // The one week that exists. Its entries have no mention id, so the
-        // prompt goes under the bot's own reply and relies on the undocumented
-        // exemption -- which is the situation this fallback exists to describe,
-        // not to prefer.
-        let mut only = entrant("won", "unused");
-        only.entry.mention_id = None;
-        let ranking = realorrug_contest::Ranking {
-            ranked: vec![only],
-            excluded: Vec::new(),
-        };
-        assert_eq!(claim_target(&ranking, "won"), "won");
-
-        // And a winner who is not in the ranking at all -- which should not
-        // happen -- gets the reply id rather than a stranger's summons.
-        let others = realorrug_contest::Ranking {
-            ranked: vec![entrant("lost", "someone-elses")],
-            excluded: Vec::new(),
-        };
-        assert_eq!(claim_target(&others, "won"), "won");
     }
 
     #[test]

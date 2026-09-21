@@ -26,7 +26,6 @@
 
 use std::fmt::Write as _;
 
-use realorrug_contest::Vault;
 use realorrug_types::civil::{date_from_days, timestamp_from_seconds};
 use serde::{Deserialize, Serialize};
 
@@ -113,12 +112,17 @@ pub enum Rendered {
 }
 
 /// The day's post, from its rows. Pure.
+///
+/// No longer takes a vault reading: the weekly prize is off (ADR 0038), so
+/// there is no pool left to quote, and the closing "Pool: n ETH at t" /
+/// "Pool: no token yet." clause this used to append is gone rather than
+/// frozen at "no token yet." forever.
 #[must_use]
 #[allow(
     clippy::cast_precision_loss,
     reason = "counts and lamports, all far below 2^53"
 )]
-pub fn render(rows: &Rows, vault: Option<&Vault>) -> Rendered {
+pub fn render(rows: &Rows) -> Rendered {
     if rows.rows.is_empty() {
         return Rendered::NothingYet(format!(
             "no replies on {}, so nothing to look back on",
@@ -196,21 +200,6 @@ pub fn render(rows: &Rows, vault: Option<&Vault>) -> Rendered {
             held.len()
         );
     }
-    match vault.map(|v| (&v.balance, v.measured_at)) {
-        Some((balance, measured_at)) => {
-            let (exact, rendered, unit) = crate::weekly::pool_figure(balance);
-            authorised.push(exact);
-            if let Ok(r) = rendered.parse::<f64>() {
-                authorised.push(r);
-            }
-            let at = timestamp_from_seconds(measured_at);
-            authorised.extend(at[..10].split('-').filter_map(|p| p.parse::<f64>().ok()));
-            authorised.extend(at[11..19].split(':').filter_map(|p| p.parse::<f64>().ok()));
-            let _ = write!(text, " Pool: {rendered} {unit} at {at}.");
-        }
-        None => text.push_str(" Pool: no token yet."),
-    }
-
     Rendered::Post(Post {
         // No subject: every figure in a daily post is about the day itself --
         // dates, counts, the pool -- so there is no second subject one of them
@@ -265,7 +254,6 @@ pub fn due(now: u64, daily_dir: &str) -> Option<String> {
 pub fn post_if_due(
     now: u64,
     daily_dir: &str,
-    vault: Option<&Vault>,
     publisher: &dyn Publisher,
     posts_log: &str,
     telegram: &dyn Publisher,
@@ -276,7 +264,7 @@ pub fn post_if_due(
     };
     let (rows_path, marker) = paths_for(daily_dir, &date);
     let rows = Rows::read(&rows_path)?;
-    let sent = match render(&rows, vault) {
+    let sent = match render(&rows) {
         Rendered::NothingYet(why) => {
             eprintln!("realorrug-analyst: seven days later, {date}: {why}");
             0
@@ -335,14 +323,7 @@ mod tests {
             row("C", None, Some(true), None),
             row("D", None, None, Some(120)),
         ]);
-        let vault = Vault {
-            address: "V".to_owned(),
-            balance: realorrug_contest::Balance::Sol {
-                lamports: 500_000_000,
-            },
-            measured_at: 1_788_600_000,
-        };
-        let Rendered::Post(post) = render(&day, Some(&vault)) else {
+        let Rendered::Post(post) = render(&day) else {
             panic!("a post");
         };
         assert!(
@@ -373,7 +354,6 @@ mod tests {
             "{}",
             post.text
         );
-        assert!(post.text.contains("Pool: 0.500 SOL at"), "{}", post.text);
         assert!(
             !post.text.contains("Seven days later"),
             "the old label claimed an observation nobody made: {}",
@@ -393,12 +373,12 @@ mod tests {
     fn a_day_with_nothing_asked_says_so_and_is_not_a_post() {
         let day = rows(Vec::new());
         assert!(
-            matches!(render(&day, None), Rendered::NothingYet(ref why) if why.contains("2026-08-29"))
+            matches!(render(&day), Rendered::NothingYet(ref why) if why.contains("2026-08-29"))
         );
-        // And one coin, unpriced, unmeasured: a post with no median and no
-        // pool, still under the limit and still checked.
+        // And one coin, unpriced, unmeasured: a post with no median, still
+        // under the limit and still checked.
         let day = rows(vec![row("A", None, None, None)]);
-        let Rendered::Post(post) = render(&day, None) else {
+        let Rendered::Post(post) = render(&day) else {
             panic!("a post");
         };
         assert!(
@@ -407,7 +387,6 @@ mod tests {
             post.text
         );
         assert!(!post.text.contains("median"), "{}", post.text);
-        assert!(post.text.ends_with("Pool: no token yet."), "{}", post.text);
         assert_eq!(crate::weekly::check(&post), Ok(()), "{}", post.text);
     }
 
@@ -416,7 +395,7 @@ mod tests {
         // Re-applied by dropping `authorised.push(median.unsigned_abs() as
         // f64)`: the median is flagged and the first assertion fails.
         let day = rows(vec![row("A", None, None, Some(-3_228))]);
-        let Rendered::Post(mut post) = render(&day, None) else {
+        let Rendered::Post(mut post) = render(&day) else {
             panic!("a post");
         };
         assert_eq!(crate::weekly::check(&post), Ok(()));
@@ -473,7 +452,6 @@ mod tests {
         let sent = post_if_due(
             at,
             &dir,
-            None,
             &crate::publish::DryRun,
             &posts,
             &crate::publish::DryRun,
@@ -490,7 +468,6 @@ mod tests {
         let again = post_if_due(
             at,
             &dir,
-            None,
             &crate::publish::DryRun,
             &posts,
             &crate::publish::DryRun,

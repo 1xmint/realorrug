@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Deploying realorrug
 
-Three processes, each its own unit. **Installed on the box since 2026-09-14:
-`realorrug-serve`, as a user unit, and `realorrug-analyst`** (below). The payout
-is not installed; this is the runbook for when it is.
+Two processes, each its own unit. **Installed on the box since 2026-09-14:
+`realorrug-serve`, as a user unit, and `realorrug-analyst`** (below). The old
+payout is retired (below).
 
 ## What runs today
 
@@ -71,7 +71,6 @@ Radar's folders, which realorrug leaves in plan 0001 step 7a (below).
 | unit | binary | what it does | writes |
 |---|---|---|---|
 | `realorrug-analyst.service` | `realorrug-analyst` | answers summoned mentions on X with measured facts | `data/analyst`, `data/contest` |
-| `realorrug-payout.service` + `realorrug-payout.timer` | `realorrug-payout --due` | claims a claimed, unpaid week's fees from the escrow and pays them, signed through Turnkey | `data/contest` |
 | `realorrug-serve.service` | `realorrug-serve` | the public site's five documents | nothing |
 
 ## It reads nothing from Radar
@@ -241,7 +240,7 @@ sudo systemctl daemon-reload && systemctl --user daemon-reload
 # 5. Start, and check
 sudo systemctl start realorrug-analyst && systemctl --user start realorrug-serve
 curl -s localhost:8090/v1/public/weeks | sed 's/"measured_at":"[^"]*"//g' | cmp - ~/weeks-before.json && echo same weeks
-sudo grep -n 'radar/\|/etc/radar' /etc/systemd/system/realorrug-*.service ~/.config/systemd/user/realorrug-serve.service /etc/realorrug/analyst.env /etc/realorrug/payout.env; [ $? -eq 1 ] && echo no Radar paths
+sudo grep -n 'radar/\|/etc/radar' /etc/systemd/system/realorrug-*.service ~/.config/systemd/user/realorrug-serve.service /etc/realorrug/analyst.env; [ $? -eq 1 ] && echo no Radar paths
 ```
 
 The move is done when the weeks match, no Radar path is left, and the
@@ -254,106 +253,23 @@ To go back before that: stop both, install the two kept units
 
 ```bash
 # Built by CI on a push to main; download the artifact, then:
-sudo install -m 0755 realorrug-analyst realorrug-payout realorrug-serve /usr/local/bin/
-sudo install -m 0644 deploy/realorrug-analyst.service deploy/realorrug-payout.service deploy/realorrug-payout.timer deploy/realorrug-serve.service /etc/systemd/system/
+sudo install -m 0755 realorrug-analyst realorrug-serve /usr/local/bin/
+sudo install -m 0644 deploy/realorrug-analyst.service deploy/realorrug-serve.service /etc/systemd/system/
 sudo install -m 0640 -o root -g guardian deploy/analyst.env.example /etc/realorrug/analyst.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now realorrug-serve realorrug-analyst
 ```
 
-The payout runs as its own user, `realorrug-payout`, which owns nothing but its
-Turnkey API key and the contest directory. **Do not enable the timer until
-launch**: the token exists, the gas float is funded, and the setup proof below
-has passed.
+### The payout is retired
 
-### The payout's key is in Turnkey
-
-[ADR 0025](../docs/adr/0025-the-robinhood-payout-signs-through-turnkey.md). The
-wallet key never touches the box. What the box holds is a Turnkey API key that
-can ask Turnkey to sign two kinds of transaction and nothing else.
-
-Set up in Turnkey's dashboard, by the operator, on a passkey:
-
-1. An organisation, with the operator as root user.
-2. One wallet with one Ethereum account. Its address is
-   `REALORRUG_PAYOUT_ADDRESS` (falling back to `RADAR_PAYOUT_ADDRESS`), and
-   the token's creator fee recipient.
-3. A user `realorrug-payout`, not in the root quorum, holding one API key on
-   the **P-256** curve. Make the key on the box, where it will live, so the
-   private half never crosses a network. From a checkout (sudo asks for a
-   password, so ssh needs `-t`):
-
-   ```bash
-   scp deploy/make-payout-key.sh guardian-vps-tail:
-   ```
-
-   ```bash
-   ssh -t guardian-vps-tail 'bash make-payout-key.sh; rm make-payout-key.sh'
-   ```
-
-   [`make-payout-key.sh`](make-payout-key.sh) uses the box's OpenSSL, creates
-   the system user, writes `/etc/realorrug/turnkey.key` (0400, that user's),
-   refuses to overwrite an existing key (removing only a secp256k1 key from its
-   first version, which Turnkey cannot use), and prints only the public key. In
-   Turnkey's dashboard, create a service user with "Generate API key via CLI"
-   ticked and paste that public key; the dashboard files it as P-256, which is
-   why the payout uses P-256 (ADR 0025). The file is in the format
-   Turnkey's CLI writes (64 hex digits, `:p256`), so a CLI-made key also
-   loads. The process refuses a key marked as another curve, a file group or
-   others can read, and a key whose public half is not
-   `TURNKEY_API_PUBLIC_KEY`. **A key made on your own root user is not this
-   key**: the root quorum is not bound by the policy, so it could sign
-   anything.
-4. One ALLOW policy for that user, and no other policy naming it. The
-   dashboard's New Policy box takes the policy as JSON (in place since
-   2026-09-15):
-
-   ```json
-   {
-     "effect": "EFFECT_ALLOW",
-     "consensus": "approvers.any(user, user.id == '<realorrug-payout user id>')",
-     "condition": "activity.type == 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2' && eth.tx.chain_id == 4663 && ((eth.tx.to == '0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e' && eth.tx.value == 0 && eth.tx.function_signature == '0x379607f5') || eth.tx.data == '' || eth.tx.data == '0x')"
-   }
-   ```
-
-   That is `claim(uint256)` on the Pons fee escrow, or a plain ETH transfer, on
-   Robinhood Chain. No token approvals, no other contracts, no other chains.
-   Empty call data is matched both as `''` and `'0x'` because Turnkey's policy
-   language documents `eth.tx.data` only as "hex-encoded"; neither can match a
-   call that carries data. There is deliberately no value cap; ADR 0025 says why.
-5. Wallet and key export stay denied to everyone but root.
-
-Then the setup proof. It needs only the Turnkey variables and
-`REALORRUG_PAYOUT_ADDRESS` (or the legacy `RADAR_PAYOUT_ADDRESS`), sends
-nothing to any chain, and costs nothing:
-
-```bash
-sudo systemd-run --pty --wait --uid=realorrug-payout -p EnvironmentFile=/etc/realorrug/payout.env -E TURNKEY_API_KEY=/etc/realorrug/turnkey.key /usr/local/bin/realorrug-payout --setup-proof
-```
-
-It passes only when `whoami` answers, a call to the Pons factory is **denied**,
-and both `claim(0)` and a 1 wei transfer at nonce 1,000,000 are **allowed**,
-each returned as the transaction asked for and signed by the wallet. Record the
-four lines in
-[research 0037](../docs/research/0037-a-payouts-gas-read-from-mainnet.md) §4,
-without the organisation id or any key. The same document sizes the gas float:
-0.001 ETH covers about 95 weeks at the September 2026 base fee.
-
-### A payout that stopped part way
-
-A run writes `data/contest/<week>.pending.json` before each transaction it
-sends, and the next run finishes that week before anything else. It never claims
-twice. Two cases stop for the operator:
-
-- **`nonce N was used by a transaction other than ...`**: something else was sent
-  from the wallet. Look the wallet up on the explorer; if the pending claim is
-  truly dead, delete the pending file.
-- **`locked`**: `data/contest/payout.lock` exists. If no payout is running, a run
-  died holding it; check the wallet and any pending file, then delete the lock.
-
-A claim or transfer made by hand is recorded with
-`realorrug contest record-payout --week N --wallet <address> --rpc <url> --claim-tx <hash> --transfer-tx <hash>`,
-which reads both back through the same checks.
+The weekly prize is off
+([ADR 0038](../docs/adr/0038-no-prizes-buybacks-or-holder-benefits.md)) and
+the token's fees are spent by the operator, by hand
+([ADR 0037](../docs/adr/0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md)).
+`realorrug-payout` is no longer built or installed, and if run it refuses
+before reading any key. Its units, env example and key script are gone from
+this directory. Past weeks' records stay under `data/contest` and
+`realorrug contest` still reads them.
 
 The environment variables are being renamed from their `RADAR_` prefix to
 `REALORRUG_` (same suffix); each name falls back to its old `RADAR_` form
