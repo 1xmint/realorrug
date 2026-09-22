@@ -978,6 +978,26 @@ pub const SOLANA_SELECTION_RULE: &str = "every distinct buyer in the mint's firs
                                           bonding curve; the first wallets by first purchase, up \
                                           to the same limit as Robinhood, are checked";
 
+/// What reading a transaction's lamport balances for one candidate found.
+///
+/// Kept distinct from a plain `Option` (AGENTS.md rule 8: absent is not
+/// zero) because [`funding_search`] must not treat "the node never gave us
+/// `preBalances`/`postBalances`" the same as "we read them and there was no
+/// inbound move" -- the first is a hole in the read, the second is a
+/// measurement.
+#[derive(Debug, PartialEq, Eq)]
+enum FunderRead {
+    /// A candidate for the funder, with the lamport amount moved.
+    Found(String, u128),
+    /// The balances were read and there was no material inbound move.
+    NoInboundMove,
+    /// This transaction's lamport balances could not be trusted at all --
+    /// missing arrays, a shape mismatch, or the candidate's own account not
+    /// among the keys. The search cannot call this transaction's absence
+    /// measured.
+    Unreadable,
+}
+
 /// The funder of one candidate's earliest lamport balance increase, read
 /// from a single transaction's `pre_balances`/`post_balances`.
 ///
@@ -986,18 +1006,29 @@ pub const SOLANA_SELECTION_RULE: &str = "every distinct buyer in the mint's firs
 /// move lamports through several accounts (fees, rent) and the largest drop
 /// is the one that plausibly funded the candidate's gain rather than a fee
 /// payer's small deduction.
-fn funder_of(tx: &Transaction, candidate: &str) -> Option<(String, u128)> {
+fn funder_of(tx: &Transaction, candidate: &str) -> FunderRead {
     if tx.accounts.len() != tx.pre_balances.len() || tx.accounts.len() != tx.post_balances.len() {
         // A shape this reader cannot trust an index into; see `rpc.rs`'s
         // `lamport_balances` doc on why a real node does not do this.
-        return None;
+        return FunderRead::Unreadable;
     }
-    let candidate_index = tx.accounts.iter().position(|a| a == candidate)?;
-    let gain = tx.post_balances[candidate_index].checked_sub(tx.pre_balances[candidate_index])?;
+    let Some(candidate_index) = tx.accounts.iter().position(|a| a == candidate) else {
+        // The candidate's own account is not even among this transaction's
+        // keys, so there is no balance to read for them at all -- a hole in
+        // the read, not a measurement that nothing moved.
+        return FunderRead::Unreadable;
+    };
+    let Some(gain) =
+        tx.post_balances[candidate_index].checked_sub(tx.pre_balances[candidate_index])
+    else {
+        // The candidate's own balance fell or stayed level: read
+        // successfully, and it was not an inbound move.
+        return FunderRead::NoInboundMove;
+    };
     if gain == 0 {
-        return None;
+        return FunderRead::NoInboundMove;
     }
-    let (from_index, drop) = tx
+    let found = tx
         .accounts
         .iter()
         .enumerate()
@@ -1008,8 +1039,39 @@ fn funder_of(tx: &Transaction, candidate: &str) -> Option<(String, u128)> {
                 .filter(|d| *d > 0)
                 .map(|d| (i, d))
         })
-        .max_by_key(|&(_, d)| d)?;
-    Some((tx.accounts[from_index].clone(), u128::from(drop.min(gain))))
+        .max_by_key(|&(_, d)| d);
+    match found {
+        Some((from_index, drop)) => {
+            FunderRead::Found(tx.accounts[from_index].clone(), u128::from(drop.min(gain)))
+        }
+        None => FunderRead::NoInboundMove,
+    }
+}
+
+/// The System Program's own id -- the only program a plain SOL transfer
+/// ever invokes.
+const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
+
+/// Whether `tx` is shaped like a plain SOL transfer: every instruction,
+/// top-level or inner (see [`Transaction::instructions`]'s doc on why inner
+/// CPIs are flattened in), belongs to the System Program.
+///
+/// This is the gate [`funding_search`] applies before trusting
+/// [`funder_of`]'s balance heuristic at all. `funder_of` reads only lamport
+/// balances -- it cannot tell a genuine transfer from a swap, a sell, a
+/// rent refund or a wrapped-SOL unwrap, all of which can move the largest
+/// lamport drop in the transaction to an account that never funded anyone
+/// (a bonding-curve vault, an AMM pool, the candidate's own closed token
+/// account). A withdrawal from an exchange -- the real signal this check
+/// exists to catch -- is exactly a System Program transfer; none of those
+/// other shapes are. An instruction list with nothing in it (as a
+/// synthetic transfer built for a test may have) is vacuously a plain
+/// transfer: there is nothing here that is *not* a System Program
+/// instruction.
+fn is_plain_sol_transfer(tx: &Transaction) -> bool {
+    tx.instructions
+        .iter()
+        .all(|ix| ix.program == SYSTEM_PROGRAM)
 }
 
 /// Distinct wallets whose balance of `mint` rose in `tx`, read from its
@@ -1243,13 +1305,22 @@ pub const MAX_FUNDING_SIGNATURE_PAGES: usize = 3;
 /// - The wallet's own history ended (an empty or short page,
 ///   [`crate::rpc::is_last_page`], the same test
 ///   [`RpcClient::signatures_back_to_oldest`] uses) with every eligible
-///   signature in it fetched and none material -- `(true, None)`. This is a
-///   **measured** absence: every signature at or before the first purchase
-///   was read, and none of them was a material transfer in.
-/// - Either cap in this module was reached, or a transaction read failed --
-///   `(false, None)`, with a gap pushed naming which. Never returned as a
-///   measured absence (AGENTS.md rule 8): a capped or failed search says
-///   nothing about whether a funder exists past the point it stopped.
+///   signature in it fetched, its lamport balances all readable, and none
+///   material -- `(true, None)`. This is a **measured** absence: every
+///   signature at or before the first purchase was read, and none of them
+///   was a material transfer in.
+/// - Either cap in this module was reached, a transaction read failed, or
+///   at least one eligible transaction's lamport balances could not be read
+///   at all -- `(false, None)`, with a gap pushed naming which. Never
+///   returned as a measured absence (AGENTS.md rule 8): a capped, failed or
+///   partly-unreadable search says nothing about whether a funder exists
+///   past the point it stopped seeing clearly.
+///
+/// A transaction that is not shaped like a plain SOL transfer
+/// ([`is_plain_sol_transfer`]) is neither a funder nor a measured absence
+/// for that signature specifically -- it is not an answer to the question
+/// at all, so the walk simply continues to the next signature, still
+/// counted against [`MAX_FUNDING_TRANSACTIONS`].
 fn funding_search(
     client: &RpcClient,
     budget: &mut Budget,
@@ -1261,6 +1332,11 @@ fn funding_search(
     let mut before: Option<String> = None;
     let mut pages = 0usize;
     let mut fetched = 0usize;
+    // Set when any eligible transaction's lamport balances could not be
+    // read at all -- makes the difference (AGENTS.md rule 8) between "we
+    // read every eligible signature and none was a funder" and "we could
+    // not tell for at least one of them".
+    let mut unreadable = false;
 
     loop {
         if pages >= MAX_FUNDING_SIGNATURE_PAGES {
@@ -1312,9 +1388,10 @@ fn funding_search(
             }
             fetched += 1;
             match client.transaction(budget, &sig.signature) {
-                Ok(Some(tx)) => {
-                    if let Some((from, amount)) = funder_of(&tx, address_key)
-                        && is_material(amount, 0, GAS_ALLOWANCE_LAMPORTS)
+                Ok(Some(tx)) => match funder_of(&tx, address_key) {
+                    FunderRead::Found(from, amount)
+                        if is_material(amount, 0, GAS_ALLOWANCE_LAMPORTS)
+                            && is_plain_sol_transfer(&tx) =>
                     {
                         return (
                             true,
@@ -1328,7 +1405,16 @@ fn funding_search(
                             }),
                         );
                     }
-                }
+                    FunderRead::Unreadable => {
+                        gaps.push(format!(
+                            "funding of {address_key}: transaction {} did not report lamport \
+                             balances; cannot confirm no funder there",
+                            sig.signature
+                        ));
+                        unreadable = true;
+                    }
+                    FunderRead::Found(..) | FunderRead::NoInboundMove => {}
+                },
                 Ok(None) => {
                     gaps.push(format!(
                         "funding of {address_key}: transaction {} could not be fetched",
@@ -1349,8 +1435,10 @@ fn funding_search(
         if reached_end {
             // Every eligible signature in the wallet's whole history was
             // read and none was a material inbound transfer: a measurement,
-            // not a guess (AGENTS.md rule 8).
-            return (true, None);
+            // not a guess (AGENTS.md rule 8) -- but only if every one of
+            // those reads actually had lamport balances to look at. If any
+            // did not, the absence is not measured; say so.
+            return (!unreadable, None);
         }
     }
 }
@@ -2710,6 +2798,19 @@ mod tests {
         )
     }
 
+    /// The same balance shape [`funding_tx_at`] produces -- `from` losing
+    /// lamports, `to` gaining them -- but carrying one instruction naming a
+    /// program that is not the System Program. A swap, a sell or anything
+    /// else that moves lamports as a side effect is shaped like this, not
+    /// like an empty instruction list; a real transfer is never shaped like
+    /// this.
+    fn non_transfer_tx_at(from: &str, to: &str, amount: u64, slot: u64, program: &str) -> String {
+        format!(
+            r#"{{"result":{{"slot":{slot},"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{from}","{to}"],"instructions":[{{"programId":"{program}","accounts":[0,1]}}]}}}}}},"error":null}}"#,
+            pre_left = 1_000_000u64.saturating_sub(amount),
+        )
+    }
+
     /// A full, 1,000-signature `getSignaturesForAddress` page -- the shape
     /// that makes `signatures_back_to_oldest` try a second page, so a page
     /// budget of one exhausts on it and reports a truncated read.
@@ -2740,6 +2841,17 @@ mod tests {
             .map(|(sig, slot)| format!(r#"{{"signature":"{sig}","slot":{slot}}}"#))
             .collect();
         format!(r#"{{"result":[{}],"error":null}}"#, items.join(","))
+    }
+
+    /// A `getTransaction` answer for a signature naming `to`, at a chosen
+    /// `slot`, whose node omitted `meta.preBalances`/`meta.postBalances`
+    /// entirely -- the shape [`funder_of`] cannot trust an index into
+    /// ([`FunderRead::Unreadable`]), distinct from a transaction that was
+    /// read and simply had no inbound move.
+    fn unreadable_balances_tx_at(to: &str, slot: u64) -> String {
+        format!(
+            r#"{{"result":{{"slot":{slot},"meta":{{"err":null,"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{to}"],"instructions":[]}}}}}},"error":null}}"#
+        )
     }
 
     /// A malformed `getTransaction` answer -- not valid JSON at all -- for
@@ -3018,6 +3130,155 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_balances_at_the_end_of_history_is_not_a_measured_absence() {
+        // Finding 3: the candidate's whole history is one page with one
+        // signature, and that transaction's node omitted the lamport
+        // balance arrays entirely -- `funder_of` cannot tell "nothing moved"
+        // from "cannot see what moved" here, so this must not read the same
+        // as `the_end_of_a_candidates_history_with_no_material_funder_is_a_measured_absence`:
+        // `funding_complete` must be false, with a gap naming the
+        // unreadable transaction, even though the page itself ended the
+        // walk.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_at("unreadable-sig", 3),
+            unreadable_balances_tx_at(&buyer, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(!funding.checked[0].funding_complete);
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("did not report lamport balances")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_readable_absence_still_reports_complete_ahead_of_an_unreadable_one() {
+        // Contrast case for Finding 3, spelled out explicitly rather than
+        // left implicit in the measured-absence test above: a transaction
+        // whose balances were read and simply had no inbound move
+        // (`FunderRead::NoInboundMove`) does not trip the same flag an
+        // unreadable one does, so a search that only ever sees readable,
+        // uninteresting transactions still ends as a measured absence.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let dust_sender = solana_addr(0xd0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_at("dust-sig", 3),
+            funding_tx_at(&dust_sender, &buyer, 1_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert!(funding.gaps.is_empty(), "gaps: {:?}", funding.gaps);
+    }
+
+    #[test]
+    fn a_swap_shaped_balance_move_is_not_recorded_as_a_funder() {
+        // Newest-first, the first eligible signature has the exact balance
+        // shape `funder_of` would accept -- the "funder" loses lamports, the
+        // buyer gains them -- but it invokes a non-System-Program
+        // instruction, so it is really a swap (or a sell, a rent refund, a
+        // wrapped-SOL unwrap: none of them a transfer). This is Finding 1:
+        // without the plain-transfer gate, a stranger's unrelated trade
+        // against a different pool would be recorded as having funded this
+        // buyer. The walk must not stop or record a gap here -- it keeps
+        // going backward and finds the genuine transfer sitting right
+        // behind it.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let pool_vault = solana_addr(0xaa).to_string();
+        let real_funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_many(&[("swap-sig", 4), ("transfer-sig", 3)]),
+            non_transfer_tx_at(
+                &pool_vault,
+                &buyer,
+                500_000,
+                4,
+                "SomeOtherProgram11111111111111111111111",
+            ),
+            funding_tx_at(&real_funder, &buyer, 500_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, real_funder);
+        assert_ne!(funding.checked[0].funders[0].address, pool_vault);
+        assert!(funding.gaps.is_empty(), "gaps: {:?}", funding.gaps);
+    }
+
+    #[test]
+    fn a_closed_token_accounts_rent_refund_is_not_recorded_as_a_funder() {
+        // The buyer's own lamport balance rises because a token account
+        // they closed refunded its rent (~2,039,280 lamports) -- the
+        // "largest loser" in `funder_of`'s balance-only view is the
+        // account being closed, which happens to belong to the buyer
+        // themself. A non-System-Program instruction (the token program's
+        // close) is exactly what marks this as not a plain transfer, so the
+        // gate must reject it and keep walking to the real transfer behind
+        // it, never naming the buyer as their own funder.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let closed_token_account = solana_addr(0xcc).to_string();
+        let real_funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_many(&[("close-sig", 4), ("transfer-sig", 3)]),
+            non_transfer_tx_at(
+                &closed_token_account,
+                &buyer,
+                2_039_280,
+                4,
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            ),
+            funding_tx_at(&real_funder, &buyer, 500_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, real_funder);
+        assert_ne!(funding.checked[0].funders[0].address, buyer);
+        assert!(funding.gaps.is_empty(), "gaps: {:?}", funding.gaps);
+    }
+
+    #[test]
     fn more_than_max_funding_signature_pages_walked_reports_incomplete() {
         // Every page returned is full (1,000 signatures, none eligible, so
         // none is fetched) -- `funding_search` never reaches the end of the
@@ -3186,9 +3447,10 @@ mod tests {
     fn a_transaction_missing_post_balances_names_no_funder() {
         // Accounts and pre-balances agree but post-balances are short: an
         // index into them cannot be trusted, so there is no funder, not a
-        // guess (and not a panic).
+        // guess (and not a panic) -- and it is unreadable, not a measured
+        // absence (Finding 3).
         let tx = bare_tx(&["candidate", "funder"], &[0, 1_000], &[500]);
-        assert_eq!(funder_of(&tx, "candidate"), None);
+        assert_eq!(funder_of(&tx, "candidate"), FunderRead::Unreadable);
     }
 
     #[test]

@@ -18,3 +18,4 @@ site/tsconfig.tsbuildinfo
 
 .claude/worktrees/
 .orchestrator/
+scratchpad/
