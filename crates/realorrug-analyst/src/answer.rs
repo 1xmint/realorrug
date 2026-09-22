@@ -621,9 +621,14 @@ mod tests {
             &mut metrics,
         );
         assert!(matches!(outcome, Answered::Reply { .. }));
-        // Two dossier reads, the token-ownership read (design 0027 slice 6a)
-        // and one page of the funding read (slice 6b).
-        assert_eq!(metrics.calls, 4);
+        // Two dossier reads (the launch-block walk and the curve miss) and
+        // the token-ownership read (design 0027 slice 6a). The funding read
+        // (slice 6b) costs nothing extra: it reuses the launch-block walk's
+        // already-read mint signatures rather than paging its own copy of
+        // them (the page-budget-starvation fix, 2026-09-22) -- see
+        // `realorrug_onchain::dossier::build`'s `mint_signatures` and
+        // `investigate_solana`'s `mint_signatures` parameter.
+        assert_eq!(metrics.calls, 3);
         drop(first);
 
         // No `record` or publisher ran. The paid read must already be durable.
@@ -656,8 +661,8 @@ mod tests {
             &mut expired,
         );
         assert!(matches!(outcome, Answered::Reply { .. }));
-        // The same four reads as the first answer: the cache expired.
-        assert_eq!(expired.calls, 4);
+        // The same three reads as the first answer: the cache expired.
+        assert_eq!(expired.calls, 3);
         std::fs::remove_file(path).expect("remove snapshot");
     }
 
