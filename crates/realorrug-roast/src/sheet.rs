@@ -3333,8 +3333,14 @@ fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::To
     );
 }
 
-/// The creator's observed on-chain cash flow on Pons v2 (design 0027 slice
-/// 5: `realorrug_onchain::wallets::CreatorCashFlow`, Robinhood only).
+/// The creator's observed on-chain cash flow (design 0027 slice 5:
+/// `realorrug_onchain::wallets::CreatorCashFlow`), on either chain -- Pons v2
+/// buys/sells for Robinhood, the creator's own associated-token-account
+/// history for Solana. `CreatorCashFlow::quote_asset` names what the numbers
+/// below are actually denominated in (SOL or ETH), so this function never
+/// hardcodes a unit: printing a Solana creator's lamports labelled "ETH"
+/// would be exactly the fabricated-unit fact AGENTS.md section 3 rule 2
+/// forbids.
 ///
 /// Reads `trades_complete` through the type's own accessors rather than the
 /// raw fields: [`realorrug_onchain::wallets::CreatorCashFlow::proceeds_wei`]
@@ -3359,23 +3365,59 @@ fn push_creator_cash_flow(
     let Some(proceeds) = cash_flow.proceeds_wei() else {
         return;
     };
-    let eth = format!("{} ETH", render_quote(proceeds, 18));
+    // `quote_asset` names what this chain's reader actually paid/received in
+    // -- SOL for Solana, ETH for Robinhood (`CreatorCashFlow::quote_asset`'s
+    // own doc). Rendering a fixed "ETH"/18 here regardless of chain would
+    // print a Solana creator's lamports as ETH, which is exactly the
+    // fabricated-unit mistake AGENTS.md section 3 rule 2 forbids.
+    let symbol = cash_flow.quote_asset.symbol.as_str();
+    let decimals = cash_flow.quote_asset.decimals;
+    let rendered_proceeds = format!("{} {symbol}", render_quote(proceeds, decimals));
+    // Solana has no per-swap log to decode a sale price from: a sell's
+    // "proceeds" here is the creator's own lamport balance change across
+    // that transaction (`classify_creator_transaction`'s own doc), which
+    // already carries the transaction fee and any rent refund or payment
+    // alongside the trade. Calling that "sale proceeds" the way the EVM
+    // reader can -- a decoded swap amount, nothing else -- would claim a
+    // precision this reader does not have, so the label says what was
+    // actually measured instead.
+    let (label, plain, blunt) = if symbol == "SOL" {
+        (
+            "SOL the creator's balance changed by across sale transactions -- their net SOL \
+             change per sale, summed across every decoded sale by the deployer or fee \
+             recipient; fees and any rent refund or rent payment are included, since Solana \
+             has no separate swap amount to isolate them from"
+                .to_owned(),
+            format!(
+                "The creator's net SOL change across every decoded sale of this token is \
+                 {rendered_proceeds} -- their balance change per sale transaction, fees and \
+                 rent included, summed across every decoded sale by the deployer or fee \
+                 recipient."
+            ),
+            format!("Creator net SOL change across sales: {rendered_proceeds}."),
+        )
+    } else {
+        (
+            format!(
+                "{symbol} the creator received in sales -- summed across every decoded sale by \
+                 the deployer or fee recipient"
+            ),
+            format!(
+                "The creator has received {rendered_proceeds} in sales of this token, across \
+                 every decoded sale by the deployer or fee recipient."
+            ),
+            format!("Creator sale proceeds: {rendered_proceeds}."),
+        )
+    };
     facts.push(
         Fact::exact(
             Kind::CreatorCashFlow,
-            "ETH the creator received in sales -- summed across every decoded sale by the \
-             deployer or fee recipient on Pons v2",
-            quote_as_f64(proceeds, 18),
-            eth.clone(),
+            label,
+            quote_as_f64(proceeds, decimals),
+            rendered_proceeds.clone(),
         )
-        .saying(
-            Voice::Plain,
-            format!(
-                "The creator has received {eth} in sales of this token on Pons v2, across \
-                 every decoded sale by the deployer or fee recipient."
-            ),
-        )
-        .saying(Voice::Blunt, format!("Creator sale proceeds: {eth}.")),
+        .saying(Voice::Plain, plain)
+        .saying(Voice::Blunt, blunt),
     );
 
     // `net_wei` cannot be `None` here: it is `None` only when either half of
@@ -3384,11 +3426,11 @@ fn push_creator_cash_flow(
     if let Some(net) = cash_flow.net_wei() {
         let magnitude = net.unsigned_abs();
         let sign = if net < 0 { "-" } else { "" };
-        let rendered = format!("{sign}{} ETH", render_quote(magnitude, 18));
+        let rendered = format!("{sign}{} {symbol}", render_quote(magnitude, decimals));
         let value = if net < 0 {
-            -quote_as_f64(magnitude, 18)
+            -quote_as_f64(magnitude, decimals)
         } else {
-            quote_as_f64(magnitude, 18)
+            quote_as_f64(magnitude, decimals)
         };
         facts.push(
             Fact::exact(
@@ -5767,7 +5809,7 @@ mod tests {
             quote,
             tokens: 1,
             block: 1,
-            transaction: realorrug_robinhood::Hash32([1; 32]),
+            transaction: realorrug_robinhood::Hash32([1; 32]).to_string(),
             unique_id: format!("0x01-0-{quote}"),
         }
     }
@@ -5792,12 +5834,80 @@ mod tests {
                 ),
             ],
             transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         let fact = fact_of(&sheet, Kind::CreatorCashFlow).expect("a proceeds fact");
         assert_eq!(fact.rendered, "0.0005 ETH");
+    }
+
+    /// `push_creator_cash_flow`'s `symbol == "SOL"` branch picks different
+    /// wording from the EVM path -- net-SOL-change language rather than
+    /// "received in sales", because a Solana sell's quote is a net lamport
+    /// change (fee and any rent refund included), never an isolated swap
+    /// amount (the function's own doc). A `==`/`!=` swap on that check would
+    /// still print a number, so only the label text tells the two branches
+    /// apart.
+    #[test]
+    fn sol_cash_flow_gets_net_sol_wording_not_received_in_sales() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![creator_trade(
+                realorrug_robinhood::pons::CreatorRole::Deployer,
+                realorrug_robinhood::pons::Side::Sell,
+                200_000_000,
+            )],
+            transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::sol(),
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::CreatorCashFlow).expect("a proceeds fact");
+        assert_eq!(fact.rendered, "0.2000 SOL");
+        assert!(
+            fact.label.contains("net SOL change"),
+            "a SOL cash flow must use the net-change wording: {}",
+            fact.label
+        );
+        assert!(
+            !fact.label.contains("received in sales"),
+            "a SOL cash flow must not borrow the EVM \"received in sales\" wording: {}",
+            fact.label
+        );
+    }
+
+    /// The mirror of the test above: an EVM (ETH) cash flow keeps the
+    /// original "received in sales" wording, not the SOL branch's
+    /// net-change language.
+    #[test]
+    fn evm_cash_flow_keeps_received_in_sales_wording() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![creator_trade(
+                realorrug_robinhood::pons::CreatorRole::Deployer,
+                realorrug_robinhood::pons::Side::Sell,
+                100_000_000_000_000,
+            )],
+            transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::CreatorCashFlow).expect("a proceeds fact");
+        assert!(
+            fact.label.contains("received in sales"),
+            "an EVM cash flow must keep the original wording: {}",
+            fact.label
+        );
+        assert!(
+            !fact.label.contains("net SOL change"),
+            "an EVM cash flow must not use the SOL branch's wording: {}",
+            fact.label
+        );
     }
 
     /// Done criterion (b), read the other direction from `wallets.rs`'s own
@@ -5814,6 +5924,7 @@ mod tests {
                 100_000_000_000_000,
             )],
             transfers_out: 3,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -5862,6 +5973,7 @@ mod tests {
                 100_000_000_000_000,
             )],
             transfers_out: 1,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: false,
             gaps: vec!["creator trade history: too many results".to_owned()],
         });
@@ -5898,6 +6010,7 @@ mod tests {
                 ),
             ],
             transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -5950,6 +6063,7 @@ mod tests {
                 ),
             ],
             transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -5977,6 +6091,7 @@ mod tests {
                 100,
             )],
             transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -6001,6 +6116,7 @@ mod tests {
                 1_000_000_000_000_000_000,
             )],
             transfers_out: 2,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });

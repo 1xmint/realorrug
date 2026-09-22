@@ -170,6 +170,16 @@ struct LargestAccountValue {
 }
 
 #[derive(Deserialize)]
+struct TokenAccountsEnvelope {
+    value: Option<Vec<TokenAccountEntry>>,
+}
+
+#[derive(Deserialize)]
+struct TokenAccountEntry {
+    pubkey: String,
+}
+
+#[derive(Deserialize)]
 struct TokenSupplyEnvelope {
     value: Option<TokenSupplyValue>,
 }
@@ -678,6 +688,41 @@ impl RpcClient {
                 Ok(LargestTokenAccount { address, amount })
             })
             .collect()
+    }
+
+    /// Every one of `owner`'s token accounts for `mint` (`getTokenAccountsByOwner`,
+    /// filtered by mint).
+    ///
+    /// Exists so a caller that derived a single associated token account can
+    /// still tell whether that address is the *only* account `owner` holds
+    /// for this mint -- a second one (a temporary account, a pre-ATA-era
+    /// account, or one made by a different wallet app) would carry balance
+    /// history this reader never looks at, and a cash-flow total that
+    /// ignored it would be wrong in a way nothing else here can catch.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] on transport, node or shape failures, or when the budget
+    /// is spent.
+    pub fn token_accounts_by_owner_for_mint(
+        &self,
+        budget: &mut Budget,
+        owner: &Address,
+        mint: &Address,
+    ) -> Result<Vec<String>, RpcError> {
+        let result: TokenAccountsEnvelope = self.call(
+            budget,
+            "getTokenAccountsByOwner",
+            &serde_json::json!([
+                owner.to_string(),
+                { "mint": mint.to_string() },
+                { "encoding": "base64" }
+            ]),
+        )?;
+        let values = result.value.ok_or_else(|| {
+            RpcError::Malformed("getTokenAccountsByOwner returned no list".to_owned())
+        })?;
+        Ok(values.into_iter().map(|v| v.pubkey).collect())
     }
 
     /// The mint's total supply, read from the chain rather than assumed from

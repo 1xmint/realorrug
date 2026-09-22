@@ -435,10 +435,13 @@ pub struct Dossier {
     /// in `unavailable`.
     pub token_ownership: Option<TokenOwnership>,
     /// The creator's observed on-chain cash flow (`crate::wallets`, design
-    /// 0027 slice 5, Robinhood only today). `None` is "not investigated"; a
-    /// reader that tried and failed names "creator cash flow" in
-    /// `unavailable`. Solana has no reader for this yet -- see
-    /// `SolanaReader`'s own doc on `creator_cash_flow` below.
+    /// 0027 slice 5). `None` is "not investigated"; a reader that tried and
+    /// failed names "creator cash flow" in `unavailable`. Robinhood reads it
+    /// from `curve`/`token` logs (`crate::wallets::creator_cash_flow`);
+    /// Solana reads it from the creator's own associated token account
+    /// (`crate::wallets::creator_cash_flow_solana`). `quote_asset` on the
+    /// result says which chain's native unit `CreatorTrade::quote` is in, so
+    /// this field's meaning does not depend on which reader filled it.
     pub creator_cash_flow: Option<crate::wallets::CreatorCashFlow>,
     /// The creator's live powers over this token -- tax, the pending
     /// fee-recipient timelock, and classified snipe-tax exemptions
@@ -516,12 +519,6 @@ pub fn build(
         calls: 0,
         elapsed_ms: 0,
     };
-    dossier.miss(
-        "creator cash flow",
-        "Solana not built: design 0027 slice 5 has no `wallets::creator_cash_flow` equivalent \
-         for Solana yet",
-    );
-
     // 1. The launch block, from the oldest signature the mint has, or from
     // the read memory ahead of it (packet 0039 §1). `Kind::Forever`: a past
     // block cannot become wrong later (AGENTS.md rule 1), so a hit needs no
@@ -611,6 +608,24 @@ pub fn build(
     match investigate_solana(client, budget, mint) {
         Ok(funding) => dossier.funding = Some(funding),
         Err(why) => dossier.miss("funding", why),
+    }
+
+    // 6. The creator's own cash flow against this mint: every buy and sell
+    // through their associated token account, plus unpriced transfers out
+    // (design 0027 slice 5, `crate::wallets::creator_cash_flow_solana`'s own
+    // doc on what "complete" requires). Needs the launch block's creator, so
+    // it runs after step 3 rather than before; a missing launch block means
+    // there is no creator to read, so the miss from step 1 stands alone.
+    // Placed last, after every other step has drawn on the shared budget,
+    // because this read's own gap (finding 4) already reports honestly when
+    // there is not enough budget left to fetch every transaction -- unlike
+    // the reads ahead of it, running it last never turns a would-be miss
+    // into a worse one.
+    if let Some(creator) = dossier.launch.as_ref().map(|l| l.creator) {
+        match crate::wallets::creator_cash_flow_solana(client, budget, mint, &creator) {
+            Ok(flow) => dossier.creator_cash_flow = Some(flow),
+            Err(why) => dossier.miss("creator cash flow", why),
+        }
     }
 
     dossier.calls = budget.calls_made();
@@ -1593,9 +1608,15 @@ mod tests {
         // walks the mint's history on its own (slice 6b). On the miss the
         // launch walk already spent the page budget, so funding reads nothing
         // there; the two walks do not yet share their pages, which is why a
-        // hit now costs as much as a miss rather than less.
-        assert_eq!(hit_budget.calls_made(), 4);
-        assert!(hit_budget.calls_made() <= miss_budget.calls_made());
+        // hit now costs as much as a miss rather than less. Step 6 (the
+        // creator's cash flow, now last, after funding) adds 1 more: reading
+        // the mint account to learn its token program, which this transport
+        // answers with no account, so the read stops there before it can
+        // reach the token-account or trade-history calls. Until each walk
+        // gets its own page allowance, a hit can cost one call more than a
+        // miss; what it must never do is page the launch.
+        assert_eq!(hit_budget.calls_made(), 5);
+        assert!(hit_budget.calls_made() <= miss_budget.calls_made() + 1);
     }
 
     /// A transport that answers `getSignaturesForAddress` and `getTransaction`
@@ -1645,9 +1666,13 @@ mod tests {
         // 1 curve miss + 1 creator history (empty page) + 1 token-ownership
         // miss (this transport answers `getTokenLargestAccounts` with
         // `value: null`, so step 4 fails after its first call) + 2 calls of
-        // the funding read's own walk of the mint's history (slice 6b).
-        assert_eq!(dossier.calls, 5);
-        assert_eq!(budget.calls_made(), 5);
+        // the funding read's own walk of the mint's history (slice 6b) + 1
+        // read of the mint account for step 6's (the creator's cash flow,
+        // now run last) token program -- no account on this transport, so
+        // that read stops there before it can spend on the token-account or
+        // trade-history calls.
+        assert_eq!(dossier.calls, 6);
+        assert_eq!(budget.calls_made(), 6);
     }
 
     impl crate::rpc::Transport for SuccessfulLaunch {

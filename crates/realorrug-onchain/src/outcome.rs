@@ -211,7 +211,7 @@ mod tests {
             quote: 1,
             tokens,
             block: 10,
-            transaction: Hash32([0; 32]),
+            transaction: Hash32([0; 32]).to_string(),
             unique_id: format!("{side:?}-{tokens}"),
         }
     }
@@ -222,6 +222,7 @@ mod tests {
             transfers_out: 0,
             trades_complete: complete,
             gaps: Vec::new(),
+            quote_asset: crate::dossier::QuoteAsset::eth(),
         }
     }
 
