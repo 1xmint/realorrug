@@ -3368,27 +3368,51 @@ fn push_creator_cash_flow(
     let symbol = cash_flow.quote_asset.symbol.as_str();
     let decimals = cash_flow.quote_asset.decimals;
     let rendered_proceeds = format!("{} {symbol}", render_quote(proceeds, decimals));
-    facts.push(
-        Fact::exact(
-            Kind::CreatorCashFlow,
+    // Solana has no per-swap log to decode a sale price from: a sell's
+    // "proceeds" here is the creator's own lamport balance change across
+    // that transaction (`classify_creator_transaction`'s own doc), which
+    // already carries the transaction fee and any rent refund or payment
+    // alongside the trade. Calling that "sale proceeds" the way the EVM
+    // reader can -- a decoded swap amount, nothing else -- would claim a
+    // precision this reader does not have, so the label says what was
+    // actually measured instead.
+    let (label, plain, blunt) = if symbol == "SOL" {
+        (
+            "SOL the creator's balance changed by across sale transactions -- their net SOL \
+             change per sale, summed across every decoded sale by the deployer or fee \
+             recipient; fees and any rent refund or rent payment are included, since Solana \
+             has no separate swap amount to isolate them from"
+                .to_owned(),
+            format!(
+                "The creator's net SOL change across every decoded sale of this token is \
+                 {rendered_proceeds} -- their balance change per sale transaction, fees and \
+                 rent included, summed across every decoded sale by the deployer or fee \
+                 recipient."
+            ),
+            format!("Creator net SOL change across sales: {rendered_proceeds}."),
+        )
+    } else {
+        (
             format!(
                 "{symbol} the creator received in sales -- summed across every decoded sale by \
                  the deployer or fee recipient"
             ),
-            quote_as_f64(proceeds, decimals),
-            rendered_proceeds.clone(),
-        )
-        .saying(
-            Voice::Plain,
             format!(
                 "The creator has received {rendered_proceeds} in sales of this token, across \
                  every decoded sale by the deployer or fee recipient."
             ),
-        )
-        .saying(
-            Voice::Blunt,
             format!("Creator sale proceeds: {rendered_proceeds}."),
-        ),
+        )
+    };
+    facts.push(
+        Fact::exact(
+            Kind::CreatorCashFlow,
+            label,
+            quote_as_f64(proceeds, decimals),
+            rendered_proceeds.clone(),
+        )
+        .saying(Voice::Plain, plain)
+        .saying(Voice::Blunt, blunt),
     );
 
     // `net_wei` cannot be `None` here: it is `None` only when either half of

@@ -1514,38 +1514,86 @@ pub fn creator_cash_flow_solana(
 
     let mint_key = mint.to_string();
     let creator_key = creator.to_string();
+    let ata_key = ata.to_string();
+
+    // Only the creator's own associated token account is ever read below.
+    // Confirm it is the *only* account they hold for this mint, or the read
+    // above quietly ignores a second one's whole history -- a real gap in
+    // the total, not a cosmetic one (module doc, "Which account is read").
+    let multi_account_gap = match client.token_accounts_by_owner_for_mint(budget, creator, mint) {
+        Ok(accounts) if accounts.iter().all(|a| *a == ata_key) => None,
+        Ok(accounts) => Some(format!(
+            "the creator holds {} token account(s) for this mint besides their associated \
+             one; only the associated account's history is read, so this cash flow may be \
+             incomplete",
+            accounts.iter().filter(|a| **a != ata_key).count()
+        )),
+        Err(e) => Some(format!(
+            "could not confirm the creator's associated token account is their only one for \
+             this mint: {e}"
+        )),
+    };
 
     let (signatures, truncated) = client
         .signatures_back_to_oldest(budget, &ata)
         .map_err(|e| format!("creator cash flow: {e}"))?;
 
     if truncated {
-        return Ok(CreatorCashFlow {
-            trades: Vec::new(),
-            transfers_out: 0,
-            trades_complete: false,
-            gaps: vec![
-                "the creator's own token account has more signature history than the page \
-                 budget allows (or none was left for this read); its cash flow could not be \
-                 read to the account's creation"
-                    .to_owned(),
-            ],
-            quote_asset: crate::dossier::QuoteAsset::sol(),
-        });
+        return Ok(with_multi_account_gap(
+            CreatorCashFlow {
+                trades: Vec::new(),
+                transfers_out: 0,
+                trades_complete: false,
+                gaps: vec![
+                    "the creator's own token account has more signature history than the page \
+                     budget allows (or none was left for this read); its cash flow could not be \
+                     read to the account's creation"
+                        .to_owned(),
+                ],
+                quote_asset: crate::dossier::QuoteAsset::sol(),
+            },
+            multi_account_gap,
+        ));
     }
 
     if signatures.len() > CREATOR_CASH_FLOW_MAX_SIGNATURES {
-        return Ok(CreatorCashFlow {
-            trades: Vec::new(),
-            transfers_out: 0,
-            trades_complete: false,
-            gaps: vec![format!(
-                "the creator's own token account has more than {CREATOR_CASH_FLOW_MAX_SIGNATURES} \
-                 signatures; reading its whole cash flow history was skipped rather than done \
-                 partway"
-            )],
-            quote_asset: crate::dossier::QuoteAsset::sol(),
-        });
+        return Ok(with_multi_account_gap(
+            CreatorCashFlow {
+                trades: Vec::new(),
+                transfers_out: 0,
+                trades_complete: false,
+                gaps: vec![format!(
+                    "the creator's own token account has more than \
+                     {CREATOR_CASH_FLOW_MAX_SIGNATURES} signatures; reading its whole cash flow \
+                     history was skipped rather than done partway"
+                )],
+                quote_asset: crate::dossier::QuoteAsset::sol(),
+            },
+            multi_account_gap,
+        ));
+    }
+
+    // A transaction fetch is one call each: if there is not enough budget
+    // left to fetch every signature, reading a random subset of them would
+    // give the same "complete" shape as a full read while quietly leaving
+    // out whichever half ran out last -- report the gap up front instead of
+    // reading partway.
+    if u32::try_from(signatures.len()).unwrap_or(u32::MAX) > budget.calls_left() {
+        return Ok(with_multi_account_gap(
+            CreatorCashFlow {
+                trades: Vec::new(),
+                transfers_out: 0,
+                trades_complete: false,
+                gaps: vec![format!(
+                    "reading {} transactions would exceed the {} calls left in this dossier's \
+                     budget; the creator's cash flow was not read rather than read partway",
+                    signatures.len(),
+                    budget.calls_left()
+                )],
+                quote_asset: crate::dossier::QuoteAsset::sol(),
+            },
+            multi_account_gap,
+        ));
     }
 
     // Oldest first: the dev buy in the launch transaction itself is the
@@ -1554,13 +1602,28 @@ pub fn creator_cash_flow_solana(
     let (trades, transfers_out, gaps, complete) =
         read_creator_trades(client, budget, &signatures, &creator_key, &mint_key);
 
-    Ok(CreatorCashFlow {
-        trades,
-        transfers_out,
-        trades_complete: complete,
-        gaps,
-        quote_asset: crate::dossier::QuoteAsset::sol(),
-    })
+    Ok(with_multi_account_gap(
+        CreatorCashFlow {
+            trades,
+            transfers_out,
+            trades_complete: complete,
+            gaps,
+            quote_asset: crate::dossier::QuoteAsset::sol(),
+        },
+        multi_account_gap,
+    ))
+}
+
+/// Folds a multi-account gap (module doc, "Which account is read") into an
+/// otherwise-finished [`CreatorCashFlow`], forcing `trades_complete` false
+/// when there was one. Split out so every return path in
+/// [`creator_cash_flow_solana`] applies it the same way.
+fn with_multi_account_gap(mut flow: CreatorCashFlow, gap: Option<String>) -> CreatorCashFlow {
+    if let Some(gap) = gap {
+        flow.trades_complete = false;
+        flow.gaps.push(gap);
+    }
+    flow
 }
 
 /// Fetches and classifies every signature in `signatures` (newest first, as
@@ -1593,6 +1656,20 @@ fn read_creator_trades(
                 if tx.failed {
                     continue;
                 }
+                if !has_readable_creator_balances(&tx, creator_key, mint_key) {
+                    // The node answered but left `meta` off (or, on this
+                    // shape, an empty balance side that never even names
+                    // this mint): there is no lamport or token move to read
+                    // for the creator at all, which is a different fact
+                    // from "nothing happened" -- rule 9 forbids reading it
+                    // as a quiet no-op.
+                    complete = false;
+                    gaps.push(format!(
+                        "transaction {} did not report balances for the creator or the mint",
+                        sig.signature
+                    ));
+                    continue;
+                }
                 match classify_creator_transaction(&tx, creator_key, mint_key) {
                     SolanaCashFlowEvent::Buy { quote, tokens } => trades.push(CreatorTrade {
                         role: CreatorRole::Deployer,
@@ -1623,6 +1700,20 @@ fn read_creator_trades(
                     sig.signature
                 ));
             }
+            Err(crate::rpc::RpcError::Stopped(_)) => {
+                // The shared budget or deadline ran out mid-walk. Every
+                // signature still left would fail the exact same way, so
+                // one gap naming the stop is the honest report -- a gap per
+                // remaining signature would just be the same fact repeated
+                // under a growing number.
+                complete = false;
+                gaps.push(
+                    "the call budget ran out before every transaction in the creator's ATA \
+                     history could be read; the remaining ones were not fetched"
+                        .to_owned(),
+                );
+                break;
+            }
             Err(why) => {
                 complete = false;
                 gaps.push(format!("transaction {}: {why}", sig.signature));
@@ -1630,6 +1721,29 @@ fn read_creator_trades(
         }
     }
     (trades, transfers_out, gaps, complete)
+}
+
+/// Whether `tx` reported enough of the creator's own balances to classify at
+/// all: their lamport balance at both `pre`/`post`, and at least one
+/// token-balance entry (either side) naming `mint_key`.
+///
+/// A node that omitted `meta` entirely -- or returned it with every array
+/// empty -- passes [`crate::rpc::parse_transaction`] as `Some` with every
+/// balance field defaulted to empty (`crate::rpc::lamport_balances` and
+/// `crate::rpc::token_balances` both default a missing field to `Vec::new()`
+/// rather than failing the parse), so a transaction like that must never
+/// reach [`classify_creator_transaction`]: every one of its "no data"
+/// branches there already reads as "nothing happened" rather than "unread",
+/// and this is the one place left that can still tell the two apart.
+fn has_readable_creator_balances(tx: &Transaction, creator_key: &str, mint_key: &str) -> bool {
+    let has_lamports = tx
+        .accounts
+        .iter()
+        .position(|a| a == creator_key)
+        .is_some_and(|i| tx.pre_balances.get(i).is_some() && tx.post_balances.get(i).is_some());
+    let mint_mentioned = tx.pre_token_balances.iter().any(|b| b.mint == mint_key)
+        || tx.post_token_balances.iter().any(|b| b.mint == mint_key);
+    has_lamports && mint_mentioned
 }
 
 /// How many blocks after the launch block count as "the same window" for a
@@ -2406,6 +2520,33 @@ mod tests {
         Budget::new(60, 60, std::time::Duration::from_secs(30))
     }
 
+    /// The creator's own associated token account for `mint`, on the same
+    /// SPL-token derivation `creator_cash_flow_solana` uses when the mint's
+    /// owner is the classic token program (every test fixture's `ata_owner`).
+    fn spl_ata(creator: realorrug_types::Address, mint: realorrug_types::Address) -> String {
+        realorrug_pumpfun::pda::associated_token_account(
+            &creator,
+            &mint,
+            &realorrug_pumpfun::token::TokenProgram::Spl.id(),
+        )
+        .expect("derivable ata")
+        .to_string()
+    }
+
+    /// A `getTokenAccountsByOwner` answer naming exactly the accounts given
+    /// (a bare pubkey list is all [`RpcClient::token_accounts_by_owner_for_mint`]
+    /// reads).
+    fn token_accounts_response(accounts: &[&str]) -> String {
+        let entries: Vec<String> = accounts
+            .iter()
+            .map(|a| format!(r#"{{"pubkey":"{a}"}}"#))
+            .collect();
+        format!(
+            r#"{{"result":{{"value":[{}]}},"error":null}}"#,
+            entries.join(",")
+        )
+    }
+
     /// A single-page `getSignaturesForAddress` answer at a chosen `slot`,
     /// for tests that need control over the slot a signature landed at.
     fn signatures_page_at(signature: &str, slot: u64) -> String {
@@ -2910,11 +3051,24 @@ mod tests {
         tx
     }
 
+    /// A top-level instruction naming a known trading venue, for tests that
+    /// must show a real trade was invoked rather than an incidental balance
+    /// move next to an account close or a plain transfer.
+    fn trading_instruction() -> crate::rpc::RawInstruction {
+        crate::rpc::RawInstruction {
+            program: KNOWN_TRADING_PROGRAMS[0].to_owned(),
+            data: Vec::new(),
+            accounts: Vec::new(),
+        }
+    }
+
     #[test]
     fn a_token_increase_with_a_sol_decrease_is_a_buy() {
         // Token balance rose by 500, SOL fell by 1_000: a buy, quoted at
-        // the SOL paid.
-        let tx = creator_tx("creator", "mint", 0, 500, 10_000, 9_000);
+        // the SOL paid -- through a known trading program, so the buy is
+        // trusted rather than mistaken for an account-open side effect.
+        let mut tx = creator_tx("creator", "mint", 0, 500, 10_000, 9_000);
+        tx.instructions.push(trading_instruction());
         assert_eq!(
             classify_creator_transaction(&tx, "creator", "mint"),
             SolanaCashFlowEvent::Buy {
@@ -2927,13 +3081,68 @@ mod tests {
     #[test]
     fn a_token_decrease_with_a_sol_increase_is_a_sell() {
         // Token balance fell by 500, SOL rose by 1_200 (the sale proceeds
-        // net of fees): a sell, quoted at the SOL received.
-        let tx = creator_tx("creator", "mint", 500, 0, 9_000, 10_200);
+        // net of fees): a sell, quoted at the SOL received -- through a
+        // known trading program.
+        let mut tx = creator_tx("creator", "mint", 500, 0, 9_000, 10_200);
+        tx.instructions.push(trading_instruction());
         assert_eq!(
             classify_creator_transaction(&tx, "creator", "mint"),
             SolanaCashFlowEvent::Sell {
                 quote: 1_200,
                 tokens: 500
+            }
+        );
+    }
+
+    #[test]
+    fn an_account_close_with_no_trading_program_is_an_unpriced_transfer_out() {
+        // The token balance falls to nothing (the account closed) and
+        // lamports rise sharply (the rent refund), but no known trading
+        // program was invoked -- this must never be read as a sale.
+        let tx = creator_tx("creator", "mint", 500, 0, 10_000, 2_039_275);
+        assert_eq!(
+            classify_creator_transaction(&tx, "creator", "mint"),
+            SolanaCashFlowEvent::TransferOut
+        );
+    }
+
+    #[test]
+    fn an_account_close_through_a_trading_program_is_still_a_sell() {
+        // The same balances as above, but a known trading program (pump.fun)
+        // was actually invoked: the rent refund lands in the same
+        // transaction as a real sale, and the sale still counts.
+        let mut tx = creator_tx("creator", "mint", 500, 0, 10_000, 2_039_275);
+        tx.instructions.push(trading_instruction());
+        assert_eq!(
+            classify_creator_transaction(&tx, "creator", "mint"),
+            SolanaCashFlowEvent::Sell {
+                quote: 2_029_275,
+                tokens: 500
+            }
+        );
+    }
+
+    #[test]
+    fn two_creator_owned_entries_for_the_mint_are_summed_not_the_first_found() {
+        // A temporary account and the ATA both hold `mint` for the creator
+        // in the same transaction: the pre and post sides must each be
+        // summed across every matching entry, not just the first `.find`
+        // would have hit.
+        let mut tx = creator_tx("creator", "mint", 0, 0, 10_000, 9_000);
+        tx.pre_token_balances = vec![
+            token_balance(0, "mint", "creator", 100),
+            token_balance(1, "mint", "creator", 200),
+        ];
+        tx.post_token_balances = vec![
+            token_balance(0, "mint", "creator", 300),
+            token_balance(1, "mint", "creator", 200),
+        ];
+        tx.instructions.push(trading_instruction());
+        assert_eq!(
+            classify_creator_transaction(&tx, "creator", "mint"),
+            SolanaCashFlowEvent::Buy {
+                quote: 1_000,
+                tokens: 200
             }
         );
     }
@@ -2990,7 +3199,8 @@ mod tests {
         lamports_after: u64,
     ) -> String {
         format!(
-            r#"{{"result":{{"slot":7,"meta":{{"err":null,"preBalances":[{lamports_before}],"postBalances":[{lamports_after}],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_before}"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_after}"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[]}}}}}},"error":null}}"#
+            r#"{{"result":{{"slot":7,"meta":{{"err":null,"preBalances":[{lamports_before}],"postBalances":[{lamports_after}],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_before}"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_after}"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[{{"programId":"{trading_program}"}}]}}}}}},"error":null}}"#,
+            trading_program = KNOWN_TRADING_PROGRAMS[0],
         )
     }
 
@@ -3012,8 +3222,10 @@ mod tests {
         let mint_key = mint.to_string();
         let creator_key = creator.to_string();
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
             signatures_page("dev-buy-sig"),
             creator_cash_flow_tx(&creator_key, &mint_key, 0, 1_000, 10_000, 9_000),
         ];
@@ -3039,8 +3251,10 @@ mod tests {
         let mint_key = mint.to_string();
         let creator_key = creator.to_string();
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
             signatures_page("sell-sig"),
             creator_cash_flow_tx(&creator_key, &mint_key, 1_000, 0, 9_000, 10_200),
         ];
@@ -3063,8 +3277,10 @@ mod tests {
         let mint_key = mint.to_string();
         let creator_key = creator.to_string();
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
             signatures_page("failed-sig"),
             failed_tx(&creator_key, &mint_key),
         ];
@@ -3087,8 +3303,10 @@ mod tests {
         let mint = solana_addr(9);
         let creator = solana_addr(1);
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
             r#"{"result":[],"error":null}"#.to_owned(),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
@@ -3112,9 +3330,11 @@ mod tests {
         let mint = solana_addr(9);
         let creator = solana_addr(1);
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
-        let responses = [format!(
-            r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#
-        )];
+        let ata = spl_ata(creator, mint);
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+        ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
         let mut budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
@@ -3135,11 +3355,13 @@ mod tests {
         let mint = solana_addr(9);
         let creator = solana_addr(1);
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
         let entries: Vec<String> = (0..=CREATOR_CASH_FLOW_MAX_SIGNATURES)
             .map(|i| format!(r#"{{"signature":"sig-{i}","slot":1}}"#))
             .collect();
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
             format!(r#"{{"result":[{}],"error":null}}"#, entries.join(",")),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
@@ -3152,6 +3374,193 @@ mod tests {
         assert!(flow.trades.is_empty());
         assert!(
             flow.gaps.iter().any(|g| g.contains("more than")),
+            "gaps: {:?}",
+            flow.gaps
+        );
+    }
+
+    #[test]
+    fn a_transaction_with_no_meta_at_all_is_reported_as_a_gap_not_a_no_op() {
+        // `getTransaction` answered, but with no `meta` key: `parse_transaction`
+        // still returns `Some`, with every balance array defaulted to empty
+        // (rpc.rs's own doc on `lamport_balances`/`token_balances`). That must
+        // not be read as "nothing happened" -- it is unread data.
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let creator_key = creator.to_string();
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let no_meta_tx = format!(
+            r#"{{"result":{{"slot":7,"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+        );
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            signatures_page("no-meta-sig"),
+            no_meta_tx,
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(!flow.trades_complete);
+        assert!(flow.trades.is_empty());
+        assert!(
+            flow.gaps
+                .iter()
+                .any(|g| g.contains("did not report balances")),
+            "gaps: {:?}",
+            flow.gaps
+        );
+    }
+
+    #[test]
+    fn a_second_token_account_for_the_mint_is_reported_incomplete_with_its_count() {
+        // The creator holds a second account for this mint besides their
+        // associated one: its history is never read, so the total may be
+        // short, and that has to be said rather than reported as a clean
+        // complete read.
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let mint_key = mint.to_string();
+        let creator_key = creator.to_string();
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata, "SomeOtherTokenAccount11111111111111111111"]),
+            signatures_page("dev-buy-sig"),
+            creator_cash_flow_tx(&creator_key, &mint_key, 0, 1_000, 10_000, 9_000),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(!flow.trades_complete);
+        assert!(
+            flow.gaps.iter().any(|g| g.contains('1')),
+            "gaps: {:?}",
+            flow.gaps
+        );
+    }
+
+    #[test]
+    fn a_failed_check_of_other_token_accounts_is_reported_incomplete() {
+        // `getTokenAccountsByOwner` itself fails: the reader cannot confirm
+        // the ATA is the creator's only account for this mint, so the read
+        // is incomplete even though the ATA's own history read cleanly.
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            r#"{"result":null,"error":{"message":"node is down"}}"#.to_owned(),
+            r#"{"result":[],"error":null}"#.to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(!flow.trades_complete);
+        assert!(
+            flow.gaps.iter().any(|g| g.contains("could not confirm")),
+            "gaps: {:?}",
+            flow.gaps
+        );
+    }
+
+    #[test]
+    fn more_signatures_than_the_remaining_budget_skips_the_fetch_entirely() {
+        // Two signatures, but only one call left in the budget after the
+        // reads already spent above: fetching would run out partway, so
+        // nothing is fetched at all and the gap says why.
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            r#"{"result":[{"signature":"a","slot":1},{"signature":"b","slot":1}],"error":null}"#
+                .to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        // 3 calls total: owner_of + token_accounts_by_owner + the signature
+        // page leave none for the two transactions this history has.
+        let mut budget = Budget::new(3, 60, std::time::Duration::from_secs(30));
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(!flow.trades_complete);
+        assert!(flow.trades.is_empty());
+        assert!(
+            flow.gaps.iter().any(|g| g.contains("calls left")),
+            "gaps: {:?}",
+            flow.gaps
+        );
+    }
+
+    #[test]
+    fn a_missing_transaction_answer_is_a_gap() {
+        // `getTransaction` answers `{"result":null}`: the transaction is
+        // simply not there for this reader, which must count against
+        // completeness rather than being skipped silently.
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            signatures_page("missing-sig"),
+            r#"{"result":null,"error":null}"#.to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(!flow.trades_complete);
+        assert!(flow.trades.is_empty());
+        assert!(
+            flow.gaps.iter().any(|g| g.contains("could not be fetched")),
+            "gaps: {:?}",
+            flow.gaps
+        );
+    }
+
+    #[test]
+    fn an_rpc_error_fetching_a_transaction_is_a_gap() {
+        // `getTransaction` answers with a node error: the same completeness
+        // rule applies as a missing result.
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            signatures_page("error-sig"),
+            r#"{"result":null,"error":{"message":"rate limited"}}"#.to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(!flow.trades_complete);
+        assert!(flow.trades.is_empty());
+        assert!(
+            flow.gaps.iter().any(|g| g.contains("rate limited")),
             "gaps: {:?}",
             flow.gaps
         );

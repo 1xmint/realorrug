@@ -579,19 +579,6 @@ pub fn build(
         }
     }
 
-    // 3b. The creator's own cash flow against this mint: every buy and sell
-    // through their associated token account, plus unpriced transfers out
-    // (design 0027 slice 5, `crate::wallets::creator_cash_flow_solana`'s own
-    // doc on what "complete" requires). Needs the launch block's creator, so
-    // it runs after step 3 rather than before; a missing launch block means
-    // there is no creator to read, so the miss from step 1 stands alone.
-    if let Some(creator) = dossier.launch.as_ref().map(|l| l.creator) {
-        match crate::wallets::creator_cash_flow_solana(client, budget, mint, &creator) {
-            Ok(flow) => dossier.creator_cash_flow = Some(flow),
-            Err(why) => dossier.miss("creator cash flow", why),
-        }
-    }
-
     // 4. Largest token accounts, aggregated by owner, and the mint's own
     // authorities (design 0027 row 6/7). Three calls: `getTokenLargestAccounts`,
     // `getTokenSupply`, and one batched `getMultipleAccounts` covering every
@@ -612,6 +599,24 @@ pub fn build(
     match investigate_solana(client, budget, mint) {
         Ok(funding) => dossier.funding = Some(funding),
         Err(why) => dossier.miss("funding", why),
+    }
+
+    // 6. The creator's own cash flow against this mint: every buy and sell
+    // through their associated token account, plus unpriced transfers out
+    // (design 0027 slice 5, `crate::wallets::creator_cash_flow_solana`'s own
+    // doc on what "complete" requires). Needs the launch block's creator, so
+    // it runs after step 3 rather than before; a missing launch block means
+    // there is no creator to read, so the miss from step 1 stands alone.
+    // Placed last, after every other step has drawn on the shared budget,
+    // because this read's own gap (finding 4) already reports honestly when
+    // there is not enough budget left to fetch every transaction -- unlike
+    // the reads ahead of it, running it last never turns a would-be miss
+    // into a worse one.
+    if let Some(creator) = dossier.launch.as_ref().map(|l| l.creator) {
+        match crate::wallets::creator_cash_flow_solana(client, budget, mint, &creator) {
+            Ok(flow) => dossier.creator_cash_flow = Some(flow),
+            Err(why) => dossier.miss("creator cash flow", why),
+        }
     }
 
     dossier.calls = budget.calls_made();
@@ -1568,11 +1573,13 @@ mod tests {
         // walks the mint's history on its own (slice 6b). On the miss the
         // launch walk already spent the page budget, so funding reads nothing
         // there; the two walks do not yet share their pages, which is why a
-        // hit now costs as much as a miss rather than less. Step 3b (the
-        // creator's cash flow) adds 1 more: reading the mint account to learn
-        // its token program, which this transport answers with no account.
-        // Until each walk gets its own page allowance, a hit can cost one
-        // call more than a miss; what it must never do is page the launch.
+        // hit now costs as much as a miss rather than less. Step 6 (the
+        // creator's cash flow, now last, after funding) adds 1 more: reading
+        // the mint account to learn its token program, which this transport
+        // answers with no account, so the read stops there before it can
+        // reach the token-account or trade-history calls. Until each walk
+        // gets its own page allowance, a hit can cost one call more than a
+        // miss; what it must never do is page the launch.
         assert_eq!(hit_budget.calls_made(), 5);
         assert!(hit_budget.calls_made() <= miss_budget.calls_made() + 1);
     }
@@ -1625,8 +1632,10 @@ mod tests {
         // miss (this transport answers `getTokenLargestAccounts` with
         // `value: null`, so step 4 fails after its first call) + 2 calls of
         // the funding read's own walk of the mint's history (slice 6b) + 1
-        // read of the mint account for step 3b's token program (no account
-        // on this transport, so the cash flow read stops there).
+        // read of the mint account for step 6's (the creator's cash flow,
+        // now run last) token program -- no account on this transport, so
+        // that read stops there before it can spend on the token-account or
+        // trade-history calls.
         assert_eq!(dossier.calls, 6);
         assert_eq!(budget.calls_made(), 6);
     }

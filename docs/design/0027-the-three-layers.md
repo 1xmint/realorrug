@@ -772,6 +772,49 @@ a named gap instead of a zero-trade result, per this design's "absent is not
 zero" rule (AGENTS.md rule 8): only a verifiably non-truncated empty
 signature list proves the account was never touched.
 
+**Review fixes, same day.** A rent refund from closing the associated token
+account looks identical to a sale in the raw balances -- token down, SOL up
+-- so a buy/sell verdict now also requires the transaction to invoke one of
+a short allowlist of known trading program ids
+(`invokes_known_trading_program`); a token decrease with a SOL increase but
+no trading program in the transaction is still an unpriced transfer out, not
+a sale. Token balances are summed across every balance-list entry that names
+both the creator and the mint, not just the first match, since a
+transaction can carry more than one entry for the same owner and mint.
+
+The read now also asks `getTokenAccountsByOwner(creator, {"mint": mint})`
+(one more budgeted call, added to `RpcClient` alongside its existing
+methods) to confirm the derived associated token account is the creator's
+only account for that mint; if a second account exists, or the check itself
+fails, the read reports incomplete with a gap naming the account count (or
+the failure) rather than silently reading only the associated account and
+calling that the creator's whole position. A transaction whose balance
+lists never mention the mint for the creator's index at all -- meta missing
+or simply silent on this account -- is the same "absent is not zero" case as
+a truncated page walk: it reports incomplete with a gap instead of treating
+the transaction as a no-op.
+
+Reading the creator's own signature history costs the shared budget one
+call per page and one call per transaction, so `dossier::build` now runs
+this step last (after funding, not between the launch read and the
+holder-distribution read): every other step has already drawn on the same
+pool by the time this one starts, so this read's own honest "not enough
+budget left" gap is the last thing to turn a would-be miss into a worse
+one, not the first. Before paging any signatures, the read compares the
+signature count already known against the budget's calls remaining and, if
+there is not enough left to fetch every transaction, reports incomplete
+with one gap and fetches nothing rather than fetching a partial, uneven
+sample. The transaction-fetch loop stops on the same first budget-exhausted
+error with a single gap, for the same reason.
+
+`push_creator_cash_flow` (`crates/realorrug-roast/src/sheet.rs`) labels the
+Solana proceeds fact accordingly: since there is no decoded swap amount to
+report, only the creator's own balance change, the published fact says "net
+SOL change across sale transactions" and states plainly that fees and any
+rent refund or payment are included, rather than reusing the EVM reader's
+"sale proceeds" wording, which implies a precision this reader does not
+have. The EVM (Robinhood/Pons v2) wording is unchanged.
+
 ### Slice 7 unit 1 as built (2026-09-18)
 
 Recording, not recommending; the one behaviour change below is held for the
