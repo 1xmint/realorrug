@@ -6,7 +6,9 @@ Saves two things to disk on the project's Linux VPS, for internal use only:
 
 (a) `memes`: a daily snapshot of the whole CMC Memes category, its per-coin
     metadata, and the full daily price history for every coin in it -- the
-    raw material for "success" and "collapse" stories.
+    raw material for "success" and "collapse" stories. `snapshot` keeps that
+    series growing cheaply afterwards: one batched latest-quote call per 100
+    coins, instead of re-running the ~1-credit-per-coin OHLCV history pull.
 (b) `launches`: PumpSwap pairs and, for pairs created within a recent window,
     minute-level candles for the first 24h after graduation plus an hourly
     series for the first 7 days -- the measured outcome rate ADR 0033 needs
@@ -47,6 +49,10 @@ DEFAULT_MAX_CREDITS = 100_000
 MAX_REQUESTS_PER_MINUTE = 500
 CATEGORY_PAGE_LIMIT = 1000
 INFO_BATCH_SIZE = 100
+# /v2/cryptocurrency/quotes/latest has its own id-list limit; kept as its own
+# constant rather than reused from INFO_BATCH_SIZE because the two endpoints
+# don't have to agree, even though both happen to be 100 today.
+SNAPSHOT_BATCH_SIZE = 100
 HISTORY_COUNT = 10_000
 CANDLE_LIMIT = 500  # undocumented max; kept conservative (packet: "check the docs")
 DEX_PAGE_LIMIT = 100
@@ -411,6 +417,99 @@ def _extract_quotes(data: Any, coin_id: str) -> list[dict[str, Any]]:
     return []
 
 
+def _latest_listing_path(memes_dir: Path) -> Path | None:
+    """Newest memes/listing-YYYYMMDD.json.gz on disk, or None if there isn't one.
+
+    Filenames sort lexicographically the same as their date (fixed-width
+    YYYYMMDD), so a plain sort finds the newest without parsing the date out.
+    """
+    if not memes_dir.exists():
+        return None
+    listings = sorted(memes_dir.glob("listing-*.json.gz"))
+    return listings[-1] if listings else None
+
+
+def cmd_snapshot(args: argparse.Namespace, client: CmcClient | None, api_key: str) -> Stats:
+    """One day's price/market-cap for every coin in the newest memes listing.
+
+    Reads ids from disk (never fetches a category listing itself -- that is
+    `memes`'s job) and batches them into /v2/cryptocurrency/quotes/latest,
+    SNAPSHOT_BATCH_SIZE ids per call, instead of the ~1-credit-per-coin daily
+    OHLCV refetch `memes` would need to keep the series growing.
+    """
+    stats = Stats()
+    data_dir = Path(args.data)
+    memes_dir = data_dir / "memes"
+    snapshots_dir = memes_dir / "snapshots"
+    date_stamp = time.strftime("%Y%m%d", time.gmtime())
+    out_path = snapshots_dir / f"{date_stamp}.jsonl.gz"
+    listing_path = _latest_listing_path(memes_dir)
+
+    if args.dry_run:
+        log(f"[dry-run] snapshot: listing={listing_path} -> {out_path}")
+        return stats
+
+    if listing_path is None:
+        log(f"snapshot: no listing file under {memes_dir}; run `memes` first, nothing to do")
+        return stats
+
+    if out_path.exists() and args.resume:
+        log(f"resume: snapshot already at {out_path}")
+        return stats
+
+    assert client is not None
+
+    coins = json.loads(gzip.decompress(listing_path.read_bytes()))
+    ids = [str(c["id"]) for c in coins if "id" in c]
+    stats.items += len(ids)
+
+    # Built in memory and written once at the end (rather than via
+    # append_jsonl_gz_line batch by batch): a run touches ~54 batches for the
+    # whole category, and the whole day's file is either complete or, on a
+    # credit-budget stop, not written at all -- there is no meaningful
+    # "partial day" to resume from the way there is for the per-coin daily
+    # history files, so there is nothing an incremental append would buy here.
+    lines: list[bytes] = []
+    for batch in chunked(ids, SNAPSHOT_BATCH_SIZE):
+        try:
+            payload = client.get("/v2/cryptocurrency/quotes/latest", {"id": ",".join(batch)})
+        except OutOfCreditBudget:
+            log("credit budget reached during snapshot fetch")
+            return stats
+        except CmcApiError as exc:
+            log(f"snapshot batch failed, skipping: {exc}")
+            stats.errors += 1
+            continue
+        data = payload.get("data", {})
+        for coin_id, coin in data.items():
+            if not isinstance(coin, dict):
+                continue
+            usd = (coin.get("quote") or {}).get("USD") or {}
+            record = {
+                "id": coin.get("id", coin_id),
+                "symbol": coin.get("symbol"),
+                # AGENTS.md rule 8: absent is not zero -- .get() with no
+                # default leaves a missing field as JSON null, never 0.
+                "price": usd.get("price"),
+                "market_cap": usd.get("market_cap"),
+                "volume_24h": usd.get("volume_24h"),
+                "percent_change_24h": usd.get("percent_change_24h"),
+                "circulating_supply": coin.get("circulating_supply"),
+                "total_supply": coin.get("total_supply"),
+                "last_updated": usd.get("last_updated"),
+            }
+            lines.append((json.dumps(record) + "\n").encode("utf-8"))
+        log(f"snapshot: wrote {len(data)} of {len(batch)} requested")
+
+    if not lines:
+        log("snapshot: nothing collected, not writing an empty file")
+        return stats
+
+    atomic_write_bytes(out_path, gzip.compress(b"".join(lines)))
+    log(f"wrote snapshot: {len(lines)} coins -> {out_path}")
+    return stats
+
+
 # --------------------------------------------------------------------------
 # launches subcommand
 # --------------------------------------------------------------------------
@@ -694,6 +793,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_launches = sub.add_parser("launches", help="PumpSwap pairs and post-graduation candles")
     p_launches.add_argument("--window-days", type=int, default=90, help="only fetch candles for pairs created within this many days")
     p_launches.set_defaults(func=cmd_launches)
+
+    p_snapshot = sub.add_parser(
+        "snapshot", help="one day's price/market-cap for every coin in the newest memes listing"
+    )
+    p_snapshot.set_defaults(func=cmd_snapshot)
 
     p_status = sub.add_parser("status", help="counts on disk and remaining credits")
     p_status.set_defaults(func=cmd_status)

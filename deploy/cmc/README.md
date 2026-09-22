@@ -56,6 +56,11 @@ python3 deploy/cmc/collect.py memes
 # Same, for a different CMC category id.
 python3 deploy/cmc/collect.py memes --category 6051a82566fc1b42617d6dc6
 
+# One day's price/market cap for every coin in the newest memes listing
+# (reads ids from disk, never fetches its own category listing). Safe to
+# re-run: today's file is skipped if it already exists.
+python3 deploy/cmc/collect.py snapshot
+
 # PumpSwap pairs, plus 1min candles for the first 24h and 1h candles for the
 # first 7 days after graduation, for pairs created in the last 90 days.
 python3 deploy/cmc/collect.py launches
@@ -73,6 +78,35 @@ python3 deploy/cmc/collect.py --max-credits 20000 memes
 Run it from a cron entry or a systemd timer on the VPS; it is not a
 long-running daemon and does not need its own service unit.
 
+## Keeping the meme history growing: `snapshot`
+
+`memes` collects each coin's full daily OHLCV history once and then skips it
+forever under `--resume` -- that's by design, it's a one-off backfill, not a
+refresh. Re-running the full history pull daily would cost about one credit
+per coin per day (~5,360 credits/day, ~160,000/month against the 450,000/
+month plan) for something a much smaller call already gives us: a fresh
+point on the same forward-going series.
+
+`snapshot` reads coin ids from the newest `memes/listing-*.json.gz` already
+on disk (it never calls the category-listing endpoint itself) and batches
+them into `GET /v2/cryptocurrency/quotes/latest`, 100 ids per call. For the
+~5,360-coin Memes category that's about 54 calls, and quotes/latest costs 1
+credit per 100 ids in a call, so about 54 credits/day (~1,620/month) --
+roughly a hundredth of the full-history refresh, for exactly the same
+forward series the outcome stories need.
+
+```bash
+# One day's price/market cap for every coin in the newest listing.
+python3 deploy/cmc/collect.py snapshot
+```
+
+Crontab line for a human to install on the VPS (just after midnight UTC, so
+the day's memes listing from an earlier `memes` run is already there):
+
+```cron
+5 0 * * * cd /path/to/realorrug && /usr/bin/python3 deploy/cmc/collect.py snapshot >> /var/log/realorrug-cmc-snapshot.log 2>&1
+```
+
 ## What each file on disk holds
 
 Under `--data` (default `~/realorrug-data/cmc`):
@@ -87,6 +121,12 @@ Under `--data` (default `~/realorrug-data/cmc`):
   `GET /v2/cryptocurrency/ohlcv/historical` with `interval=daily`. An
   inactive coin with no quotes is still saved (as an empty list) so it is
   not re-fetched every run.
+- `memes/snapshots/YYYYMMDD.jsonl.gz` -- one line per coin from the newest
+  `memes/listing-*.json.gz` on disk, from a batched
+  `GET /v2/cryptocurrency/quotes/latest` call (see "snapshot" below): id,
+  symbol, price, market cap, 24h volume, 24h percent change, circulating
+  supply, total supply and the quote's own `last_updated`. A field the
+  response didn't carry is written as `null`, never 0 (AGENTS.md rule 8).
 - `launches/pairs-YYYYMMDD.jsonl.gz` -- the day's PumpSwap pair listing from
   `GET /v4/dex/spot-pairs/latest`, one JSON object per line.
 - `launches/candles/<base mint>.json.gz` -- for pairs created within
@@ -104,6 +144,9 @@ Under `--data` (default `~/realorrug-data/cmc`):
   roughly 0.03 credits/day of history. The full Memes category (~5,360
   coins) is the largest line item; `--max-credits` (default 100,000) stops a
   run cleanly once the plan's monthly 450,000-credit budget is at risk.
+- Latest quotes (`/v2/cryptocurrency/quotes/latest`, used by `snapshot`): 1
+  credit per 100 ids in a call, so ~54 credits for the whole Memes category
+  once a day -- about 1/100th of re-running the daily-history pull.
 - DEX pairs listing: standard per-page cost, paged with `scroll_id`.
 - Candles (`/v1/k-line/candles`): 1 credit per call regardless of how many
   candles it returns, so a 24h/1min window (up to ~1,440 candles) is chunked
