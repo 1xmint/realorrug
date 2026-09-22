@@ -850,6 +850,10 @@ pub(crate) mod tests {
                     .label
                     .contains("how many reached an AMM by filling over time")
         });
+        // The launch block may lead only once its own signal fired
+        // (`salience::launch_recipients`): an ordinary recipient count is
+        // not a concern, so without this the headline correctly has nothing.
+        sheet.signals.push(Signal::LaunchBlockInStrongestBand);
         let headline = headline(&sheet).expect("the launch block is still about this coin");
         assert!(headline.contains("launch block"), "{headline}");
         assert!(crate::fidelity::check(&headline, &sheet.authorised()).is_empty());
