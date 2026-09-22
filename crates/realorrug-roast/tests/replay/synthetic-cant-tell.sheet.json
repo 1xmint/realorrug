@@ -1,0 +1,38 @@
+{
+  "mint": "SYNTHETIC-CANTTELL-NOT-A-REAL-TOKEN",
+  "label": "synthetic-cant-tell",
+  "captured_at": "2026-09-22T00:00:00Z",
+  "rules_version": "2026-09-21",
+  "level": "CantTell",
+  "assessment": {
+    "findings": [],
+    "risk_index": 0,
+    "score_bps": 0,
+    "coverage": {
+      "read": 0,
+      "applicable": 1
+    },
+    "critical_gaps": [
+      "where the checked early buyers got their money before their first purchase could not be read"
+    ],
+    "level": "CantTell",
+    "admissible": [
+      "CantTell"
+    ],
+    "score_level": "CantTell"
+  },
+  "sheet": {
+    "mint": "SYNTHETIC-CANTTELL-NOT-A-REAL-TOKEN",
+    "read_at": {
+      "Solana": 900
+    },
+    "facts": [],
+    "untrusted": [],
+    "unknown": [
+      "where the checked early buyers got their money before their first purchase could not be read"
+    ],
+    "signals": [],
+    "twins": [],
+    "skipped": []
+  }
+}

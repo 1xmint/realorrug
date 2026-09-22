@@ -1,0 +1,106 @@
+{
+  "mint": "SYNTHETIC-RUGGED-NOT-A-REAL-TOKEN",
+  "label": "synthetic-rugged",
+  "captured_at": "2026-09-22T00:00:00Z",
+  "rules_version": "2026-09-21",
+  "level": "Rugged",
+  "assessment": {
+    "findings": [
+      {
+        "signal": "liquidity_gone",
+        "group": "ExitMechanics",
+        "episode": "Exit"
+      },
+      {
+        "signal": "holder_concentration",
+        "group": "Ownership",
+        "episode": "Holders"
+      }
+    ],
+    "risk_index": 65,
+    "score_bps": 5320,
+    "coverage": {
+      "read": 4,
+      "applicable": 4
+    },
+    "critical_gaps": [],
+    "level": "Rugged",
+    "admissible": [
+      "Rugged"
+    ],
+    "score_level": "Rugged"
+  },
+  "sheet": {
+    "mint": "SYNTHETIC-RUGGED-NOT-A-REAL-TOKEN",
+    "read_at": {
+      "Solana": 900
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "about 0.4 hours old at the read (900 slots after its launch block)",
+        "values": [
+          900.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 0.4 hours ago -- 900 slots, by the read point."
+          }
+        ]
+      },
+      {
+        "about": "Price",
+        "kind": "curve_liquidity",
+        "label": "quote asset held in the bonding curve now, read at slot 900",
+        "rendered": "0.0000 SOL",
+        "values": [
+          0.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The curve holds 0.0000 SOL right now, as of slot 900."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "holders",
+        "label": "addresses holding the token, not counting the bonding curve",
+        "rendered": "5",
+        "values": [
+          5.0
+        ],
+        "clauses": []
+      },
+      {
+        "about": "Measurement",
+        "kind": "largest_holder_share",
+        "label": "share of circulating supply at the single largest address outside the curve",
+        "rendered": "89.0%",
+        "values": [
+          0.89,
+          89.0,
+          89.0,
+          89.0,
+          89.0
+        ],
+        "clauses": []
+      }
+    ],
+    "untrusted": [],
+    "unknown": [],
+    "signals": [
+      "liquidity_gone",
+      "holder_concentration"
+    ],
+    "twins": [
+      "a curve read at zero reserves pre-graduation is also what a fully-sold-through graduation looks like for one block, before the AMM pool is credited",
+      "the largest address outside the curve could be an exchange's wallet or the pool itself, which this read does not resolve"
+    ],
+    "skipped": []
+  }
+}
