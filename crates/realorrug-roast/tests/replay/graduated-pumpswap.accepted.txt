@@ -2,6 +2,5 @@ Can't tell yet: the launch block could not be read.
 - has it graduated off its bonding curve: yes
 - not known: the launch block could not be read
 - not known: who funded the early buyers could not be read
-- not known: the creator's own buys and sells were not checked
 How old this token is could not be read.
-Read at slot 449426216.
+Read at slot 449455720.
