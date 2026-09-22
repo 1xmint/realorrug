@@ -745,6 +745,33 @@ with a named gap, since Solana has no `wallets::creator_cash_flow` equivalent
 yet. No `salience.rs` candidate yet either -- this PR wires the fact onto the
 sheet and no further.
 
+#### Solana reader added (2026-09-22)
+
+`crate::wallets::creator_cash_flow_solana` fills in the gap above: it reads
+only the launch creator's own associated token account for the mint (derived
+against whichever token program -- SPL Token or Token-2022 -- the mint's own
+account names), pages `getSignaturesForAddress` back to that account's
+creation, and classifies each transaction from `preTokenBalances`/
+`postTokenBalances` and the creator's own pre/post lamport balance: token up
+with SOL down is a buy, token down with SOL up is a sale, a token decrease
+with no matching SOL increase is an unpriced transfer out, and a token
+increase with no SOL decrease (an incoming transfer) is ignored. The SOL
+figure is the creator's net lamport change for the whole transaction, so it
+carries the fee and any other instruction in the same transaction -- an
+approximation stated in the reader's own doc comment, not hidden precision.
+`CreatorCashFlow::quote_asset` is set to `QuoteAsset::sol()`, which is what
+already lets `push_creator_cash_flow` render the right unit and decimals
+without a Solana-specific branch.
+
+`trades_complete` is `true` only when every signature back to the account's
+creation was fetched and decoded; a truncated page walk (including the
+shared `Budget` running out of pages before this read gets a turn -- the
+budget is one pool across all of `dossier::build()`, not yet split per
+reader) or a signature count over the ~200 read cap reports incomplete with
+a named gap instead of a zero-trade result, per this design's "absent is not
+zero" rule (AGENTS.md rule 8): only a verifiably non-truncated empty
+signature list proves the account was never touched.
+
 ### Slice 7 unit 1 as built (2026-09-18)
 
 Recording, not recommending; the one behaviour change below is held for the

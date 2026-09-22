@@ -426,10 +426,13 @@ pub struct Dossier {
     /// in `unavailable`.
     pub token_ownership: Option<TokenOwnership>,
     /// The creator's observed on-chain cash flow (`crate::wallets`, design
-    /// 0027 slice 5, Robinhood only today). `None` is "not investigated"; a
-    /// reader that tried and failed names "creator cash flow" in
-    /// `unavailable`. Solana has no reader for this yet -- see
-    /// `SolanaReader`'s own doc on `creator_cash_flow` below.
+    /// 0027 slice 5). `None` is "not investigated"; a reader that tried and
+    /// failed names "creator cash flow" in `unavailable`. Robinhood reads it
+    /// from `curve`/`token` logs (`crate::wallets::creator_cash_flow`);
+    /// Solana reads it from the creator's own associated token account
+    /// (`crate::wallets::creator_cash_flow_solana`). `quote_asset` on the
+    /// result says which chain's native unit `CreatorTrade::quote` is in, so
+    /// this field's meaning does not depend on which reader filled it.
     pub creator_cash_flow: Option<crate::wallets::CreatorCashFlow>,
     /// The creator's live powers over this token -- tax, the pending
     /// fee-recipient timelock, and classified snipe-tax exemptions
@@ -507,12 +510,6 @@ pub fn build(
         calls: 0,
         elapsed_ms: 0,
     };
-    dossier.miss(
-        "creator cash flow",
-        "Solana not built: design 0027 slice 5 has no `wallets::creator_cash_flow` equivalent \
-         for Solana yet",
-    );
-
     // 1. The launch block, from the oldest signature the mint has, or from
     // the read memory ahead of it (packet 0039 §1). `Kind::Forever`: a past
     // block cannot become wrong later (AGENTS.md rule 1), so a hit needs no
@@ -579,6 +576,19 @@ pub fn build(
                 dossier.creator_transactions = Some(Count::AtLeast(n));
             }
             Err(why) => dossier.miss("creator history", why),
+        }
+    }
+
+    // 3b. The creator's own cash flow against this mint: every buy and sell
+    // through their associated token account, plus unpriced transfers out
+    // (design 0027 slice 5, `crate::wallets::creator_cash_flow_solana`'s own
+    // doc on what "complete" requires). Needs the launch block's creator, so
+    // it runs after step 3 rather than before; a missing launch block means
+    // there is no creator to read, so the miss from step 1 stands alone.
+    if let Some(creator) = dossier.launch.as_ref().map(|l| l.creator) {
+        match crate::wallets::creator_cash_flow_solana(client, budget, mint, &creator) {
+            Ok(flow) => dossier.creator_cash_flow = Some(flow),
+            Err(why) => dossier.miss("creator cash flow", why),
         }
     }
 
