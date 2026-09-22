@@ -206,6 +206,18 @@ class Test1014NotRetried(unittest.TestCase):
             client.get("/v1/k-line/candles", {"address": "mint", "from": 0, "to": 1})
         self.assertEqual(len(calls), 1)  # not retried
 
+    def test_string_status_codes_are_read_as_numbers(self):
+        # The DEX and k-line endpoints send "0" and "1014" as strings (seen
+        # live 2026-09-22); a string "0" once read as an error.
+        ok = {"status": {"error_code": "0", "credit_count": "1"}, "data": []}
+        client, _, _ = make_client([ok])
+        self.assertEqual(client.get("/v4/dex/spot-pairs/latest", {}), ok)
+        late = {"status": {"error_code": "1014", "error_message": "exceeds", "credit_count": 0}}
+        client, calls, _ = make_client([late])
+        with self.assertRaises(collect.Cmc1014Error):
+            client.get("/v1/k-line/candles", {"address": "mint", "from": 0, "to": 1})
+        self.assertEqual(len(calls), 1)
+
     def test_fetch_candles_records_out_of_window_and_returns_partial(self):
         # First chunk succeeds, second chunk hits 1014.
         seq = [[[1, 2, 3, 4, 5, 1000, 1]]]
@@ -259,6 +271,48 @@ class TestCandleChunkPaging(unittest.TestCase):
         span = collect._INTERVAL_MS["1min"] * collect_limit
         for i in range(len(seen_ranges) - 1):
             self.assertEqual(seen_ranges[i][1], seen_ranges[i][0] + span)
+
+
+class TestDexPairPaging(unittest.TestCase):
+    def test_next_page_uses_last_rows_scroll_id(self):
+        # Live 2026-09-22: the cursor is on each row, not in status, and the
+        # old read stopped after the first 100 pairs.
+        full = [{"base_asset_contract_address": f"m{i}", "scroll_id": f"s{i}"} for i in range(2)]
+        responses = [ok_payload(full), ok_payload([{"base_asset_contract_address": "m9"}])]
+        client, calls, _ = make_client(responses)
+        pairs = list(collect.iter_dex_pairs(client, limit=2))
+        self.assertEqual(len(pairs), 3)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("scroll_id=s1", calls[1])
+
+
+class TestFirstTrade(unittest.TestCase):
+    NOW = 100 * collect.DAY_MS
+    WINDOW = 90 * collect.DAY_MS
+
+    def _responder(self, daily_first, hourly_first):
+        def responder(url):
+            if "interval=1d" in url:
+                return ok_payload([] if daily_first is None else [[1, 1, 1, 1, 1, daily_first, 1]])
+            return ok_payload([] if hourly_first is None else [[1, 1, 1, 1, 1, hourly_first, 1]])
+
+        return responder
+
+    def test_first_hour_inside_first_day(self):
+        day = 50 * collect.DAY_MS
+        hour = day + 5 * collect.HOUR_MS
+        client, _, _ = make_client(self._responder(day, hour))
+        self.assertEqual(collect.first_trade_ms(client, "m", self.NOW, self.WINDOW), (hour, False))
+
+    def test_trading_on_windows_first_day_is_older_not_a_launch(self):
+        start = self.NOW - self.WINDOW
+        client, calls, _ = make_client(self._responder(start, start))
+        self.assertEqual(collect.first_trade_ms(client, "m", self.NOW, self.WINDOW), (None, True))
+        self.assertEqual(len(calls), 1)  # no hourly call paid for
+
+    def test_no_candles_is_unknown(self):
+        client, _, _ = make_client(self._responder(None, None))
+        self.assertEqual(collect.first_trade_ms(client, "m", self.NOW, self.WINDOW), (None, False))
 
 
 class TestAtomicWrite(unittest.TestCase):
