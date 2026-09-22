@@ -1,0 +1,112 @@
+{
+  "mint": "SYNTHETIC-RUGMECHANICSLIVE-NOT-A-REAL-TOKEN",
+  "label": "synthetic-rug-mechanics-live",
+  "captured_at": "2026-09-22T00:00:00Z",
+  "rules_version": "2026-09-21",
+  "level": "RugMechanicsLive",
+  "assessment": {
+    "findings": [
+      {
+        "signal": "holder_concentration",
+        "group": "Ownership",
+        "episode": "Holders"
+      },
+      {
+        "signal": "repeat_launcher",
+        "group": "CreatorActivity",
+        "episode": "CreatorHistory"
+      }
+    ],
+    "risk_index": 45,
+    "score_bps": 3604,
+    "coverage": {
+      "read": 5,
+      "applicable": 5
+    },
+    "critical_gaps": [],
+    "level": "RugMechanicsLive",
+    "admissible": [
+      "RugMechanicsLive",
+      "Sketchy"
+    ],
+    "score_level": "RugMechanicsLive"
+  },
+  "sheet": {
+    "mint": "SYNTHETIC-RUGMECHANICSLIVE-NOT-A-REAL-TOKEN",
+    "read_at": {
+      "Solana": 900
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "about 0.4 hours old at the read (900 slots after its launch block)",
+        "values": [
+          900.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 0.4 hours ago -- 900 slots, by the read point."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "holders",
+        "label": "addresses holding the token, not counting the bonding curve",
+        "rendered": "4",
+        "values": [
+          4.0
+        ],
+        "clauses": []
+      },
+      {
+        "about": "Measurement",
+        "kind": "largest_holder_share",
+        "label": "share of circulating supply at the single largest address outside the curve",
+        "rendered": "74.0%",
+        "values": [
+          0.74,
+          74.0,
+          74.0,
+          74.0,
+          74.0
+        ],
+        "clauses": []
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_launches",
+        "label": "tokens this creator has launched, in Real or Rug's record",
+        "rendered": "14",
+        "values": [
+          14.0
+        ],
+        "clauses": []
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_organic",
+        "label": "of the measured launches, how many ever filled a curve over time",
+        "rendered": "0 of 14",
+        "values": [
+          0.0
+        ],
+        "clauses": []
+      }
+    ],
+    "untrusted": [],
+    "unknown": [],
+    "signals": [
+      "holder_concentration",
+      "repeat_launcher"
+    ],
+    "twins": [
+      "the largest address outside the curve could be an exchange's wallet or the pool itself, which this read does not resolve",
+      "a creator who launches often and rarely graduates could be an inexperienced repeat hobbyist rather than someone running the same play on purpose"
+    ],
+    "skipped": []
+  }
+}

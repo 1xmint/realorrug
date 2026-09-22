@@ -26,3 +26,14 @@ way that would refuse a reply the owner already signed off on, or a check
 grew a new rule that this reply happens to trip. Either way the failure is
 the point -- this directory is the regression suite for "would we still say
 this," not a snapshot to keep green by editing the accepted text.
+
+## Only signed-off pairs belong here
+
+`accepted_replies_still_pass.rs` panics on any `<stem>.sheet.json` in this
+directory with no `<stem>.accepted.txt` beside it, because a lone sheet is a
+pair someone started and did not finish. That makes this directory mean
+exactly one thing: replies the owner has read and accepted.
+
+A hand-built sheet nobody has signed off on therefore cannot sit here. The
+five synthetic fixtures covering the other four `Level`s live in
+[`../ladder/`](../ladder/README.md) instead.

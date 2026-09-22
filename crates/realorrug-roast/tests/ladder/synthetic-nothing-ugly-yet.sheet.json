@@ -1,0 +1,50 @@
+{
+  "mint": "SYNTHETIC-NOTHINGUGLYYET-NOT-A-REAL-TOKEN",
+  "label": "synthetic-nothing-ugly-yet",
+  "captured_at": "2026-09-22T00:00:00Z",
+  "rules_version": "2026-09-21",
+  "level": "NothingUglyYet",
+  "assessment": {
+    "findings": [],
+    "risk_index": 0,
+    "score_bps": 0,
+    "coverage": {
+      "read": 1,
+      "applicable": 1
+    },
+    "critical_gaps": [],
+    "level": "NothingUglyYet",
+    "admissible": [
+      "NothingUglyYet"
+    ],
+    "score_level": "NothingUglyYet"
+  },
+  "sheet": {
+    "mint": "SYNTHETIC-NOTHINGUGLYYET-NOT-A-REAL-TOKEN",
+    "read_at": {
+      "Solana": 900
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "about 0.4 hours old at the read (900 slots after its launch block)",
+        "values": [
+          900.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 0.4 hours ago -- 900 slots, by the read point."
+          }
+        ]
+      }
+    ],
+    "untrusted": [],
+    "unknown": [],
+    "signals": [],
+    "twins": [],
+    "skipped": []
+  }
+}
