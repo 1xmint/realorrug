@@ -3528,10 +3528,12 @@ mod tests {
         let flow =
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
+        // The client reports a null result as an unreadable response, so
+        // the gap names the transaction rather than a fixed phrase.
         assert!(!flow.trades_complete);
         assert!(flow.trades.is_empty());
         assert!(
-            flow.gaps.iter().any(|g| g.contains("could not be fetched")),
+            flow.gaps.iter().any(|g| g.contains("missing-sig")),
             "gaps: {:?}",
             flow.gaps
         );
