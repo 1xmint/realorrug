@@ -38,6 +38,7 @@ Partly applied: ADR 0027 was renamed. Files still using "prove" (checked 2026-09
 - Environment names are `REALORRUG_*`; old `RADAR_*` names still work as fallbacks (PR #63, merged c1f9e65).
 - Pons v2 launch contracts verified against published source; no hidden admin drain (research/pons-bytecode-verification.md). Launch blocker closed.
 - Brand art: keep the existing X profile picture and banner.
+- CoinMarketCap data (temporary Startup key, 2026-09-22): Josh says the project has an exception to CMC's no-redistribution terms; collect freely (deploy/cmc/).
 
 ## Open, undecided
 
