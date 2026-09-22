@@ -1052,9 +1052,10 @@ fn funder_of(tx: &Transaction, candidate: &str) -> FunderRead {
 /// ever invokes.
 const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 
-/// Whether `tx` is shaped like a plain SOL transfer: every instruction,
-/// top-level or inner (see [`Transaction::instructions`]'s doc on why inner
-/// CPIs are flattened in), belongs to the System Program.
+/// Whether `tx` is shaped like a plain SOL transfer: it has at least one
+/// instruction, and every instruction, top-level or inner (see
+/// [`Transaction::instructions`]'s doc on why inner CPIs are flattened in),
+/// belongs to the System Program.
 ///
 /// This is the gate [`funding_search`] applies before trusting
 /// [`funder_of`]'s balance heuristic at all. `funder_of` reads only lamport
@@ -1064,14 +1065,22 @@ const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 /// (a bonding-curve vault, an AMM pool, the candidate's own closed token
 /// account). A withdrawal from an exchange -- the real signal this check
 /// exists to catch -- is exactly a System Program transfer; none of those
-/// other shapes are. An instruction list with nothing in it (as a
-/// synthetic transfer built for a test may have) is vacuously a plain
-/// transfer: there is nothing here that is *not* a System Program
-/// instruction.
+/// other shapes are.
+///
+/// A real Solana transaction always carries at least one instruction, so an
+/// empty list is never a fact about the chain -- it is a fact about this
+/// process, which did not read the instructions (a parser gap, a versioned
+/// transaction whose address-lookup-table accounts were not merged in, a
+/// short read). Reporting `false` here for an empty list is not enough on
+/// its own: the caller must also not count that signature as a measured
+/// miss (AGENTS.md rule 8, "absent is not zero"), since `false` from a real
+/// swap and `false` from an unread transaction mean different things.
 fn is_plain_sol_transfer(tx: &Transaction) -> bool {
-    tx.instructions
-        .iter()
-        .all(|ix| ix.program == SYSTEM_PROGRAM)
+    !tx.instructions.is_empty()
+        && tx
+            .instructions
+            .iter()
+            .all(|ix| ix.program == SYSTEM_PROGRAM)
 }
 
 /// Distinct wallets whose balance of `mint` rose in `tx`, read from its
@@ -1320,7 +1329,76 @@ pub const MAX_FUNDING_SIGNATURE_PAGES: usize = 3;
 /// ([`is_plain_sol_transfer`]) is neither a funder nor a measured absence
 /// for that signature specifically -- it is not an answer to the question
 /// at all, so the walk simply continues to the next signature, still
-/// counted against [`MAX_FUNDING_TRANSACTIONS`].
+/// counted against [`MAX_FUNDING_TRANSACTIONS`]. The one exception: a
+/// material lamport move whose instruction list is empty did not fail the
+/// plain-transfer gate on its shape -- there was no shape to judge, because
+/// this process never read its instructions. That is the same "could not
+/// tell" as [`FunderRead::Unreadable`], so it sets the same `unreadable`
+/// flag and pushes a gap naming the transaction, rather than silently
+/// moving on as a genuine non-transfer would.
+/// Formats a gap for a transaction [`funding_search`] could not use to
+/// answer "was this the funder" one way or the other -- shared by the
+/// missing-balances and empty-instructions cases, which both set the same
+/// `unreadable` flag for the same reason (AGENTS.md rule 8).
+fn unreadable_gap(address_key: &str, signature: &str, why: &str) -> String {
+    format!("funding of {address_key}: transaction {signature} {why}")
+}
+
+/// Turns one signature's `funder_of` read into either a final answer for
+/// [`funding_search`] to return (`Some`) or nothing, meaning the walk keeps
+/// going (`None`), setting `*unreadable` and pushing a gap along the way
+/// when the read could not settle the question. Split out of
+/// `funding_search` to keep that function's loop body short -- see its doc
+/// comment for why an empty instruction list is treated the same as
+/// [`FunderRead::Unreadable`] rather than as a genuine non-transfer.
+fn resolve_funder_read(
+    read: FunderRead,
+    tx: &Transaction,
+    signature: &str,
+    address_key: &str,
+    gaps: &mut Vec<String>,
+    unreadable: &mut bool,
+) -> Option<(bool, Option<Funder>)> {
+    match read {
+        FunderRead::Found(from, amount)
+            if is_material(amount, 0, GAS_ALLOWANCE_LAMPORTS) && is_plain_sol_transfer(tx) =>
+        {
+            Some((
+                true,
+                Some(Funder {
+                    address: from,
+                    amount_wei: amount,
+                    block: tx.slot.0,
+                    transaction: signature.to_owned(),
+                    unique_id: signature.to_owned(),
+                    material: true,
+                }),
+            ))
+        }
+        FunderRead::Unreadable => {
+            gaps.push(unreadable_gap(
+                address_key,
+                signature,
+                "did not report lamport balances; cannot confirm no funder there",
+            ));
+            *unreadable = true;
+            None
+        }
+        FunderRead::Found(_, amount)
+            if is_material(amount, 0, GAS_ALLOWANCE_LAMPORTS) && tx.instructions.is_empty() =>
+        {
+            gaps.push(unreadable_gap(
+                address_key,
+                signature,
+                "reported no instructions; cannot confirm it was not a funding transfer",
+            ));
+            *unreadable = true;
+            None
+        }
+        FunderRead::Found(..) | FunderRead::NoInboundMove => None,
+    }
+}
+
 fn funding_search(
     client: &RpcClient,
     budget: &mut Budget,
@@ -1388,33 +1466,19 @@ fn funding_search(
             }
             fetched += 1;
             match client.transaction(budget, &sig.signature) {
-                Ok(Some(tx)) => match funder_of(&tx, address_key) {
-                    FunderRead::Found(from, amount)
-                        if is_material(amount, 0, GAS_ALLOWANCE_LAMPORTS)
-                            && is_plain_sol_transfer(&tx) =>
-                    {
-                        return (
-                            true,
-                            Some(Funder {
-                                address: from,
-                                amount_wei: amount,
-                                block: tx.slot.0,
-                                transaction: sig.signature.clone(),
-                                unique_id: sig.signature.clone(),
-                                material: true,
-                            }),
-                        );
+                Ok(Some(tx)) => {
+                    let read = funder_of(&tx, address_key);
+                    if let Some(result) = resolve_funder_read(
+                        read,
+                        &tx,
+                        &sig.signature,
+                        address_key,
+                        gaps,
+                        &mut unreadable,
+                    ) {
+                        return result;
                     }
-                    FunderRead::Unreadable => {
-                        gaps.push(format!(
-                            "funding of {address_key}: transaction {} did not report lamport \
-                             balances; cannot confirm no funder there",
-                            sig.signature
-                        ));
-                        unreadable = true;
-                    }
-                    FunderRead::Found(..) | FunderRead::NoInboundMove => {}
-                },
+                }
                 Ok(None) => {
                     gaps.push(format!(
                         "funding of {address_key}: transaction {} could not be fetched",
@@ -2728,7 +2792,7 @@ mod tests {
     /// `to` by `amount`.
     fn funding_tx(from: &str, to: &str, amount: u64) -> String {
         format!(
-            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{from}","{to}"],"instructions":[]}}}}}},"error":null}}"#,
+            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{from}","{to}"],"instructions":[{{"programId":"11111111111111111111111111111111","accounts":[0,1]}}]}}}}}},"error":null}}"#,
             pre_left = 1_000_000u64.saturating_sub(amount),
         )
     }
@@ -2790,8 +2854,27 @@ mod tests {
     }
 
     /// A `getTransaction` answer whose only lamport move is `from` funding
-    /// `to` by `amount`, landing at a chosen `slot`.
+    /// `to` by `amount`, landing at a chosen `slot`, carrying the one
+    /// instruction a genuine System Program transfer has. This is the
+    /// positive case [`is_plain_sol_transfer`] must accept on its own
+    /// merits -- an empty instruction list here would let every funding
+    /// test pass through the gate's unreadable-is-vacuously-true bug
+    /// instead of proving it accepts a real transfer's shape.
     fn funding_tx_at(from: &str, to: &str, amount: u64, slot: u64) -> String {
+        format!(
+            r#"{{"result":{{"slot":{slot},"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{from}","{to}"],"instructions":[{{"programId":"11111111111111111111111111111111","accounts":[0,1]}}]}}}}}},"error":null}}"#,
+            pre_left = 1_000_000u64.saturating_sub(amount),
+        )
+    }
+
+    /// The same balance shape [`funding_tx_at`] produces -- a material
+    /// lamport move from `from` to `to` -- but with no instructions at all,
+    /// the shape a versioned transaction whose address-lookup-table
+    /// accounts were not merged in can produce. This is not a plain
+    /// transfer's absence of a non-System instruction; it is this process
+    /// never having read the instructions, so it must not be scored as a
+    /// measured "no funder here".
+    fn unreadable_instructions_tx_at(from: &str, to: &str, amount: u64, slot: u64) -> String {
         format!(
             r#"{{"result":{{"slot":{slot},"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{from}","{to}"],"instructions":[]}}}}}},"error":null}}"#,
             pre_left = 1_000_000u64.saturating_sub(amount),
@@ -3161,6 +3244,50 @@ mod tests {
                 .gaps
                 .iter()
                 .any(|g| g.contains("did not report lamport balances")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn an_empty_instruction_list_is_treated_as_unreadable_not_a_measured_miss() {
+        // The candidate's whole history is one page with one signature, and
+        // that transaction has the exact balance shape of a genuine
+        // transfer (the funder loses lamports, the buyer gains them, the
+        // amount clears materiality) but reports no instructions at all --
+        // the shape a versioned transaction whose lookup-table accounts
+        // never got merged into `accountKeys` produces (research 0056).
+        // `is_plain_sol_transfer` must not treat "nothing here is a
+        // non-System instruction" as true when there is nothing here at
+        // all: an empty list never means "this process read the
+        // instructions and found only System Program calls", so this must
+        // read the same as an unreadable-balances transaction, not as a
+        // measured absence. If the `is_empty` guard is removed this
+        // transaction is (wrongly) accepted as a plain transfer and this
+        // test fails on `funding_complete` and the missing gap.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_at("empty-ix-sig", 3),
+            unreadable_instructions_tx_at(&funder, &buyer, 500_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(!funding.checked[0].funding_complete);
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("reported no instructions")),
             "gaps: {:?}",
             funding.gaps
         );

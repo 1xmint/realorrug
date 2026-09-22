@@ -354,6 +354,63 @@ name a funder, or record a measured absence, for candidates that used to
 report nothing at all; whether either mint's launch actually clears
 `CantTell` is a question for the next capture, not settled here.
 
+## Addendum, 2026-09-22: can a versioned transaction's dropped lookup-table accounts feed the wrong program id to the plain-transfer gate?
+
+Asked while fixing `is_plain_sol_transfer`'s vacuous-empty-list bug
+(`crates/realorrug-onchain/src/wallets.rs`, branch
+`who-paid-the-solana-buyers-v2`): can `collect_instructions`
+(`crates/realorrug-onchain/src/rpc.rs:890`) resolve a program id to the
+*wrong* address, or silently drop an instruction, when a versioned
+transaction's `accountKeys` omits addresses a lookup table supplied and
+`meta.loadedAddresses` is not merged in? Answer, from reading the code, not
+from a new capture: **not a wrong address, but yes, an instruction can be
+dropped -- and the drop is exactly the shape that could let a swap pass the
+plain-transfer gate.**
+
+`RpcClient::transaction` (`rpc.rs:660`) already requests
+`maxSupportedTransactionVersion: 1` with `encoding: "json"`, so instructions
+carry a numeric `programIdIndex`, never a resolved address string --
+`program_of` (`rpc.rs:921`) must look the index up in `accounts` itself.
+`parse_transaction` (`rpc.rs:812`) already merges `meta.loadedAddresses`'s
+`writable` then `readonly` arrays onto the end of the static `accountKeys`
+(added by PR #145, this same document's "what the capture command got
+wrong" section) -- the same order Solana's own account-indexing rule uses,
+so *when the node returns `loadedAddresses`*, an index into a lookup-table
+account resolves to the right address.
+
+The residual case is when it does not: an RPC response for a versioned
+transaction that used a lookup table but whose `meta.loadedAddresses` is
+missing, null, or short (a different provider's shape, a malformed capture,
+a future encoding change). Because dynamically-loaded accounts are always
+indexed *after* every static account, an instruction naming one always
+carries an index at or past `accountKeys`'s length. `program_of` reads that
+index with `accounts.get(index)` inside a `filter_map`
+(`collect_instructions`, `rpc.rs:896`), and `Vec::get` on an out-of-range
+index returns `None`, not a wraparound or a fallback to some other real
+account -- so `program_of` returns `None`, and `collect_instructions` skips
+the instruction entirely (`continue`) rather than resolving it to a
+different, wrong-but-existing program. **No instruction is ever attributed
+to the wrong program by this path; a missing address means an instruction
+disappears from `Transaction::instructions`, not that it appears under
+someone else's name.**
+
+That disappearance is still dangerous for exactly the reason this branch's
+fix exists. If a swap's only non-System instruction is the one whose program
+lived in the unmerged lookup table, dropping it can leave
+`Transaction::instructions` holding *only* the System Program instructions
+that were already present (fee payment, a wrapped-SOL account touch, and
+so on) -- a **non-empty** list that reads as "every instruction is the
+System Program" to `is_plain_sol_transfer`, because the swap's tell was
+silently removed before the gate ever saw it. This is not the same failure
+this branch's fix closes: the empty-list fix only catches the case where
+*every* instruction was dropped. A partial drop that still leaves one or
+more (all-System) instructions behind is not caught by `is_empty()` and
+would pass the gate today, wrongly, exactly as the task worried. Whether
+this happens in practice depends on whether every RPC provider the crate
+talks to reliably returns `meta.loadedAddresses` for every versioned
+transaction it can return at all -- not verified here, and not fixed here
+per instruction; `rpc.rs` is unchanged by this commit.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
