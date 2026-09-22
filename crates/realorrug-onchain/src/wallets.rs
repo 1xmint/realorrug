@@ -1323,16 +1323,24 @@ fn classify_creator_transaction(
     creator: &str,
     mint: &str,
 ) -> SolanaCashFlowEvent {
+    // Sum every entry for this creator and mint, not just the first: a
+    // transaction that touches two of the creator's own accounts for the
+    // same mint (a temporary account plus the ATA, for instance) would
+    // otherwise compare whichever entry happened to be `.find`'s first hit
+    // in `pre` against a possibly different one in `post`, and read a
+    // same-account round trip as a phantom sale or purchase.
     let token_before: u64 = tx
         .pre_token_balances
         .iter()
-        .find(|b| b.mint == mint && b.owner.as_deref() == Some(creator))
-        .map_or(0, |b| b.amount);
+        .filter(|b| b.mint == mint && b.owner.as_deref() == Some(creator))
+        .map(|b| b.amount)
+        .sum();
     let token_after: u64 = tx
         .post_token_balances
         .iter()
-        .find(|b| b.mint == mint && b.owner.as_deref() == Some(creator))
-        .map_or(0, |b| b.amount);
+        .filter(|b| b.mint == mint && b.owner.as_deref() == Some(creator))
+        .map(|b| b.amount)
+        .sum();
 
     let Some(creator_index) = tx.accounts.iter().position(|a| a == creator) else {
         // The creator's own account never appears in this transaction's
@@ -1347,22 +1355,74 @@ fn classify_creator_transaction(
         return classify_without_lamports(token_before, token_after);
     };
 
-    match token_after.cmp(&token_before) {
-        std::cmp::Ordering::Greater if after < before => SolanaCashFlowEvent::Buy {
-            quote: u128::from(before - after),
-            tokens: u128::from(token_after - token_before),
-        },
-        std::cmp::Ordering::Less if after > before => SolanaCashFlowEvent::Sell {
-            quote: u128::from(after - before),
-            tokens: u128::from(token_before - token_after),
-        },
-        // Token down, SOL not up: an outgoing transfer, never priced.
-        std::cmp::Ordering::Less => SolanaCashFlowEvent::TransferOut,
-        // Equal, or token up with SOL not down (a received transfer, not a
-        // purchase): nothing this reader attributes to the creator's own
-        // trading.
-        std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => SolanaCashFlowEvent::Ignored,
+    // A token account close refunds its rent (~0.00204 SOL) to its owner,
+    // and a closed account has no post balance at all -- read as 0 by the
+    // `map_or(0, ..)`-style default above (now a `.sum()` over zero
+    // matching entries). That makes a plain burn-and-close, or a
+    // transfer-all-and-close with no trade involved, look exactly like a
+    // sale (token down, lamports up from the rent refund), and its mirror
+    // (receiving tokens while paying rent to create a fresh account) look
+    // like a buy. Neither is a trade unless a known trading program was
+    // actually invoked in this transaction -- so only *that* case may ever
+    // become Buy/Sell; every other token-balance move without a trading
+    // program falls back to the same unpriced transfer/ignore rule
+    // `classify_without_lamports` already applies when there is no SOL data
+    // at all.
+    if invokes_known_trading_program(tx) {
+        match token_after.cmp(&token_before) {
+            std::cmp::Ordering::Greater if after < before => {
+                return SolanaCashFlowEvent::Buy {
+                    quote: u128::from(before - after),
+                    tokens: u128::from(token_after - token_before),
+                };
+            }
+            std::cmp::Ordering::Less if after > before => {
+                return SolanaCashFlowEvent::Sell {
+                    quote: u128::from(after - before),
+                    tokens: u128::from(token_before - token_after),
+                };
+            }
+            _ => {}
+        }
     }
+    classify_without_lamports(token_before, token_after)
+}
+
+/// The known Solana trading venues a creator's balance move is trusted to
+/// mean a real trade against, rather than an account-close rent refund or
+/// an ordinary transfer that happened to land next to one.
+///
+/// Every address is the venue's documented program id, quoted in full below
+/// so a diff against a fresh capture is a string compare. `realorrug-decode`
+/// already owns [`realorrug_decode::pumpfun::PROGRAM_ID`] and
+/// [`realorrug_decode::pumpswap::PROGRAM_ID`] (both mainnet-verified there);
+/// the rest are not decoded anywhere in this crate yet, so they are named
+/// here as plain ids -- this reader only needs to know a trade *venue* was
+/// invoked, never what the instruction did.
+const KNOWN_TRADING_PROGRAMS: [&str; 7] = [
+    // pump.fun bonding curve -- realorrug_decode::pumpfun::PROGRAM_ID.
+    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    // PumpSwap AMM -- realorrug_decode::pumpswap::PROGRAM_ID.
+    "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+    // Raydium Liquidity Pool V4 (the original constant-product AMM).
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+    // Raydium CPMM (`CP-Swap`).
+    "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+    // Raydium CLMM (concentrated liquidity).
+    "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+    // Jupiter aggregator v6.
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+    // Meteora DLMM.
+    "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+];
+
+/// Whether any instruction in `tx` -- top-level or inner, per
+/// [`Transaction::instructions`]'s own doc on why inner CPIs are flattened
+/// in -- names a program on [`KNOWN_TRADING_PROGRAMS`].
+fn invokes_known_trading_program(tx: &Transaction) -> bool {
+    tx.instructions
+        .iter()
+        .any(|ix| KNOWN_TRADING_PROGRAMS.contains(&ix.program.as_str()))
 }
 
 /// The same classification, for a transaction whose lamport balances for the
