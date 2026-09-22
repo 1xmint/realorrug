@@ -523,6 +523,23 @@ confirming a `None` coverage never renders a percentage. The Robinhood path
 (`investigate`, `purchases_from`, `SELECTION_RULE`) is untouched by this
 slice.
 
+**Addendum (2026-09-22)**: `investigate_solana`'s own walk of the mint's
+history above was, until this date, a *second* read of it — `dossier.rs`
+step 1 (the launch block) had already paged the same address's signatures
+against the same shared `Budget`, so a busy mint's history could spend the
+whole page pool on step 1, leaving step 5 (this one) nothing to page with
+of its own (see `docs/research/0056-the-solana-replay-set.md`'s addendum for
+the symptom this produced: "who funded the early buyers could not be read"
+on every token, not just the busy ones). `investigate_solana` now takes an
+`Option<&(Vec<SignatureInfo>, bool)>` and `dossier.rs::build` passes step 1's
+already-read signatures into it directly, so no second
+`getSignaturesForAddress` walk of the mint happens on the common path; the
+internal walk this section describes now only runs as a fallback, when step
+1 was skipped because the launch block was served from memory
+(`crate::budget::Budget::grant_pages` then gives that fallback walk its own
+page floor so the memory-cache path is not left with whatever the rest of
+`build` happened to leave in the shared pool).
+
 **Not done in this slice**: the SOL cost of the observed buy itself is not
 read, so `is_material` is applied with `quote = 0` for a Solana candidate,
 the same "more than dust" fallback it already applies to an unpriced

@@ -188,7 +188,7 @@ PR #151. The saved sheets are the read after it.
   the first gap ("Can't tell yet: ...").
 - **The funding read is not the rate limit.** "Who funded the early
   buyers" still fails on every Helius read, so the explanation above is
-  wrong for these captures. The cause is not yet found.
+  wrong for these captures. The cause is found and fixed below.
 - The graduated tokens' launch block is still out of reach of the page
   budget on Helius, as it was on the public endpoint.
 
@@ -196,6 +196,50 @@ All six checks pass on all four. The owner delegated acceptance, and the
 four replies were accepted on 2026-09-22 and copied, with their sheets, into
 `crates/realorrug-roast/tests/replay/` as the first regression cases.
 All remain `CantTell` until the Solana creator cash flow read lands.
+
+## Addendum, 2026-09-22: the funding-read failure was a shared page budget
+
+The cause named above as "not yet found" is found. `dossier.rs::build`'s six
+steps for one mint all draw pages from the same `Budget`
+(`crates/realorrug-onchain/src/budget.rs`'s `DEFAULT_MAX_PAGES = 3`), and
+step 1 — the launch block's own signature-history walk — ran first and
+against the busy mints in this set, spent the whole page pool getting cut off
+before it found a launch. Every later step that pages its own walk of an
+address's signature history then found `pages_left == 0` and failed
+immediately: step 3 (the creator's transaction count) reported
+`Count::AtLeast(0)`, a fake zero (AGENTS.md rule 8) rather than the gap it
+actually was, and step 5 (`investigate_solana`, the funding read) re-walked
+the mint's own signature history a *second* time — the same address step 1
+had already paged — with nothing left to page with, which is exactly "who
+funded the early buyers could not be read" on every one of these tokens, not
+a rate limit at all.
+
+Fixed in the same PR that lands this paragraph:
+
+1. `investigate_solana` no longer re-walks the mint's signatures; `build`
+   passes step 1's already-read `(Vec<SignatureInfo>, bool)` into it
+   directly, so the funding read's launch-window signatures cost zero extra
+   calls on the common path (a fallback walk, with its own granted page
+   floor, remains for the one case step 1 never ran: a launch block served
+   from the read memory).
+2. `Budget` gained `grant_pages(floor)`, which raises `pages_left` to
+   `max(pages_left, floor)` — a floor, not an addition, so a walk that
+   already has pages left is never handed a second, stacking allowance.
+   `build` calls it with `PAGES_PER_WALK` (`= DEFAULT_MAX_PAGES`) before each
+   of the creator-history walk (step 3), the funding read's fallback walk
+   (step 5), and the creator cash flow read (step 6), so one busy mint can no
+   longer starve the reads that come after it. `DEFAULT_MAX_CALLS` is
+   untouched: the overall call ceiling for a `build` call is still global,
+   only the *page* pool is now floored per walk.
+3. Step 3's creator-history walk now tells a miss (`"creator history"`,
+   already rendered by `realorrug-roast/src/sheet.rs`'s `phrase_for` as "the
+   creator's history could not be read") apart from a genuine zero: a walk
+   cut off before a single signature came back is the absence of a count,
+   not a measurement of zero (AGENTS.md rule 8), and `Count::AtLeast(0)` was
+   claiming the latter for the former.
+
+See `docs/design/0027-the-three-layers.md`'s slice 6b addendum, same date,
+for the funding-read side of this fix in more detail.
 
 ## Sources
 
