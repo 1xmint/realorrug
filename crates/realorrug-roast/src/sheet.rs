@@ -5795,6 +5795,73 @@ mod tests {
         assert_eq!(fact.rendered, "0.0005 ETH");
     }
 
+    /// `push_creator_cash_flow`'s `symbol == "SOL"` branch picks different
+    /// wording from the EVM path -- net-SOL-change language rather than
+    /// "received in sales", because a Solana sell's quote is a net lamport
+    /// change (fee and any rent refund included), never an isolated swap
+    /// amount (the function's own doc). A `==`/`!=` swap on that check would
+    /// still print a number, so only the label text tells the two branches
+    /// apart.
+    #[test]
+    fn sol_cash_flow_gets_net_sol_wording_not_received_in_sales() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![creator_trade(
+                realorrug_robinhood::pons::CreatorRole::Deployer,
+                realorrug_robinhood::pons::Side::Sell,
+                200_000_000,
+            )],
+            transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::sol(),
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::CreatorCashFlow).expect("a proceeds fact");
+        assert_eq!(fact.rendered, "0.2000 SOL");
+        assert!(
+            fact.label.contains("net SOL change"),
+            "a SOL cash flow must use the net-change wording: {}",
+            fact.label
+        );
+        assert!(
+            !fact.label.contains("received in sales"),
+            "a SOL cash flow must not borrow the EVM \"received in sales\" wording: {}",
+            fact.label
+        );
+    }
+
+    /// The mirror of the test above: an EVM (ETH) cash flow keeps the
+    /// original "received in sales" wording, not the SOL branch's
+    /// net-change language.
+    #[test]
+    fn evm_cash_flow_keeps_received_in_sales_wording() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![creator_trade(
+                realorrug_robinhood::pons::CreatorRole::Deployer,
+                realorrug_robinhood::pons::Side::Sell,
+                100_000_000_000_000,
+            )],
+            transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::CreatorCashFlow).expect("a proceeds fact");
+        assert!(
+            fact.label.contains("received in sales"),
+            "an EVM cash flow must keep the original wording: {}",
+            fact.label
+        );
+        assert!(
+            !fact.label.contains("net SOL change"),
+            "an EVM cash flow must not use the SOL branch's wording: {}",
+            fact.label
+        );
+    }
+
     /// Done criterion (b), read the other direction from `wallets.rs`'s own
     /// test of the same rule: a transfer out is never folded into the
     /// published proceeds figure, even when it is the only thing on the

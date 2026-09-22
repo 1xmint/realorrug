@@ -3171,6 +3171,95 @@ mod tests {
     }
 
     #[test]
+    fn pre_balance_noise_for_a_different_owner_or_mint_is_never_summed_in() {
+        // The pre-side filter must require *both* the mint and the owner to
+        // match (an `&&`, not an `||`): a same-mint entry owned by someone
+        // else, and a creator-owned entry of a different mint, must both be
+        // excluded from `token_before`. With no trading program invoked, the
+        // result falls straight through to `classify_without_lamports`, so
+        // the token totals alone decide it.
+        let mut tx = creator_tx("creator", "mint", 0, 0, 10_000, 9_999);
+        tx.pre_token_balances = vec![
+            token_balance(0, "mint", "someone-else", 500),
+            token_balance(1, "othermint", "creator", 300),
+        ];
+        tx.post_token_balances = vec![token_balance(2, "mint", "creator", 0)];
+        assert_eq!(
+            classify_creator_transaction(&tx, "creator", "mint"),
+            SolanaCashFlowEvent::Ignored,
+            "neither noise entry matches both mint and owner, so token_before must read 0"
+        );
+    }
+
+    #[test]
+    fn post_balance_noise_for_a_different_owner_or_mint_is_never_summed_in() {
+        // The mirror of the test above for the post side: a same-mint entry
+        // owned by someone else, and a creator-owned entry of a different
+        // mint, must both be excluded from `token_after`. The real balance
+        // falls from 500 to 0 (an unpriced transfer out); if the noise
+        // leaked in, `token_after` would read 1300 instead and flip the
+        // result to `Ignored`.
+        let mut tx = creator_tx("creator", "mint", 0, 0, 10_000, 9_999);
+        tx.pre_token_balances = vec![token_balance(0, "mint", "creator", 500)];
+        tx.post_token_balances = vec![
+            token_balance(1, "mint", "someone-else", 600),
+            token_balance(2, "othermint", "creator", 700),
+        ];
+        assert_eq!(
+            classify_creator_transaction(&tx, "creator", "mint"),
+            SolanaCashFlowEvent::TransferOut,
+            "neither noise entry matches both mint and owner, so token_after must read 0"
+        );
+    }
+
+    #[test]
+    fn a_token_increase_with_unchanged_lamports_is_never_a_buy() {
+        // Token balance rose, but the creator's own lamport balance did not
+        // move at all -- the `after < before` guard must read false here
+        // (and stay false under a `<=` swap, since `after == before`), so
+        // this must fall through to `classify_without_lamports` rather than
+        // becoming a `Buy` with a phantom zero-SOL quote.
+        let mut tx = creator_tx("creator", "mint", 0, 500, 10_000, 10_000);
+        tx.instructions.push(trading_instruction());
+        assert_eq!(
+            classify_creator_transaction(&tx, "creator", "mint"),
+            SolanaCashFlowEvent::Ignored
+        );
+    }
+
+    #[test]
+    fn a_token_decrease_with_unchanged_lamports_is_never_a_sell() {
+        // The mirror case: token balance fell, lamports unchanged -- the
+        // `after > before` guard must read false (and stay false under a
+        // `>=` swap), so this is an unpriced transfer out, never a `Sell`
+        // with a phantom zero-SOL quote.
+        let mut tx = creator_tx("creator", "mint", 500, 0, 10_000, 10_000);
+        tx.instructions.push(trading_instruction());
+        assert_eq!(
+            classify_creator_transaction(&tx, "creator", "mint"),
+            SolanaCashFlowEvent::TransferOut
+        );
+    }
+
+    #[test]
+    fn a_partial_sell_reports_the_tokens_actually_sold_not_their_sum() {
+        // token_before (500) - token_after (200) = 300 tokens sold. Both
+        // operands are non-zero here, so a `-`/`+` swap on the sell's token
+        // count is only caught with a token_after that is not zero: the
+        // existing full-exit sell test above has `token_after == 0`, where
+        // subtraction and addition happen to agree.
+        let mut tx = creator_tx("creator", "mint", 500, 200, 9_000, 10_200);
+        tx.instructions.push(trading_instruction());
+        assert_eq!(
+            classify_creator_transaction(&tx, "creator", "mint"),
+            SolanaCashFlowEvent::Sell {
+                quote: 1_200,
+                tokens: 300
+            }
+        );
+    }
+
+    #[test]
     fn a_creator_missing_from_the_account_keys_never_guesses_a_sale_price() {
         // The creator's own account is not among this transaction's keys at
         // all (e.g. a v0 transaction whose loaded addresses did not include
@@ -3566,6 +3655,180 @@ mod tests {
             "gaps: {:?}",
             flow.gaps
         );
+    }
+
+    #[test]
+    fn an_unchanged_token_balance_is_never_a_transfer_out() {
+        // `classify_without_lamports`'s guard is `token_after < token_before`;
+        // an unchanged balance must read `false` (`Ignored`), not `true`
+        // under a `<=` swap (`TransferOut`).
+        assert_eq!(
+            classify_without_lamports(500, 500),
+            SolanaCashFlowEvent::Ignored
+        );
+    }
+
+    // -- has_readable_creator_balances -----------------------------------
+
+    #[test]
+    fn readable_balances_with_only_the_pre_side_mentioning_the_mint() {
+        let mut tx = creator_tx("creator", "mint", 0, 0, 10_000, 9_999);
+        tx.pre_token_balances = vec![token_balance(0, "mint", "someone-else", 500)];
+        tx.post_token_balances = Vec::new();
+        assert!(has_readable_creator_balances(&tx, "creator", "mint"));
+    }
+
+    #[test]
+    fn readable_balances_with_only_the_post_side_mentioning_the_mint() {
+        let mut tx = creator_tx("creator", "mint", 0, 0, 10_000, 9_999);
+        tx.pre_token_balances = Vec::new();
+        tx.post_token_balances = vec![token_balance(0, "mint", "someone-else", 500)];
+        assert!(has_readable_creator_balances(&tx, "creator", "mint"));
+    }
+
+    #[test]
+    fn unreadable_when_neither_side_mentions_the_mint() {
+        let mut tx = creator_tx("creator", "mint", 0, 0, 10_000, 9_999);
+        tx.pre_token_balances = Vec::new();
+        tx.post_token_balances = Vec::new();
+        assert!(!has_readable_creator_balances(&tx, "creator", "mint"));
+    }
+
+    #[test]
+    fn unreadable_when_the_creators_lamport_balance_is_missing() {
+        // The creator's own account key is absent, so there is no lamport
+        // balance to read at either index -- unreadable even though the
+        // mint is mentioned.
+        let mut tx = creator_tx("someone-else", "mint", 0, 0, 1, 1);
+        tx.accounts = vec!["someone-else".to_owned()];
+        tx.pre_token_balances = vec![token_balance(0, "mint", "creator", 500)];
+        tx.post_token_balances = Vec::new();
+        assert!(!has_readable_creator_balances(&tx, "creator", "mint"));
+    }
+
+    #[test]
+    fn unreadable_when_only_a_different_mint_is_mentioned() {
+        let mut tx = creator_tx("creator", "mint", 0, 0, 10_000, 9_999);
+        tx.pre_token_balances = vec![token_balance(0, "othermint", "creator", 500)];
+        tx.post_token_balances = vec![token_balance(1, "othermint", "creator", 0)];
+        assert!(!has_readable_creator_balances(&tx, "creator", "mint"));
+    }
+
+    #[test]
+    fn transfers_out_counts_every_one_not_just_one() {
+        // `read_creator_trades`' `transfers_out += 1` must accumulate: two
+        // unpriced transfer-outs in the history must read as 2, not 0 (a
+        // `*=` swap would leave the counter at its zero start forever) or
+        // some other wrong value (a `-=` swap).
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let mint_key = mint.to_string();
+        let creator_key = creator.to_string();
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let sigs =
+            r#"{"result":[{"signature":"t2","slot":2},{"signature":"t1","slot":1}],"error":null}"#
+                .to_owned();
+        // No trading instruction on either transaction: a token fall with
+        // no matching SOL rise is an unpriced transfer out.
+        let tx1 = format!(
+            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[10000],"postBalances":[9995],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"500"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+        );
+        let tx2 = format!(
+            r#"{{"result":{{"slot":2,"meta":{{"err":null,"preBalances":[9995],"postBalances":[9990],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"300"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+        );
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            sigs,
+            tx1,
+            tx2,
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(flow.trades_complete);
+        assert!(flow.trades.is_empty());
+        assert_eq!(flow.transfers_out, 2);
+    }
+
+    #[test]
+    fn exactly_the_signature_cap_falls_through_to_the_next_check() {
+        // `signatures.len() > CREATOR_CASH_FLOW_MAX_SIGNATURES` must read
+        // `false` when the two are exactly equal (an `==`/`>=` swap would
+        // read `true`): with no calls left for the transaction fetches that
+        // would follow, the read must report the "calls left" gap, never
+        // the "more than" cap gap, proving the cap branch was never taken.
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let entries: Vec<String> = (0..CREATOR_CASH_FLOW_MAX_SIGNATURES)
+            .map(|i| format!(r#"{{"signature":"sig-{i}","slot":1}}"#))
+            .collect();
+        assert_eq!(entries.len(), CREATOR_CASH_FLOW_MAX_SIGNATURES);
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            format!(r#"{{"result":[{}],"error":null}}"#, entries.join(",")),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        // 3 calls total (owner_of + token_accounts_by_owner + the signature
+        // page) leave none for any transaction fetch.
+        let mut budget = Budget::new(3, 60, std::time::Duration::from_secs(30));
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(!flow.trades_complete);
+        assert!(
+            flow.gaps.iter().any(|g| g.contains("calls left")),
+            "an exact-cap signature count must fall through to the calls-left check, not the \
+             cap check: {:?}",
+            flow.gaps
+        );
+        assert!(
+            !flow.gaps.iter().any(|g| g.contains("more than")),
+            "the cap branch must not have been taken: {:?}",
+            flow.gaps
+        );
+    }
+
+    #[test]
+    fn a_signature_count_exactly_equal_to_calls_left_is_still_read() {
+        // `signatures.len() > budget.calls_left()` must read `false` when
+        // the two are exactly equal (a `>=` swap would read `true` and skip
+        // the fetch that should have happened).
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let mint_key = mint.to_string();
+        let creator_key = creator.to_string();
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let responses = [
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            signatures_page("dev-buy-sig"),
+            creator_cash_flow_tx(&creator_key, &mint_key, 0, 1_000, 10_000, 9_000),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        // 3 calls consumed by setup (owner_of + token_accounts_by_owner +
+        // the signature page) leave exactly 1 -- the same as the single
+        // signature this history has.
+        let mut budget = Budget::new(4, 60, std::time::Duration::from_secs(30));
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(
+            flow.trades_complete,
+            "an exactly-equal signature count must still be fetched, not skipped: {:?}",
+            flow.gaps
+        );
+        assert_eq!(flow.trades.len(), 1);
     }
 }
 
