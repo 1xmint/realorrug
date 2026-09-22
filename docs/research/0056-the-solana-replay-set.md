@@ -265,6 +265,49 @@ be a transaction-read failure during the launch-window buyer walk itself,
 so "some transactions in the launch window could not be read, so the early
 buyers seen may not be all of them".
 
+## Addendum, 2026-09-22: the fourth read, and all four replies accepted
+
+All four mints were re-captured through Helius after the page-budget fix
+(#157), the creator cash-flow read (#156) and the gap-sentence fix (#159),
+and all four replies were accepted. The accepted set in
+`crates/realorrug-roast/tests/replay/` now holds these captures and these
+replies; the review file is at
+`docs/research/data/replay-2026-09-23/review.md` with a `yes` on every
+accept line.
+
+What moved. `the creator's own buys and sells were not checked` is gone from
+all four sheets -- the creator's own trading is now read on every one of
+them. The ordinary launch went from 25 facts to 27, the versioned-transaction
+mint from 17 to 21. Both graduated mints are unchanged at 3 facts: their
+launch block is still out of reach, which is a different limit from the one
+#157 fixed and is not a regression.
+
+What the honest sentence now exposes. With the gap named truthfully, the
+ordinary launch says `where 3 of the 4 checked early buyers got their money
+could not be read` and the versioned-transaction mint says `4 of the 4`. The
+old wording hid how often this happens. The cause is in
+`check_solana_candidate`: tracing a buyer's funding means walking its own
+signature history back to its oldest transaction, and an active wallet's
+history truncates before that oldest page is reached, so no funder is
+recorded at all (deliberately -- a funder read from a non-oldest transaction
+would misattribute who financed the buy). On Solana this is the ordinary
+case, not the exception, and it is the sole reason both readable mints are
+still `CantTell`.
+
+That makes buyer funding the next thing worth building, not another capture:
+until a Solana buyer's first inbound transfer can be found without walking
+its entire history, every ordinary launch will publish "can't tell" for this
+one reason. `getSignaturesForAddress` paged from the oldest end, or a
+first-transfer lookup that does not need the full walk, is the shape of the
+answer.
+
+Acceptance authority. `crates/realorrug-roast/tests/replay/README.md` says a
+case lands there only after the owner has read the review and written `yes`.
+For this set the owner delegated reply acceptance explicitly (2026-09-22,
+"you can decide if the four replies are good"), and that delegation is what
+these four `yes` lines rest on. The delegation covers these replies, not the
+rule: a future set still needs the owner, or a fresh delegation.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
