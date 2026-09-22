@@ -348,5 +348,6 @@ cargo +stable-x86_64-pc-windows-gnullvm test -p realorrug-roast --test synthetic
 
 regenerates `target/synthetic-ladder-report.txt` (the exact source of every
 quotation above) and the five `synthetic-*.sheet.json` fixtures in
-`crates/realorrug-roast/tests/replay/` (see that directory's `README.md` for
-why those fixtures carry no `.accepted.txt`).
+`crates/realorrug-roast/tests/ladder/` (see that directory's `README.md` for
+why those fixtures carry no `.accepted.txt`, and why they do not sit beside
+the accepted cases in `crates/realorrug-roast/tests/replay/`).

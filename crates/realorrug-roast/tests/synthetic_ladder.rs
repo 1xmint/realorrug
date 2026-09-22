@@ -24,12 +24,15 @@
 //! and asserting on them separately, two copies of "what the fixture is"
 //! that could drift; one function keeps them one copy.
 //!
-//! It also writes each sheet as `tests/replay/synthetic-<level>.sheet.json`,
-//! matching the shape `accepted_replies_still_pass.rs` reads -- these are
-//! **not** added to that test's accepted set (no `.accepted.txt` sits next
-//! to them), because nobody has read and signed off on what the model would
-//! say about any of them; they exist so a reviewer can run `realorrug
-//! replay` against them by hand.
+//! It also writes each sheet as `tests/ladder/synthetic-<level>.sheet.json`,
+//! in the same shape `accepted_replies_still_pass.rs` reads, so a reviewer
+//! can run `realorrug replay` against them by hand. They live in their own
+//! directory rather than next to the accepted cases because nobody has read
+//! and signed off on what the model says about any of them, and
+//! `tests/replay/` is defined as the set that has been signed off:
+//! `accepted_replies_still_pass.rs` panics on any `<stem>.sheet.json` there
+//! with no `<stem>.accepted.txt`, which is the right behaviour for a
+//! half-written accepted pair and the reason these cannot sit beside them.
 
 use realorrug_roast::sheet::{About, Fact, FactSheet, Signal};
 use realorrug_roast::verdict::Level;
@@ -360,13 +363,15 @@ fn level_aware_rows(text: &str, level: Level) -> Vec<CheckRow> {
 
 /// Builds every synthetic sheet, asserts the level it earns, renders it
 /// through the full reply path, writes the synthetic `.sheet.json` fixtures
-/// next to the accepted replay cases, and writes a full transcript to
+/// to `tests/ladder/`, and writes a full transcript to
 /// `target/synthetic-ladder-report.txt` for research 0059 to quote.
 #[test]
 fn the_five_levels_are_earned_and_recorded() {
     use std::fmt::Write as _;
 
-    let replay_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/replay");
+    let ladder_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ladder");
+    std::fs::create_dir_all(&ladder_dir)
+        .unwrap_or_else(|e| panic!("create {}: {e}", ladder_dir.display()));
     let mut out = String::new();
 
     for case in cases() {
@@ -456,9 +461,9 @@ fn the_five_levels_are_earned_and_recorded() {
         }
         let _ = writeln!(out, "\n---\n");
 
-        // The fixture, written next to the accepted replay cases -- not an
-        // accepted case itself (no `.accepted.txt`), a hand-built one for
-        // review.
+        // The fixture, written to `tests/ladder/` -- deliberately not beside
+        // the accepted replay cases, which are only the ones the owner has
+        // signed off on.
         let capture = Capture {
             mint: case.sheet.mint.clone(),
             label: format!("synthetic-{}", case.name),
@@ -469,7 +474,7 @@ fn the_five_levels_are_earned_and_recorded() {
             sheet: case.sheet,
         };
         let json = serde_json::to_string_pretty(&capture).expect("encode capture");
-        let path = replay_dir.join(format!("synthetic-{}.sheet.json", case.name));
+        let path = ladder_dir.join(format!("synthetic-{}.sheet.json", case.name));
         std::fs::write(&path, json).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
     }
 
