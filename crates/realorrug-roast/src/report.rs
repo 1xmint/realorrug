@@ -504,13 +504,51 @@ mod tests {
             score_level: Level::NothingUglyYet,
         };
         let rendered = report.render(&assessment);
+        // The exact line under the heading: "no signal fired" alone also
+        // matches the Alternative explanations section below it.
         assert!(
-            rendered.contains("no signal fired"),
+            rendered.starts_with(
+                "**Strongest concern**
+- no signal fired
+"
+            ),
             "the strongest-concern section must say so, not present a non-concern: {rendered}"
         );
         assert!(
             rendered.contains("**Context**") && rendered.contains("0.08%"),
             "the ranked fact must still reach the reader, as context: {rendered}"
+        );
+    }
+
+    /// A signal fired but nothing ranked: the concern section says there was
+    /// no candidate to lead with, never "no signal fired", which would
+    /// contradict the alternative row printed below it.
+    #[test]
+    fn a_fired_signal_with_nothing_ranked_does_not_say_no_signal_fired() {
+        let sheet = sheet_with(vec![Signal::HolderConcentration], Vec::new(), Vec::new());
+        let report = build(&sheet);
+        assert!(report.strongest_concern.is_none());
+        let assessment = Assessment {
+            findings: Vec::new(),
+            risk_index: 0,
+            score_bps: crate::assessment::Weight::from_bps(0),
+            coverage: crate::assessment::Coverage {
+                read: 0,
+                applicable: 1,
+            },
+            critical_gaps: Vec::new(),
+            level: crate::verdict::level(&sheet),
+            admissible: Vec::new(),
+            score_level: Level::CantTell,
+        };
+        let rendered = report.render(&assessment);
+        assert!(
+            rendered.starts_with(
+                "**Strongest concern**
+- nothing on this sheet ranked -- no candidate to lead with
+"
+            ),
+            "{rendered}"
         );
     }
 
