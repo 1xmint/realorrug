@@ -43,7 +43,7 @@
 //! module say more.
 
 use crate::clause::Kind;
-use crate::sheet::{Fact, FactSheet};
+use crate::sheet::{Fact, FactSheet, Signal};
 use std::fmt;
 
 /// A stable name for a ranked candidate: the [`Kind`]s whose facts it bundles.
@@ -158,8 +158,21 @@ fn creator_record(sheet: &FactSheet) -> Option<Candidate> {
 /// Below the creator record and concentration: a count with no per-creator or
 /// per-holder denominator to weigh it against, useful mainly when neither of
 /// the stronger bundles has anything to say.
+///
+/// **Only a fired signal is eligible to lead (AGENTS.md rule "absent is not
+/// zero" and this module's own "matched by kind, never by label").** An
+/// ordinary recipient count that never crossed the snapshot's own strongest
+/// band is not a concern -- [`Signal::LaunchBlockInStrongestBand`] is the one
+/// place that band's threshold is applied -- so this candidate does not
+/// exist unless that signal is on `sheet.signals`. Before this gate, "3
+/// token accounts were paid in the launch block" led a reply, and the
+/// report's own "Strongest concern" repeated it, on a sheet whose report
+/// said in the same breath that no signal had fired.
 fn launch_recipients(sheet: &FactSheet) -> Option<Candidate> {
     let recipients = fact(sheet, Kind::LaunchRecipients)?;
+    if !sheet.signals.contains(&Signal::LaunchBlockInStrongestBand) {
+        return None;
+    }
     Some(Candidate {
         id: CandidateId(vec![Kind::LaunchRecipients]),
         priority: 70,
@@ -503,6 +516,39 @@ mod tests {
             .expect("still ranked");
         assert_eq!(shared.id, CandidateId(vec![Kind::SharedFunder]));
         assert_eq!(shared.priority, 80);
+    }
+
+    /// An ordinary launch block -- a recipient count that never crossed the
+    /// snapshot's strongest band -- must not lead. Re-applying the bug (drop
+    /// the `sheet.signals.contains` gate in `launch_recipients`) makes this
+    /// fail: an unfired count would rank and `lead` would return it.
+    #[test]
+    fn an_unfired_recipient_count_does_not_lead() {
+        let sheet = sheet_with(vec![Fact::exact(
+            Kind::LaunchRecipients,
+            "distinct token accounts receiving the token in its own launch block",
+            3.0,
+            "3",
+        )]);
+        assert!(lead(&sheet).is_none());
+        assert!(rank(&sheet).is_empty());
+    }
+
+    /// The same recipient count, once the strongest-band signal has fired,
+    /// is eligible to lead -- the gate is on the signal, not on the fact
+    /// being absent.
+    #[test]
+    fn a_fired_recipient_count_leads_when_nothing_else_outranks_it() {
+        let mut sheet = sheet_with(vec![Fact::exact(
+            Kind::LaunchRecipients,
+            "distinct token accounts receiving the token in its own launch block",
+            3.0,
+            "3",
+        )]);
+        sheet.signals.push(Signal::LaunchBlockInStrongestBand);
+        let top = lead(&sheet).expect("a fired signal is eligible to lead");
+        assert_eq!(top.id, CandidateId(vec![Kind::LaunchRecipients]));
+        assert!(top.sentence.contains('3'));
     }
 
     /// Silences an unused-import warning for `About`/`Voice` if a future edit

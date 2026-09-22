@@ -539,12 +539,19 @@ pub fn template(sheet: &FactSheet) -> String {
     // for a position of" alone finds `$0.20-$2` -- 3042 bps -- and publishes a
     // cost 6.7x the real one on every reply. Written without it, run against
     // three live coins, and caught by reading the output.
+    // The number is a population measurement (research 0024: pump.fun
+    // bonding-curve trades, the `round_trip.bar` band), not this token's own
+    // cost, and the sentence says so -- `push_cost` already omits the fact
+    // entirely once the sheet says the token graduated (a graduated coin
+    // trades on an AMM the snapshot never sampled), so no separate check is
+    // needed here.
     if let Some(cost) = sheet.facts.iter().find(|f| {
         f.label.contains("round trip for a position of $20-$200") && !f.rendered.is_empty()
     }) {
         let _ = writeln!(
             out,
-            "Entering and leaving a $20-$200 position: {}.",
+            "Typical cost to enter and leave a $20-$200 position on the launch's bonding curve, \
+             measured across launches, not this token's own: {}.",
             cost.rendered
         );
     }
@@ -559,7 +566,11 @@ pub fn template(sheet: &FactSheet) -> String {
         .iter()
         .find(|f| f.kind == crate::clause::Kind::Age)
     {
-        let _ = writeln!(out, "Launched {}.", age.rendered);
+        // `age.rendered` now leads with the wall clock ("about 7.1 hours old
+        // at the read (...)"), so the sentence reads as a state ("This launch
+        // is...") rather than an event ("Launched...") that the rendered
+        // string no longer opens with a duration for.
+        let _ = writeln!(out, "This launch is {}.", age.rendered);
     } else if sheet.read_at.is_some() {
         let _ = writeln!(out, "How old this token is could not be read.");
     }
@@ -593,18 +604,39 @@ pub fn template(sheet: &FactSheet) -> String {
     out
 }
 
+/// The band name a sheet label carries in its trailing `(name)`, e.g.
+/// `"...in that band (10-13 recipients)"` -> `Some("10-13 recipients")`.
+///
+/// [`crate::sheet::push_band`] already writes the band's name into every
+/// label it builds -- the digits are on the sheet because the band's own
+/// facts authorise them (that function's own doc comment) -- so the name is
+/// always here to read back out. `None` only for a label this function was
+/// never meant to see the band name of.
+fn band_name(label: &str) -> Option<&str> {
+    // The name is the label's trailing parenthesis, so a label that does not
+    // end in one has no name to read -- no index arithmetic to get wrong.
+    label.rsplit_once('(')?.1.strip_suffix(')')
+}
+
 /// A label short enough to post, with its caveat intact.
-fn short(label: &str) -> &str {
+///
+/// Returns an owned `String`, not `&str`: two arms below name the band a
+/// share was measured over, read out of the sheet's own label rather than
+/// hard-coded, so a short line never says "in that band" without saying
+/// which one.
+fn short(label: &str) -> String {
     match label {
         l if l.contains("distinct token accounts receiving") => {
-            "token accounts in the launch block (accounts, not people)"
+            "token accounts in the launch block (accounts, not people)".to_owned()
         }
-        l if l.contains("share of INSTANT graduations") => {
-            "share of instantly-graduating launches in that band"
-        }
-        l if l.contains("share of launches that NEVER graduated") => {
-            "share of never-graduated launches in that band"
-        }
+        l if l.contains("share of INSTANT graduations") => match band_name(l) {
+            Some(name) => format!("share of instantly-graduating launches whose launch block also had {name}"),
+            None => "share of instantly-graduating launches in that band".to_owned(),
+        },
+        l if l.contains("share of launches that NEVER graduated") => match band_name(l) {
+            Some(name) => format!("share of never-graduated launches whose launch block also had {name}"),
+            None => "share of never-graduated launches in that band".to_owned(),
+        },
         // Matched on the words both the old "SOL that can be bought" label and
         // today's "quote asset that can be bought" one share: after the rename
         // this arm stopped firing, and the long label -- "(research 0022)" and
@@ -612,29 +644,35 @@ fn short(label: &str) -> &str {
         // as a number and the capacity as a claim about the venue. No venue
         // word here for the same reason.
         l if l.contains("that can be bought before price moves 1%") => {
-            "how much can be bought before 1% price impact (Real or Rug's own sizing budget, not a trading limit)"
+            "how much can be bought before 1% price impact (Real or Rug's own sizing budget, not a trading limit)".to_owned()
         }
-        l if l.contains("SOL the creator spent") => "the creator's own buy",
-        l if l.contains("round trip for a position of") => "round trip on a $20-$200 position",
+        l if l.contains("SOL the creator spent") => "the creator's own buy".to_owned(),
+        l if l.contains("round trip for a position of") => {
+            "typical round trip on a $20-$200 position on the launch's bonding curve, measured \
+             across launches, not this token's own"
+                .to_owned()
+        }
         // The population lines. Written as a comparison rather than as a
         // statistic, because the reader is holding the creator's count two lines
         // above and the sentence has to connect the two for them.
         l if l.contains("how many graduated at all") => {
-            "across every launch Real or Rug has measured, how many graduated at all"
+            "across every launch Real or Rug has measured, how many graduated at all".to_owned()
         }
         l if l.contains("how many showed almost no activity at all") => {
-            "and how many showed almost no activity at all"
+            "and how many showed almost no activity at all".to_owned()
         }
         l if l.contains("how many filled their curve over time") => {
-            "across every launch Real or Rug has measured, how many filled over time"
+            "across every launch Real or Rug has measured, how many filled over time".to_owned()
         }
         // The two lines that make one reply differ from the next, so they are
         // the two whose wording matters most. The sheet's labels are written to
         // be unambiguous to a model reading twenty of them; these are written to
         // be read once, by somebody deciding whether to buy.
-        l if l.contains("tokens this creator has launched") => "tokens this creator has launched",
+        l if l.contains("tokens this creator has launched") => {
+            "tokens this creator has launched".to_owned()
+        }
         l if l.contains("how many reached an AMM by filling over time") => {
-            "of those, how many ever filled their curve over time"
+            "of those, how many ever filled their curve over time".to_owned()
         }
         // The Robinhood lines. The caveats the sheet's labels carry are kept,
         // not trimmed for length: "may be a pool, not a person" is what stops
@@ -645,26 +683,46 @@ fn short(label: &str) -> &str {
         l if l.contains("held by the single largest address") => {
             "the largest single address's share of the supply outside the curve (may be a pool, \
              not a person)"
+                .to_owned()
         }
         l if l.contains("addresses holding the token now") => {
             "addresses holding it, not counting the curve, the factory or the zero address"
+                .to_owned()
         }
         l if l.contains("has the token graduated off the bonding curve") => {
-            "has it graduated off its bonding curve"
+            "has it graduated off its bonding curve".to_owned()
         }
         l if l.contains("ETH the launcher spent") => {
-            "the launcher's own buy in the launch transaction"
+            "the launcher's own buy in the launch transaction".to_owned()
         }
         l if l.contains("venue fee, round trip, read from the on-chain schedule") => {
-            "the venue's own fee, not the cost of trading"
+            "the venue's own fee, not the cost of trading".to_owned()
         }
-        other => other,
+        other => other.to_owned(),
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_band_share_names_its_band_and_never_says_that_band() {
+        let instant = short("share of INSTANT graduations in that band (10-13 recipients)");
+        assert_eq!(
+            instant,
+            "share of instantly-graduating launches whose launch block also had 10-13 recipients"
+        );
+        let never = short(
+            "share of launches that NEVER graduated whose block had 3 recipients (1-4 recipients)",
+        );
+        assert_eq!(
+            never,
+            "share of never-graduated launches whose launch block also had 1-4 recipients"
+        );
+        assert_eq!(band_name("no name here"), None);
+        assert_eq!(band_name("a name (x) then more words"), None);
+    }
     use crate::assessment::Weight;
     use crate::clause::Kind;
     use crate::sheet::{About, Fact};
@@ -810,6 +868,10 @@ pub(crate) mod tests {
                     .label
                     .contains("how many reached an AMM by filling over time")
         });
+        // The launch block may lead only once its own signal fired
+        // (`salience::launch_recipients`): an ordinary recipient count is
+        // not a concern, so without this the headline correctly has nothing.
+        sheet.signals.push(Signal::LaunchBlockInStrongestBand);
         let headline = headline(&sheet).expect("the launch block is still about this coin");
         assert!(headline.contains("launch block"), "{headline}");
         assert!(crate::fidelity::check(&headline, &sheet.authorised()).is_empty());
@@ -874,7 +936,7 @@ pub(crate) mod tests {
         // the reader rather than about the coin.
         let out = template(&a_real_shaped_sheet());
         let cost = out
-            .find("Entering and leaving")
+            .find("Typical cost to enter and leave")
             .expect("the cost line must survive being demoted");
         let last_fact = out.rfind("- ").expect("fact lines");
         assert!(
@@ -903,7 +965,7 @@ pub(crate) mod tests {
         let mut sheet = a_real_shaped_sheet();
         sheet.facts.retain(|f| !f.label.contains("round trip"));
         let out = template(&sheet);
-        assert!(!out.contains("Entering and leaving"), "{out}");
+        assert!(!out.contains("Typical cost to enter and leave"), "{out}");
         assert!(!out.contains("456"), "{out}");
     }
 

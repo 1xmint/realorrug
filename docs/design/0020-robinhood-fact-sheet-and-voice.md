@@ -583,7 +583,7 @@ enforced by `forbidden::check_required_age`, which reads the level and the
 sheet together.
 
 **Tier one, the age is on the sheet.** The launch-block read produced a
-`Kind::Age` fact — "63954 slots (about 7.1 hours) since its launch block."
+`Kind::Age` fact — "about 7.1 hours old at the read (63954 slots after its launch block)."
 The reply must use an age word (*ago*, *old*, *hour*) **and** state a number
 the age fact itself carries. The read point's own number is deliberately not
 in the set of numbers that satisfy this: a slot number is not an age, and

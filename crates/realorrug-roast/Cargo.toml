@@ -32,6 +32,9 @@ realorrug-agent.workspace = true
 # Robinhood-gate tests in `sheet.rs`) needs the 20-byte address type itself;
 # `realorrug-types` only re-exports the enum that wraps it.
 realorrug-robinhood.workspace = true
+# Test-only: the fee-line test builds a `CurveFacts` by hand and needs the
+# venue's own fee-schedule type; `realorrug-onchain` does not re-export it.
+realorrug-pumpfun.workspace = true
 # The summary-beside-the-index test writes to a directory it owns.
 tempfile = "3"
 
