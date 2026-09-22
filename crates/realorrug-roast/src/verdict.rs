@@ -452,6 +452,19 @@ const MAX_FACTS: usize = 5;
 /// screenshotted without the rest.
 #[must_use]
 pub fn headline(sheet: &FactSheet) -> Option<String> {
+    // **Nothing fired: state the level, not the salience-ranked fact.**
+    // Research 2026-09 (replay-2026-09): a sheet with no signal at all still
+    // opened on whichever fact happened to rank highest -- a 0.08% top-holder
+    // share leading a reply whose own alternatives section said "no signal
+    // fired" is the exact defect this guards against. `level(sheet)` can only
+    // be `CantTell` or `NothingUglyYet` here (`level`'s own body: the other
+    // three arms all require a signal), so this covers both cases the empty
+    // list can produce. The demoted fact is not dropped -- it still reaches
+    // the reader as an ordinary `LEAD` bullet in [`template`], the same fact
+    // the loop already pulls by `Kind` regardless of what led.
+    if sheet.signals.is_empty() {
+        return Some(no_signal_headline(sheet));
+    }
     // Drawn from [`crate::salience`], the one typed selection service --
     // ranked by `Fact::kind`, never by a fragment of `Fact::label`. Until
     // 2026-09-18 this matched label substrings directly, one branch per
@@ -465,6 +478,38 @@ pub fn headline(sheet: &FactSheet) -> Option<String> {
     crate::salience::lead(sheet)
         .map(|c| c.sentence)
         .filter(|line| line.chars().count() <= 100)
+}
+
+/// The level-stating line printed when [`level`] found nothing to lead on.
+///
+/// `sheet.unknown` already carries the exact phrase [`crate::forbidden`]'s
+/// `check_required_canttell` looks for (`sheet::phrase_for`'s own wording),
+/// so this reuses it verbatim rather than paraphrasing a second copy that
+/// could drift from what the check accepts.
+fn no_signal_headline(sheet: &FactSheet) -> String {
+    match level(sheet) {
+        Level::CantTell => {
+            let gap = sheet
+                .unknown
+                .first()
+                .map_or("a required fact could not be read", String::as_str);
+            format!("Can't tell yet: {gap}.")
+        }
+        // Phrased so `forbidden::check_required_age` still requires the age
+        // (or its absence) stated separately below -- this line names the
+        // level, not a claim about what was checked, so it cannot be read as
+        // "safe" about anything `sheet.unknown` does not cover (rule 8).
+        Level::NothingUglyYet => "Nothing ugly yet at this read.".to_owned(),
+        // `sheet.signals.is_empty()` rules these out by construction:
+        // `rugged_pair` and the live-risk count both require a signal, and
+        // `Sketchy` is any signal at all. Kept as a real arm rather than
+        // `unreachable!` for the same reason `forbidden.rs`'s own dead
+        // branches are -- this function is callable against any hand-built
+        // sheet, not only ones `level` itself produced.
+        Level::Rugged | Level::RugMechanicsLive | Level::Sketchy => crate::salience::lead(sheet)
+            .map(|c| c.sentence)
+            .unwrap_or_default(),
+    }
 }
 
 /// The reply that ships when a model reply cannot be trusted or cannot be had.
@@ -829,12 +874,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_unknown_creator_gets_no_headline_rather_than_a_zero() {
+    fn an_unknown_creator_with_no_signal_gets_the_level_not_a_zero() {
         // Rule 9, and the direction that matters. A creator Radar has never
         // seen has NO record, not a record of zero launches -- and "0 launches
         // by this creator" would be a damning sentence invented out of an
         // absence. With no creator record and no launch block there is nothing
-        // about this coin to lead with, so nothing is offered.
+        // about this coin to lead with the old, per-fact way -- and, since
+        // 2026-09-22 (Fault 2, replay-2026-09), nothing fired either, so the
+        // headline states the level instead of going silent or inventing a
+        // zero.
         let mut sheet = a_real_shaped_sheet();
         sheet.facts.retain(|f| {
             !f.label.contains("tokens this creator has launched")
@@ -845,7 +893,10 @@ pub(crate) mod tests {
                     .label
                     .contains("receiving the token in its own launch block")
         });
-        assert_eq!(headline(&sheet), None);
+        assert_eq!(
+            headline(&sheet).as_deref(),
+            Some("Nothing ugly yet at this read.")
+        );
         // And the floor still renders, without an empty line where the
         // headline would have been.
         let out = template(&sheet);
@@ -884,16 +935,20 @@ pub(crate) mod tests {
         // coins opened with the same sentence, which reads as a bot repeating
         // itself rather than as something that looked at the coin. As of
         // 2026-09-17 there is no name-and-address header either (`template`'s
-        // own doc comment), so line 0 is the headline itself.
+        // own doc comment), so line 0 is the headline itself. `a_real_shaped_
+        // sheet` fires no signal, so as of 2026-09-22 (Fault 2) line 0 states
+        // the level instead -- still not the constant -- and the creator's
+        // record follows as an ordinary bullet rather than leading.
         let out = template(&a_real_shaped_sheet());
         let first = out.lines().next().expect("a first line");
-        assert!(
-            first.contains("launches by this creator"),
-            "the first line must be about this coin, got: {first}"
-        );
+        assert_eq!(first, "Nothing ugly yet at this read.");
         assert!(
             !first.contains("round trip"),
             "the constant must not lead: {first}"
+        );
+        assert!(
+            out.contains("tokens this creator has launched"),
+            "the creator record must still reach the reader, as an ordinary line: {out}"
         );
     }
 
@@ -1367,6 +1422,31 @@ pub(crate) mod tests {
             level(&sheet_with(Vec::new(), Vec::new())),
             Level::NothingUglyYet
         );
+    }
+
+    /// Fault 2 (replay-2026-09): a `CantTell` sheet with no signal must open
+    /// on the level and the reason, not on a salience-ranked fact that would
+    /// contradict "can't tell" by reading like an ordinary observation.
+    #[test]
+    fn cant_tell_with_no_signal_states_the_gap_first() {
+        let sheet = sheet_with(
+            Vec::new(),
+            vec!["the creator's own buys and sells were not checked".to_owned()],
+        );
+        assert_eq!(level(&sheet), Level::CantTell);
+        assert_eq!(
+            headline(&sheet).as_deref(),
+            Some("Can't tell yet: the creator's own buys and sells were not checked.")
+        );
+        // The published line must still name the gap the way
+        // `forbidden::check_required_canttell` requires -- proven here
+        // against the real check, not assumed.
+        let out = crate::forbidden::check_required(
+            &headline(&sheet).unwrap_or_default(),
+            Level::CantTell,
+            &sheet,
+        );
+        assert!(out.is_empty(), "{out:?}");
     }
 
     #[test]

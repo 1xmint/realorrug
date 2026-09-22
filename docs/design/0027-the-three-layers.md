@@ -708,6 +708,37 @@ owner to report, falling through to the next unresolved one exactly as it
 already did for the curve. "One unidentified wallet" still means what it
 says: an address neither proof reached.
 
+### The lead states the level when nothing fired, as built (2026-09-22)
+
+Recording, not recommending. The same capture replay found a second gap:
+`verdict::headline` always opened on `salience::lead`'s highest-ranked
+candidate, even when `sheet.signals` was empty. On an ordinary launch that
+put a 0.08% top-holder share -- not a concern by any measure this codebase
+has -- under the reply's first line, while the report's own Alternative
+explanations said "no signal fired" one section down. `report::build` had
+the matching defect: `strongest_concern` was `salience::lead`'s candidate
+regardless of `sheet.signals`, so the same non-concern also led the report's
+"Strongest concern" section.
+
+`headline` now checks `sheet.signals.is_empty()` first. `level(sheet)` can
+only be `CantTell` or `NothingUglyYet` when nothing fired (`level`'s own
+body: the other three arms all require a signal), so the two cases are
+exhaustive: `CantTell` opens with "Can't tell yet: " followed by
+`sheet.unknown`'s first entry, verbatim -- the same phrase
+`forbidden::check_required_canttell` already requires the reply name, so
+reusing it rather than paraphrasing cannot drift out of that check's
+vocabulary. `NothingUglyYet` opens with "Nothing ugly yet at this read."
+Neither line moves the level; both only print what `crate::verdict::level`
+already computed. The demoted candidate is not dropped -- `template`'s
+`LEAD` loop already pulls the same fact by `Kind` a line or two later,
+independently of what led, so it still reaches the reader as an ordinary
+line.
+
+`report::build` got the equivalent split: when `sheet.signals` is empty, the
+ranked candidate (if any) moves from `strongest_concern` into a new
+`Report::context` field instead, and `Report::render`'s "Strongest concern"
+section prints "no signal fired" rather than presenting a non-concern as one.
+
 ### Readable market time, as built (2026-09-18)
 
 `push_market`'s "as of" moment was Unix seconds ("unix time 1758000000"),
