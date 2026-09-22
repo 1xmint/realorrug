@@ -76,7 +76,7 @@ use realorrug_robinhood::{Address, Hash32, Log, LogsError, Rpc, quantity, quanti
 
 use crate::budget::Budget;
 use crate::memory::{CheckRun, Completeness, FundingEdge, Memory};
-use crate::rpc::{RpcClient, SignatureInfo, Transaction};
+use crate::rpc::{RpcClient, SignatureInfo, Transaction, is_last_page};
 
 /// `alchemy_getAssetTransfers`, per the CU table (2026-09-18).
 pub const CU_GET_ASSET_TRANSFERS: u32 = 120;
@@ -1061,14 +1061,19 @@ struct EarlyBuyer {
 /// bonding-curve PDA ([`realorrug_pumpfun::pda::bonding_curve`]), is a buyer
 /// (`Funding::buyers` -- see [`SOLANA_SELECTION_RULE`]). The first
 /// [`MAX_CANDIDATES`] of them by first purchase are checked: each candidate's
-/// own oldest signature is read separately for the native lamport transfer
-/// that funded it, on the same terms [`funder_of`] already reads for
-/// Robinhood (the account whose balance fell the most), counted only when
-/// [`Transaction::slot`] is at or before the candidate's first-purchase slot
-/// -- a transfer after the purchase it is supposed to finance did not fund
-/// it -- and subject to [`is_material`] against [`GAS_ALLOWANCE_LAMPORTS`]
-/// (quote 0: no SOL cost of the buy itself is read here, so materiality
-/// falls back to "more than dust").
+/// own funder is found by [`funding_search`], which pages the candidate's
+/// signature history backward *from its first purchase*, newest-first, for
+/// the most recent material inbound SOL transfer at or before that purchase
+/// -- not its wallet's oldest transaction ever. That is both the more useful
+/// fact (a wallet built to buy one launch was funded by the transfer that
+/// financed the buy, whoever sent it) and the one the network can actually
+/// serve, because `getSignaturesForAddress` already pages newest-first, so
+/// walking back from the purchase is the cheap direction (research 0056's
+/// "the fourth read" addendum). Funders are tested on the same terms
+/// [`funder_of`] already reads for Robinhood (the account whose balance fell
+/// the most) and [`is_material`] against [`GAS_ALLOWANCE_LAMPORTS`] (quote 0:
+/// no SOL cost of the buy itself is read here, so materiality falls back to
+/// "more than dust").
 ///
 /// **If the mint's own history was truncated before its window could be
 /// read, none of the buyers found in what *was* read are "the early
@@ -1076,10 +1081,11 @@ struct EarlyBuyer {
 /// drops the oldest, undiscovered page first, so the window is not
 /// necessarily the earliest one. Nothing is checked, `Funding::buyers` and
 /// `checked` are both empty, and the gap says why. **If a candidate's own
-/// signature history is truncated before its oldest transaction, no funder
-/// is recorded for it** -- `signatures.last()` there is not its oldest
-/// transaction either -- again never as "no funder found"; both cases are
-/// named in [`Funding::gaps`] (AGENTS.md rule 8).
+/// search hits [`MAX_FUNDING_SIGNATURE_PAGES`] or
+/// [`MAX_FUNDING_TRANSACTIONS`], or a transaction read fails, no funder is
+/// recorded and `Candidate::funding_complete` is false** -- a capped or
+/// failed search never counts as having measured the absence of a funder;
+/// both cases are named in [`Funding::gaps`] (AGENTS.md rule 8).
 ///
 /// `mint_signatures` reuses the mint's signature history dossier step 1
 /// already read, rather than walking it a second time: two walks of the same
@@ -1196,10 +1202,163 @@ pub fn investigate_solana(
     })
 }
 
-/// Reads one early buyer's own oldest signature for the native transfer that
-/// funded it before its first purchase. Split out of [`investigate_solana`]
-/// so a failure on one candidate is a gap on the overall result, not a
-/// reason to abandon the others.
+/// How many `getTransaction` fetches [`funding_search`] will make for one
+/// buyer while looking for its funder.
+///
+/// A wallet built to buy one launch shows a handful of transactions in this
+/// window -- the transfer that funded it, the buy itself, maybe one or two
+/// more -- so ten fetches is a wide margin over that shape. A wallet that
+/// needs more than ten `getTransaction` calls just to find a signature
+/// landing at or before its first purchase is not a fresh wallet created for
+/// this launch; it is one a stranger could have chosen specifically to be
+/// expensive to read, and this read should stop and say so rather than keep
+/// paying for it (AGENTS.md rule 8: a capped search is not a measurement).
+pub const MAX_FUNDING_TRANSACTIONS: usize = 10;
+
+/// How many `getSignaturesForAddress` pages [`funding_search`] will walk
+/// back through one buyer's history looking for a signature at or before its
+/// first purchase.
+///
+/// Sized the same way [`crate::budget::PAGES_PER_WALK`] is: three pages (up
+/// to 3,000 signatures, [`crate::rpc::PAGE_SIZE`] each) covers the entire
+/// recent history of a wallet built for this launch, including one that kept
+/// trading afterward. A wallet whose most recent 3,000 signatures are *all*
+/// newer than its own purchase of this mint is busy enough that finishing
+/// the walk would mean reading deep into a history this check has no reason
+/// to trust is honestly priced.
+pub const MAX_FUNDING_SIGNATURE_PAGES: usize = 3;
+
+/// Searches backward through one buyer's own signature history for the most
+/// recent material inbound SOL transfer at or before its first purchase of
+/// this mint -- the wallet's funder (research 0056's "the fourth read"
+/// addendum), not its oldest transaction ever.
+///
+/// `getSignaturesForAddress` pages newest-first, so walking backward from the
+/// purchase is the cheap direction: a wallet created to buy one launch has
+/// its funding transfer somewhere in its most recent history before the buy,
+/// and this never needs to reach the wallet's actual beginning to find it.
+///
+/// Returns `(complete, funder)`:
+/// - A material funder found -- `(true, Some(funder))`.
+/// - The wallet's own history ended (an empty or short page,
+///   [`crate::rpc::is_last_page`], the same test
+///   [`RpcClient::signatures_back_to_oldest`] uses) with every eligible
+///   signature in it fetched and none material -- `(true, None)`. This is a
+///   **measured** absence: every signature at or before the first purchase
+///   was read, and none of them was a material transfer in.
+/// - Either cap in this module was reached, or a transaction read failed --
+///   `(false, None)`, with a gap pushed naming which. Never returned as a
+///   measured absence (AGENTS.md rule 8): a capped or failed search says
+///   nothing about whether a funder exists past the point it stopped.
+fn funding_search(
+    client: &RpcClient,
+    budget: &mut Budget,
+    address: &realorrug_types::Address,
+    address_key: &str,
+    first_purchase_slot: u64,
+    gaps: &mut Vec<String>,
+) -> (bool, Option<Funder>) {
+    let mut before: Option<String> = None;
+    let mut pages = 0usize;
+    let mut fetched = 0usize;
+
+    loop {
+        if pages >= MAX_FUNDING_SIGNATURE_PAGES {
+            gaps.push(format!(
+                "funding of {address_key}: more than {MAX_FUNDING_SIGNATURE_PAGES} signature \
+                 pages walked without reaching its first purchase or the end of its history; no \
+                 funder recorded"
+            ));
+            return (false, None);
+        }
+        pages += 1;
+
+        let page = match client.signatures_page(budget, address, before.as_deref()) {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                gaps.push(format!(
+                    "funding of {address_key}: page budget exhausted while searching for its \
+                     funder; no funder recorded"
+                ));
+                return (false, None);
+            }
+            Err(why) => {
+                gaps.push(format!("funding of {address_key}: {why}"));
+                return (false, None);
+            }
+        };
+
+        let reached_end = page.is_empty() || is_last_page(page.len());
+        if let Some(last) = page.last() {
+            before = Some(last.signature.clone());
+        }
+
+        for sig in &page {
+            // Landed after the purchase it would have to finance: cannot be
+            // the funder. `>`, not `>=` -- a transfer in the same slot as the
+            // purchase can still have landed before it within that slot.
+            if sig.slot > first_purchase_slot {
+                continue;
+            }
+            if sig.err.is_some() {
+                continue;
+            }
+            if fetched >= MAX_FUNDING_TRANSACTIONS {
+                gaps.push(format!(
+                    "funding of {address_key}: more than {MAX_FUNDING_TRANSACTIONS} \
+                     transactions fetched; no funder recorded"
+                ));
+                return (false, None);
+            }
+            fetched += 1;
+            match client.transaction(budget, &sig.signature) {
+                Ok(Some(tx)) => {
+                    if let Some((from, amount)) = funder_of(&tx, address_key)
+                        && is_material(amount, 0, GAS_ALLOWANCE_LAMPORTS)
+                    {
+                        return (
+                            true,
+                            Some(Funder {
+                                address: from,
+                                amount_wei: amount,
+                                block: tx.slot.0,
+                                transaction: sig.signature.clone(),
+                                unique_id: sig.signature.clone(),
+                                material: true,
+                            }),
+                        );
+                    }
+                }
+                Ok(None) => {
+                    gaps.push(format!(
+                        "funding of {address_key}: transaction {} could not be fetched",
+                        sig.signature
+                    ));
+                    return (false, None);
+                }
+                Err(why) => {
+                    gaps.push(format!(
+                        "funding of {address_key}: transaction {}: {why}",
+                        sig.signature
+                    ));
+                    return (false, None);
+                }
+            }
+        }
+
+        if reached_end {
+            // Every eligible signature in the wallet's whole history was
+            // read and none was a material inbound transfer: a measurement,
+            // not a guess (AGENTS.md rule 8).
+            return (true, None);
+        }
+    }
+}
+
+/// Reads one early buyer's funder: the most recent material inbound SOL
+/// transfer at or before its first purchase ([`funding_search`]). Split out
+/// of [`investigate_solana`] so a failure on one candidate is a gap on the
+/// overall result, not a reason to abandon the others.
 fn check_solana_candidate(
     client: &RpcClient,
     budget: &mut Budget,
@@ -1228,60 +1387,29 @@ fn check_solana_candidate(
         return candidate;
     };
 
-    match client.signatures_back_to_oldest(budget, &address_key) {
-        Ok((signatures, truncated)) => {
-            candidate.funding_complete = !truncated;
-            if truncated {
-                // `signatures.last()` is only the oldest transaction seen so
-                // far, not the candidate's actual oldest -- a truncated page
-                // walk drops the earlier, undiscovered pages first (same
-                // reasoning as the mint-level truncation above). Recording a
-                // funder from a non-oldest transaction would misattribute
-                // who financed the buy, so no funder is recorded at all; the
-                // gap says why (AGENTS.md rule 8).
-                gaps.push(format!(
-                    "funding of {address}: signature history truncated before its oldest \
-                     transaction; no funder recorded"
-                ));
-            } else if let Some(oldest) = signatures.last() {
-                match client.transaction(budget, &oldest.signature) {
-                    Ok(Some(tx)) => {
-                        if tx.slot.0 > buyer.first_purchase_slot {
-                            // A transfer after the purchase it is supposed to
-                            // finance did not fund it; only a transfer at or
-                            // before the first-purchase slot can have.
-                            gaps.push(format!(
-                                "funding of {address}: its oldest transaction landed after its \
-                                 first purchase; no funder recorded"
-                            ));
-                        } else if let Some((from, amount)) = funder_of(&tx, &address) {
-                            candidate.funders.push(Funder {
-                                address: from,
-                                amount_wei: amount,
-                                block: tx.slot.0,
-                                transaction: oldest.signature.clone(),
-                                unique_id: oldest.signature.clone(),
-                                material: is_material(amount, 0, GAS_ALLOWANCE_LAMPORTS),
-                            });
-                        }
-                    }
-                    Ok(None) => {
-                        gaps.push(format!(
-                            "funding of {address}: oldest transaction not found"
-                        ));
-                        candidate.funding_complete = false;
-                    }
-                    Err(why) => {
-                        gaps.push(format!("funding of {address}: {why}"));
-                        candidate.funding_complete = false;
-                    }
-                }
-            }
-        }
-        Err(why) => {
-            gaps.push(format!("funding of {address}: {why}"));
-            candidate.funding_complete = false;
-        }
+    // No extra page floor is granted here (contrast `dossier.rs`'s steps 3
+    // and 6): `investigate_solana`'s caller already grants the funding
+    // step's own floor of `PAGES_PER_WALK` once, before this loop, exactly
+    // when this loop is the first walk of anything in this dossier
+    // (`mint_signatures.is_none()`); granting a second floor per candidate
+    // on top of that would let up to `MAX_CANDIDATES` candidates each
+    // restack the floor, silently widening the funding step's own share of
+    // the shared pool at step 6's expense. `MAX_FUNDING_SIGNATURE_PAGES` and
+    // `MAX_FUNDING_TRANSACTIONS` already bound what one candidate can spend,
+    // so a candidate low on shared pages simply reports a gap rather than
+    // reading past what remains -- the same honest degradation the rest of
+    // this module relies on.
+    let (complete, funder) = funding_search(
+        client,
+        budget,
+        &address_key,
+        &address,
+        buyer.first_purchase_slot,
+        gaps,
+    );
+    candidate.funding_complete = complete;
+    if let Some(funder) = funder {
+        candidate.funders.push(funder);
     }
     candidate
 }
@@ -2592,6 +2720,35 @@ mod tests {
         format!(r#"{{"result":[{}],"error":null}}"#, entries.join(","))
     }
 
+    /// A full, 1,000-signature page at a chosen `slot` -- for tests that need
+    /// a page that is *not* the last one (forcing `funding_search` to fetch
+    /// another) while also controlling whether its signatures are eligible
+    /// (at or before a candidate's first purchase).
+    fn full_signatures_page_at(prefix: &str, slot: u64) -> String {
+        let entries: Vec<String> = (0..1000)
+            .map(|i| format!(r#"{{"signature":"{prefix}-{i}","slot":{slot}}}"#))
+            .collect();
+        format!(r#"{{"result":[{}],"error":null}}"#, entries.join(","))
+    }
+
+    /// A short `getSignaturesForAddress` page naming several signatures at
+    /// chosen slots, newest first -- for tests that need more than one
+    /// signature in a single (final) page.
+    fn signatures_page_many(entries: &[(&str, u64)]) -> String {
+        let items: Vec<String> = entries
+            .iter()
+            .map(|(sig, slot)| format!(r#"{{"signature":"{sig}","slot":{slot}}}"#))
+            .collect();
+        format!(r#"{{"result":[{}],"error":null}}"#, items.join(","))
+    }
+
+    /// A malformed `getTransaction` answer -- not valid JSON at all -- for
+    /// tests exercising a transaction-read failure on one candidate without
+    /// aborting the others.
+    fn malformed_response() -> String {
+        "not json".to_owned()
+    }
+
     #[test]
     fn a_truncated_mint_history_checks_nobody_instead_of_the_wrong_buyers() {
         // A full page means there may be more signatures older than it; with
@@ -2685,10 +2842,15 @@ mod tests {
 
     #[test]
     fn a_funder_transaction_after_the_first_purchase_does_not_count() {
-        // The candidate's own oldest transaction landed at slot 9, after its
-        // first purchase at slot 5 -- so whatever moved lamports there did
-        // not fund the buy; it happened afterward, and recording it as "who
-        // funded the early buyer" would be false.
+        // The candidate's only signature landed at slot 9, after its first
+        // purchase at slot 5 -- so whatever moved lamports there did not
+        // fund the buy; it happened afterward. funding_search skips it (its
+        // slot is past the purchase) and, since that was the wallet's whole
+        // history (a short page), reaches the end having fetched every
+        // eligible signature and found none material: that is a measured
+        // absence, not a failure, so funding_complete is true and no gap is
+        // recorded -- skipping a too-recent signature during a normal
+        // backward walk is not itself a reportable gap.
         let mint = solana_addr(9);
         let mint_key = mint.to_string();
         let buyer = solana_addr(1).to_string();
@@ -2708,10 +2870,266 @@ mod tests {
         assert!(funding.checked[0].funding_complete);
         assert!(funding.checked[0].funders.is_empty());
         assert!(
-            funding
+            !funding
                 .gaps
                 .iter()
                 .any(|g| g.contains("after its first purchase")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_fresh_wallets_funder_is_found_on_the_first_page() {
+        // The simplest case: the candidate's whole history is one page with
+        // one signature, and that signature's transaction is a material
+        // inbound transfer landing at or before the first purchase.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_at("buyer-sig", 3),
+            funding_tx_at(&funder, &buyer, 500_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, funder);
+    }
+
+    #[test]
+    fn a_busy_wallets_funder_is_found_several_pages_back() {
+        // The first page is full (1,000 signatures, all landing after the
+        // first purchase so none is fetched) -- a full page is not the last
+        // one, so `funding_search` must walk backward to a second page to
+        // find the material transfer that funded the purchase.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            full_signatures_page_at("recent", 100),
+            signatures_page_at("buyer-sig", 3),
+            funding_tx_at(&funder, &buyer, 500_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, funder);
+    }
+
+    #[test]
+    fn a_transfer_after_the_first_purchase_is_skipped_for_an_older_material_one() {
+        // Newest-first, the first signature landed after the purchase (must
+        // be skipped, not fetched at all) and the second landed before it
+        // and is a material transfer -- demonstrating the skip-then-find
+        // behavior distinctly from a plain end-of-history absence.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_many(&[("after-sig", 9), ("before-sig", 3)]),
+            funding_tx_at(&funder, &buyer, 500_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, funder);
+        assert_eq!(funding.checked[0].funders[0].transaction, "before-sig");
+    }
+
+    #[test]
+    fn an_immaterial_dust_transfer_is_skipped_for_a_later_material_one() {
+        // Newest-first, the first eligible signature is a dust transfer
+        // (below the materiality threshold: `is_material` needs at least
+        // half of `GAS_ALLOWANCE_LAMPORTS`) and must be passed over in favor
+        // of the next, larger transfer.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let dust_sender = solana_addr(0xd0).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_many(&[("dust-sig", 4), ("material-sig", 3)]),
+            funding_tx_at(&dust_sender, &buyer, 1_000, 4),
+            funding_tx_at(&funder, &buyer, 500_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, funder);
+    }
+
+    #[test]
+    fn the_end_of_a_candidates_history_with_no_material_funder_is_a_measured_absence() {
+        // The candidate's whole history (a short, final page) is read and
+        // every eligible signature is fetched, but none is material: this is
+        // a measurement, not a guess, so `funding_complete` is true with no
+        // gap even though no funder was found.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let dust_sender = solana_addr(0xd0).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page_at("dust-sig", 3),
+            funding_tx_at(&dust_sender, &buyer, 1_000, 3),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete);
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(funding.gaps.is_empty(), "gaps: {:?}", funding.gaps);
+    }
+
+    #[test]
+    fn more_than_max_funding_signature_pages_walked_reports_incomplete() {
+        // Every page returned is full (1,000 signatures, none eligible, so
+        // none is fetched) -- `funding_search` never reaches the end of the
+        // candidate's history, so after `MAX_FUNDING_SIGNATURE_PAGES` pages
+        // it must stop and say so, not report a false absence.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let responses = [
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            full_signatures_page_at("p1", 100),
+            full_signatures_page_at("p2", 100),
+            full_signatures_page_at("p3", 100),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(!funding.checked[0].funding_complete);
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("signature pages walked")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn more_than_max_funding_transactions_fetched_reports_incomplete() {
+        // One page names 11 eligible signatures (at or before the purchase,
+        // none failed): the 11th exceeds `MAX_FUNDING_TRANSACTIONS` (10)
+        // before it is ever fetched, so the search stops and says so rather
+        // than reporting a false absence after reading only part of the
+        // page's eligible signatures.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let dust_sender = solana_addr(0xd0).to_string();
+        let entries: Vec<(&str, u64)> = (0..11)
+            .map(|i| {
+                (
+                    [
+                        "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10",
+                    ][i],
+                    3,
+                )
+            })
+            .collect();
+        let mut responses = vec![
+            signatures_page_at("mint-sig", 5),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+        ];
+        responses.push(signatures_page_many(&entries));
+        for _ in 0..10 {
+            responses.push(funding_tx_at(&dust_sender, &buyer, 1_000, 3));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(!funding.checked[0].funding_complete);
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("transactions fetched")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_failed_transaction_read_for_one_candidate_does_not_abort_the_others() {
+        // Two candidates share the mint's one buy transaction. The first
+        // candidate's own transaction read comes back malformed -- a named
+        // gap, `funding_complete == false` -- but the second candidate is
+        // still checked and its own funder still found.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer1 = solana_addr(1).to_string();
+        let buyer2 = solana_addr(2).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [
+            signatures_page("mint-sig"),
+            buy_tx(&mint_key, &[(&buyer1, 500), (&buyer2, 500)]),
+            signatures_page("buyer1-sig"),
+            malformed_response(),
+            signatures_page("buyer2-sig"),
+            funding_tx(&funder, &buyer2, 500_000),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 2);
+        assert!(!funding.checked[0].funding_complete);
+        assert!(funding.checked[0].funders.is_empty());
+        assert!(funding.checked[1].funding_complete);
+        assert_eq!(funding.checked[1].funders.len(), 1);
+        assert_eq!(funding.checked[1].funders[0].address, funder);
+        assert!(
+            funding.gaps.iter().any(|g| g.contains("buyer1-sig")),
             "gaps: {:?}",
             funding.gaps
         );

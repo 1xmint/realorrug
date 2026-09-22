@@ -308,6 +308,52 @@ For this set the owner delegated reply acceptance explicitly (2026-09-22,
 these four `yes` lines rest on. The delegation covers these replies, not the
 rule: a future set still needs the owner, or a fresh delegation.
 
+## Addendum, 2026-09-22: buyer funding stops walking for the oldest transaction
+
+The cause named in the previous addendum is fixed. `check_solana_candidate`
+(`crates/realorrug-onchain/src/wallets.rs`) no longer walks a candidate's
+signature history back to its oldest transaction; a new `funding_search`
+pages the candidate's own history backward *from its first purchase of this
+mint*, newest-first, and takes the most recent material inbound SOL transfer
+at or before that purchase as the funder. `getSignaturesForAddress` already
+pages newest-first, so this is the cheap direction: a wallet built to buy
+one launch has its funding transfer somewhere in the handful of transactions
+before the buy, not necessarily at the very start of its life, and finding
+it never requires reaching the wallet's actual beginning.
+
+Two new caps bound what a search will pay for a wallet a stranger could have
+built to be expensive to read: `MAX_FUNDING_SIGNATURE_PAGES = 3` (matching
+`Budget::PAGES_PER_WALK`'s own sizing) bounds how many `getSignaturesForAddress`
+pages the search walks, and `MAX_FUNDING_TRANSACTIONS = 10` bounds how many
+`getTransaction` calls it spends testing candidate signatures for a funder. A
+wallet created for one launch shows a handful of transactions in this window
+— the funding transfer, the buy, maybe one or two more — so both caps sit
+well above that shape without opening the read to unbounded cost against a
+wallet with thousands of signatures.
+
+What "complete" means changed with it. `Candidate::funding_complete` is
+`true` in exactly two cases: a material funder was found, or the search
+paged back to the end of the candidate's own history (an empty or short
+page, the same test `RpcClient::signatures_back_to_oldest` uses) having
+fetched every eligible signature and found none material — a **measured**
+absence, because the whole reachable window was actually read. It is
+`false`, with a gap naming which cap was hit or which read failed, whenever
+either cap stops the search or a signature-page or transaction read errors.
+A capped or failed search is never recorded as a measured absence (AGENTS.md
+rule 8): reaching a cap says nothing about whether a funder exists past the
+point the search gave up.
+
+`crates/realorrug-roast/src/sheet.rs`'s `funding_gap_message` (added by the
+previous addendum) reads `Candidate::funding_complete` and needed no change:
+the sentence it builds ("where N of the M checked early buyers got their
+money could not be read") was already written for this definition of
+complete, not the old one. On the two readable captures in this set —
+previously "where 3 of the 4 checked early buyers got their money could not
+be read" and "4 of the 4" — a fresh re-read after this fix is expected to
+name a funder, or record a measured absence, for candidates that used to
+report nothing at all; whether either mint's launch actually clears
+`CantTell` is a question for the next capture, not settled here.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
