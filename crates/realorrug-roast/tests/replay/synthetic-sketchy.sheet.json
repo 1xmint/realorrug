@@ -1,0 +1,85 @@
+{
+  "mint": "SYNTHETIC-SKETCHY-NOT-A-REAL-TOKEN",
+  "label": "synthetic-sketchy",
+  "captured_at": "2026-09-22T00:00:00Z",
+  "rules_version": "2026-09-21",
+  "level": "Sketchy",
+  "assessment": {
+    "findings": [
+      {
+        "signal": "holder_concentration",
+        "group": "Ownership",
+        "episode": "Holders"
+      }
+    ],
+    "risk_index": 25,
+    "score_bps": 2200,
+    "coverage": {
+      "read": 3,
+      "applicable": 3
+    },
+    "critical_gaps": [],
+    "level": "Sketchy",
+    "admissible": [
+      "Sketchy",
+      "NothingUglyYet"
+    ],
+    "score_level": "Sketchy"
+  },
+  "sheet": {
+    "mint": "SYNTHETIC-SKETCHY-NOT-A-REAL-TOKEN",
+    "read_at": {
+      "Solana": 900
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "about 0.4 hours old at the read (900 slots after its launch block)",
+        "values": [
+          900.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 0.4 hours ago -- 900 slots, by the read point."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "holders",
+        "label": "addresses holding the token, not counting the bonding curve",
+        "rendered": "6",
+        "values": [
+          6.0
+        ],
+        "clauses": []
+      },
+      {
+        "about": "Measurement",
+        "kind": "largest_holder_share",
+        "label": "share of circulating supply at the single largest address outside the curve",
+        "rendered": "61.0%",
+        "values": [
+          0.61,
+          61.0,
+          61.0,
+          61.0,
+          61.0
+        ],
+        "clauses": []
+      }
+    ],
+    "untrusted": [],
+    "unknown": [],
+    "signals": [
+      "holder_concentration"
+    ],
+    "twins": [
+      "the largest address outside the curve could be an exchange's wallet or the pool itself, which this read does not resolve"
+    ],
+    "skipped": []
+  }
+}
