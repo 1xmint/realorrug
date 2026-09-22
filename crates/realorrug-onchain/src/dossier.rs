@@ -1568,9 +1568,13 @@ mod tests {
         // walks the mint's history on its own (slice 6b). On the miss the
         // launch walk already spent the page budget, so funding reads nothing
         // there; the two walks do not yet share their pages, which is why a
-        // hit now costs as much as a miss rather than less.
-        assert_eq!(hit_budget.calls_made(), 4);
-        assert!(hit_budget.calls_made() <= miss_budget.calls_made());
+        // hit now costs as much as a miss rather than less. Step 3b (the
+        // creator's cash flow) adds 1 more: reading the mint account to learn
+        // its token program, which this transport answers with no account.
+        // Until each walk gets its own page allowance, a hit can cost one
+        // call more than a miss; what it must never do is page the launch.
+        assert_eq!(hit_budget.calls_made(), 5);
+        assert!(hit_budget.calls_made() <= miss_budget.calls_made() + 1);
     }
 
     /// A transport that answers `getSignaturesForAddress` and `getTransaction`
@@ -1620,9 +1624,11 @@ mod tests {
         // 1 curve miss + 1 creator history (empty page) + 1 token-ownership
         // miss (this transport answers `getTokenLargestAccounts` with
         // `value: null`, so step 4 fails after its first call) + 2 calls of
-        // the funding read's own walk of the mint's history (slice 6b).
-        assert_eq!(dossier.calls, 5);
-        assert_eq!(budget.calls_made(), 5);
+        // the funding read's own walk of the mint's history (slice 6b) + 1
+        // read of the mint account for step 3b's token program (no account
+        // on this transport, so the cash flow read stops there).
+        assert_eq!(dossier.calls, 6);
+        assert_eq!(budget.calls_made(), 6);
     }
 
     impl crate::rpc::Transport for SuccessfulLaunch {
