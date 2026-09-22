@@ -394,22 +394,39 @@ to the wrong program by this path; a missing address means an instruction
 disappears from `Transaction::instructions`, not that it appears under
 someone else's name.**
 
-That disappearance is still dangerous for exactly the reason this branch's
-fix exists. If a swap's only non-System instruction is the one whose program
-lived in the unmerged lookup table, dropping it can leave
-`Transaction::instructions` holding *only* the System Program instructions
-that were already present (fee payment, a wrapped-SOL account touch, and
-so on) -- a **non-empty** list that reads as "every instruction is the
-System Program" to `is_plain_sol_transfer`, because the swap's tell was
-silently removed before the gate ever saw it. This is not the same failure
-this branch's fix closes: the empty-list fix only catches the case where
-*every* instruction was dropped. A partial drop that still leaves one or
-more (all-System) instructions behind is not caught by `is_empty()` and
-would pass the gate today, wrongly, exactly as the task worried. Whether
-this happens in practice depends on whether every RPC provider the crate
-talks to reliably returns `meta.loadedAddresses` for every versioned
-transaction it can return at all -- not verified here, and not fixed here
-per instruction; `rpc.rs` is unchanged by this commit.
+**Revised by an independent review (2026-09-22): that "would pass the gate
+today, wrongly" conclusion does not hold, once `funder_of`'s own shape check
+is read alongside `parse_transaction`.** Verified from the code:
+`funder_of` (`wallets.rs:1009`) refuses to trust *any* index into `accounts`
+unless `tx.accounts.len()` equals both `tx.pre_balances.len()` and
+`tx.post_balances.len()`, returning `FunderRead::Unreadable` otherwise --
+before `is_plain_sol_transfer` is ever consulted, because `resolve_funder_read`
+only reaches the plain-transfer gate on a `FunderRead::Found`. A node
+computes `preBalances`/`postBalances` over the account list its runtime
+actually resolved for the transaction, including every lookup-table
+address, independently of whether it also echoes `meta.loadedAddresses`
+back in the response for `parse_transaction` to merge. So the partial-drop
+case above still happens -- `tx.accounts` stays short, holding only the
+static `accountKeys` -- but its effect is not a wrongly-accepted gate: the
+balance arrays it left full-length now disagree in length with the
+shortened `accounts`, `funder_of` catches that mismatch first, and the read
+becomes a gap ("did not report lamport balances; cannot confirm no funder
+there") rather than a silently-accepted plain transfer. This chain --
+`funder_of`'s length check firing before the gate is reached -- is verified
+by reading `wallets.rs` and by `a_partial_lookup_table_read_is_unreadable_not_a_funder`,
+the fixture added alongside this addendum.
+
+The residual risk this leaves is narrower than the original paragraph
+claimed, and is now an inference about provider behaviour, not a code
+finding: a provider that omits the lookup-table keys from
+`meta.loadedAddresses` **and** also truncates `preBalances`/`postBalances`
+to match the shortened, static-only account list (rather than reporting
+them at the full length its own runtime resolved) would make the lengths
+agree again, and the partial-drop-then-pass failure this addendum
+originally described would recur. Whether any RPC provider the crate talks
+to actually does that has not been checked against a live capture -- it is
+inference about what a provider *could* do, not a fact this document can
+settle; `rpc.rs` is unchanged by this commit.
 
 ## Sources
 
