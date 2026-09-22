@@ -241,6 +241,31 @@ for this sheet, and `voice::template` follows that same lead. A reader of
 this `Rugged` reply, with no other context, cannot tell it apart from a
 `Sketchy` one.
 
+## Why the advice check fires on a sentence that gives no advice
+
+The `"buy/sell/hold advice"` FAIL on the `Sketchy` and `Rugged` reply text is
+not a vague false fire; its trigger is exact. `hint_violations`
+([`forbidden.rs:882-890`](../../crates/realorrug-roast/src/forbidden.rs))
+marks a sentence as advice when the word `buy`, `sell` or `hold` is
+sentence-initial, follows one of `and`/`then`/`please`/`should`/`must`/
+`just`/`to`, or **is followed by one of `now`/`this`/`it`/`your`/`until`**.
+
+Both replies begin with the holder-concentration headline:
+
+```
+5 addresses hold it, but the biggest balance -- 89.0% of it -- is still unidentified.
+```
+
+`hold` is followed by `it`, which matches the third arm. The verb's subject
+is `addresses`: the sentence describes who holds the token, it does not tell
+a reader to hold it. The imperative test does not look for a subject, so any
+sentence of the form "N addresses hold it" is refused.
+
+Both levels whose reply led with this headline in this run — `Sketchy` and
+`Rugged` — therefore fail their own advice check. `RugMechanicsLive`, which
+led with the creator's launch history instead, passed. Recorded as a
+finding; no fix is decided here.
+
 ## The blanket ban vs. the level-aware trio, on the same text
 
 This is the comparison the packet calls "the most valuable thing in the
