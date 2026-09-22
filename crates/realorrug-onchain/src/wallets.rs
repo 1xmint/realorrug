@@ -740,14 +740,21 @@ pub struct CreatorTrade {
     pub role: CreatorRole,
     /// Buy or sell.
     pub side: Side,
-    /// Quote paid in (a buy) or received (a sell), in wei.
+    /// Quote paid in (a buy) or received (a sell), in the chain's own
+    /// smallest unit -- wei for Robinhood, lamports for Solana. See
+    /// [`CreatorCashFlow::quote_asset`] for which one, and its decimals.
     pub quote: u128,
     /// Tokens received (a buy) or given up (a sell).
     pub tokens: u128,
-    /// The block it landed in.
+    /// The block it landed in (a Robinhood block number, or a Solana slot).
     pub block: u64,
-    /// The transaction that carried it.
-    pub transaction: Hash32,
+    /// The transaction that carried it, in the chain's own canonical text
+    /// form (`0x`-hex for Robinhood, base58 for Solana) -- a `String`, not
+    /// [`Hash32`], because a Solana signature is 64 raw bytes and cannot fit
+    /// that 32-byte type at all. See this module's own doc on why every
+    /// cross-chain field here is the chain's own text form rather than a
+    /// chain-specific typed one.
+    pub transaction: String,
     /// A stable per-log id for memory's `(chain, unique_id)` key.
     pub unique_id: String,
 }
@@ -783,7 +790,7 @@ pub fn classify_creator_trades(logs: &[Log], record: &LaunchedToken) -> Vec<Crea
                 quote: t.quote,
                 tokens: t.tokens,
                 block: log.block,
-                transaction: log.transaction,
+                transaction: log.transaction.to_string(),
                 unique_id: log_unique_id(log),
             })
         })
@@ -833,6 +840,14 @@ pub struct CreatorCashFlow {
     pub trades_complete: bool,
     /// Why a read fell short, when it did.
     pub gaps: Vec<String>,
+    /// What `CreatorTrade::quote` is denominated in -- native ETH for
+    /// Robinhood, native SOL for Solana. Carried on the result itself,
+    /// rather than inferred by the caller from which chain it thinks it
+    /// asked, so a renderer (`realorrug-roast`'s `push_creator_cash_flow`)
+    /// can never print one chain's lamports labelled with another chain's
+    /// symbol (AGENTS.md section 3 rule 2: no fabricated fact, which a
+    /// wrong unit label would be).
+    pub quote_asset: crate::dossier::QuoteAsset,
 }
 
 impl CreatorCashFlow {
@@ -940,6 +955,7 @@ pub fn creator_cash_flow(
         transfers_out: transfers_out.unwrap_or(0),
         trades_complete,
         gaps,
+        quote_asset: crate::dossier::QuoteAsset::eth(),
     }
 }
 
@@ -2625,7 +2641,7 @@ mod creator_cash_flow_tests {
                     quote: 100,
                     tokens: 40,
                     block: 1,
-                    transaction: Hash32([1; 32]),
+                    transaction: Hash32([1; 32]).to_string(),
                     unique_id: "0x01-0-0".to_owned(),
                 },
                 CreatorTrade {
@@ -2634,13 +2650,14 @@ mod creator_cash_flow_tests {
                     quote: 30,
                     tokens: 50,
                     block: 1,
-                    transaction: Hash32([3; 32]),
+                    transaction: Hash32([3; 32]).to_string(),
                     unique_id: "0x03-0-0".to_owned(),
                 },
             ],
             transfers_out: 0,
             trades_complete: true,
             gaps: Vec::new(),
+            quote_asset: crate::dossier::QuoteAsset::eth(),
         };
         assert_eq!(complete.proceeds_wei(), Some(100));
         assert_eq!(complete.cost_basis_wei(), Some(30));

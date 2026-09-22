@@ -3328,8 +3328,14 @@ fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::To
     );
 }
 
-/// The creator's observed on-chain cash flow on Pons v2 (design 0027 slice
-/// 5: `realorrug_onchain::wallets::CreatorCashFlow`, Robinhood only).
+/// The creator's observed on-chain cash flow (design 0027 slice 5:
+/// `realorrug_onchain::wallets::CreatorCashFlow`), on either chain -- Pons v2
+/// buys/sells for Robinhood, the creator's own associated-token-account
+/// history for Solana. `CreatorCashFlow::quote_asset` names what the numbers
+/// below are actually denominated in (SOL or ETH), so this function never
+/// hardcodes a unit: printing a Solana creator's lamports labelled "ETH"
+/// would be exactly the fabricated-unit fact AGENTS.md section 3 rule 2
+/// forbids.
 ///
 /// Reads `trades_complete` through the type's own accessors rather than the
 /// raw fields: [`realorrug_onchain::wallets::CreatorCashFlow::proceeds_wei`]
@@ -3354,23 +3360,35 @@ fn push_creator_cash_flow(
     let Some(proceeds) = cash_flow.proceeds_wei() else {
         return;
     };
-    let eth = format!("{} ETH", render_quote(proceeds, 18));
+    // `quote_asset` names what this chain's reader actually paid/received in
+    // -- SOL for Solana, ETH for Robinhood (`CreatorCashFlow::quote_asset`'s
+    // own doc). Rendering a fixed "ETH"/18 here regardless of chain would
+    // print a Solana creator's lamports as ETH, which is exactly the
+    // fabricated-unit mistake AGENTS.md section 3 rule 2 forbids.
+    let symbol = cash_flow.quote_asset.symbol.as_str();
+    let decimals = cash_flow.quote_asset.decimals;
+    let rendered_proceeds = format!("{} {symbol}", render_quote(proceeds, decimals));
     facts.push(
         Fact::exact(
             Kind::CreatorCashFlow,
-            "ETH the creator received in sales -- summed across every decoded sale by the \
-             deployer or fee recipient on Pons v2",
-            quote_as_f64(proceeds, 18),
-            eth.clone(),
+            format!(
+                "{symbol} the creator received in sales -- summed across every decoded sale by \
+                 the deployer or fee recipient"
+            ),
+            quote_as_f64(proceeds, decimals),
+            rendered_proceeds.clone(),
         )
         .saying(
             Voice::Plain,
             format!(
-                "The creator has received {eth} in sales of this token on Pons v2, across \
+                "The creator has received {rendered_proceeds} in sales of this token, across \
                  every decoded sale by the deployer or fee recipient."
             ),
         )
-        .saying(Voice::Blunt, format!("Creator sale proceeds: {eth}.")),
+        .saying(
+            Voice::Blunt,
+            format!("Creator sale proceeds: {rendered_proceeds}."),
+        ),
     );
 
     // `net_wei` cannot be `None` here: it is `None` only when either half of
@@ -3379,11 +3397,11 @@ fn push_creator_cash_flow(
     if let Some(net) = cash_flow.net_wei() {
         let magnitude = net.unsigned_abs();
         let sign = if net < 0 { "-" } else { "" };
-        let rendered = format!("{sign}{} ETH", render_quote(magnitude, 18));
+        let rendered = format!("{sign}{} {symbol}", render_quote(magnitude, decimals));
         let value = if net < 0 {
-            -quote_as_f64(magnitude, 18)
+            -quote_as_f64(magnitude, decimals)
         } else {
-            quote_as_f64(magnitude, 18)
+            quote_as_f64(magnitude, decimals)
         };
         facts.push(
             Fact::exact(
@@ -5719,7 +5737,7 @@ mod tests {
             quote,
             tokens: 1,
             block: 1,
-            transaction: realorrug_robinhood::Hash32([1; 32]),
+            transaction: realorrug_robinhood::Hash32([1; 32]).to_string(),
             unique_id: format!("0x01-0-{quote}"),
         }
     }
@@ -5744,6 +5762,7 @@ mod tests {
                 ),
             ],
             transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -5766,6 +5785,7 @@ mod tests {
                 100_000_000_000_000,
             )],
             transfers_out: 3,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -5814,6 +5834,7 @@ mod tests {
                 100_000_000_000_000,
             )],
             transfers_out: 1,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: false,
             gaps: vec!["creator trade history: too many results".to_owned()],
         });
@@ -5850,6 +5871,7 @@ mod tests {
                 ),
             ],
             transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -5902,6 +5924,7 @@ mod tests {
                 ),
             ],
             transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -5929,6 +5952,7 @@ mod tests {
                 100,
             )],
             transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
@@ -5953,6 +5977,7 @@ mod tests {
                 1_000_000_000_000_000_000,
             )],
             transfers_out: 2,
+            quote_asset: realorrug_onchain::QuoteAsset::eth(),
             trades_complete: true,
             gaps: Vec::new(),
         });
