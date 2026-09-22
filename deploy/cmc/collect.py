@@ -61,6 +61,14 @@ class OutOfCreditBudget(Exception):
     """Raised to unwind cleanly once --max-credits is reached."""
 
 
+def _as_int(value: object) -> int:
+    """Read a status number that may arrive as an int, a numeric string or null."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 class CmcApiError(Exception):
     """A non-retryable CMC error for a single item; caller logs and skips."""
 
@@ -204,8 +212,11 @@ class CmcClient:
                 raise CmcApiError(_scrub(f"bad JSON from {path}: {exc}", self._api_key)) from None
 
             status = payload.get("status", {})
-            credit_count = status.get("credit_count", 0) or 0
-            error_code = status.get("error_code", 0) or 0
+            # The DEX and k-line endpoints send these as strings ("0",
+            # "1014") while the classic endpoints send integers; compare as
+            # numbers or a success reads as an error.
+            credit_count = _as_int(status.get("credit_count"))
+            error_code = _as_int(status.get("error_code"))
 
             if error_code == RETRYABLE_ERROR_CODE and attempt <= MAX_RETRIES:
                 self._sleep_backoff(attempt)

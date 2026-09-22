@@ -206,6 +206,18 @@ class Test1014NotRetried(unittest.TestCase):
             client.get("/v1/k-line/candles", {"address": "mint", "from": 0, "to": 1})
         self.assertEqual(len(calls), 1)  # not retried
 
+    def test_string_status_codes_are_read_as_numbers(self):
+        # The DEX and k-line endpoints send "0" and "1014" as strings (seen
+        # live 2026-09-22); a string "0" once read as an error.
+        ok = {"status": {"error_code": "0", "credit_count": "1"}, "data": []}
+        client, _, _ = make_client([ok])
+        self.assertEqual(client.get("/v4/dex/spot-pairs/latest", {}), ok)
+        late = {"status": {"error_code": "1014", "error_message": "exceeds", "credit_count": 0}}
+        client, calls, _ = make_client([late])
+        with self.assertRaises(collect.Cmc1014Error):
+            client.get("/v1/k-line/candles", {"address": "mint", "from": 0, "to": 1})
+        self.assertEqual(len(calls), 1)
+
     def test_fetch_candles_records_out_of_window_and_returns_partial(self):
         # First chunk succeeds, second chunk hits 1014.
         seq = [[[1, 2, 3, 4, 5, 1000, 1]]]
