@@ -3280,22 +3280,26 @@ fn render_usd(value: f64) -> String {
 /// The largest owner among the sampled top token accounts (design 0027 row
 /// 6/7 slice 6a: `realorrug_onchain::TokenOwnership`, Solana only).
 ///
-/// **Excludes any owner proven to be the token's own bonding curve**, the
-/// one exclusion `dossier.rs`'s `token_ownership` reader can make without
-/// guessing (recomputing the pump.fun bonding curve's program-derived
-/// address and matching it). Every other owner stays
-/// `OwnerRole::Unresolved` regardless of its balance's size or shape, so
-/// this always writes the unresolved-role sentence -- "one unidentified
+/// **Excludes any owner proven to be the token's own bonding curve or the
+/// PumpSwap AMM pool**, the two exclusions `dossier.rs`'s `token_ownership`
+/// reader can make without guessing (recomputing the pump.fun bonding
+/// curve's program-derived address and matching it, or reading an owner
+/// address's own account back and finding the PumpSwap program owns it). A
+/// graduated mint's largest holder is routinely the pool, and reporting that
+/// as "one unidentified wallet" would be badly misleading. Every other owner
+/// stays `OwnerRole::Unresolved` regardless of its balance's size or shape,
+/// so this always writes the unresolved-role sentence -- "one unidentified
 /// wallet" -- and never a role the sheet did not establish (AGENTS.md §4's
-/// last bullet). If every sampled account belongs to the curve, or the
-/// sample is empty, there is no non-curve owner to report and this writes
-/// nothing rather than a fact about zero owners.
+/// last bullet). If every sampled account belongs to the curve or the pool,
+/// or the sample is empty, there is no other owner to report and this
+/// writes nothing rather than a fact about zero owners.
 fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::TokenOwnership) {
-    let Some(largest) = ownership
-        .owners
-        .iter()
-        .find(|o| o.role != realorrug_onchain::OwnerRole::BondingCurve)
-    else {
+    let Some(largest) = ownership.owners.iter().find(|o| {
+        !matches!(
+            o.role,
+            realorrug_onchain::OwnerRole::BondingCurve | realorrug_onchain::OwnerRole::AmmPool
+        )
+    }) else {
         return;
     };
     // `share_bps` is `None` only when `getTokenSupply` reported zero (rule 9:
@@ -3308,7 +3312,8 @@ fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::To
     let share = Fact::share(
         Kind::TokenOwnership,
         "share of the total token supply held by the largest owner among the sampled \
-         largest accounts, excluding any address proven to be the bonding curve",
+         largest accounts, excluding any address proven to be the bonding curve or the \
+         PumpSwap AMM pool",
         f64::from(bps) / 10_000.0,
     );
     let pct = share.rendered.clone();
@@ -5620,6 +5625,49 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         let fact = fact_of(&sheet, Kind::TokenOwnership).expect("a token-ownership fact");
         assert_eq!(fact.rendered, "20.0%");
+    }
+
+    #[test]
+    fn a_pool_owned_top_account_is_skipped_for_the_next_non_pool_owner() {
+        // Fault: on a graduated mint the largest sampled account is
+        // routinely the PumpSwap AMM pool, and reporting it as "one
+        // unidentified wallet" is badly misleading. `AmmPool` must be
+        // excluded the same way `BondingCurve` already is, falling through
+        // to the next owner rather than suppressing the fact.
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![
+                token_owner(
+                    [45u8; 32],
+                    8_530,
+                    Some(8_530),
+                    realorrug_onchain::OwnerRole::AmmPool,
+                ),
+                token_owner(
+                    [46u8; 32],
+                    460,
+                    Some(460),
+                    realorrug_onchain::OwnerRole::Unresolved,
+                ),
+            ],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let fact = fact_of(&sheet, Kind::TokenOwnership).expect("a token-ownership fact");
+        assert_eq!(fact.rendered, "4.6%");
+        let plain = fact
+            .clauses
+            .iter()
+            .find(|c| c.voice == crate::clause::Voice::Plain)
+            .expect("a plain clause");
+        assert!(
+            plain.text.contains("one unidentified wallet holds 4.6%"),
+            "{}",
+            plain.text
+        );
     }
 
     #[test]

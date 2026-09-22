@@ -686,6 +686,28 @@ by the two chains happening to stay disjoint forever. Still above
 sampled one, is more specific than a bare recipient count with nothing to
 weigh it against.
 
+### The AMM pool gets a proven role too, as built (2026-09-22)
+
+Recording, not recommending. A capture replay (`docs/research/data/replay-2026-09`)
+found the gap the paragraph above already flagged as a limit: on a graduated
+mint the largest sampled account's owner is routinely the PumpSwap pool
+itself, not a person, and `push_token_ownership` reported it as "one
+unidentified wallet holds 85.3%" -- badly misleading for an address the
+chain proves is a pool.
+
+`dossier.rs`'s `OwnerRole` gained `AmmPool`, proven the same way as
+`BondingCurve` in kind if not in mechanism: `BondingCurve` recomputes a
+program-derived address from the mint and needs no read; `AmmPool` has no
+seed to recompute the pool from, so `token_ownership` reads each
+still-unresolved owner's own account back in a second batched
+`getMultipleAccounts` call and checks whether the PumpSwap program
+(`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) owns it -- a fact a caller
+can re-read, not an inference from the balance's size. `push_token_ownership`
+now excludes `AmmPool` alongside `BondingCurve` when picking the largest
+owner to report, falling through to the next unresolved one exactly as it
+already did for the curve. "One unidentified wallet" still means what it
+says: an address neither proof reached.
+
 ### Readable market time, as built (2026-09-18)
 
 `push_market`'s "as of" moment was Unix seconds ("unix time 1758000000"),
