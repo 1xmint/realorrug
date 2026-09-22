@@ -113,7 +113,11 @@ pub struct ChangeRow {
 /// The four-part report.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Report {
-    /// Part 1: the strongest concern and its evidence.
+    /// Part 1: the strongest concern and its evidence. `None` when no signal
+    /// fired -- the salience-ranked fact still exists on a signal-less sheet,
+    /// but it is not a concern, so it travels in [`Report::context`] instead
+    /// (replay-2026-09: the fix for a 0.08% top-holder share leading this
+    /// section while `alternatives` said "no signal fired" one line below).
     pub strongest_concern: Option<Concern>,
     /// Part 2: alternative explanations, one row per fired signal.
     pub alternatives: Vec<AlternativeRow>,
@@ -121,6 +125,11 @@ pub struct Report {
     pub missing: Missing,
     /// Part 4: what evidence would change the assessment.
     pub would_change: Vec<ChangeRow>,
+    /// The salience-ranked fact, demoted out of [`Report::strongest_concern`]
+    /// because no signal fired. `Some` only when `alternatives` is empty and
+    /// the sheet still had a candidate to rank -- the same fact a reader
+    /// would otherwise have seen mislabelled as the concern.
+    pub context: Option<Concern>,
 }
 
 /// The fact kind a fired [`Signal`] is read from.
@@ -205,10 +214,20 @@ fn would_resolve_text(signal: Signal) -> &'static str {
 /// (`realorrug replay`) reproduce it from a saved capture with no network.
 #[must_use]
 pub fn build(sheet: &FactSheet) -> Report {
-    let strongest_concern = crate::salience::lead(sheet).map(|candidate| Concern {
+    let lead = crate::salience::lead(sheet).map(|candidate| Concern {
         kinds: candidate.id.0.clone(),
         evidence: candidate.sentence,
     });
+    // Nothing fired: the ranked fact is real but is not a concern -- putting
+    // it under "Strongest concern" is the exact defect replay-2026-09 found
+    // (a tiny holder share leading the section while `alternatives` says "no
+    // signal fired" one line below). It still reaches the reader, as
+    // context instead of as the concern.
+    let (strongest_concern, context) = if sheet.signals.is_empty() {
+        (None, lead)
+    } else {
+        (lead, None)
+    };
 
     let level = crate::verdict::level(sheet);
 
@@ -241,6 +260,7 @@ pub fn build(sheet: &FactSheet) -> Report {
             read_at: sheet.read_at,
         },
         would_change,
+        context,
     }
 }
 
@@ -262,6 +282,14 @@ impl Report {
                 let kinds: Vec<String> = c.kinds.iter().map(|k| format!("{k:?}")).collect();
                 let _ = writeln!(out, "  (evidence: {})", kinds.join(", "));
             }
+            // `alternatives` is built 1:1 from `sheet.signals` (`build`'s own
+            // zip), so an empty one here means no signal fired -- the exact
+            // case `build` also empties `strongest_concern` for, so the two
+            // sections never contradict each other the way replay-2026-09
+            // found them doing.
+            None if self.alternatives.is_empty() => {
+                let _ = writeln!(out, "- no signal fired");
+            }
             None => {
                 let _ = writeln!(
                     out,
@@ -282,6 +310,13 @@ impl Report {
             for row in &self.alternatives {
                 let _ = writeln!(out, "| {:?} | {} |", row.kind, row.explanation);
             }
+        }
+
+        if let Some(c) = &self.context {
+            let _ = writeln!(out, "\n**Context**");
+            let _ = writeln!(out, "- {}", c.evidence);
+            let kinds: Vec<String> = c.kinds.iter().map(|k| format!("{k:?}")).collect();
+            let _ = writeln!(out, "  (evidence: {})", kinds.join(", "));
         }
 
         let _ = writeln!(out, "\n**Missing checks**");
@@ -415,6 +450,106 @@ mod tests {
         let sheet = sheet_with(Vec::new(), Vec::new(), Vec::new());
         let report = build(&sheet);
         assert!(report.strongest_concern.is_none());
+        assert!(report.context.is_none());
+    }
+
+    /// Fault 2 (replay-2026-09): a sheet that ranks a candidate but fired no
+    /// signal must not present that candidate as the strongest concern --
+    /// the report's own Alternative explanations already say no signal
+    /// fired, and a tiny holder share leading the concern section
+    /// contradicted that line one row down. The fact is not dropped: it
+    /// moves to `Report::context`, and `render` says "no signal fired"
+    /// rather than a non-concern.
+    #[test]
+    fn a_ranked_candidate_with_no_signal_becomes_context_not_a_concern() {
+        use crate::sheet::Fact;
+        let mut sheet = sheet_with(Vec::new(), Vec::new(), Vec::new());
+        sheet.facts = vec![
+            Fact::exact(
+                Kind::Holders,
+                "addresses holding the token now",
+                529.0,
+                "529",
+            ),
+            Fact::exact(
+                Kind::LargestHolderShare,
+                "held by the single largest address",
+                0.0008,
+                "0.08%",
+            ),
+        ];
+        let report = build(&sheet);
+        assert!(
+            report.strongest_concern.is_none(),
+            "a non-concern must not fill the strongest-concern slot: {:?}",
+            report.strongest_concern
+        );
+        let context = report
+            .context
+            .clone()
+            .expect("the ranked fact still surfaces");
+        assert!(context.evidence.contains("0.08%"), "{}", context.evidence);
+
+        let assessment = Assessment {
+            findings: Vec::new(),
+            risk_index: 0,
+            score_bps: crate::assessment::Weight::from_bps(0),
+            coverage: crate::assessment::Coverage {
+                read: 1,
+                applicable: 1,
+            },
+            critical_gaps: Vec::new(),
+            level: crate::verdict::level(&sheet),
+            admissible: Vec::new(),
+            score_level: Level::NothingUglyYet,
+        };
+        let rendered = report.render(&assessment);
+        // The exact line under the heading: "no signal fired" alone also
+        // matches the Alternative explanations section below it.
+        assert!(
+            rendered.starts_with(
+                "**Strongest concern**
+- no signal fired
+"
+            ),
+            "the strongest-concern section must say so, not present a non-concern: {rendered}"
+        );
+        assert!(
+            rendered.contains("**Context**") && rendered.contains("0.08%"),
+            "the ranked fact must still reach the reader, as context: {rendered}"
+        );
+    }
+
+    /// A signal fired but nothing ranked: the concern section says there was
+    /// no candidate to lead with, never "no signal fired", which would
+    /// contradict the alternative row printed below it.
+    #[test]
+    fn a_fired_signal_with_nothing_ranked_does_not_say_no_signal_fired() {
+        let sheet = sheet_with(vec![Signal::HolderConcentration], Vec::new(), Vec::new());
+        let report = build(&sheet);
+        assert!(report.strongest_concern.is_none());
+        let assessment = Assessment {
+            findings: Vec::new(),
+            risk_index: 0,
+            score_bps: crate::assessment::Weight::from_bps(0),
+            coverage: crate::assessment::Coverage {
+                read: 0,
+                applicable: 1,
+            },
+            critical_gaps: Vec::new(),
+            level: crate::verdict::level(&sheet),
+            admissible: Vec::new(),
+            score_level: Level::CantTell,
+        };
+        let rendered = report.render(&assessment);
+        assert!(
+            rendered.starts_with(
+                "**Strongest concern**
+- nothing on this sheet ranked -- no candidate to lead with
+"
+            ),
+            "{rendered}"
+        );
     }
 
     /// Every fired signal produces one alternative row and one would-change

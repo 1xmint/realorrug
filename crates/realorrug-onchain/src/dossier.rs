@@ -24,6 +24,7 @@
 
 use std::time::SystemTime;
 
+use realorrug_decode::pumpswap;
 use realorrug_pumpfun::curve::BondingCurve;
 use realorrug_pumpfun::token::{TokenAccount, TokenProgram};
 use realorrug_pumpfun::{Fees, pda};
@@ -268,15 +269,23 @@ pub struct Holders {
 ///
 /// **`Unresolved` is the default and the safe one.** Excluding an owner from
 /// "largest holder" on the strength of a balance's size or shape alone would
-/// be exactly the guess AGENTS.md rule 9 forbids. The only accepted proof
-/// today is recomputing the pump.fun bonding curve's program-derived address
-/// from the mint itself and finding an owner's address matches it -- math a
-/// reader can rerun, not an inference from what the balance looks like.
+/// be exactly the guess AGENTS.md rule 9 forbids. The accepted proofs today
+/// are recomputing the pump.fun bonding curve's program-derived address from
+/// the mint itself and finding an owner's address matches it, and reading an
+/// owner address's own account back and finding the PumpSwap AMM program
+/// owns it -- both math or a read a caller can rerun, never an inference
+/// from what the balance looks like.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnerRole {
     /// This owner is the verified pump.fun bonding curve for this exact
     /// mint, proven by recomputing its program-derived address.
     BondingCurve,
+    /// This owner's own account is owned by the PumpSwap AMM program
+    /// (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) -- proof the address
+    /// is a pool the program controls, not a guess from its balance's size.
+    /// A graduated mint's largest holder is routinely this pool, and calling
+    /// it "one unidentified wallet" would be badly misleading.
+    AmmPool,
     /// No program identity could be established for this owner. Never
     /// upgraded to a person, or to a role this reader did not establish.
     Unresolved,
@@ -685,6 +694,32 @@ fn token_ownership(
                 share_bps: None,
                 role,
             });
+        }
+    }
+
+    // The first batch already proved the bonding curve for free (a PDA
+    // recomputation, no read needed). Proving the AMM pool instead needs an
+    // address's own account read back -- there is no seed to recompute it
+    // from here -- so the still-unresolved owners get one more batched
+    // `getMultipleAccounts`, reusing the same `.owner` field this function
+    // already reads for the bonding curve check, just against a different
+    // address per entry.
+    let pending: Vec<Address> = owners
+        .iter()
+        .filter(|o| o.role == OwnerRole::Unresolved)
+        .map(|o| o.owner)
+        .collect();
+    if !pending.is_empty() {
+        let owner_accounts = client.accounts(budget, &pending)?;
+        for (address, account) in pending.iter().zip(&owner_accounts.accounts) {
+            let is_amm_pool = account
+                .as_ref()
+                .and_then(|a| a.owner.as_deref())
+                .and_then(|o| o.parse::<Address>().ok())
+                == Some(pumpswap::PROGRAM_ID);
+            if is_amm_pool && let Some(owner) = owners.iter_mut().find(|o| o.owner == *address) {
+                owner.role = OwnerRole::AmmPool;
+            }
         }
     }
 
@@ -1950,6 +1985,25 @@ mod tests {
         )
     }
 
+    /// A `getMultipleAccounts`-shaped body naming each account's owning
+    /// program explicitly (or `null` for an absent account), for the
+    /// AMM-pool check's second call, which only ever reads the `.owner`
+    /// field back -- never the data, so the data here is empty rather than a
+    /// parsed token account's bytes.
+    fn owner_program_body(programs: &[Option<Address>]) -> String {
+        let values: Vec<String> = programs
+            .iter()
+            .map(|p| match p {
+                Some(program) => format!(r#"{{"data":["","base64"],"owner":"{program}"}}"#),
+                None => "null".to_owned(),
+            })
+            .collect();
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"value":[{}],"context":{{"slot":1}}}}}}"#,
+            values.join(",")
+        )
+    }
+
     fn largest_accounts_body(entries: &[(Address, u64)]) -> String {
         let values: Vec<String> = entries
             .iter()
@@ -1967,13 +2021,24 @@ mod tests {
         )
     }
 
-    /// A transport that routes to canned bodies for the three
-    /// `token_ownership` reads by method name, and errors on anything else --
-    /// nothing else should ever be called from a bare `token_ownership` test.
+    /// A transport that routes to canned bodies for the `token_ownership`
+    /// reads by method name, and errors on anything else -- nothing else
+    /// should ever be called from a bare `token_ownership` test.
+    ///
+    /// `getMultipleAccounts` is called twice by `token_ownership`: once for
+    /// the sampled accounts plus the mint, once more for any owner still
+    /// unresolved after the first (the AMM-pool check). `multi` answers the
+    /// first call and `owners` the second, tracked by a counter rather than
+    /// by inspecting the request body, since both calls share a method name.
     struct TokenOwnershipMock {
         largest: String,
         supply: String,
         multi: String,
+        /// The second `getMultipleAccounts` call's answer, for the
+        /// still-unresolved owners. Empty-list bodies (`multi_accounts_body(&[])`)
+        /// are the right default when a test expects nothing left unresolved.
+        owners: String,
+        calls: std::sync::atomic::AtomicU32,
     }
 
     impl crate::rpc::Transport for TokenOwnershipMock {
@@ -1983,7 +2048,12 @@ mod tests {
             } else if body.contains("getTokenSupply") {
                 Ok(self.supply.clone())
             } else if body.contains("getMultipleAccounts") {
-                Ok(self.multi.clone())
+                let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if call == 0 {
+                    Ok(self.multi.clone())
+                } else {
+                    Ok(self.owners.clone())
+                }
             } else {
                 Err(format!("unexpected call: {body}"))
             }
@@ -2036,6 +2106,8 @@ mod tests {
                 largest,
                 supply,
                 multi,
+                owners: owner_program_body(&[Some(realorrug_pumpfun::token::SPL_TOKEN_PROGRAM)]),
+                calls: std::sync::atomic::AtomicU32::new(0),
             }),
         );
         let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
@@ -2077,6 +2149,8 @@ mod tests {
                 largest,
                 supply,
                 multi,
+                owners: owner_program_body(&[Some(realorrug_pumpfun::token::SPL_TOKEN_PROGRAM)]),
+                calls: std::sync::atomic::AtomicU32::new(0),
             }),
         );
         let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
@@ -2095,6 +2169,44 @@ mod tests {
             .find(|o| o.owner == unproven_owner)
             .expect("the unproven owner is kept, not dropped");
         assert_eq!(other.role, OwnerRole::Unresolved);
+    }
+
+    #[test]
+    fn a_pool_owned_top_account_is_classified_amm_pool() {
+        // Fault: a graduated mint's largest token account is routinely owned
+        // by the PumpSwap AMM pool, and reporting that as "one unidentified
+        // wallet" is badly misleading. Proof here is reading the owner
+        // address's own account back and finding the PumpSwap program owns
+        // it -- the same shape of proof as the bonding curve check, just one
+        // more batched read since there is no seed to recompute the pool
+        // PDA from here.
+        let mint = Address::new([50u8; 32]);
+        let pool = Address::new([51u8; 32]);
+        let pool_account = Address::new([52u8; 32]);
+
+        let largest = largest_accounts_body(&[(pool_account, 853)]);
+        let supply = supply_body(1_000, 6);
+        let multi = multi_accounts_body(&[
+            Some(&token_account_bytes(mint, pool, 853)),
+            Some(&mint_account_bytes(None, None)),
+        ]);
+
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(TokenOwnershipMock {
+                largest,
+                supply,
+                multi,
+                owners: owner_program_body(&[Some(pumpswap::PROGRAM_ID)]),
+                calls: std::sync::atomic::AtomicU32::new(0),
+            }),
+        );
+        let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
+        let facts = token_ownership(&client, &mut budget, &mint).expect("a token ownership read");
+
+        assert_eq!(facts.owners.len(), 1);
+        assert_eq!(facts.owners[0].owner, pool);
+        assert_eq!(facts.owners[0].role, OwnerRole::AmmPool);
     }
 
     #[test]
