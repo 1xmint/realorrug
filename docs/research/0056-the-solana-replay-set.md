@@ -169,6 +169,34 @@ read is a rules question for the owner, not changed here. The early buyers'
 funding read also failed on the saved captures, but read cleanly on a
 `dossier` run minutes later, so that one is the public endpoint's rate limit.
 
+## Addendum, 2026-09-22: the third read, through Helius, and acceptance
+
+The four were read a third time on 2026-09-22 through the project's Helius
+endpoint (passed with `--rpc`, never written to the captures; the saved
+files were checked for the key before commit), first before and then after
+PR #151. The saved sheets are the read after it.
+
+- **The PumpSwap pool was read as a holder.** On the Helius read the
+  graduated tokens' "largest unidentified wallet" was their own AMM pool
+  (85.3% for DsjPN, 4.6% for GTBx). The reader now proves a pool from the
+  owner account's program and leaves it out of holder shares, as it already
+  did for the bonding curve; the largest real wallet is 2.9% and 2.8%.
+- **A non-concern led the report and the reply.** With no signal fired, a
+  0.08% holder share sat under "Strongest concern" while the next section
+  said no signal fired. The report now says "no signal fired" there and
+  moves the ranked fact to a **Context** section, and the reply opens with
+  the first gap ("Can't tell yet: ...").
+- **The funding read is not the rate limit.** "Who funded the early
+  buyers" still fails on every Helius read, so the explanation above is
+  wrong for these captures. The cause is not yet found.
+- The graduated tokens' launch block is still out of reach of the page
+  budget on Helius, as it was on the public endpoint.
+
+All six checks pass on all four. The owner delegated acceptance, and the
+four replies were accepted on 2026-09-22 and copied, with their sheets, into
+`crates/realorrug-roast/tests/replay/` as the first regression cases.
+All remain `CantTell` until the Solana creator cash flow read lands.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),

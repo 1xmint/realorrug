@@ -1,0 +1,11 @@
+Can't tell yet: who funded the early buyers could not be read.
+- token accounts in the launch block (accounts, not people): 3
+- share of instantly-graduating launches whose launch block also had one to three: 1.0%
+- share of never-graduated launches whose launch block also had one to three: 71.7%
+- how much can be bought before 1% price impact (Real or Rug's own sizing budget, not a trading limit): 0.3036 SOL
+- has it graduated off its bonding curve: no
+- not known: who funded the early buyers could not be read
+- not known: the creator's own buys and sells were not checked
+Typical cost to enter and leave a $20-$200 position on the launch's bonding curve, measured across launches, not this token's own: 456 bps (4.6%).
+This launch is about 39.5 hours old at the read (355721 slots after its launch block).
+Read at slot 449426194.
