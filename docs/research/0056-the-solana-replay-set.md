@@ -241,6 +241,30 @@ Fixed in the same PR that lands this paragraph:
 See `docs/design/0027-the-three-layers.md`'s slice 6b addendum, same date,
 for the funding-read side of this fix in more detail.
 
+## Addendum, 2026-09-22: the funding gap's own sentence was self-contradicting
+
+Two ordinary launches captured this same day sat at `CantTell` for a reason
+that could not be true. Both replies' sole critical gap read "the funding
+check did not finish: 4 of 4 chosen early buyers were read" — "did not
+finish" and "4 of 4 were read" in the same sentence. `push_funding` in
+`crates/realorrug-roast/src/sheet.rs` built this sentence from
+`funding.selected`, but `investigate_solana` in
+`crates/realorrug-onchain/src/wallets.rs` sets `selected: checked.len()`, so
+`checked == selected` always on Solana; the EVM-shaped sentence that assumes
+they can differ never fit this chain.
+
+`push_funding` (via a new `funding_gap_message` helper) now says one of three
+true things when `funding.gaps` is non-empty: on EVM, where a candidate can
+be chosen but never checked, the original sentence stands unchanged ("the
+funding check did not finish: N of M chosen early buyers were read"). On
+Solana, every checked candidate was attempted, so the gap is instead named
+against `Candidate::funding_complete` — if any checked candidate's funding
+history is incomplete, "where N of the M checked early buyers got their
+money could not be read"; if all of them are complete, the recorded gap must
+be a transaction-read failure during the launch-window buyer walk itself,
+so "some transactions in the launch window could not be read, so the early
+buyers seen may not be all of them".
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),

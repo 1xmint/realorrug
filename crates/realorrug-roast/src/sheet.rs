@@ -2212,10 +2212,47 @@ fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Fund
         );
     }
     if !funding.gaps.is_empty() {
-        unknown.push(format!(
+        unknown.push(funding_gap_message(funding, checked));
+    }
+}
+
+/// The sentence for an unfinished funding check, once `funding.gaps` says
+/// something was missed.
+///
+/// Three cases, each true on its own chain:
+///
+/// 1. `checked < funding.selected`: the EVM path, where a compute-unit cap
+///    or similar stopped the walk before every chosen candidate was checked
+///    at all.
+/// 2. Otherwise: on Solana `checked == selected` always
+///    (`investigate_solana` sets `selected: checked.len()`), so case 1's
+///    sentence would say "4 of 4 were read" and contradict itself. Every
+///    checked candidate was attempted, so if any of them has an incomplete
+///    funding history, the gap is in whether its money-in was traced.
+/// 3. Otherwise: every checked candidate is funding-complete, so the
+///    recorded gap must be from the launch-window buyer walk instead --
+///    about which early buyers were found, not their funding.
+fn funding_gap_message(funding: &Funding, checked: u32) -> String {
+    if checked < funding.selected {
+        return format!(
             "the funding check did not finish: {checked} of {} chosen early buyers were read",
             funding.selected
-        ));
+        );
+    }
+    let unread = funding
+        .checked
+        .iter()
+        .filter(|c| !c.funding_complete)
+        .count();
+    if unread > 0 {
+        format!(
+            "where {unread} of the {checked} checked early buyers got their money could not be \
+             read"
+        )
+    } else {
+        "some transactions in the launch window could not be read, so the early buyers seen may \
+         not be all of them"
+            .to_owned()
     }
 }
 
@@ -6889,6 +6926,149 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert!(fact_of(&sheet, Kind::FundingChecked).is_none());
         assert!(!sheet.unknown.iter().any(|u| u.contains("funded")));
+    }
+
+    #[test]
+    fn on_solana_checked_equals_selected_so_the_evm_sentence_is_never_said() {
+        // `investigate_solana` sets `selected: checked.len()`, so
+        // `checked < funding.selected` can never fire there; a gap must
+        // instead fall into one of the two Solana-shaped branches below,
+        // never repeat "the funding check did not finish: N of N ... were
+        // read" (research 0056, 2026-09-22 addendum).
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &["some gap"]);
+        funding.checked[0].funding_complete = false;
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet
+                .unknown
+                .iter()
+                .any(|u| u.contains("did not finish") && u.contains("were read")),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn incomplete_candidate_funding_is_counted_not_totalled() {
+        // Two of four checked candidates have incomplete funding history;
+        // the sentence must say 2, not 4 (the total checked) and not the
+        // gap count.
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(
+            4,
+            4,
+            &[],
+            &[
+                "funding of <address 1>: signature history truncated before its oldest \
+                 transaction; no funder recorded",
+                "funding of <address 2>: signature history truncated before its oldest \
+                 transaction; no funder recorded",
+            ],
+        );
+        funding.checked[0].funding_complete = false;
+        funding.checked[1].funding_complete = false;
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet.unknown.iter().any(|u| {
+                u == "where 2 of the 4 checked early buyers got their money could not be read"
+            }),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn one_incomplete_candidate_is_not_rendered_as_all_of_them() {
+        // Boundary: only 1 of 4 is incomplete; a mutant that swapped the
+        // filtered count for `checked` (or dropped the `unread > 0` guard's
+        // strictness) would say "4" or fire even at zero.
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(
+            4,
+            4,
+            &[],
+            &[
+                "funding of <address 1>: signature history truncated before its oldest \
+                 transaction; no funder recorded",
+            ],
+        );
+        funding.checked[0].funding_complete = false;
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet.unknown.iter().any(|u| {
+                u == "where 1 of the 4 checked early buyers got their money could not be read"
+            }),
+            "{:?}",
+            sheet.unknown
+        );
+        assert!(
+            !sheet
+                .unknown
+                .iter()
+                .any(|u| u.contains("4 of the 4 checked early buyers")),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn zero_incomplete_candidates_blames_the_buyer_walk_not_funding() {
+        // All checked candidates are funding-complete, but a gap remains
+        // (a transaction-read failure during the launch-window walk): the
+        // honest statement is about buyer discovery, not funding, and the
+        // `unread > 0` boundary must not fire on 0.
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let funding = funding_of(
+            4,
+            4,
+            &[],
+            &["transaction read failed during launch-window walk"],
+        );
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet.unknown.iter().any(|u| {
+                u == "some transactions in the launch window could not be read, so the early \
+                      buyers seen may not be all of them"
+            }),
+            "{:?}",
+            sheet.unknown
+        );
+        assert!(
+            !sheet.unknown.iter().any(|u| u.contains("could not be read")
+                && u.contains("checked early buyers got their money")),
+            "{:?}",
+            sheet.unknown
+        );
+    }
+
+    #[test]
+    fn a_finished_evm_funding_check_still_names_the_stopped_short_gap() {
+        // Branch 1 (checked < selected) must survive unchanged: this is
+        // exactly the existing `a_funding_check_that_stopped_short_names_its_gap`
+        // assertion, re-asserted here so a future edit to branch 1 cannot
+        // silently reorder the `if` without a dedicated failure.
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(
+            4,
+            2,
+            &[2],
+            &["compute-unit cap of 330 CU reached: 2 of 4 candidates checked"],
+        );
+        funding.selected = 4;
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet.unknown.iter().any(|u| {
+                u == "the funding check did not finish: 2 of 4 chosen early buyers were read"
+            }),
+            "{:?}",
+            sheet.unknown
+        );
     }
 
     #[test]
