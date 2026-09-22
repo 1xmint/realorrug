@@ -44,6 +44,13 @@ pub const DEFAULT_MAX_CALLS: u32 = 60;
 /// answer is to say so rather than to keep paging.
 pub const DEFAULT_MAX_PAGES: u32 = 3;
 
+/// How many pages a single named walk inside `dossier::build` is topped up
+/// with immediately before that walk starts (see [`Budget::grant_pages`]).
+/// Same size as [`DEFAULT_MAX_PAGES`]: each walk is answering the same shape
+/// of question -- "how far back does this address's history go" -- as the
+/// mint's own first walk, so it is sized the same way.
+pub const PAGES_PER_WALK: u32 = DEFAULT_MAX_PAGES;
+
 /// How long one dossier may take.
 ///
 /// A reply that arrives after the thread is dead is not worth its cost — this is
@@ -188,6 +195,32 @@ impl Budget {
         Ok(())
     }
 
+    /// Raises the page allowance to at least `floor`, for a named walk about
+    /// to start.
+    ///
+    /// # Why a floor, not a page pool per walk
+    ///
+    /// `dossier::build` performs several independent signature walks against
+    /// one shared [`Budget`]: the mint's own history, the creator's, the
+    /// funding candidates', and the creator's cash-flow account. Giving
+    /// `Budget` its own notion of distinct walks would mean threading a walk
+    /// identifier through every [`Budget::take_page`] call site --
+    /// `robinhood.rs` and `market.rs` call it too, for their own single walk
+    /// each, and would gain nothing from a multi-walk API they never use.
+    /// Simpler: the allowance stays one counter, and the caller that actually
+    /// knows when a new named walk begins (`dossier::build`) raises it to a
+    /// floor right before that walk runs, so a walk that already burned the
+    /// shared pool (a busy mint's three-thousand-signature history, say)
+    /// cannot starve the next one down to zero. `max`, not addition: a walk
+    /// that starts with pages still unspent from before keeps them rather
+    /// than stacking a second full allowance on top, so the guarantee stays
+    /// "at least `floor`" and does not compound across steps. The overall
+    /// call cap ([`DEFAULT_MAX_CALLS`]) is untouched by this and stays the
+    /// one global limit.
+    pub fn grant_pages(&mut self, floor: u32) {
+        self.pages_left = self.pages_left.max(floor);
+    }
+
     /// How many calls have been made.
     ///
     /// Reported on the dossier so the cost of an answer is visible next to the
@@ -287,6 +320,36 @@ mod tests {
     #[test]
     fn a_budget_stops_at_its_page_allowance() {
         let mut budget = Budget::new(60, 2, Duration::from_secs(60));
+        assert!(budget.take_page().is_ok());
+        assert!(budget.take_page().is_ok());
+        assert_eq!(budget.take_page(), Err(Exhausted::Pages));
+    }
+
+    #[test]
+    fn granting_pages_raises_a_starved_walk_to_the_floor() {
+        // A walk that already spent the shared pool would otherwise see
+        // every later walk fail immediately with `Exhausted::Pages` -- the
+        // page-budget-starvation bug this method exists to prevent.
+        let mut budget = Budget::new(60, 1, Duration::from_secs(60));
+        assert!(budget.take_page().is_ok());
+        assert_eq!(budget.take_page(), Err(Exhausted::Pages));
+        budget.grant_pages(2);
+        assert!(budget.take_page().is_ok());
+        assert!(budget.take_page().is_ok());
+        assert_eq!(budget.take_page(), Err(Exhausted::Pages));
+    }
+
+    #[test]
+    fn granting_pages_never_stacks_on_top_of_what_is_left() {
+        // `max`, not addition: a walk with pages still unspent from before it
+        // ran must not turn one floor into two full allowances added
+        // together, or a later walk's guarantee stops meaning "at least
+        // this many" and starts meaning "however much piled up".
+        let mut budget = Budget::new(60, 5, Duration::from_secs(60));
+        budget.grant_pages(2);
+        assert!(budget.take_page().is_ok());
+        assert!(budget.take_page().is_ok());
+        assert!(budget.take_page().is_ok());
         assert!(budget.take_page().is_ok());
         assert!(budget.take_page().is_ok());
         assert_eq!(budget.take_page(), Err(Exhausted::Pages));

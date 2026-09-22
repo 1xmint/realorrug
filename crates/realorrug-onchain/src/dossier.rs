@@ -467,6 +467,38 @@ impl Dossier {
     }
 }
 
+/// Turns a creator signature-history walk into a transaction count, or `None`
+/// when the walk cannot support one.
+///
+/// `None` covers the one case where a count would lie: the walk was cut short
+/// (`truncated`) *and* came back with nothing (`sigs` empty), which is not a
+/// measurement of "zero transactions" but the absence of any measurement at
+/// all (AGENTS.md rule 8). Every other combination is a real, if possibly
+/// incomplete, count: a truncated walk that still returned some signatures
+/// knows there are *at least* that many, and a walk that ran to completion
+/// and found none has genuinely measured zero.
+///
+/// Pulled out of [`build`]'s step 3 so the miss-vs-zero decision can be
+/// exercised directly, without going through `Budget`/RPC machinery: once
+/// `build` grants every walk its own page floor (see
+/// [`crate::budget::Budget::grant_pages`]), the "no pages left" case this
+/// guards against can no longer occur inside `build`'s own integration
+/// tests.
+fn creator_transaction_count(sigs: &[crate::rpc::SignatureInfo], truncated: bool) -> Option<Count> {
+    let n = u32::try_from(sigs.iter().filter(|s| s.err.is_none()).count()).unwrap_or(u32::MAX);
+    if truncated && n == 0 {
+        None
+    } else {
+        // `AtLeast` whether or not paging was cut short, and the reason is
+        // not the budget: a signature history is transactions, and the
+        // question anyone actually asks is about launches. Reporting
+        // `Exactly` here would be exact about the wrong quantity, which is
+        // LEARNINGS 22's shape -- an exemption whose reasoning named the
+        // wrong number.
+        Some(Count::AtLeast(n))
+    }
+}
+
 /// Builds a dossier for one mint.
 ///
 /// `memory` is the read memory (design 0021; packet 0039 §1) placed in front
@@ -527,22 +559,30 @@ pub fn build(
     // The curve and creator-activity reads below are deliberately NOT given
     // the same treatment: they change with every trade, so a remembered one
     // would be a stale number stamped with a fresh slot.
+    // Kept for step 5 (funding) below, which needs the mint's own signature
+    // history too: `None` only when a memory hit skipped this walk, in which
+    // case step 5 pages it itself rather than trusting a history it never
+    // read.
+    let mut mint_signatures: Option<(Vec<crate::rpc::SignatureInfo>, bool)> = None;
     let launch_result = if let Some(block) = memory.and_then(|mem| cached_launch(mem, &mint_key)) {
         Ok(block)
     } else {
         let (signatures, truncated) = client.signatures_back_to_oldest(budget, mint)?;
-        oldest_launch(client, budget, &signatures, truncated, &mint_key).and_then(|block| {
-            if let Some(mem) = memory {
-                // `record` refuses to overwrite a `(what, subject, block)`
-                // key with a different value rather than replacing it
-                // (packet 0039 §1, `Memory::record`'s own doc) -- a launch
-                // record that came back different from a fresh read is a
-                // bug (AGENTS.md rule 1) and is surfaced here with its
-                // error text intact, never silently resolved either way.
-                store_launch(mem, &mint_key, &block).map_err(|e| e.to_string())?;
-            }
-            Ok(block)
-        })
+        let result =
+            oldest_launch(client, budget, &signatures, truncated, &mint_key).and_then(|block| {
+                if let Some(mem) = memory {
+                    // `record` refuses to overwrite a `(what, subject, block)`
+                    // key with a different value rather than replacing it
+                    // (packet 0039 §1, `Memory::record`'s own doc) -- a launch
+                    // record that came back different from a fresh read is a
+                    // bug (AGENTS.md rule 1) and is surfaced here with its
+                    // error text intact, never silently resolved either way.
+                    store_launch(mem, &mint_key, &block).map_err(|e| e.to_string())?;
+                }
+                Ok(block)
+            });
+        mint_signatures = Some((signatures, truncated));
+        result
     };
     match launch_result {
         Ok(block) => dossier.launch = Some(block),
@@ -570,20 +610,29 @@ pub fn build(
         dossier.read_at = dossier.launch.as_ref().map(|l| ReadAt::Solana(l.slot));
     }
 
-    // 3. The creator's activity, bounded.
+    // 3. The creator's activity, bounded. Its own page allowance, topped up
+    // here rather than drawn from whatever step 1's mint walk left behind
+    // (`Budget::grant_pages`'s own doc): a mint whose history alone spent the
+    // shared pool used to leave this walk, and everything after it, with
+    // nothing.
     if let Some(creator) = dossier.launch.as_ref().map(|l| l.creator) {
+        budget.grant_pages(crate::budget::PAGES_PER_WALK);
         match client.signatures_back_to_oldest(budget, &creator) {
-            Ok((sigs, _cut)) => {
-                let n = u32::try_from(sigs.iter().filter(|s| s.err.is_none()).count())
-                    .unwrap_or(u32::MAX);
-                // `AtLeast` whether or not paging was cut short, and the reason
-                // is not the budget: a signature history is transactions, and
-                // the question anyone actually asks is about launches. Reporting
-                // `Exactly` here would be exact about the wrong quantity, which
-                // is LEARNINGS 22's shape -- an exemption whose reasoning named
-                // the wrong number.
-                dossier.creator_transactions = Some(Count::AtLeast(n));
-            }
+            Ok((sigs, cut)) => match creator_transaction_count(&sigs, cut) {
+                Some(count) => dossier.creator_transactions = Some(count),
+                // No pages at all reached this walk (or it was cut before a
+                // single signature came back): the count is not a
+                // measurement of "zero transactions", it is the absence of
+                // one, and `Count::AtLeast(0)` would read as the former
+                // (AGENTS.md rule 8). A genuine miss, not a count, is what
+                // the sheet already knows how to render as "could not be
+                // read" (`realorrug-roast/src/sheet.rs`'s `phrase_for`).
+                None => dossier.miss(
+                    "creator history",
+                    "the creator's signature history is longer than the page budget allows; \
+                     no creator transactions could be read within the read budget",
+                ),
+            },
             Err(why) => dossier.miss("creator history", why),
         }
     }
@@ -605,7 +654,18 @@ pub fn build(
     // signature history, not from the current holder sample. A transport
     // failure here names "funding" in `unavailable` rather than a silent
     // empty result, per `investigate_solana`'s own doc.
-    match investigate_solana(client, budget, mint) {
+    //
+    // Reuses step 1's mint signatures instead of paging them again --
+    // re-walking here against the same shared budget was exactly the
+    // starvation bug this commit fixes (`investigate_solana`'s own doc). When
+    // step 1 was skipped (the launch block came from memory,
+    // `mint_signatures` is `None`), this is the first walk of the mint's
+    // history in this dossier, so it still needs its own allowance topped up
+    // the same way step 3's did.
+    if mint_signatures.is_none() {
+        budget.grant_pages(crate::budget::PAGES_PER_WALK);
+    }
+    match investigate_solana(client, budget, mint, mint_signatures.as_ref()) {
         Ok(funding) => dossier.funding = Some(funding),
         Err(why) => dossier.miss("funding", why),
     }
@@ -622,6 +682,11 @@ pub fn build(
     // the reads ahead of it, running it last never turns a would-be miss
     // into a worse one.
     if let Some(creator) = dossier.launch.as_ref().map(|l| l.creator) {
+        // Its own allowance too (`Budget::grant_pages`'s own doc): placed
+        // last though it is, this walk is still a distinct address (the
+        // creator's ATA) from every one before it, and must not inherit
+        // whatever those left behind as its only budget.
+        budget.grant_pages(crate::budget::PAGES_PER_WALK);
         match crate::wallets::creator_cash_flow_solana(client, budget, mint, &creator) {
             Ok(flow) => dossier.creator_cash_flow = Some(flow),
             Err(why) => dossier.miss("creator cash flow", why),
@@ -1184,6 +1249,46 @@ mod tests {
         ));
     }
 
+    fn count_sig(ok: bool) -> crate::rpc::SignatureInfo {
+        crate::rpc::SignatureInfo {
+            signature: "sig".to_string(),
+            slot: 0,
+            err: if ok {
+                None
+            } else {
+                Some(serde_json::json!({"InstructionError": [0, "Custom"]}))
+            },
+        }
+    }
+
+    #[test]
+    fn a_creator_walk_cut_short_with_nothing_back_is_a_miss_not_a_zero() {
+        // Requirement 4c: exhausting the page budget before a single
+        // signature comes back is the absence of a measurement, and
+        // reporting `Count::AtLeast(0)` here would misreport that absence as
+        // a real, if partial, count (AGENTS.md rule 8).
+        assert_eq!(creator_transaction_count(&[], true), None);
+    }
+
+    #[test]
+    fn a_creator_walk_cut_short_with_some_signatures_is_at_least_that_many() {
+        let sigs = vec![count_sig(true), count_sig(true), count_sig(false)];
+        assert_eq!(
+            creator_transaction_count(&sigs, true),
+            Some(Count::AtLeast(2))
+        );
+    }
+
+    #[test]
+    fn a_creator_walk_that_ran_to_completion_with_nothing_is_a_genuine_zero() {
+        // No truncation: the walk reached the oldest signature and there
+        // simply were none. That is a real zero, not an absent measurement.
+        assert_eq!(
+            creator_transaction_count(&[], false),
+            Some(Count::AtLeast(0))
+        );
+    }
+
     #[test]
     fn a_dossier_names_what_it_could_not_read() {
         let mut dossier = Dossier {
@@ -1603,20 +1708,26 @@ mod tests {
         let mut hit_budget = Budget::new(60, 2, std::time::Duration::from_secs(30));
         let hit = build(&client, &mut hit_budget, &mint, Some(&mem)).expect("no transport error");
         assert_eq!(hit.launch.as_ref(), Some(&cached));
-        // 0 launch paging (the hit) + 1 curve miss + 1 creator history (empty
-        // page) + 1 token-ownership miss + 1 page of the funding read, which
-        // walks the mint's history on its own (slice 6b). On the miss the
-        // launch walk already spent the page budget, so funding reads nothing
-        // there; the two walks do not yet share their pages, which is why a
-        // hit now costs as much as a miss rather than less. Step 6 (the
-        // creator's cash flow, now last, after funding) adds 1 more: reading
-        // the mint account to learn its token program, which this transport
-        // answers with no account, so the read stops there before it can
-        // reach the token-account or trade-history calls. Until each walk
-        // gets its own page allowance, a hit can cost one call more than a
-        // miss; what it must never do is page the launch.
-        assert_eq!(hit_budget.calls_made(), 5);
-        assert!(hit_budget.calls_made() <= miss_budget.calls_made() + 1);
+        // 0 launch paging (the hit, still the property this test exists for)
+        // + 1 curve miss + 1 creator history (empty page; step 3 grants
+        // itself its own floor of `PAGES_PER_WALK` rather than inheriting the
+        // 2-page pool this test seeds, so the small starting budget cannot
+        // starve it) + 1 token-ownership miss + 3 pages of the funding read's
+        // own walk of the mint's history (slice 6b; also granted its own
+        // floor, since step 1's walk never ran to leave it anything) + 1 read
+        // of the mint account for step 6's (the creator's cash flow) token
+        // program -- no account on this transport, so that read stops there
+        // before it can spend on the token-account or trade-history calls.
+        // A hit now costs *more* than the miss below, not less or "at most
+        // one more": the miss's launch walk lands truncated with nothing
+        // (rule 9 refuses to guess a launch from it), so it never learns a
+        // creator and skips steps 3 and 6 outright, while the hit's cached
+        // creator lets every later step actually run instead of starving on
+        // whatever the mint walk left behind -- the fix this test exists to
+        // demonstrate (each walk answering "how far back does this address's
+        // history go" pays for itself, `Budget::grant_pages`'s own doc).
+        assert_eq!(hit_budget.calls_made(), 7);
+        assert!(hit_budget.calls_made() > miss_budget.calls_made());
     }
 
     /// A transport that answers `getSignaturesForAddress` and `getTransaction`
@@ -1663,16 +1774,18 @@ mod tests {
             crate::dispatch::read_with_memory(&mint_key, &clients, Some(&memory), &mut budget)
                 .expect("read");
         assert_eq!(dossier.launch, Some(launch));
-        // 1 curve miss + 1 creator history (empty page) + 1 token-ownership
-        // miss (this transport answers `getTokenLargestAccounts` with
-        // `value: null`, so step 4 fails after its first call) + 2 calls of
-        // the funding read's own walk of the mint's history (slice 6b) + 1
-        // read of the mint account for step 6's (the creator's cash flow,
-        // now run last) token program -- no account on this transport, so
-        // that read stops there before it can spend on the token-account or
-        // trade-history calls.
-        assert_eq!(dossier.calls, 6);
-        assert_eq!(budget.calls_made(), 6);
+        // 1 curve miss + 1 creator history (empty page; its own granted
+        // floor, `Budget::grant_pages`) + 1 token-ownership miss (this
+        // transport answers `getTokenLargestAccounts` with `value: null`, so
+        // step 4 fails after its first call) + 3 pages of the funding read's
+        // own walk of the mint's history (slice 6b; step 1 never ran, so this
+        // walk is granted its own floor rather than inheriting an empty pool)
+        // + 1 read of the mint account for step 6's (the creator's cash flow)
+        // token program -- no account on this transport, so that read stops
+        // there before it can spend on the token-account or trade-history
+        // calls.
+        assert_eq!(dossier.calls, 7);
+        assert_eq!(budget.calls_made(), 7);
     }
 
     impl crate::rpc::Transport for SuccessfulLaunch {

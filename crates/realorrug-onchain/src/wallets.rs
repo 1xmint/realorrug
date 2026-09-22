@@ -76,7 +76,7 @@ use realorrug_robinhood::{Address, Hash32, Log, LogsError, Rpc, quantity, quanti
 
 use crate::budget::Budget;
 use crate::memory::{CheckRun, Completeness, FundingEdge, Memory};
-use crate::rpc::{RpcClient, Transaction};
+use crate::rpc::{RpcClient, SignatureInfo, Transaction};
 
 /// `alchemy_getAssetTransfers`, per the CU table (2026-09-18).
 pub const CU_GET_ASSET_TRANSFERS: u32 = 120;
@@ -1081,21 +1081,41 @@ struct EarlyBuyer {
 /// transaction either -- again never as "no funder found"; both cases are
 /// named in [`Funding::gaps`] (AGENTS.md rule 8).
 ///
+/// `mint_signatures` reuses the mint's signature history dossier step 1
+/// already read, rather than walking it a second time: two walks of the same
+/// address against the same shared [`Budget`] is exactly the amplifier this
+/// crate's whole design exists to prevent (`budget.rs`'s own module doc), and
+/// re-walking here was what left this read starved on any mint whose history
+/// alone spent the page allowance (finding: a mint history landing at exactly
+/// the page cap left this read, and everything after it, with nothing).
+/// `None` is for the one caller that has no signatures to hand in --
+/// `dossier::build` when the launch block came from memory and step 1's walk
+/// never ran -- and falls back to reading them here.
+///
 /// # Errors
 ///
 /// A string naming why the mint's own signature history could not be read at
-/// all. A single candidate or transaction read failure lands in
-/// [`Funding::gaps`] instead, on a result that is still returned.
+/// all (only reachable when `mint_signatures` is `None`). A single candidate
+/// or transaction read failure lands in [`Funding::gaps`] instead, on a
+/// result that is still returned.
 pub fn investigate_solana(
     client: &RpcClient,
     budget: &mut Budget,
     mint: &realorrug_types::Address,
+    mint_signatures: Option<&(Vec<SignatureInfo>, bool)>,
 ) -> Result<Funding, String> {
     let curve = realorrug_pumpfun::pda::bonding_curve(mint).map(|c| c.to_string());
     let mint_key = mint.to_string();
-    let (signatures, truncated) = client
-        .signatures_back_to_oldest(budget, mint)
-        .map_err(|e| format!("funding: {e}"))?;
+    let owned_signatures;
+    let (signatures, truncated): (&[SignatureInfo], bool) =
+        if let Some((sigs, cut)) = mint_signatures {
+            (sigs.as_slice(), *cut)
+        } else {
+            owned_signatures = client
+                .signatures_back_to_oldest(budget, mint)
+                .map_err(|e| format!("funding: {e}"))?;
+            (owned_signatures.0.as_slice(), owned_signatures.1)
+        };
 
     if truncated {
         // A truncated mint history means the transactions this reader could
@@ -2587,7 +2607,7 @@ mod tests {
             Canned::boxed(&responses.iter().map(String::as_str).collect::<Vec<_>>()),
         );
         let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
-        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert_eq!(funding.buyers, 0);
         assert!(funding.checked.is_empty());
@@ -2600,6 +2620,35 @@ mod tests {
             "gaps: {:?}",
             funding.gaps
         );
+    }
+
+    #[test]
+    fn investigate_solana_does_not_rewalk_the_mints_signatures_when_given_them() {
+        // The bug this fixes: `dossier::build` reads the mint's signature
+        // history once (step 1) and used to make `investigate_solana` read
+        // it again (step 5) against the same shared, already-spent page
+        // budget -- on a busy mint, step 1 alone could exhaust it, leaving
+        // this read with nothing. Handing the signatures in must mean no
+        // second `getSignaturesForAddress` call for the mint: the canned
+        // transport below supplies no such answer at all, only the buy
+        // transaction, so a re-walk would consume that response in its
+        // place and fail to parse it as a signature list.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let signatures = vec![crate::rpc::SignatureInfo {
+            signature: "mint-sig".to_owned(),
+            slot: 1,
+            err: None,
+        }];
+        let responses = [buy_tx(&mint_key, &[(&buyer, 500)])];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, Some(&(signatures, false)))
+            .expect("no re-walk: the buy transaction is the only response supplied");
+
+        assert_eq!(funding.buyers, 1);
     }
 
     #[test]
@@ -2619,7 +2668,7 @@ mod tests {
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
         let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
-        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert_eq!(funding.checked.len(), 1);
         assert!(!funding.checked[0].funding_complete);
@@ -2653,7 +2702,7 @@ mod tests {
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
         let mut budget = solana_budget();
-        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert_eq!(funding.checked.len(), 1);
         assert!(funding.checked[0].funding_complete);
@@ -2693,7 +2742,7 @@ mod tests {
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
         let mut budget = solana_budget();
-        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert_eq!(funding.buyers, 6);
         assert_eq!(funding.selected, u32::try_from(MAX_CANDIDATES).unwrap());
@@ -2761,7 +2810,7 @@ mod tests {
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
         let mut budget = Budget::new(200, 200, std::time::Duration::from_secs(30));
-        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert_eq!(
             funding.buyers,
@@ -2792,7 +2841,7 @@ mod tests {
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
         let mut budget = solana_budget();
-        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert_eq!(funding.checked.len(), 2);
         assert!(funding.checked.iter().all(|c| c.funding_complete));
@@ -2813,7 +2862,7 @@ mod tests {
         let mint = solana_addr(9);
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&[]));
         let mut budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
-        let funding = investigate_solana(&client, &mut budget, &mint).expect("a result");
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert!(funding.checked.is_empty());
         assert!(
@@ -2834,7 +2883,7 @@ mod tests {
         let mint = solana_addr(9);
         let client = RpcClient::with_transport("http://test.invalid", Box::new(AlwaysFails));
         let mut budget = solana_budget();
-        let err = investigate_solana(&client, &mut budget, &mint)
+        let err = investigate_solana(&client, &mut budget, &mint, None)
             .expect_err("a transport failure must surface, not disappear");
         assert!(err.contains("funding"), "{err}");
     }
