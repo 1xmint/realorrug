@@ -103,6 +103,14 @@ the failure. Say whether you are recommending or recording.
   `Get-Process cargo,rustc -ErrorAction SilentlyContinue` first.
 - **Stage by path** (no `git add -A`), read the staged diff before committing,
   and never commit to `main`.
+- **Read the checks on the merge commit before merging, and read `main` after.**
+  A pull request's own branch can be green while the merge of it is not: a test
+  that reads a whole directory, or any check that spans files two branches each
+  added separately, only fails once they meet. On 2026-09-22 a merge whose
+  checks were never read broke `tests` on `main` and on every branch built from
+  it, and the next branch's agent spent its run diagnosing a failure that was
+  not its own. `gh pr checks <n>` before `gh pr merge`, and
+  `gh run list --branch main --limit 1` after.
 - **Do not push while a CI run you are waiting on is in flight**: the workflow
   cancels in-progress runs, and a cancelled check reads like a broken one.
 - Record decisions in `docs/adr/`, reasoning in `docs/design/`, findings in
