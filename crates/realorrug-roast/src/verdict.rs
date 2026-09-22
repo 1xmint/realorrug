@@ -550,7 +550,7 @@ pub fn template(sheet: &FactSheet) -> String {
     }) {
         let _ = writeln!(
             out,
-            "Typical cost to enter and leave a $20-$200 position on pump.fun's bonding curve, \
+            "Typical cost to enter and leave a $20-$200 position on the launch's bonding curve, \
              measured across launches, not this token's own: {}.",
             cost.rendered
         );
@@ -648,7 +648,7 @@ fn short(label: &str) -> String {
         }
         l if l.contains("SOL the creator spent") => "the creator's own buy".to_owned(),
         l if l.contains("round trip for a position of") => {
-            "typical round trip on a $20-$200 position on pump.fun's bonding curve, measured \
+            "typical round trip on a $20-$200 position on the launch's bonding curve, measured \
              across launches, not this token's own"
                 .to_owned()
         }

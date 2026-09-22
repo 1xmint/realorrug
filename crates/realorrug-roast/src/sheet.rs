@@ -3523,7 +3523,7 @@ fn push_cost(facts: &mut Vec<Fact>, round_trip: &crate::baserates::RoundTrip) {
                 // coin's number, when it is the same figure on every sheet
                 // that reaches this band.
                 label: format!(
-                    "typical round trip for a position of {size} on pump.fun's bonding \
+                    "typical round trip for a position of {size} on the launch's bonding \
                      curve, measured across launches, not this token's own"
                 ),
                 rendered: rendered.clone(),
@@ -6159,7 +6159,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "typical round trip for a position of $20-$200 on pump.fun's bonding curve, \
+                "typical round trip for a position of $20-$200 on the launch's bonding curve, \
                  measured across launches, not this token's own: 456 bps (4.6%)"
             ),
             "{rendered}"
