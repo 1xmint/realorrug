@@ -1241,7 +1241,16 @@ impl FactSheet {
         // kernel assumes"); Robinhood Chain has no such measurement yet, so
         // `BaseRates::round_trip` is `None` for it -- absent, not a
         // conservative estimate borrowed from a different chain.
-        if let Some(rates) = rates
+        //
+        // **And gated on this token still being on the curve.** The snapshot
+        // this measures (`round_trip.bar`, research 0024) is bonding-curve
+        // trades; once a token graduates it trades on an AMM the snapshot
+        // never sampled, so the figure would describe a venue this token no
+        // longer uses. `push_graduation` above already states whether it
+        // graduated -- read the same fact here rather than re-deriving it.
+        let graduated = dossier.curve.as_ref().is_some_and(|c| c.complete);
+        if !graduated
+            && let Some(rates) = rates
             && let Some(round_trip) = &rates.round_trip
         {
             push_cost(&mut facts, round_trip);
@@ -1643,7 +1652,13 @@ fn push_age(facts: &mut Vec<Fact>, delta: SlotDelta) {
         reason = "a slot delta is well inside f64's exact integer range"
     )]
     let slots_value = slots as f64;
-    let rendered = format!("{slots} slots (about {hours} hours) since its launch block");
+    // "{slots} slots (about {hours} hours) since its launch block" read like
+    // the slot count was itself a duration, with the wall clock tacked on as
+    // an afterthought in parentheses. The wall clock is the fact a reader
+    // wants first; the slot count is the checkable receipt for it, so it
+    // moves to a trailing clause instead of leading the sentence.
+    let rendered =
+        format!("about {hours} hours old at the read ({slots} slots after its launch block)");
     facts.push(Fact {
         about: About::Measurement,
         kind: Kind::Age,
@@ -3433,14 +3448,15 @@ fn push_fee(facts: &mut Vec<Fact>, curve: &realorrug_onchain::CurveFacts) {
                 about: About::Measurement,
                 kind: Kind::VenueFee,
                 label: "venue fee, round trip, read from the on-chain schedule".to_owned(),
-                // The rendered line is shown verbatim by the template, so it
-                // carries the qualifier and nothing else: an instruction to the
-                // model here was printed in public replies, and the 850 bps it
-                // quoted is `push_cost`'s fresh-launch figure, which the reply
-                // already states beside a different measured round trip.
-                rendered: format!(
-                    "{rt} bps, the venue's own fee and not the whole cost of a round trip"
-                ),
+                // The rendered line is shown verbatim by the template, right
+                // after `short(&fact.label)` already prints the caution ("the
+                // venue's own fee, not the cost of trading"). Until this fix
+                // `rendered` repeated the same caution in different words, so
+                // a template line said it twice: "...: 250 bps, the venue's
+                // own fee and not the whole cost of a round trip." The label
+                // carries the caution; the rendered value is just the number,
+                // the same shape every other bps fact on this sheet uses.
+                rendered: format!("{rt} bps ({:.1}%)", rt / 100.0),
                 values: vec![rt, rt / 100.0],
                 clauses: Vec::new(),
             }
@@ -3500,16 +3516,31 @@ fn push_cost(facts: &mut Vec<Fact>, round_trip: &crate::baserates::RoundTrip) {
             Fact {
                 about: About::Measurement,
                 kind: Kind::CostBand,
-                label: format!("round trip for a position of {size}"),
+                // A population measurement, said as one: `round_trip.bar`
+                // (research 0024) is measured across pump.fun bonding-curve
+                // launches, not read from this token's own trades. Without
+                // the qualifier a reply reads "$20-$200: 456 bps" as this
+                // coin's number, when it is the same figure on every sheet
+                // that reaches this band.
+                label: format!(
+                    "typical round trip for a position of {size} on pump.fun's bonding \
+                     curve, measured across launches, not this token's own"
+                ),
                 rendered: rendered.clone(),
                 values: vec![band.round_trip, band.round_trip / 100.0],
                 clauses: Vec::new(),
             }
             .saying(
                 Voice::Plain,
-                format!("A position of {size} pays {rendered} to go round."),
+                format!(
+                    "Across pump.fun launches, not this one's own trades, a position of \
+                     {size} typically pays {rendered} to go round."
+                ),
             )
-            .saying(Voice::Blunt, format!("{size} costs {rendered} round trip.")),
+            .saying(
+                Voice::Blunt,
+                format!("{size} typically costs {rendered} round trip, measured across launches."),
+            ),
         );
     }
 }
@@ -3671,7 +3702,7 @@ mod tests {
         assert_eq!(facts.len(), 1);
         assert_eq!(
             facts[0].rendered,
-            "63954 slots (about 7.1 hours) since its launch block"
+            "about 7.1 hours old at the read (63954 slots after its launch block)"
         );
         assert_eq!(facts[0].values, vec![63_954.0, 7.1]);
     }
@@ -4907,6 +4938,45 @@ mod tests {
         );
     }
 
+    /// The fee line must say the number once. Until this fix `rendered`
+    /// repeated the caution `short(&fact.label)` already prints ("the
+    /// venue's own fee, not the cost of trading"): the reply read "...:
+    /// 250 bps, the venue's own fee and not the whole cost of a round
+    /// trip." Re-apply the bug by putting the caution back in `rendered`
+    /// (`sheet.rs`'s old `push_fee`) to see this fail.
+    #[test]
+    fn the_fee_line_states_the_number_once() {
+        let mut facts = Vec::new();
+        push_fee(
+            &mut facts,
+            &realorrug_onchain::CurveFacts {
+                creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                    [9u8; 32],
+                )),
+                complete: false,
+                quote_reserves: 0,
+                quote_capacity: None,
+                quote_asset: None,
+                fees: Some(realorrug_pumpfun::Fees {
+                    lp_bps: 0,
+                    protocol_bps: 100,
+                    creator_bps: 25,
+                }),
+            },
+        );
+        let fee = facts
+            .iter()
+            .find(|f| f.kind == Kind::VenueFee)
+            .expect("a fee fact");
+        assert_eq!(fee.rendered, "250 bps (2.5%)");
+        assert!(!fee.rendered.contains("venue"), "{}", fee.rendered);
+        assert!(
+            !fee.rendered.contains("cost of trading"),
+            "{}",
+            fee.rendered
+        );
+    }
+
     #[test]
     fn the_curve_facts_reach_the_sheet() {
         // `push_curve` replaced with nothing survived mutation testing on
@@ -6088,7 +6158,10 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("round trip for a position of $20-$200: 456 bps (4.6%)"),
+            rendered.contains(
+                "typical round trip for a position of $20-$200 on pump.fun's bonding curve, \
+                 measured across launches, not this token's own: 456 bps (4.6%)"
+            ),
             "{rendered}"
         );
         // Authorised in both renderings, so a reply quoting 4.6% is not refused
@@ -6096,6 +6169,38 @@ mod tests {
         let authorised = sheet.authorised();
         assert!(authorised.iter().any(|a| (a.value - 456.0).abs() < 1e-9));
         assert!(authorised.iter().any(|a| (a.value - 4.56).abs() < 1e-9));
+    }
+
+    /// The round-trip cost bands are a bonding-curve measurement (research
+    /// 0024): once a token has graduated, it trades on an AMM the snapshot
+    /// never sampled, so the figure describes a venue this token no longer
+    /// uses. Re-apply the bug by dropping the `graduated` guard in front of
+    /// `push_cost`'s call site to see this fail.
+    #[test]
+    fn the_cost_bands_are_omitted_once_the_token_has_graduated() {
+        let rates = BaseRates::parse(SNAPSHOT).expect("the published snapshot");
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.curve = Some(realorrug_onchain::CurveFacts {
+            creator: realorrug_types::ChainAddress::Solana(realorrug_types::Address::new(
+                [9u8; 32],
+            )),
+            complete: true,
+            quote_reserves: 0,
+            quote_capacity: None,
+            quote_asset: None,
+            fees: None,
+        });
+        let sheet = FactSheet::build(&dossier, Some(&rates), None, None, None);
+        assert!(
+            !sheet.facts.iter().any(|f| f.kind == Kind::CostBand),
+            "{:?}",
+            sheet.facts
+        );
+        assert!(
+            !sheet.facts.iter().any(|f| f.kind == Kind::RoundTripBar),
+            "{:?}",
+            sheet.facts
+        );
     }
 
     #[test]

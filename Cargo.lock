@@ -1462,6 +1462,7 @@ dependencies = [
  "realorrug-agent",
  "realorrug-model",
  "realorrug-onchain",
+ "realorrug-pumpfun",
  "realorrug-robinhood",
  "realorrug-types",
  "serde",

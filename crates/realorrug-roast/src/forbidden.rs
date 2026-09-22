@@ -1940,7 +1940,8 @@ mod tests {
             kind: crate::clause::Kind::Age,
             label: "how long ago this token's launch block was, on the chain's own clock"
                 .to_owned(),
-            rendered: "63954 slots (about 7.1 hours) since its launch block".to_owned(),
+            rendered: "about 7.1 hours old at the read (63954 slots after its launch block)"
+                .to_owned(),
             values: vec![63954.0, 7.1],
             clauses: Vec::new(),
         });
