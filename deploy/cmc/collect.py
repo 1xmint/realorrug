@@ -438,7 +438,13 @@ def iter_dex_pairs(
         if not data:
             return
         yield from data
-        next_scroll = payload.get("status", {}).get("scroll_id") or payload.get("scroll_id")
+        # The cursor rides on each row (seen live 2026-09-22), not in status;
+        # the last row's is the next page's.
+        next_scroll = (
+            data[-1].get("scroll_id")
+            or payload.get("status", {}).get("scroll_id")
+            or payload.get("scroll_id")
+        )
         if not next_scroll or next_scroll == scroll_id:
             return
         scroll_id = next_scroll
@@ -494,6 +500,7 @@ def fetch_candles(
 _INTERVAL_MS = {
     "1min": 60_000,
     "1h": 3_600_000,
+    "1d": 86_400_000,
 }
 
 HOUR_MS = 3_600_000
@@ -531,17 +538,27 @@ def cmd_launches(args: argparse.Namespace, client: CmcClient | None, api_key: st
         atomic_write_bytes(pairs_path, gzip.compress(payload_bytes))
         log(f"wrote {len(pairs)} pairs -> {pairs_path}")
 
+    seen: set[str] = set()
     for pair in pairs:
         base_mint = pair.get("base_asset_contract_address")
-        pool_created = _pool_created_ms(pair)
-        if not base_mint or pool_created is None:
+        if not base_mint or base_mint in seen:
             continue
-        if now_ms - pool_created > window_ms:
-            continue
+        seen.add(base_mint)
         out_path = candles_dir / f"{base_mint}.json.gz"
         if out_path.exists() and args.resume:
             continue
+        pool_created = _pool_created_ms(pair)
         try:
+            if pool_created is None:
+                pool_created, older = first_trade_ms(client, base_mint, now_ms, window_ms)
+                if older:
+                    # Written so a resumed run does not pay to learn it again.
+                    write_json_gz(out_path, {"pair": pair, "older_than_window": True})
+                    continue
+                if pool_created is None:
+                    continue
+            if now_ms - pool_created > window_ms:
+                continue
             minute_candles, min_oow = fetch_candles(
                 client, base_mint, pool_created, pool_created + DAY_MS, "1min"
             )
@@ -572,6 +589,34 @@ def cmd_launches(args: argparse.Namespace, client: CmcClient | None, api_key: st
         )
 
     return stats
+
+
+def first_trade_ms(
+    client: CmcClient, mint: str, now_ms: int, window_ms: int
+) -> tuple[int | None, bool]:
+    """Find a token's first traded hour from its own candles.
+
+    CMC's pair listing and pair quotes both return `pool_created` and
+    `created_at` as null (checked live 2026-09-22), so the launch moment is
+    read from the price history instead: the first daily candle in the
+    window, then the first hourly candle inside that day. Two credits.
+
+    Returns (first_trade_ms, older_than_window). A first daily candle on the
+    window's opening day means trading may have started before the window,
+    so the true first trade is unknown and the token is marked older rather
+    than given a wrong launch time.
+    """
+    start = now_ms - window_ms
+    daily, _ = fetch_candles(client, mint, start, now_ms, "1d")
+    if not daily:
+        return None, False
+    first_day = int(daily[0][5])
+    if first_day < start + DAY_MS:
+        return None, True
+    hourly, _ = fetch_candles(client, mint, first_day - DAY_MS, first_day + DAY_MS, "1h")
+    if not hourly:
+        return first_day, False
+    return int(hourly[0][5]), False
 
 
 def _pool_created_ms(pair: dict[str, Any]) -> int | None:
