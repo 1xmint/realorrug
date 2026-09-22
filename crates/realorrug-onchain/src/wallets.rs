@@ -3707,6 +3707,18 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_when_only_one_side_of_the_creators_lamports_is_present() {
+        // A before balance with no after balance (or the reverse) cannot
+        // price anything, so one side alone is not a readable balance.
+        let mut tx = creator_tx("creator", "mint", 500, 0, 10_000, 9_999);
+        tx.post_balances = Vec::new();
+        assert!(!has_readable_creator_balances(&tx, "creator", "mint"));
+        let mut tx = creator_tx("creator", "mint", 500, 0, 10_000, 9_999);
+        tx.pre_balances = Vec::new();
+        assert!(!has_readable_creator_balances(&tx, "creator", "mint"));
+    }
+
+    #[test]
     fn unreadable_when_only_a_different_mint_is_mentioned() {
         let mut tx = creator_tx("creator", "mint", 0, 0, 10_000, 9_999);
         tx.pre_token_balances = vec![token_balance(0, "othermint", "creator", 500)];
