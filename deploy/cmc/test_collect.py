@@ -315,6 +315,214 @@ class TestFirstTrade(unittest.TestCase):
         self.assertEqual(collect.first_trade_ms(client, "m", self.NOW, self.WINDOW), (None, False))
 
 
+class TestSnapshot(unittest.TestCase):
+    def _listing(self, data_dir: Path, date_stamp: str, ids: list[int]) -> Path:
+        memes_dir = data_dir / "memes"
+        path = memes_dir / f"listing-{date_stamp}.json.gz"
+        collect.write_json_gz(path, [{"id": i} for i in ids])
+        return path
+
+    def test_ids_read_from_newest_listing_among_several(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            self._listing(data_dir, "20260901", [1, 2])
+            self._listing(data_dir, "20260920", [7, 8, 9])
+            self._listing(data_dir, "20260910", [3, 4, 5])
+
+            latest = collect._latest_listing_path(data_dir / "memes")
+            self.assertEqual(latest.name, "listing-20260920.json.gz")
+
+            def responder(url):
+                self.assertIn("id=7%2C8%2C9", url)
+                return ok_payload(
+                    {
+                        "7": {"id": 7, "symbol": "A", "circulating_supply": 1, "total_supply": 2,
+                              "quote": {"USD": {"price": 1.0, "market_cap": 2.0, "volume_24h": 3.0,
+                                                 "percent_change_24h": 4.0, "last_updated": "t"}}},
+                        "8": {"id": 8, "symbol": "B", "circulating_supply": 1, "total_supply": 2,
+                              "quote": {"USD": {"price": 1.0, "market_cap": 2.0, "volume_24h": 3.0,
+                                                 "percent_change_24h": 4.0, "last_updated": "t"}}},
+                        "9": {"id": 9, "symbol": "C", "circulating_supply": 1, "total_supply": 2,
+                              "quote": {"USD": {"price": 1.0, "market_cap": 2.0, "volume_24h": 3.0,
+                                                 "percent_change_24h": 4.0, "last_updated": "t"}}},
+                    }
+                )
+
+            client, calls, _ = make_client(responder)
+            args = _namespace(data=str(data_dir), dry_run=False, resume=True)
+            with mock.patch("collect.time.strftime", return_value="20260925"):
+                stats = collect.cmd_snapshot(args, client, "k")
+            self.assertEqual(stats.errors, 0)
+            self.assertEqual(len(calls), 1)
+            out_path = data_dir / "memes" / "snapshots" / "20260925.jsonl.gz"
+            lines = gzip.decompress(out_path.read_bytes()).decode("utf-8").splitlines()
+            self.assertEqual(len(lines), 3)
+
+    def test_batches_at_100_boundary_with_remainder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            ids = list(range(1, 251))  # 250 ids -> batches of 100, 100, 50
+            self._listing(data_dir, "20260920", ids)
+
+            seen_batch_sizes = []
+
+            def responder(url):
+                qs = url.split("?", 1)[1]
+                params = dict(p.split("=") for p in qs.split("&"))
+                id_list = urllib_unquote(params["id"]).split(",")
+                seen_batch_sizes.append(len(id_list))
+                return ok_payload({i: {"id": int(i), "symbol": "X", "quote": {"USD": {}}} for i in id_list})
+
+            client, calls, _ = make_client(responder)
+            args = _namespace(data=str(data_dir), dry_run=False, resume=True)
+            with mock.patch("collect.time.strftime", return_value="20260925"):
+                stats = collect.cmd_snapshot(args, client, "k")
+            self.assertEqual(seen_batch_sizes, [100, 100, 50])
+            self.assertEqual(stats.errors, 0)
+            self.assertEqual(len(calls), 3)
+
+    def test_resume_skips_existing_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            self._listing(data_dir, "20260920", [1])
+            out_path = data_dir / "memes" / "snapshots" / "20260925.jsonl.gz"
+            collect.write_json_gz(out_path, {"already": "here"})
+
+            def opener(request, timeout=30):
+                self.fail(f"should not call the API, but called {request.full_url}")
+
+            budget = collect.CreditBudget(max_credits=1000)
+            client = collect.CmcClient("k", budget, collect.RateLimiter(), opener=opener)
+            args = _namespace(data=str(data_dir), dry_run=False, resume=True)
+            with mock.patch("collect.time.strftime", return_value="20260925"):
+                stats = collect.cmd_snapshot(args, client, "k")
+            self.assertEqual(stats.errors, 0)
+
+    def test_no_resume_overwrites_existing_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            self._listing(data_dir, "20260920", [1])
+            out_path = data_dir / "memes" / "snapshots" / "20260925.jsonl.gz"
+            collect.write_json_gz(out_path, {"stale": "data"})
+
+            def responder(url):
+                return ok_payload({"1": {"id": 1, "symbol": "X", "quote": {"USD": {"price": 5.0}}}})
+
+            client, calls, _ = make_client(responder)
+            args = _namespace(data=str(data_dir), dry_run=False, resume=False)
+            with mock.patch("collect.time.strftime", return_value="20260925"):
+                stats = collect.cmd_snapshot(args, client, "k")
+            self.assertEqual(len(calls), 1)
+            lines = gzip.decompress(out_path.read_bytes()).decode("utf-8").splitlines()
+            self.assertEqual(len(lines), 1)
+            record = json.loads(lines[0])
+            self.assertEqual(record["price"], 5.0)
+
+    def test_missing_quote_field_is_null_not_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            self._listing(data_dir, "20260920", [1])
+
+            def responder(url):
+                # volume_24h and total_supply absent from this response.
+                return ok_payload(
+                    {"1": {"id": 1, "symbol": "X", "circulating_supply": 1000,
+                           "quote": {"USD": {"price": 1.0, "market_cap": 2.0,
+                                              "percent_change_24h": 3.0, "last_updated": "t"}}}}
+                )
+
+            client, calls, _ = make_client(responder)
+            args = _namespace(data=str(data_dir), dry_run=False, resume=True)
+            with mock.patch("collect.time.strftime", return_value="20260925"):
+                stats = collect.cmd_snapshot(args, client, "k")
+            out_path = data_dir / "memes" / "snapshots" / "20260925.jsonl.gz"
+            record = json.loads(gzip.decompress(out_path.read_bytes()).decode("utf-8").splitlines()[0])
+            self.assertIsNone(record["volume_24h"])
+            self.assertIsNone(record["total_supply"])
+            self.assertNotEqual(record["volume_24h"], 0)
+
+    def test_failing_batch_counts_error_and_next_batch_still_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            ids = list(range(1, 151))  # two batches: 100, 50
+            self._listing(data_dir, "20260920", ids)
+
+            call_count = [0]
+
+            def responder(url):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return error_payload(9999, "boom")
+                qs = url.split("?", 1)[1]
+                params = dict(p.split("=") for p in qs.split("&"))
+                id_list = urllib_unquote(params["id"]).split(",")
+                return ok_payload({i: {"id": int(i), "symbol": "X", "quote": {"USD": {}}} for i in id_list})
+
+            client, calls, _ = make_client(responder)
+            args = _namespace(data=str(data_dir), dry_run=False, resume=True)
+            with mock.patch("collect.time.strftime", return_value="20260925"):
+                stats = collect.cmd_snapshot(args, client, "k")
+            self.assertEqual(stats.errors, 1)
+            self.assertEqual(len(calls), 2)
+            out_path = data_dir / "memes" / "snapshots" / "20260925.jsonl.gz"
+            lines = gzip.decompress(out_path.read_bytes()).decode("utf-8").splitlines()
+            self.assertEqual(len(lines), 50)
+
+    def test_credit_budget_stops_run_partway_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            ids = list(range(1, 301))  # three batches of 100
+            self._listing(data_dir, "20260920", ids)
+
+            def responder(url):
+                qs = url.split("?", 1)[1]
+                params = dict(p.split("=") for p in qs.split("&"))
+                id_list = urllib_unquote(params["id"]).split(",")
+                return ok_payload(
+                    {i: {"id": int(i), "symbol": "X", "quote": {"USD": {}}} for i in id_list},
+                    credit_count=40,
+                )
+
+            budget = collect.CreditBudget(max_credits=50)
+            client, calls, _ = make_client(responder, budget=budget)
+            args = _namespace(data=str(data_dir), dry_run=False, resume=True)
+            with mock.patch("collect.time.strftime", return_value="20260925"):
+                stats = collect.cmd_snapshot(args, client, "k")
+            # First batch succeeds (used=40), second batch's credit_count
+            # tips it over budget and raises before a third call happens.
+            self.assertEqual(len(calls), 2)
+            out_path = data_dir / "memes" / "snapshots" / "20260925.jsonl.gz"
+            self.assertFalse(out_path.exists())
+
+    def test_no_listing_logs_and_returns_without_calling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+
+            def opener(request, timeout=30):
+                self.fail(f"should not call the API, but called {request.full_url}")
+
+            budget = collect.CreditBudget(max_credits=1000)
+            client = collect.CmcClient("k", budget, collect.RateLimiter(), opener=opener)
+            args = _namespace(data=str(data_dir), dry_run=False, resume=True)
+            stats = collect.cmd_snapshot(args, client, "k")
+            self.assertEqual(stats.errors, 0)
+            self.assertEqual(stats.items, 0)
+
+    def test_dry_run_calls_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            self._listing(data_dir, "20260920", [1])
+            args = _namespace(data=str(data_dir), dry_run=True, resume=True)
+            stats = collect.cmd_snapshot(args, None, "")
+            self.assertEqual(stats.errors, 0)
+
+
+def urllib_unquote(s: str) -> str:
+    import urllib.parse
+
+    return urllib.parse.unquote(s)
+
+
 class TestAtomicWrite(unittest.TestCase):
     def test_write_then_read_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
