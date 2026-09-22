@@ -613,9 +613,9 @@ pub fn template(sheet: &FactSheet) -> String {
 /// always here to read back out. `None` only for a label this function was
 /// never meant to see the band name of.
 fn band_name(label: &str) -> Option<&str> {
-    let start = label.rfind('(')?;
-    let end = label.rfind(')')?;
-    (end > start).then(|| &label[start + 1..end])
+    // The name is the label's trailing parenthesis, so a label that does not
+    // end in one has no name to read -- no index arithmetic to get wrong.
+    label.rsplit_once('(')?.1.strip_suffix(')')
 }
 
 /// A label short enough to post, with its caveat intact.
@@ -705,6 +705,24 @@ fn short(label: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_band_share_names_its_band_and_never_says_that_band() {
+        let instant = short("share of INSTANT graduations in that band (10-13 recipients)");
+        assert_eq!(
+            instant,
+            "share of instantly-graduating launches whose launch block also had 10-13 recipients"
+        );
+        let never = short(
+            "share of launches that NEVER graduated whose block had 3 recipients (1-4 recipients)",
+        );
+        assert_eq!(
+            never,
+            "share of never-graduated launches whose launch block also had 1-4 recipients"
+        );
+        assert_eq!(band_name("no name here"), None);
+        assert_eq!(band_name("a name (x) then more words"), None);
+    }
     use crate::assessment::Weight;
     use crate::clause::Kind;
     use crate::sheet::{About, Fact};
