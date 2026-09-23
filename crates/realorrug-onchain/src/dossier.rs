@@ -567,9 +567,37 @@ pub fn build(
     let launch_result = if let Some(block) = memory.and_then(|mem| cached_launch(mem, &mint_key)) {
         Ok(block)
     } else {
-        let (signatures, truncated) = client.signatures_back_to_oldest(budget, mint)?;
-        let result = oldest_launch(client, budget, &signatures, truncated, mint, &mint_key)
-            .and_then(|block| {
+        let (mut signatures, mut truncated) = client.signatures_back_to_oldest(budget, mint)?;
+        // A newest-first walk that ran out of page budget before reaching the
+        // beginning gets one shot at an ascending-order read instead (research
+        // 0056 addendum, 2026-09-23: 7 of 9 real pump.fun mints hit this in
+        // production). `signatures_oldest_first`'s own doc explains why its
+        // list is complete from the start even though the backward walk was
+        // not. Read here rather than inside `oldest_launch` so step 5 below
+        // (funding) is handed the same list through `mint_signatures` and
+        // does not ask the node the same question a second time. Any failure
+        // -- method-not-found on a non-Helius endpoint, a node error, the
+        // budget spent -- leaves `truncated` set, and `oldest_launch` still
+        // refuses to guess (AGENTS.md rule 8).
+        if truncated {
+            // The walk above can spend the whole shared page pool getting to
+            // `truncated`, the same starvation `Budget::grant_pages`'s own doc
+            // describes for the other named walks.
+            budget.grant_pages(1);
+            if let Some(ascending) = client
+                .signatures_oldest_first(budget, mint, crate::rpc::PAGE_SIZE)
+                .ok()
+                .flatten()
+                .filter(|sigs| !sigs.is_empty())
+            {
+                // Reversed into the newest-first shape every reader here
+                // expects (`oldest_launch` takes the LAST entry as oldest).
+                signatures = ascending.into_iter().rev().collect();
+                truncated = false;
+            }
+        }
+        let result =
+            oldest_launch(client, budget, &signatures, truncated, &mint_key).and_then(|block| {
                 if let Some(mem) = memory {
                     // `record` refuses to overwrite a `(what, subject, block)`
                     // key with a different value rather than replacing it
@@ -1096,57 +1124,19 @@ fn oldest_launch(
     budget: &mut Budget,
     signatures: &[crate::rpc::SignatureInfo],
     truncated: bool,
-    address: &Address,
     mint: &str,
 ) -> Result<LaunchBlock, String> {
-    // A newest-first walk that ran out of page budget before reaching the
-    // beginning gets one shot at an ascending-order read instead (research
-    // 0056 addendum, 2026-09-23: 7 of 9 real pump.fun mints hit this in
-    // production). `signatures_oldest_first`'s own doc explains why its
-    // first entry can stand in as the launch: the call starts at the
-    // beginning of the address's history, so its list is complete from the
-    // start even though the backward walk was not. Any failure there --
-    // method-not-found on a non-Helius endpoint, a node error, or the budget
-    // already spent -- comes back `Ok(None)`/`Err`, never a fabricated
-    // "complete" (AGENTS.md rule 8).
-    let ascending = if truncated {
-        // The walk above can spend the whole shared page pool getting to
-        // `truncated`, the same starvation `Budget::grant_pages`'s own doc
-        // describes for the other named walks -- so this one-shot call gets
-        // the same floor rather than silently finding nothing left to spend.
-        budget.grant_pages(1);
-        client
-            .signatures_oldest_first(budget, address, crate::rpc::PAGE_SIZE)
-            .ok()
-            .flatten()
-            .filter(|sigs| !sigs.is_empty())
-    } else {
-        None
-    };
-
-    // `block_signatures` is only used to find same-slot co-transactions
-    // (order-independent), but `oldest` itself depends on which list is in
-    // play: `signatures` is newest-first (oldest is the LAST non-error
-    // entry), `ascending` is oldest-first (oldest is the FIRST).
-    let (oldest, block_signatures) = if let Some(asc) = &ascending {
-        let Some(oldest) = asc.iter().find(|s| s.err.is_none()) else {
-            return Err("no successful transactions for this mint".to_owned());
-        };
-        (oldest, asc.as_slice())
-    } else if truncated {
-        // The fallback wasn't available either. The oldest signature seen by
-        // the backward walk is not the oldest signature there is, so reading
-        // it as the launch would invent a launch block out of an ordinary
-        // trade. Refused rather than guessed -- AGENTS.md section 2: when
-        // something is unknown, record it as unknown.
+    if truncated {
+        // The oldest signature seen is not the oldest signature there is, so
+        // reading it as the launch would invent a launch block out of an
+        // ordinary trade. Refused rather than guessed -- AGENTS.md section 2:
+        // when something is unknown, record it as unknown.
         return Err("this token has more history than the page budget allows, \
                     so its launch could not be reached"
             .to_owned());
-    } else {
-        let Some(oldest) = signatures.iter().rev().find(|s| s.err.is_none()) else {
-            return Err("no successful transactions for this mint".to_owned());
-        };
-        (oldest, signatures)
+    }
+    let Some(oldest) = signatures.iter().rev().find(|s| s.err.is_none()) else {
+        return Err("no successful transactions for this mint".to_owned());
     };
 
     let launch_slot = oldest.slot;
@@ -1159,7 +1149,7 @@ fn oldest_launch(
     // are the same-slot coordinated buys the recipient count is about.
     let mut block: Vec<Transaction> = vec![launch_tx.clone()];
     let mut stopped = false;
-    for sig in block_signatures
+    for sig in signatures
         .iter()
         .filter(|s| also_in_block(s, launch_slot, &oldest.signature))
     {
@@ -1758,10 +1748,12 @@ mod tests {
         // Truncated paging refuses to guess a launch (rule 9), so the miss
         // path never learns a creator to read step 3 from.
         assert!(miss.launch.is_none());
-        // 2 paging + 1 curve miss + 1 token-ownership miss (getTokenLargestAccounts
+        // 2 paging + 1 oldest-first read (refused: this transport answers
+        // it with `value: null`, so the launch stays unreached) + 1 curve
+        // miss + 1 token-ownership miss (getTokenLargestAccounts
         // fails immediately on this transport's `value: null`, so step 4 never
         // reaches getTokenSupply or getMultipleAccounts).
-        assert_eq!(miss_budget.calls_made(), 4);
+        assert_eq!(miss_budget.calls_made(), 5);
 
         let mut hit_budget = Budget::new(60, 2, std::time::Duration::from_secs(30));
         let hit = build(&client, &mut hit_budget, &mint, Some(&mem)).expect("no transport error");
@@ -1772,7 +1764,9 @@ mod tests {
         // 2-page pool this test seeds, so the small starting budget cannot
         // starve it) + 1 token-ownership miss + 3 pages of the funding read's
         // own walk of the mint's history (slice 6b; also granted its own
-        // floor, since step 1's walk never ran to leave it anything) + 1 read
+        // floor, since step 1's walk never ran to leave it anything) + 1
+        // oldest-first read after that walk truncates (refused here; tried
+        // because the funding read walked the history itself) + 1 read
         // of the mint account for step 6's (the creator's cash flow) token
         // program -- no account on this transport, so that read stops there
         // before it can spend on the token-account or trade-history calls.
@@ -1784,7 +1778,7 @@ mod tests {
         // whatever the mint walk left behind -- the fix this test exists to
         // demonstrate (each walk answering "how far back does this address's
         // history go" pays for itself, `Budget::grant_pages`'s own doc).
-        assert_eq!(hit_budget.calls_made(), 7);
+        assert_eq!(hit_budget.calls_made(), 8);
         assert!(hit_budget.calls_made() > miss_budget.calls_made());
     }
 
@@ -1838,12 +1832,13 @@ mod tests {
         // step 4 fails after its first call) + 3 pages of the funding read's
         // own walk of the mint's history (slice 6b; step 1 never ran, so this
         // walk is granted its own floor rather than inheriting an empty pool)
+        // + 1 oldest-first read after that walk truncates (refused here)
         // + 1 read of the mint account for step 6's (the creator's cash flow)
         // token program -- no account on this transport, so that read stops
         // there before it can spend on the token-account or trade-history
         // calls.
-        assert_eq!(dossier.calls, 7);
-        assert_eq!(budget.calls_made(), 7);
+        assert_eq!(dossier.calls, 8);
+        assert_eq!(budget.calls_made(), 8);
     }
 
     impl crate::rpc::Transport for SuccessfulLaunch {
@@ -1866,24 +1861,10 @@ mod tests {
         // only exercises the miss branch.
         let mint = Address::new([4u8; 32]);
         let creator = Address::new([9u8; 32]);
-
-        let mut discriminator = vec![0x18, 0x1e, 0xc8, 0x28, 0x05, 0x1c, 0x07, 0x77];
-        for s in ["Name", "SYM", "uri"] {
-            discriminator.extend_from_slice(&u32::try_from(s.len()).expect("short").to_le_bytes());
-            discriminator.extend_from_slice(s.as_bytes());
-        }
-        discriminator.extend_from_slice(creator.as_bytes());
-        let data_b58 = base58_encode(&discriminator);
-
-        let program = realorrug_decode::pumpfun::PROGRAM_ID.to_string();
         let one_signature =
             r#"{"jsonrpc":"2.0","id":1,"result":[{"signature":"launch-sig","slot":10,"err":null}]}"#
                 .to_owned();
-        let transaction = format!(
-            r#"{{"jsonrpc":"2.0","id":1,"result":{{"slot":10,"meta":{{"err":null}},
-               "transaction":{{"message":{{"accountKeys":["{creator}"],
-               "instructions":[{{"programId":"{program}","data":"{data_b58}","accounts":[]}}]}}}}}}}}"#
-        );
+        let transaction = create_transaction(&creator);
 
         let client = RpcClient::with_transport(
             "http://test.invalid",
@@ -1913,6 +1894,71 @@ mod tests {
         let second =
             build(&dead_client, &mut second_budget, &mint, Some(&mem)).expect("no transport error");
         assert_eq!(second.launch, Some(launch));
+    }
+
+    /// A `getTransaction` body holding a real pump.fun `create` at slot 10,
+    /// built from the same raw payload `launch.rs`'s own tests use.
+    fn create_transaction(creator: &Address) -> String {
+        let mut discriminator = vec![0x18, 0x1e, 0xc8, 0x28, 0x05, 0x1c, 0x07, 0x77];
+        for s in ["Name", "SYM", "uri"] {
+            discriminator.extend_from_slice(&u32::try_from(s.len()).expect("short").to_le_bytes());
+            discriminator.extend_from_slice(s.as_bytes());
+        }
+        discriminator.extend_from_slice(creator.as_bytes());
+        let data_b58 = base58_encode(&discriminator);
+        let program = realorrug_decode::pumpfun::PROGRAM_ID.to_string();
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"slot":10,"meta":{{"err":null}},
+               "transaction":{{"message":{{"accountKeys":["{creator}"],
+               "instructions":[{{"programId":"{program}","data":"{data_b58}","accounts":[]}}]}}}}}}}}"#
+        )
+    }
+
+    /// A busy mint: its newest-first history never ends inside the page
+    /// budget, and only the oldest-first read reaches the launch.
+    struct BusyMint {
+        transaction: String,
+    }
+
+    impl crate::rpc::Transport for BusyMint {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            // Checked before `getTransaction`, which it contains as a prefix.
+            if body.contains("getTransactionsForAddress") {
+                Ok(r#"{"jsonrpc":"2.0","id":1,"result":{"data":[
+                    {"signature":"launch-sig","slot":10,"err":null},
+                    {"signature":"later-sig","slot":11,"err":null}],"paginationToken":"x"}}"#
+                    .to_owned())
+            } else if body.contains("getSignaturesForAddress") {
+                Ok(big_signature_page())
+            } else if body.contains("getTransaction") {
+                Ok(self.transaction.clone())
+            } else {
+                Ok(r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_owned())
+            }
+        }
+    }
+
+    #[test]
+    fn a_busy_mints_launch_is_reached_through_the_oldest_first_read() {
+        // Task 9-23-0011: with one page of budget the newest-first walk ends
+        // truncated, which used to be a flat "could not be reached". The
+        // oldest-first read's first entry is the launch; it must be the one
+        // read, not the newest entry of the backward walk.
+        let mint = Address::new([4u8; 32]);
+        let creator = Address::new([9u8; 32]);
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(BusyMint {
+                transaction: create_transaction(&creator),
+            }),
+        );
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let dossier = build(&client, &mut budget, &mint, None).expect("no transport error");
+        let launch = dossier
+            .launch
+            .expect("the oldest-first read reached the launch");
+        assert_eq!(launch.slot, Slot(10));
+        assert_eq!(launch.creator, creator);
     }
 
     /// A launch, then a bonding curve read at a later slot.

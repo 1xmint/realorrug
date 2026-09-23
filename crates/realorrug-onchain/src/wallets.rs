@@ -1243,9 +1243,13 @@ pub fn investigate_solana(
     // its list can be trusted as complete from the start even though the
     // backward walk was not. Any failure there leaves `truncated` as it was,
     // and the gap below still fires (AGENTS.md rule 8: unknown is not safe).
+    // Only for a walk made here: a caller that hands its own history in
+    // (`dossier::build`) already made this same read before handing it over,
+    // so a list still `truncated` means the read failed there, and asking
+    // the node again would only spend a second call on the same refusal.
     let owned_ascending;
     let mut ascending = false;
-    let signatures: &[SignatureInfo] = if truncated {
+    let signatures: &[SignatureInfo] = if truncated && mint_signatures.is_none() {
         // Same starvation `Budget::grant_pages`'s own doc describes for the
         // other named walks: the mint's own walk above can spend the whole
         // shared page pool getting to `truncated`, so this one-shot call

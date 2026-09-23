@@ -593,9 +593,13 @@ Treat 10 credits as the documented figure, not yet a confirmed one.
 **Fixed in the PR that lands this paragraph:** `RpcClient::signatures_oldest_first`
 (`crates/realorrug-onchain/src/rpc.rs`) makes one `getTransactionsForAddress`
 call, ascending, and both of the gaps quoted above now try it once when the
-newest-first walk is truncated — `dossier.rs`'s `oldest_launch` (step 1's
-launch block) and `wallets.rs`'s `investigate_solana` (step 5's launch
-window). It is a fallback, not a replacement for the cheaper newest-first
+newest-first walk is truncated. `dossier::build` makes the read right after
+step 1's walk and hands the same list to both step 1's launch block and
+step 5's launch window (`investigate_solana`), so a dossier asks the node
+once, not twice; `investigate_solana` makes the read itself only when it
+walked the mint's history itself (a memory hit skipped step 1's walk). The
+first CI run of this change counted the second, redundant read in two
+existing budget tests, which is how it was found. It is a fallback, not a replacement for the cheaper newest-first
 walk: one extra call (10 Helius credits, per the documented rate above) only
 on mints whose history exceeds the walk. It is also Helius-only — every
 other RPC this repo has tried answers `getTransactionsForAddress` with a
