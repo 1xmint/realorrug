@@ -260,6 +260,17 @@ pub enum Signal {
     /// (`realorrug_onchain::wallets::correlated_selling`'s own doc), so this
     /// only ever fires from reads inside the bonding-curve window.
     CorrelatedSelling,
+    /// The launch's creator address materially funded one or more of the
+    /// checked early buyers, at or before they bought (design 0031 §2).
+    ///
+    /// A flow, not an identity claim (rule 4): the creator's address sent
+    /// money to these wallets; nothing here says the creator owns or
+    /// controls them. Read from the same comparison as
+    /// [`Kind::SharedFunder`](crate::clause::Kind::SharedFunder) -- a
+    /// funder's canonical address equal to the launch's own creator address
+    /// -- so it costs no extra reads. Not live-risk (design 0031 §2: "on its
+    /// own it earns `Sketchy`, the same footing as `CreatorBoughtOwnLaunch`").
+    CreatorFundedEarlyBuyers,
 }
 
 /// The innocent, on-chain-identical reading of a signal, from design 0020
@@ -325,6 +336,10 @@ pub(crate) fn twin_for(signal: Signal) -> &'static str {
              they are one actor cashing out or several separate early buyers who all decided, \
              on their own, that the same moment was a good time to take profit"
         }
+        Signal::CreatorFundedEarlyBuyers => {
+            "a creator's address paying early buyers reads the same as a creator sending money \
+             to friends or to its own other wallets for reasons unrelated to the launch"
+        }
     }
 }
 
@@ -359,6 +374,7 @@ impl Signal {
             Signal::HolderConcentration => "one address holds most of the supply",
             Signal::OwnerCanStillMintOrPause => "the creator still holds live powers over it",
             Signal::CorrelatedSelling => "wallets that look linked sold together",
+            Signal::CreatorFundedEarlyBuyers => "the creator's address paid early buyers",
         }
     }
 }

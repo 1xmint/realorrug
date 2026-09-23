@@ -190,6 +190,17 @@ pub enum Kind {
     /// addresses, which an exchange's hot wallet also produces: never who
     /// owns or controls whom.
     SharedFunder,
+    /// How many of the checked early buyers the launch's own creator
+    /// address materially funded, at or before they bought (design 0031
+    /// §2). The same comparison [`Kind::SharedFunder`] is built from, with
+    /// the creator's address as the one held fixed. On-chain flow, never an
+    /// ownership or control claim.
+    CreatorFundedEarlyBuyers,
+    /// How many of the checked early buyers were already active -- had sent
+    /// a transaction -- before this launch, with their first-seen dates
+    /// (design 0031 §1's last paragraph). Informational: no signal is built
+    /// from this alone, and it never says "bot".
+    EarlyBuyersActiveBeforeLaunch,
     /// A dated USD price or market-cap read from an off-chain aggregator
     /// (design 0027 §2.2, "Market and exit"; `realorrug-onchain::market`).
     ///
