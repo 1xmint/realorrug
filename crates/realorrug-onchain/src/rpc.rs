@@ -210,6 +210,20 @@ struct TransactionsForAddressEnvelope {
     data: Vec<SignatureInfo>,
 }
 
+/// The `data` half of `getTransactionsForAddress`'s **full**-mode response
+/// (`transactionDetails: "full"`, [`RpcClient::funding_transactions_page`]):
+/// each row is shaped exactly like `getTransaction`'s own single result --
+/// `transaction`/`meta`/`slot` -- confirmed against a real Helius response
+/// (research 0056 addendum, 2026-09-23), so [`parse_transaction`] reads a row
+/// here unmodified rather than this crate carrying a second parser for it.
+/// `paginationToken` is `Some` while more history remains past this page.
+#[derive(Deserialize)]
+struct FullTransactionsEnvelope {
+    data: Vec<serde_json::Value>,
+    #[serde(rename = "paginationToken")]
+    pagination_token: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct AccountEnvelope {
     value: Option<AccountValue>,
@@ -721,6 +735,75 @@ impl RpcClient {
         Ok(Some(result.data))
     }
 
+    /// One page of a Solana address's transaction history in Helius's
+    /// **full** mode: up to [`FULL_TRANSACTIONS_PAGE_SIZE`] whole
+    /// transactions per call, each already carrying its balances and
+    /// instructions, instead of one `getSignaturesForAddress` entry plus a
+    /// separate `getTransaction` call per signature (research 0056
+    /// addendum, 2026-09-23 -- an active buyer routinely has more
+    /// pre-purchase transactions than the old per-transaction walk's caps
+    /// allowed it to read).
+    ///
+    /// `at_or_before_slot` becomes Helius's `filters.slot.lte`: only
+    /// transactions at or before that slot come back, newest first
+    /// (`sortOrder: "desc"`) -- callers wanting the same-slot inclusion
+    /// [`crate::wallets::funding_search`] relies on should pass the
+    /// purchase's own slot, not one less. `pagination_token`, when `Some`,
+    /// is a previous call's own `paginationToken` and continues that walk;
+    /// `None` starts at the newest matching transaction.
+    ///
+    /// Returns the page's raw rows unparsed -- callers run them through
+    /// [`parse_transaction`] themselves, the same parser
+    /// [`RpcClient::transaction`] uses, so the two paths never carry two
+    /// copies of the parsing -- alongside the response's own
+    /// `paginationToken` for the next call, or `None` when the node did not
+    /// send one (the walk has nothing further to page through).
+    ///
+    /// Helius-only, like [`RpcClient::signatures_oldest_first`]: every other
+    /// RPC this repo has tried answers `getTransactionsForAddress` with a
+    /// JSON-RPC "method not found" error, which surfaces as `Err` here, never
+    /// a false empty page -- a caller on a non-Helius endpoint sees an `Err`
+    /// on its first call and can fall back rather than mistaking "unsupported"
+    /// for "no history" (AGENTS.md rule 8).
+    ///
+    /// Returns `Ok(None)` when the page budget is spent before the call is
+    /// made, the same convention [`RpcClient::signatures_page`] uses. Costs
+    /// one page and one call against the [`Budget`], like any other read --
+    /// no separate accounting for its larger response.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] on transport, node (including method-not-found) or shape
+    /// failures.
+    pub fn funding_transactions_page(
+        &self,
+        budget: &mut Budget,
+        address: &Address,
+        at_or_before_slot: u64,
+        pagination_token: Option<&str>,
+    ) -> Result<Option<FundingTransactionsPage>, RpcError> {
+        if budget.take_page().is_err() {
+            return Ok(None);
+        }
+        let mut options = serde_json::json!({
+            "transactionDetails": "full",
+            "sortOrder": "desc",
+            "limit": FULL_TRANSACTIONS_PAGE_SIZE,
+            "encoding": "json",
+            "maxSupportedTransactionVersion": 0,
+            "filters": { "status": "succeeded", "slot": { "lte": at_or_before_slot } },
+        });
+        if let Some(token) = pagination_token {
+            options["paginationToken"] = serde_json::json!(token);
+        }
+        let result: FullTransactionsEnvelope = self.call(
+            budget,
+            "getTransactionsForAddress",
+            &serde_json::json!([address.to_string(), options]),
+        )?;
+        Ok(Some((result.data, result.pagination_token)))
+    }
+
     /// Reads one transaction.
     ///
     /// # Errors
@@ -871,6 +954,18 @@ pub(crate) const PAGE_SIZE: usize = 1000;
 pub(crate) const fn is_last_page(returned: usize) -> bool {
     returned < PAGE_SIZE
 }
+
+/// How many whole transactions one [`RpcClient::funding_transactions_page`]
+/// call asks Helius for. Fixed at Helius's own observed page size (research
+/// 0056 addendum, 2026-09-23), not a tunable: the whole point of full mode is
+/// reading a candidate's history in as few calls as its actual size allows,
+/// and a caller wanting a short page can just stop reading rows early.
+pub const FULL_TRANSACTIONS_PAGE_SIZE: usize = 100;
+
+/// One page from [`RpcClient::funding_transactions_page`]: its raw,
+/// unparsed rows, and the node's own cursor to the next page (`None` when
+/// there is not one).
+pub type FundingTransactionsPage = (Vec<serde_json::Value>, Option<String>);
 
 /// Reads the subset of `getTransaction`'s JSON this crate needs.
 ///
