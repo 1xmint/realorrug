@@ -3988,6 +3988,42 @@ mod tests {
         assert!(floored.gaps.is_empty(), "{:?}", floored.gaps);
     }
 
+    #[test]
+    fn a_rejected_purchase_anchored_read_falls_back_to_the_newest_first_walk() {
+        // The node refuses the first, purchase-anchored signature read; the
+        // search must retry newest-first and still find the funder, with no
+        // gap for the refused attempt. Only the first page may fall back --
+        // an error on any later page is a real gap, not a retry.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let signatures = vec![crate::rpc::SignatureInfo {
+            signature: "mint-sig".to_owned(),
+            slot: 1,
+            err: None,
+        }];
+
+        let responses = [
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            r#"{"result":null,"error":{"code":-32602,"message":"Invalid param: before"}}"#
+                .to_owned(),
+            signatures_page("buyer-sig"),
+            funding_tx(&funder, &buyer, 100_000),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 3, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, Some(&(signatures, false)))
+            .expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete, "{:?}", funding.gaps);
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, funder);
+        assert!(funding.gaps.is_empty(), "{:?}", funding.gaps);
+    }
+
     /// A transport for [`funding_search`]'s purchase-anchored-start test:
     /// routes a `getSignaturesForAddress` call naming `buyer` to a canned
     /// page chosen by that call's own `before` cursor, and every other call
