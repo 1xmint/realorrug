@@ -386,56 +386,46 @@ fn named_in(sentence: &str) -> Vec<Subject> {
     const VENUE: &[&str] = &["launchpad", "launchpads", "venue", "pons", "pump"];
     const LIQUIDITY: &[&str] = &["liquidity", "pool", "pools", "lp"];
 
-    let lower = sentence.to_ascii_lowercase();
     let mut out: Vec<Subject> = Vec::new();
-    let mut idx = 0;
-    let bytes = lower.as_bytes();
-    while idx < bytes.len() {
-        if !bytes[idx].is_ascii_alphanumeric() {
-            idx += 1;
-            continue;
-        }
-        let start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_alphanumeric() {
-            idx += 1;
-        }
-        let word = &lower[start..idx];
-        // "non-pool" is not the pool: the hyphen joins "non" directly onto the
-        // next word with no space, which is the shape of a plain-English
-        // negation ("non-pool wallet", "non-pool account") rather than a
-        // sentence about the pool. A true sentence about the pool never
-        // writes it this way, so refusing to name the subject here costs
-        // nothing and stops "non-pool" from tripping the liquidity subject
-        // when the sentence is plainly about a holder (see review.md case A,
-        // 9-23-0012).
-        // `start - 4` is a byte offset, and the four bytes immediately before
-        // an ASCII word are not always a char boundary -- a curly apostrophe
-        // (`\u{2019}`, three UTF-8 bytes) sitting there, as in "supply\u{2019}s"
-        // just before a later word, put a slice boundary inside it and
-        // panicked on the trial's real drafts (9-23-0012b evidence step,
-        // 2026-09-23). Checked with `is_char_boundary` first; a false `start -
-        // 4` that lands mid-character cannot spell "non-" (it holds one whole
-        // multi-byte character, not four ASCII ones), so treating it as "not
-        // negated" here is exactly the answer the boundary check would have
-        // given if it could have been asked at all.
-        let negated =
-            start >= 4 && lower.is_char_boundary(start - 4) && &lower[start - 4..start] == "non-";
-        if negated {
-            continue;
-        }
-        let subject = if CREATOR.contains(&word) {
-            Subject::Creator
-        } else if HOLDERS.contains(&word) {
-            Subject::Holders
-        } else if VENUE.contains(&word) {
-            Subject::Venue
-        } else if LIQUIDITY.contains(&word) {
-            Subject::Liquidity
-        } else {
-            continue;
-        };
-        if !out.contains(&subject) {
-            out.push(subject);
+    // Split on everything but letters, digits and the hyphen, then on the
+    // hyphen, so "non-pool" arrives as one token of two words and the word
+    // after a bare "non" can be skipped: "non-pool" is not the pool. The
+    // hyphen joins "non" directly onto the next word, which is the shape of a
+    // plain-English negation ("non-pool wallet", "non-pool account") rather
+    // than a sentence about the pool; a true sentence about the pool never
+    // writes it this way, so skipping it costs nothing and stops "non-pool"
+    // from tripping the liquidity subject when the sentence is plainly about
+    // a holder (see review.md case A, 9-23-0012).
+    //
+    // Words, not byte offsets, on purpose: an earlier version of this check
+    // sliced the four bytes before each word to look for "non-", and a curly
+    // apostrophe (`\u{2019}`, three UTF-8 bytes) there put the slice inside a
+    // character and panicked on the trial's real drafts (9-23-0012b,
+    // 2026-09-23). Its hand-written index loop also let a one-character slip
+    // spin forever, which the mutation check caught as time-outs.
+    for token in sentence.split(|c: char| !c.is_ascii_alphanumeric() && c != '-') {
+        let mut after_non = false;
+        for part in token.split('-') {
+            let word = part.to_ascii_lowercase();
+            let negated = after_non;
+            after_non = word == "non";
+            if negated {
+                continue;
+            }
+            let subject = if CREATOR.contains(&word.as_str()) {
+                Subject::Creator
+            } else if HOLDERS.contains(&word.as_str()) {
+                Subject::Holders
+            } else if VENUE.contains(&word.as_str()) {
+                Subject::Venue
+            } else if LIQUIDITY.contains(&word.as_str()) {
+                Subject::Liquidity
+            } else {
+                continue;
+            };
+            if !out.contains(&subject) {
+                out.push(subject);
+            }
         }
     }
     out
@@ -1001,7 +991,7 @@ mod tests {
         // "...of supply\u{2019}s launch timing...remains unknown." puts a
         // curly apostrophe (`\u{2019}`, three UTF-8 bytes) four bytes before
         // "s", and `start - 4` landed inside it rather than on a char
-        // boundary. `is_char_boundary` guards the slice now; the sentence is
+        // boundary. `named_in` splits words now and slices no bytes; the sentence is
         // about the launch block (`Subject::Launch`), not negated, and
         // must still name it.
         let sheet = vec![Authorised {

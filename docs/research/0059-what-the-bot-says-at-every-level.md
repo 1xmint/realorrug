@@ -494,11 +494,12 @@ Running the eight real drafts through the full ship path
 check reads four bytes immediately before a word and compares them to
 "non-", and a curly apostrophe (`\u{2019}`, three UTF-8 bytes) sitting in
 that span put the slice boundary inside a character rather than on one. This
-is the identical cause-A mechanism, on real trial text, and is fixed the
-same way: `fidelity.rs`'s `named_in` now checks `is_char_boundary` before
-taking the slice, and a boundary that fails the check is treated as "not
-negated" (it cannot spell four ASCII bytes of "non-" if it is not a
-four-byte ASCII run in the first place).
+is a flaw in cause A's own first fix, on real trial text. A boundary check
+fixed the crash, but the mutation check then found the hand-written byte
+loop around it could be made to spin forever by a one-character slip. So
+`fidelity.rs`'s `named_in` went back to splitting the sentence into words,
+now also at hyphens, and skips the word straight after a bare "non". It
+slices no bytes, so there is nothing to land inside a character.
 
 **All eight refused drafts, re-run against their real sheets after every
 fix above** (`render::for_publication` then `check_target`, `check_level`,
