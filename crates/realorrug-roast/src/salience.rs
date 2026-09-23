@@ -258,6 +258,35 @@ fn market(sheet: &FactSheet) -> Option<Candidate> {
     })
 }
 
+/// The curve-liquidity bundle: what the bonding curve holds right now, when
+/// a drain was actually observed (`Signal::LiquidityGone`).
+///
+/// Gated on the signal, not on the fact's mere presence, for the same
+/// reason [`launch_recipients`] gates on `LaunchBlockInStrongestBand`: an
+/// ordinary non-zero curve balance is not a concern, and printing it
+/// unconditionally would rank a routine number as if it were the finding.
+///
+/// Ranked above [`concentration`]: this is the fact that actually earns a
+/// `Rugged` verdict when paired with `HolderConcentration`
+/// (`crate::verdict::rugged_pair`), and research 0059 found the
+/// deterministic reply leading with the holder-concentration sentence
+/// instead -- the same headline a `Sketchy` reply uses -- so a `Rugged`
+/// reply never said the one thing that made it `Rugged`.
+fn curve_liquidity(sheet: &FactSheet) -> Option<Candidate> {
+    let liquidity = fact(sheet, Kind::CurveLiquidity)?;
+    if !sheet.signals.contains(&Signal::LiquidityGone) {
+        return None;
+    }
+    Some(Candidate {
+        id: CandidateId(vec![Kind::CurveLiquidity]),
+        priority: 92,
+        sentence: format!(
+            "The bonding curve's reserves are drained -- it now holds {}.",
+            liquidity.rendered
+        ),
+    })
+}
+
 /// The token-ownership bundle: the largest owner among the sampled top
 /// token accounts, once any bonding-curve address is proven-excluded
 /// (design 0027 row 6/7 slice 6a, Solana only).
@@ -300,6 +329,7 @@ pub fn rank(sheet: &FactSheet) -> Vec<Candidate> {
     let mut candidates: Vec<Candidate> = [
         creator_record(sheet),
         shared_funder(sheet),
+        curve_liquidity(sheet),
         concentration(sheet),
         token_ownership(sheet),
         launch_recipients(sheet),
@@ -448,6 +478,50 @@ mod tests {
             ranked[1].id,
             CandidateId(vec![Kind::Holders, Kind::LargestHolderShare])
         );
+    }
+
+    fn curve_liquidity_fact() -> Fact {
+        Fact::exact(
+            Kind::CurveLiquidity,
+            "quote asset held in the bonding curve now",
+            0.0,
+            "0.0000 SOL",
+        )
+    }
+
+    /// Research 0059: a `Rugged` sheet's reply led with the same
+    /// holder-concentration headline a `Sketchy` reply uses and never said
+    /// the fact that actually earned the level -- the curve's reserves read
+    /// at zero. Reapplying the bug (dropping `curve_liquidity` from
+    /// [`rank`], or its `Signal::LiquidityGone` gate) makes this fail: the
+    /// lead reverts to the concentration bundle.
+    #[test]
+    fn a_drained_curve_leads_over_concentration() {
+        let mut sheet = sheet_with(vec![
+            curve_liquidity_fact(),
+            holders_fact("addresses holding the token, not counting the bonding curve"),
+            share_fact("share of circulating supply at the single largest address"),
+        ]);
+        sheet.signals = vec![Signal::LiquidityGone, Signal::HolderConcentration];
+        let top = lead(&sheet).expect("a candidate exists");
+        assert_eq!(top.id, CandidateId(vec![Kind::CurveLiquidity]));
+        assert!(top.sentence.contains("0.0000 SOL"), "{}", top.sentence);
+        assert!(
+            top.sentence.to_lowercase().contains("drained"),
+            "{}",
+            top.sentence
+        );
+    }
+
+    /// The curve-liquidity fact alone, with no `LiquidityGone` signal, must
+    /// not lead or even rank -- an ordinary non-zero curve balance is not a
+    /// finding (the same "absent is not zero" gate `launch_recipients`
+    /// already holds itself to).
+    #[test]
+    fn an_unfired_curve_liquidity_fact_does_not_lead() {
+        let sheet = sheet_with(vec![curve_liquidity_fact()]);
+        assert!(lead(&sheet).is_none());
+        assert!(rank(&sheet).is_empty());
     }
 
     fn funding_sheet(funded: u32, checked: Option<u32>) -> FactSheet {

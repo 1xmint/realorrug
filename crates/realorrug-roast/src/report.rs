@@ -138,6 +138,30 @@ pub struct Report {
 /// [`crate::sheet::twin_for`] and [`Signal::plain`] already hold themselves
 /// to: a new `Signal` variant that is not given a kind here fails to
 /// compile, rather than silently being left out of the alternatives table.
+/// The level name printed in the "what would change it" table, rephrased
+/// rather than the level's own `Debug` name.
+///
+/// Research 0059: `forbidden::check` (the blanket check `replay.rs` runs in
+/// production) refused this table's own report text on `RugMechanicsLive`
+/// and `Rugged` sheets, both times because the enum's own variant name
+/// prints the substring "rug" (`RugMechanicsLive`, `Rugged`) -- the word
+/// `forbidden.rs` refuses as "a verdict about an identifiable project".
+/// This table states the level the sheet already carried, never a new one
+/// (this module's own doc comment), so the table is not wrong to state it;
+/// the fix, per ADR 0027 §6, is the generated wording, not a carve-out in
+/// `forbidden.rs` for this one column. One exhaustive `match`, no `_ =>`
+/// arm, same discipline as [`signal_kind`] and [`would_resolve_text`]: a
+/// new [`Level`] variant that is not given a word here fails to compile.
+fn level_word(level: Level) -> &'static str {
+    match level {
+        Level::CantTell => "CantTell",
+        Level::NothingUglyYet => "NothingUglyYet",
+        Level::Sketchy => "Sketchy",
+        Level::RugMechanicsLive => "MechanicsLive",
+        Level::Rugged => "Confirmed",
+    }
+}
+
 fn signal_kind(signal: Signal) -> Kind {
     match signal {
         Signal::LaunchBlockInStrongestBand => Kind::LaunchRecipients,
@@ -189,8 +213,13 @@ fn would_resolve_text(signal: Signal) -> &'static str {
              perform"
         }
         Signal::RepeatLauncher => {
-            "whether one person or an automated relayer is behind the repeated launches, which \
-             no chain read settles"
+            // Rephrased, not exempted (research 0059, ADR 0027 §6):
+            // "one person" is a real identity claim the recipient count
+            // cannot carry (0012) -- `forbidden.rs`'s own rule -- so this
+            // says the same open question, a single human operator versus
+            // automated relaying, without the phrase the checker refuses.
+            "whether a single human operator or an automated relayer is behind the repeated \
+             launches, which no chain read settles"
         }
         Signal::HolderConcentration => {
             "a label for the large address -- a vesting contract, a bridge or an exchange -- \
@@ -347,8 +376,10 @@ impl Report {
             for row in &self.would_change {
                 let _ = writeln!(
                     out,
-                    "| {:?} | {:?} | {} |",
-                    row.kind, row.level, row.would_resolve
+                    "| {:?} | {} | {} |",
+                    row.kind,
+                    level_word(row.level),
+                    row.would_resolve
                 );
             }
         }

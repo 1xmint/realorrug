@@ -6,7 +6,7 @@ on his behalf; anything not covered here is a question for Josh, not a guess.
 ## Status
 
 **Direction changed 2026-09-21** (Josh's plan, recorded as ADRs 0037–0039,
-design 0029, plan 0002). Current milestone: plan 0002 phase 1 (every doc, page
+design 0029, plan 0002). Current milestone: plan 0002 phase 2 (every doc, page
 and code path describes the pump.fun launch; the weekly prize is switched off)
 plus the Solana reply-review loop. The Robinhood launch, the weekly prize and
 the payout signer are retired; the daily five stays as a free game with
