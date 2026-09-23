@@ -76,7 +76,10 @@ use realorrug_robinhood::{Address, Hash32, Log, LogsError, Rpc, quantity, quanti
 
 use crate::budget::Budget;
 use crate::memory::{CheckRun, Completeness, FundingEdge, Memory};
-use crate::rpc::{RpcClient, SignatureInfo, Transaction, is_last_page};
+use crate::rpc::{
+    FULL_TRANSACTIONS_PAGE_SIZE, RpcClient, SignatureInfo, Transaction, is_last_page,
+    parse_transaction,
+};
 
 /// `alchemy_getAssetTransfers`, per the CU table (2026-09-18).
 pub const CU_GET_ASSET_TRANSFERS: u32 = 120;
@@ -1217,6 +1220,10 @@ struct EarlyBuyer {
 /// all (only reachable when `mint_signatures` is `None`). A single candidate
 /// or transaction read failure lands in [`Funding::gaps`] instead, on a
 /// result that is still returned.
+// The launch-window walk and the candidate loop are one unit of work:
+// splitting them would only move the length somewhere a reader has to
+// follow (same reasoning as `investigate`'s own `#[allow]`, above).
+#[allow(clippy::too_many_lines)]
 pub fn investigate_solana(
     client: &RpcClient,
     budget: &mut Budget,
@@ -1345,8 +1352,17 @@ pub fn investigate_solana(
     // it first and could spend it all. A floor, not an addition
     // (`Budget::grant_pages`), sized for every candidate walking to its cap.
     budget.grant_pages(FUNDING_PAGE_FLOOR);
+    // Cached once per dossier: a node that fails the full-mode probe once
+    // will fail it again, so later candidates skip straight past it.
+    let mut full_mode_supported: Option<bool> = None;
     for buyer in window_buyers.iter().take(MAX_CANDIDATES) {
-        checked.push(check_solana_candidate(client, budget, buyer, &mut gaps));
+        checked.push(check_solana_candidate(
+            client,
+            budget,
+            buyer,
+            &mut full_mode_supported,
+            &mut gaps,
+        ));
     }
 
     let shared = shared_funders(&checked);
@@ -1373,6 +1389,12 @@ pub fn investigate_solana(
 /// this launch; it is one a stranger could have chosen specifically to be
 /// expensive to read, and this read should stop and say so rather than keep
 /// paying for it (AGENTS.md rule 8: a capped search is not a measurement).
+///
+/// Applies only to [`funding_search`]'s **fallback** per-transaction walk
+/// (today's path, kept for a node that does not support Helius's full-mode
+/// `getTransactionsForAddress`). The full-mode path this cap does not bound
+/// is capped by [`MAX_FUNDING_SIGNATURE_PAGES`] instead -- a page there is
+/// [`crate::rpc::FULL_TRANSACTIONS_PAGE_SIZE`] whole transactions, not one.
 pub const MAX_FUNDING_TRANSACTIONS: usize = 10;
 
 /// How many `getSignaturesForAddress` pages [`funding_search`] will walk
@@ -1536,15 +1558,178 @@ fn resolve_funder_read(
     }
 }
 
-fn funding_search(
+/// A raw full-mode row's own transaction signature, read straight off the
+/// same JSON [`parse_transaction`] reads (`transaction.signatures[0]`, the
+/// node's own signing order) -- [`crate::rpc::Transaction`] does not carry
+/// its own signature (nothing before this needed one), so this is read
+/// separately from the row rather than added to that struct for one caller.
+fn full_mode_row_signature(raw: &serde_json::Value) -> Option<&str> {
+    raw.get("transaction")?
+        .get("signatures")?
+        .as_array()?
+        .first()?
+        .as_str()
+}
+
+/// Tries the full-mode read
+/// ([`RpcClient::funding_transactions_page`]) before [`funding_search`]'s
+/// per-transaction walk falls back to it (CHANGE point 1 of the 2026-09-23
+/// "read a hundred at a time" fix). Every row this reads runs through the
+/// same [`funder_of`]/[`resolve_funder_read`] the fallback path uses, so the
+/// two paths share one funder test rather than carrying two.
+///
+/// Returns:
+/// - `Some((complete, funder))` when full mode answered the question --
+///   found, a measured absence, or a gap it recorded itself (a later page's
+///   error, or its own page/signature-page caps).
+/// - `None` when the **first** page could not be read at all -- JSON-RPC
+///   method-not-found or any other error -- the caller's cue to fall back to
+///   today's path exactly as before, without a gap for this attempt (CHANGE
+///   point 2: a non-Helius RPC must behave exactly as it does today). An
+///   error on a *later* page does not return `None` -- it is a gap, not a
+///   fallback trigger, same as `None` above never occurs past the first
+///   page.
+fn full_mode_funding_search(
     client: &RpcClient,
     budget: &mut Budget,
     address: &realorrug_types::Address,
     address_key: &str,
     first_purchase_slot: u64,
-    first_purchase_signature: &str,
+    gaps: &mut Vec<String>,
+) -> Option<(bool, Option<Funder>)> {
+    let mut pagination_token: Option<String> = None;
+    let mut unreadable = false;
+
+    for page_num in 0..MAX_FUNDING_SIGNATURE_PAGES {
+        let page = match client.funding_transactions_page(
+            budget,
+            address,
+            first_purchase_slot,
+            pagination_token.as_deref(),
+        ) {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                gaps.push(format!(
+                    "funding of {address_key}: page budget exhausted while searching for its \
+                     funder; no funder recorded"
+                ));
+                return Some((false, None));
+            }
+            Err(_) if page_num == 0 => return None,
+            Err(why) => {
+                gaps.push(format!("funding of {address_key}: {why}"));
+                return Some((false, None));
+            }
+        };
+        let (rows, next_token) = page;
+        let reached_end = rows.len() < FULL_TRANSACTIONS_PAGE_SIZE;
+
+        for raw in &rows {
+            // Same-slot rule as the fallback path, kept identical on purpose
+            // (CHANGE point 3): `>`, not `>=` -- a transfer in the purchase's
+            // own slot can still have landed before it within that slot.
+            let Some(slot) = raw.get("slot").and_then(serde_json::Value::as_u64) else {
+                gaps.push(unreadable_gap(
+                    address_key,
+                    full_mode_row_signature(raw).unwrap_or("(unknown)"),
+                    "did not report a slot; cannot confirm no funder there",
+                ));
+                unreadable = true;
+                continue;
+            };
+            if slot > first_purchase_slot {
+                continue;
+            }
+            let signature = full_mode_row_signature(raw)
+                .unwrap_or("(unknown)")
+                .to_owned();
+            let Some(tx) = parse_transaction(raw) else {
+                gaps.push(unreadable_gap(
+                    address_key,
+                    &signature,
+                    "could not be parsed; cannot confirm no funder there",
+                ));
+                unreadable = true;
+                continue;
+            };
+            if tx.failed {
+                // The full-mode request already filters to
+                // `filters.status: "succeeded"`; this is a defensive
+                // second read of the same fact, not a new filter.
+                continue;
+            }
+            let read = funder_of(&tx, address_key);
+            if let Some(result) =
+                resolve_funder_read(read, &tx, &signature, address_key, gaps, &mut unreadable)
+            {
+                return Some(result);
+            }
+        }
+
+        if reached_end || next_token.is_none() {
+            return Some((!unreadable, None));
+        }
+        pagination_token = next_token;
+    }
+
+    gaps.push(format!(
+        "funding of {address_key}: more than {MAX_FUNDING_SIGNATURE_PAGES} signature pages \
+         walked without reaching its first purchase or the end of its history; no funder \
+         recorded"
+    ));
+    Some((false, None))
+}
+
+/// [`funding_search`]'s anchor: the buyer's first purchase of this mint,
+/// bundled into one argument so adding the full-mode probe's own state
+/// (`full_mode_supported`) did not push that function's own parameter count
+/// over clippy's cap.
+#[derive(Clone, Copy)]
+struct FirstPurchase<'a> {
+    slot: u64,
+    signature: &'a str,
+}
+
+// The full-mode dispatch and the fallback walk it defers to are one unit of
+// work: splitting the fallback out further would only move the length
+// somewhere a reader has to follow (same reasoning as `investigate`'s own
+// `#[allow]`, above).
+#[allow(clippy::too_many_lines)]
+fn funding_search(
+    client: &RpcClient,
+    budget: &mut Budget,
+    address: &realorrug_types::Address,
+    address_key: &str,
+    first_purchase: FirstPurchase<'_>,
+    full_mode_supported: &mut Option<bool>,
     gaps: &mut Vec<String>,
 ) -> (bool, Option<Funder>) {
+    let FirstPurchase {
+        slot: first_purchase_slot,
+        signature: first_purchase_signature,
+    } = first_purchase;
+    // Full mode first (CHANGE point 1): once known unsupported for this
+    // dossier (`Some(false)`), skip straight to the fallback below rather
+    // than re-probing it once per candidate -- the probe itself already cost
+    // a call, and a node that does not support the method on one candidate
+    // will not support it on the next.
+    if *full_mode_supported != Some(false) {
+        match full_mode_funding_search(
+            client,
+            budget,
+            address,
+            address_key,
+            first_purchase_slot,
+            gaps,
+        ) {
+            Some(result) => {
+                *full_mode_supported = Some(true);
+                return result;
+            }
+            None => *full_mode_supported = Some(false),
+        }
+    }
+
     // Start right at the purchase, not at the wallet's newest activity: the
     // purchase signature is the buyer's own, so `getSignaturesForAddress`
     // with it as `before` returns exactly the history at or before the
@@ -1695,6 +1880,7 @@ fn check_solana_candidate(
     client: &RpcClient,
     budget: &mut Budget,
     buyer: &EarlyBuyer,
+    full_mode_supported: &mut Option<bool>,
     gaps: &mut Vec<String>,
 ) -> Candidate {
     let address = buyer.address.clone();
@@ -1735,8 +1921,11 @@ fn check_solana_candidate(
         budget,
         &address_key,
         &address,
-        buyer.first_purchase_slot,
-        &buyer.first_purchase_signature,
+        FirstPurchase {
+            slot: buyer.first_purchase_slot,
+            signature: &buyer.first_purchase_signature,
+        },
+        full_mode_supported,
         gaps,
     );
     candidate.funding_complete = complete;
@@ -2942,19 +3131,49 @@ mod tests {
     /// fixture (private to that module, so this crate's other test modules
     /// each keep a small copy rather than share one across a test boundary
     /// Rust does not have).
-    struct Canned(std::sync::Mutex<Vec<String>>);
+    ///
+    /// Auto-answers a full-mode `getTransactionsForAddress` probe
+    /// (`"transactionDetails":"full"`) with [`full_mode_unsupported`]
+    /// *without* popping the queue, unless built with [`Canned::boxed_full_mode`]
+    /// -- `funding_search` now tries that read before every one of this
+    /// module's other tests' scripted legacy-path responses, and this is
+    /// what keeps every test written before that fix scripted only for the
+    /// path it actually means to exercise, rather than each needing its own
+    /// inserted probe response.
+    struct Canned {
+        responses: std::sync::Mutex<Vec<String>>,
+        full_mode: bool,
+    }
 
     impl Canned {
         fn boxed(responses: &[&str]) -> Box<dyn crate::rpc::Transport> {
-            Box::new(Self(std::sync::Mutex::new(
-                responses.iter().rev().map(|s| (*s).to_owned()).collect(),
-            )))
+            Box::new(Self {
+                responses: std::sync::Mutex::new(
+                    responses.iter().rev().map(|s| (*s).to_owned()).collect(),
+                ),
+                full_mode: false,
+            })
+        }
+
+        /// Like [`Canned::boxed`], but a full-mode `getTransactionsForAddress`
+        /// call is popped from the queue like any other -- for the tests that
+        /// exercise the full-mode funding read itself.
+        fn boxed_full_mode(responses: &[&str]) -> Box<dyn crate::rpc::Transport> {
+            Box::new(Self {
+                responses: std::sync::Mutex::new(
+                    responses.iter().rev().map(|s| (*s).to_owned()).collect(),
+                ),
+                full_mode: true,
+            })
         }
     }
 
     impl crate::rpc::Transport for Canned {
-        fn post(&self, _: &str, _: String) -> Result<String, String> {
-            self.0
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            if !self.full_mode && body.contains(r#""transactionDetails":"full""#) {
+                return Ok(full_mode_unsupported());
+            }
+            self.responses
                 .lock()
                 .map_err(|_| "poisoned".to_owned())?
                 .pop()
@@ -2998,6 +3217,47 @@ mod tests {
 
     fn solana_budget() -> Budget {
         Budget::new(60, 60, std::time::Duration::from_secs(30))
+    }
+
+    /// A JSON-RPC "method not found" error, the shape a non-Helius RPC
+    /// answers `getTransactionsForAddress` with -- `full_mode_funding_search`'s
+    /// trigger to fall back to today's per-transaction walk.
+    fn full_mode_unsupported() -> String {
+        r#"{"result":null,"error":{"code":-32601,"message":"Method not found"}}"#.to_owned()
+    }
+
+    /// One full-mode row shaped like `getTransaction`'s own result (bare,
+    /// with no `{"result":...,"error":null}` wrapper -- `full_mode_page`
+    /// below supplies that once per page, not once per row): `to` receives
+    /// `amount` lamports from `from` in a plain System Program transfer,
+    /// landing at `slot`, signed `signature`.
+    fn full_mode_row(signature: &str, from: &str, to: &str, amount: u64, slot: u64) -> String {
+        format!(
+            r#"{{"slot":{slot},"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"signatures":["{signature}"],"message":{{"accountKeys":["{from}","{to}"],"instructions":[{{"programId":"11111111111111111111111111111111","accounts":[0,1]}}]}}}}}}"#,
+            pre_left = 1_000_000u64.saturating_sub(amount),
+        )
+    }
+
+    /// A full-mode row that moves no lamports at all -- unrelated history
+    /// filling out a page around [`full_mode_row`]'s one funding transfer,
+    /// each with its own signature so [`funder_of`] sees no inbound move on
+    /// any of them and the walk moves on to the next row.
+    fn full_mode_filler_row(signature: &str, owner: &str, slot: u64) -> String {
+        format!(
+            r#"{{"slot":{slot},"meta":{{"err":null,"preBalances":[1000000],"postBalances":[1000000],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"signatures":["{signature}"],"message":{{"accountKeys":["{owner}"],"instructions":[]}}}}}}"#
+        )
+    }
+
+    /// One `getTransactionsForAddress` full-mode page: the given raw `rows`
+    /// (each from [`full_mode_row`]/[`full_mode_filler_row`]), continuing
+    /// onto `pagination_token`'s own cursor when `Some`, or ending the walk
+    /// when `None`.
+    fn full_mode_page(rows: &[String], pagination_token: Option<&str>) -> String {
+        let token = pagination_token.map_or_else(|| "null".to_owned(), |t| format!(r#""{t}""#));
+        format!(
+            r#"{{"result":{{"data":[{}],"paginationToken":{token}}},"error":null}}"#,
+            rows.join(",")
+        )
     }
 
     /// The creator's own associated token account for `mint`, on the same
@@ -4000,12 +4260,18 @@ mod tests {
         //
         // Four candidates share the mint's one buy transaction. Reading the
         // window costs 2 calls (the mint's own signature page, then that one
-        // transaction); each candidate that is actually checked costs 2 more
-        // (its own signature page, then the funding transaction found on
-        // it) -- 10 calls in total when nothing is starved. A budget left
-        // with only 6 calls (as if steps 1 through 4 had already spent 54 of
-        // `DEFAULT_MAX_CALLS`) checks only the first two candidates and
-        // reports a `Calls` gap for the rest -- the bug -- unless it is
+        // transaction). The *first* candidate checked also pays for the
+        // full-mode probe `funding_search` now tries first (one call,
+        // `Canned`'s default auto-"unsupported" answer) before falling back
+        // to the legacy path this test's responses are scripted for; every
+        // candidate after that skips the probe once the walk has learned the
+        // node does not support it. So the first checked candidate costs 3
+        // calls (probe, then its own signature page, then the funding
+        // transaction found on it) and each one after that costs 2 -- 11
+        // calls in total when nothing is starved. A budget left with only 6
+        // calls (as if steps 1 through 4 had already spent 54 of
+        // `DEFAULT_MAX_CALLS`) checks only the first candidate to completion
+        // and reports a `Calls` gap for the rest -- the bug -- unless it is
         // first raised to `FUNDING_CALL_FLOOR` the way `dossier::build` now
         // does immediately before calling this function, in which case the
         // identical transport lets every candidate be checked.
@@ -4037,7 +4303,7 @@ mod tests {
             .iter()
             .filter(|c| c.funding_complete)
             .count();
-        assert_eq!(complete, 2, "{:?}", starved.gaps);
+        assert_eq!(complete, 1, "{:?}", starved.gaps);
         assert!(
             starved.gaps.iter().any(|g| g.contains("Calls")),
             "{:?}",
@@ -4114,6 +4380,272 @@ mod tests {
         assert!(floored.gaps.is_empty(), "{:?}", floored.gaps);
     }
 
+    // -- Slice 6c: full-mode funding reads (research 0056, 2026-09-23) ----
+
+    #[test]
+    fn a_candidates_funder_on_the_second_full_mode_page_is_found_in_two_calls() {
+        // The candidate's funder is row 150 of its pre-purchase history: two
+        // full-mode pages of 100 rows each, the funder on the second (row 50
+        // of that page). Full mode reads it in exactly 2 calls, one per
+        // page -- contrast the re-applied-bug test below, which forces the
+        // legacy per-transaction path on this exact same wallet and dies on
+        // `MAX_FUNDING_TRANSACTIONS` (10) long before reaching it.
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let page1: Vec<String> = (0..100)
+            .map(|i| full_mode_filler_row(&format!("p1-{i}"), &buyer, slot))
+            .collect();
+        let mut page2: Vec<String> = (0..49)
+            .map(|i| full_mode_filler_row(&format!("p2-{i}"), &buyer, slot))
+            .collect();
+        page2.push(full_mode_row("funding-sig", &funder, &buyer, 500_000, slot));
+
+        let responses = [
+            full_mode_page(&page1, Some("page2-token")),
+            full_mode_page(&page2, None),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let calls_before = budget.calls_left();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found.expect("a funder").address, funder);
+        assert_eq!(calls_before - budget.calls_left(), 2, "{gaps:?}");
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    /// Runs the full-mode search over canned pages for buyer 1 bought at
+    /// `slot`; returns (complete, funder address, calls spent, gaps).
+    fn full_mode_search(
+        responses: &[String],
+        slot: u64,
+    ) -> (bool, Option<String>, u32, Vec<String>) {
+        let buyer = solana_addr(1).to_string();
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let calls_before = budget.calls_left();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+        let (complete, found) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+        (
+            complete,
+            found.map(|f| f.address),
+            calls_before - budget.calls_left(),
+            gaps,
+        )
+    }
+
+    #[test]
+    fn a_short_full_mode_page_ends_the_history_even_with_a_token() {
+        // Fewer than 100 rows means the node had no more to give; a token
+        // that still came back must not cost a second call, and a clean end
+        // with nothing unreadable is a complete read (a buyer with no funder
+        // before the purchase), not a gap.
+        let buyer = solana_addr(1).to_string();
+        let responses = [full_mode_page(
+            &[full_mode_filler_row("only", &buyer, 5)],
+            Some("stale-token"),
+        )];
+        let (complete, found, calls, gaps) = full_mode_search(&responses, 5);
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found, None);
+        assert_eq!(calls, 1, "{gaps:?}");
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn a_transfer_after_the_purchase_is_not_its_funder() {
+        // Money that arrived after the buyer's first purchase cannot have
+        // paid for it; the slot filter is the node's, and this skip is the
+        // same rule re-read so a node that ignores the filter cannot plant
+        // a later funder.
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [full_mode_page(
+            &[full_mode_row("late-sig", &funder, &buyer, 500_000, 6)],
+            None,
+        )];
+        let (complete, found, _, gaps) = full_mode_search(&responses, 5);
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found, None, "{gaps:?}");
+    }
+
+    #[test]
+    fn re_applying_the_per_transaction_bug_hits_the_ten_transaction_cap() {
+        // The bug this fix replaces, reproduced: forcing the legacy
+        // per-transaction path (as if full mode were never tried, the
+        // pre-fix behaviour) on the exact same "funder is row 150" wallet as
+        // the test above. The legacy walk fetches one `getTransaction` per
+        // signature and gives up after `MAX_FUNDING_TRANSACTIONS` (10) of
+        // them -- fifteen short of the funder -- and reports the cap gap
+        // instead of finding it.
+        let buyer = solana_addr(1).to_string();
+        let filler = solana_addr(0xaa).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let mut responses = vec![full_signatures_page_at("buyer-sig", slot)];
+        for _ in 0..MAX_FUNDING_TRANSACTIONS {
+            responses.push(funding_tx_at(&filler, &buyer, 0, slot));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        // The bug reproduced: full mode never gets a chance, even though
+        // (per the test above, on the identical wallet) the node would have
+        // supported it.
+        let mut full_mode_supported: Option<bool> = Some(false);
+
+        let (complete, found) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        assert!(!complete);
+        assert!(found.is_none());
+        assert!(
+            gaps.iter()
+                .any(|g| g.contains("more than 10 transactions fetched")),
+            "{gaps:?}"
+        );
+    }
+
+    #[test]
+    fn a_method_not_found_full_mode_probe_falls_back_to_the_legacy_path() {
+        // CHANGE point 2: the node refuses the first full-mode page outright
+        // (method-not-found, a non-Helius RPC's real answer) -- the search
+        // must fall back to today's per-transaction walk and still find the
+        // funder, exactly as it would have before this fix existed.
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let responses = [
+            full_mode_unsupported(),
+            signatures_page_at("funding-sig", slot),
+            funding_tx_at(&funder, &buyer, 500_000, slot),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found.expect("a funder").address, funder);
+        assert_eq!(full_mode_supported, Some(false));
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn an_error_on_the_second_full_mode_page_is_a_gap_not_a_fallback() {
+        // CHANGE point 2's other half: an error past the first page is a
+        // gap, not a retrigger of the legacy fallback -- the search already
+        // knows the node supports full mode (it answered page 1), so a
+        // later failure is this candidate's own read failing, the same way
+        // a later `getSignaturesForAddress` page failing is today.
+        let buyer = solana_addr(1).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let page1: Vec<String> = (0..100)
+            .map(|i| full_mode_filler_row(&format!("p1-{i}"), &buyer, slot))
+            .collect();
+        let responses = [
+            full_mode_page(&page1, Some("page2-token")),
+            r#"{"result":null,"error":{"code":-32000,"message":"internal error"}}"#.to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        assert!(!complete);
+        assert!(found.is_none());
+        assert_eq!(
+            full_mode_supported,
+            Some(true),
+            "a later page's error is not a fallback trigger"
+        );
+        assert!(
+            gaps.iter().any(|g| g.contains("internal error")),
+            "{gaps:?}"
+        );
+    }
+
     #[test]
     fn a_rejected_purchase_anchored_read_falls_back_to_the_newest_first_walk() {
         // The node refuses the first, purchase-anchored signature read; the
@@ -4179,6 +4711,12 @@ mod tests {
 
     impl crate::rpc::Transport for BeforeRouted {
         fn post(&self, _: &str, body: String) -> Result<String, String> {
+            // Same auto-"unsupported" answer `Canned` gives a full-mode
+            // probe: this transport only has legacy-shaped fixtures, so a
+            // probe here must always fall back rather than consume one.
+            if body.contains(r#""transactionDetails":"full""#) {
+                return Ok(full_mode_unsupported());
+            }
             if body.contains("getSignaturesForAddress") && body.contains(&self.buyer) {
                 let before = before_in(&body).unwrap_or_default();
                 return self

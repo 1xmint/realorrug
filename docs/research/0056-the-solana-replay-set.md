@@ -633,6 +633,75 @@ the request; whether the account is billed for a refused call is unmeasured
 and would need a credit-balance read straddling a captured 429, which this
 recapture did not do.
 
+## Addendum, 2026-09-23: the funder search hits the same two caps
+
+VPS recapture (build `1d1fe2d`, the branch landing #169) against the
+production Helius endpoint found funding candidates on two more real mints
+failing during `funding_search`
+(`crates/realorrug-onchain/src/wallets.rs`): "more than 10 transactions
+fetched; no funder recorded" (`MAX_FUNDING_TRANSACTIONS`) and "read stopped:
+Calls" (the shared 60-call budget exhausted mid-search), the second gap also
+starving later steps of the same dossier. The cause is the same shape as the
+launch-window problem above: `funding_search` fetches each pre-purchase
+signature with its own `getTransaction` call, one call per transaction,
+instead of reading pages of them.
+
+**The fix reuses full mode, not signatures mode.** Unlike
+`signatures_oldest_first`'s `transactionDetails: "signatures"` (signature
+strings only, still needing a `getTransaction` per candidate), a
+candidate's *own* pre-purchase history is read with `transactionDetails:
+"full"` in one call per page of 100 whole transactions, so the search never
+issues a separate `getTransaction` for a page it already has. Confirmed
+against a real Helius response for candidate
+`DxhpC9c4kGkYJR34xUrfFeDx9vwb6yoHUMWrTCZybwtH`, 2026-09-23:
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"getTransactionsForAddress","params":["<addr>",{"transactionDetails":"full","sortOrder":"desc","limit":100,"encoding":"json","maxSupportedTransactionVersion":0,"filters":{"status":"succeeded","slot":{"lte":<first_purchase_slot>}}}]}
+```
+
+Response shape:
+
+```json
+{"data":[ /* 100 rows */ ],"paginationToken":"…"}
+```
+
+Each row is shaped exactly like `getTransaction`'s own single result
+(`transaction`, `meta` with `preBalances`/`postBalances`, `version`, `slot`,
+`transactionIndex`, `blockTime`) — the existing per-transaction funder check
+(`crates/realorrug-onchain/src/rpc.rs`'s `parse_transaction`) reads a row
+here unmodified, so this crate does not carry a second parser for it. The
+slot filter was confirmed working: every row in the captured response had
+`slot` at or below the requested bound, newest first. The response was
+roughly 640 KB for 100 rows.
+
+**Cost per call: unmeasured.** The addendum above records Helius's
+documented 10-credit rate for a *signatures-only* call; this repo has not
+measured what a *full*-mode call costs against an account's credit balance,
+and no number is claimed here for it. Per AGENTS.md rule 8, absent is not
+zero — this is recorded as unknown, not as free or as the same rate as the
+signatures-only call.
+
+**Fixed in the PR that lands this paragraph:**
+`RpcClient::funding_transactions_page` makes one full-mode
+`getTransactionsForAddress` call per page; `funding_search` tries it first,
+walking pages (each one page and one call against the shared `Budget`,
+following `paginationToken`, up to `MAX_FUNDING_SIGNATURE_PAGES` pages) and
+running every row through the same funder test the per-transaction path
+already used. It falls back to today's per-transaction walk only when the
+very first full-mode page comes back "method not found" or otherwise
+errors — the same Helius-only caveat as `signatures_oldest_first`, and the
+same treatment for every other RPC this repo has tried. A failure on a
+*later* page is recorded as a gap for that candidate, not treated as a
+fallback trigger: by then the node has already proven it supports the
+method, so a later failure is this candidate's own read failing, the same
+way a later `getSignaturesForAddress` page failing is today.
+`MAX_FUNDING_TRANSACTIONS` (the 10-transaction cap quoted above) now applies
+only to the fallback path; the full-mode path has its own cap,
+`MAX_FUNDING_SIGNATURE_PAGES` pages of `FULL_TRANSACTIONS_PAGE_SIZE` (100)
+rows each.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
