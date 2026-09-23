@@ -28,6 +28,26 @@
 //! and either one fabricating a number, naming an accusation or reassuring
 //! about a gap is the same failure `voice::write`'s own gate exists to catch
 //! for the reply alone.
+//!
+//! # The reply's source is never left for the reviewer to guess
+//!
+//! [`realorrug_roast::voice::write`] already decided, per case, whether the
+//! text under "### Reply" is the model's own words or the deterministic
+//! template standing in for them ([`realorrug_roast::Reply::fellback`]).
+//! `review.md` says so on its own line, in one of three forms: `model reply
+//! used`; `template, because no provider was configured` (the ordinary case
+//! with no `--model`); or `template, because the model's reply was refused:
+//! <reason>`, naming the check that threw the draft away. A reviewer of a
+//! `--model` run who cannot tell the two apart risks accepting the template
+//! while believing it came from the model -- the owner's launch decision
+//! (2026-09-23) ships model-written replies, so this is not a cosmetic line.
+//!
+//! When a check refused the model's draft, [`realorrug_roast::Reply::refused`]
+//! holds exactly what the model returned, and `review.md` prints it in a
+//! fenced block, labelled as **not** the shipped reply. The draft is
+//! untrusted model output describing an unvetted, possibly fabricated or
+//! forbidden claim: it goes into the file as data inside a fence, never
+//! interpolated into the surrounding markdown structure.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -75,14 +95,32 @@ pub fn run(args: &[String]) -> Result<(), String> {
         return Err(format!("no *.sheet.json capture found in {dir_arg}"));
     }
 
-    let mut out = String::new();
-    let _ = writeln!(out, "# Replay review\n");
+    // Every reply is computed up front, before anything is written, so the
+    // summary line at the top of `review.md` can count them -- the tally a
+    // reviewer of a `--model` run reads first, and reading it after the
+    // sections it counts would mean writing the file twice.
+    let mut cases: Vec<(Capture, realorrug_roast::Reply)> = Vec::with_capacity(paths.len());
     for path in &paths {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let capture: Capture = serde_json::from_str(&text)
             .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
-        render_case(&mut out, &capture, provider.as_deref());
+        let reply = realorrug_roast::voice::write(&capture.sheet, provider.as_deref());
+        cases.push((capture, reply));
+    }
+
+    let used = cases.iter().filter(|(_, r)| r.fellback.is_none()).count();
+    let fell_back = cases.len() - used;
+
+    let mut out = String::new();
+    let _ = writeln!(out, "# Replay review\n");
+    let _ = writeln!(
+        out,
+        "{used} model repl{} used, {fell_back} fell back.\n",
+        if used == 1 { "y" } else { "ies" }
+    );
+    for (capture, reply) in &cases {
+        render_case(&mut out, capture, reply);
     }
 
     let out_path = dir.join("review.md");
@@ -154,12 +192,33 @@ fn checks_for(authorised: &[Authorised], text: &str) -> Vec<CheckRow> {
     ]
 }
 
+/// Why a model draft was refused, in one line for a reviewer -- the same
+/// shape `checks_for`'s reasons already use, so a refusal reads the same way
+/// whether it is named here or under "### Checks".
+fn fellback_reason(fellback: &realorrug_roast::Fellback) -> String {
+    use realorrug_roast::Fellback;
+    match fellback {
+        Fellback::NoProvider => "no provider was configured".to_owned(),
+        Fellback::Unreachable(e) => e.clone(),
+        Fellback::Fabricated(fabricated) => fabricated
+            .iter()
+            .map(|f| format!("{} ({:?})", f.literal, f.why))
+            .collect::<Vec<_>>()
+            .join("; "),
+        Fellback::Forbidden(violations) => violations
+            .iter()
+            .map(|v| format!("\"{}\" -- {}", v.phrase, v.because))
+            .collect::<Vec<_>>()
+            .join("; "),
+        Fellback::Empty => "the model returned nothing usable".to_owned(),
+    }
+}
+
 /// Writes one case's section of `review.md`.
-fn render_case(out: &mut String, capture: &Capture, provider: Option<&dyn Provider>) {
+fn render_case(out: &mut String, capture: &Capture, reply: &realorrug_roast::Reply) {
     let level = realorrug_roast::level(&capture.sheet);
     let assessment = Assessment::from(&capture.sheet);
     let report = realorrug_roast::report::build(&capture.sheet);
-    let reply = realorrug_roast::voice::write(&capture.sheet, provider);
 
     let heading = if capture.label.is_empty() {
         capture.mint.clone()
@@ -194,7 +253,44 @@ fn render_case(out: &mut String, capture: &Capture, provider: Option<&dyn Provid
     let _ = writeln!(out, "{}", report.render(&assessment));
 
     let _ = writeln!(out, "### Reply\n");
+    match &reply.fellback {
+        None => {
+            let _ = writeln!(out, "- source: model reply used");
+        }
+        Some(realorrug_roast::Fellback::NoProvider) => {
+            let _ = writeln!(
+                out,
+                "- source: template, because no provider was configured"
+            );
+        }
+        Some(fellback) => {
+            let _ = writeln!(
+                out,
+                "- source: template, because the model's reply was refused: {}",
+                fellback_reason(fellback)
+            );
+        }
+    }
+    match reply.billed {
+        realorrug_roast::Billed::NoCall => {}
+        realorrug_roast::Billed::Reported(cost) => {
+            let _ = writeln!(out, "- billed: {cost}");
+        }
+        realorrug_roast::Billed::Unreported => {
+            let _ = writeln!(out, "- billed: unreported");
+        }
+    }
+    let _ = writeln!(out);
     let _ = writeln!(out, "{}\n", reply.text);
+    if let Some(refused) = &reply.refused {
+        let _ = writeln!(
+            out,
+            "**Not the shipped reply** -- the model's own draft, refused above:\n"
+        );
+        let _ = writeln!(out, "```text");
+        let _ = writeln!(out, "{refused}");
+        let _ = writeln!(out, "```\n");
+    }
 
     let _ = writeln!(out, "### Checks\n");
     let sheet_authorised = capture.sheet.authorised();
@@ -249,10 +345,36 @@ fn wants_model(args: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use realorrug_model::{Answer, Request, Unreachable};
     use realorrug_roast::{Assessment, FactSheet};
+    use realorrug_types::MicroUsd;
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// A fake [`Provider`] with no test/fake provider in `realorrug_model`
+    /// to reuse (checked with a grep for one before writing this): it always
+    /// answers with the fixed text it was built with, and reports no cost,
+    /// which is enough to drive [`realorrug_roast::voice::write`] down
+    /// either the "model reply used" or the "refused" arm depending only on
+    /// what that text says.
+    #[derive(Debug)]
+    struct FixedAnswer(String);
+
+    impl realorrug_model::Provider for FixedAnswer {
+        fn name(&self) -> &'static str {
+            "fixed-answer"
+        }
+        fn estimate(&self) -> MicroUsd {
+            MicroUsd(0)
+        }
+        fn ask(&self, _: &Request) -> Result<Answer, Unreachable> {
+            Ok(Answer {
+                text: self.0.clone(),
+                cost: None,
+            })
+        }
     }
 
     #[test]
@@ -342,6 +464,68 @@ mod tests {
         // template shipped -- and the template is what `fidelity`/`forbidden`
         // are already proven to pass, so every check row reads PASS.
         assert!(!review.contains("FAIL"), "{review}");
+        // (a) Case the packet asks this test to cover: with no provider, the
+        // source line names the reason, and the top-of-file tally counts the
+        // case as a fallback rather than a model reply. Delete the source
+        // line from `render_case` and this assertion is the one that fails.
+        assert!(
+            review.contains("- source: template, because no provider was configured"),
+            "{review}"
+        );
+        assert!(
+            review.contains("0 model replies used, 1 fell back."),
+            "{review}"
+        );
+    }
+
+    /// (c) A provider whose answer clears every check: the source line says
+    /// the model's reply was used, not the template's. Reusing
+    /// `verdict::template`'s own text as the "model" answer is what makes
+    /// this reliable without hand-tuning a sentence against the empty-sheet
+    /// fixture -- that text is already proven (by the test above) to pass
+    /// every check `voice::write` runs.
+    #[test]
+    fn an_acceptable_model_reply_is_named_as_used() {
+        let capture = hand_built_capture("SoMeMiNt", "");
+        let acceptable = realorrug_roast::verdict::template(&capture.sheet);
+        let provider = FixedAnswer(acceptable);
+        let reply = realorrug_roast::voice::write(&capture.sheet, Some(&provider));
+        assert!(reply.fellback.is_none(), "{:?}", reply.fellback);
+
+        let mut out = String::new();
+        render_case(&mut out, &capture, &reply);
+
+        assert!(out.contains("- source: model reply used"), "{out}");
+        assert!(!out.contains("refused above"), "{out}");
+    }
+
+    /// (b) A provider whose answer fails fidelity -- a figure the sheet never
+    /// measured, on an otherwise unremarkable sentence -- ships the template,
+    /// and `review.md` both names the refusal and prints the model's raw,
+    /// refused draft, clearly marked as not the shipped reply. Deleting
+    /// either the source line or the fenced draft from `render_case` fails
+    /// this test.
+    #[test]
+    fn a_refused_model_draft_is_named_and_shown() {
+        let capture = hand_built_capture("SoMeMiNt", "");
+        let draft =
+            "This launch shows 424242 wallets nobody else measured, read at the usual moment.";
+        let provider = FixedAnswer(draft.to_owned());
+        let reply = realorrug_roast::voice::write(&capture.sheet, Some(&provider));
+        assert!(reply.fellback.is_some(), "expected a fallback");
+        assert_eq!(reply.refused.as_deref(), Some(draft));
+
+        let mut out = String::new();
+        render_case(&mut out, &capture, &reply);
+
+        assert!(
+            out.contains("- source: template, because the model's reply was refused:"),
+            "{out}"
+        );
+        assert!(out.contains("424242"), "{out}");
+        assert!(out.contains("**Not the shipped reply**"), "{out}");
+        assert!(out.contains("```text"), "{out}");
+        assert!(out.contains(draft), "{out}");
     }
 
     /// A capture whose `rules_version` does not match the crate's current
