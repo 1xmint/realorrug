@@ -101,12 +101,14 @@ you think it means. If the honest read is ugly, write the ugly thing in \
 plain words.
 
 Write one to three sentences and nothing else: no greeting, no heading, no \
-explanation, no line that is not part of the reply itself. Keep it short \
-enough for one post on a platform that cuts a longer one off mid-sentence --\
-a shorter reply chosen on purpose beats a longer one truncated by the \
-platform. Two sentences that finish beat three where the last one runs \
-past the limit and is dropped, so put the thing you most want said in the \
-first sentence and never save it for the last.
+explanation, no line that is not part of the reply itself. The whole reply \
+must fit in two hundred eighty characters. Nothing you write past that limit \
+is ever seen: it is cut before posting, at the end of the last sentence that \
+finished inside it, never mid-sentence, so a sentence that would run past \
+the limit does not post half-written -- it does not post at all. Two \
+sentences that finish beat three where the last one runs past the limit and \
+is dropped, so put the thing you most want said in the first sentence and \
+never save it for the last.
 
 How to write it:
 
@@ -162,7 +164,14 @@ on the end. Somebody should come away knowing one thing about how these \
 launches work that they did not know before.
 
 The sheet also carries facts marked NOT KNOWN. Say so plainly if one of them \
-is the story; do not invent a number to fill the gap it leaves.";
+is the story; do not invent a number to fill the gap it leaves.
+
+Some words are refused outright, whatever the verdict and however you use \
+them: \"safe\", \"clean\", \"fine\", \"legit\", \"trustworthy\", \
+\"healthy\", and the phrase \"nothing ugly\". Never write one, even to deny \
+it -- a sentence that says a launch is NOT clean is refused exactly like one \
+that says it is, because the check reads the word, not your intent. Say what \
+you actually found instead: a gap unread is a gap unread, not an almost-safe.";
 
 /// Why a model reply was not used.
 #[derive(Clone, Debug, PartialEq)]
@@ -461,8 +470,10 @@ fn verdict_brief(level: verdict::Level) -> String {
         verdict::Level::CantTell => (
             "CAN'T TELL",
             "A fact the ladder needed could not be read, so there is no verdict to give. \
-             Your reply must name the thing that could not be read and say what it would \
-             have settled. Nothing unread is evidence of anything good.",
+             Name the thing that could not be read in your FIRST sentence, plainly, and say \
+             what it would have settled -- put it first because it is required, and a reply \
+             that saves it for later can lose it to the length limit above before it is \
+             said. Nothing unread is evidence of anything good.",
         ),
     };
     let mut brief =
@@ -540,6 +551,50 @@ pub fn request_for(sheet: &FactSheet) -> Request {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "debug harness for 9-23-0012b evidence step, not part of the suite"]
+    fn debug_all_eight_refused_drafts_through_ship_path() {
+        let base = std::path::Path::new(
+            "C:/Users/Josh/Desktop/GitHub/realorrug/.orchestrator/runs/20260923-plan-0002-phase2/evidence/trial-model-replay",
+        );
+        let cases: &[(&str, &str)] = &[
+            ("24RwgHxwu8icT1tcDtgH4RwyaDWao86xfacUo2xHpump", "The key gap is funding: 3 of 4 checked early buyers could not be traced to their money source, so the sheet cannot settle whether this launch\u{2019}s early activity was organic or coordinated. The largest sampled non-pool account holds just 0.08% of supply, but that does not answer the missing funding question; the verdict is therefore CAN\u{2019}T TELL."),
+            ("5pYB12kEhfhSFXJjZ7JtyqDpt6uUqhsF6iu6Ee9spump", "The largest sampled non-pool wallet holds 4.7% of supply, which is notable but not decisive by itself. The launch block could not be read, so the token\u{2019}s launch timing\u{2014}and the concentration context that would help settle this\u{2014}remains unknown."),
+            ("5t5keof7mNJAMq4vKMBZA5WDk6Aa5cBgUsxyRVYspump", "The launch block could not be read, so this cannot be classified: that timing would help establish the launch sequence and what happened around early trading. The largest sampled non-pool wallet holds only 0.1% of supply, but that does not settle the missing history."),
+            ("7V6Sk63y8Rr1MvcN5mYNp61wgFhy4EeQg5gUASk9pump", "One unidentified wallet holds 27.6% of supply, a concentration that could be a holder, vesting contract, bridge, or exchange\u{2014}but the address\u{2019}s role is unknown. The launch block could not be read, so this sheet cannot settle the token\u{2019}s launch history; the verdict is therefore can\u{2019}t tell."),
+            ("DsjPNCjFrQDXGZ96UzohaMm9PQJJUxWFQ6Gy6do9CSLT", "The largest sampled non-pool wallet holds 2.9% of supply, which is not a clear concentration signal by itself, but the launch block could not be read, so the token\u{2019}s launch timing and sequence cannot be verified. That missing data is why this remains CAN\u{2019}T TELL\u{2014}not evidence that anything is safe."),
+            ("GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump", "The largest sampled non-pool wallet holds 2.8% of total supply, which is not concentrated enough by itself to settle the risk. The launch block and the funding of early buyers could not be read, so this remains CAN\u{2019}T TELL rather than evidence that the launch was clean."),
+            ("Ge87EtsjwRQbHaqQmKRno69RFTwh9bfSsm99XNxTpump", "It has graduated to the AMM, and the largest sampled non-pool wallet holds 3.0% of supply\u{2014}concentrated, but not a one-wallet takeover. The launch block and early-buyer funding could not be read, so this settles as can\u{2019}t tell: the missing history is exactly what would show how this distribution formed."),
+            ("JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump", "The launch block and the funding path for early buyers could not be read, so this cannot be settled from the available history. The largest sampled non-pool wallet holds only 0.6% of supply, but that does not fill the missing evidence."),
+        ];
+        for (mint, draft) in cases {
+            let path = base.join(format!("{mint}.sheet.json"));
+            let json = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+            let wrapper: serde_json::Value = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()));
+            let sheet: FactSheet = serde_json::from_value(wrapper["sheet"].clone())
+                .unwrap_or_else(|e| panic!("parsing sheet in {}: {e}", path.display()));
+            let level = verdict::level(&sheet);
+            let text = render::for_publication(draft);
+            let mut violations = forbidden::check_target(&text);
+            violations.extend(forbidden::check_level(&text, level));
+            violations.extend(forbidden::check_unconditional(&text));
+            violations.extend(forbidden::check_hint(&text, &sheet));
+            violations.extend(forbidden::check_required(&text, level, &sheet));
+            let fabricated = if violations.is_empty() {
+                fidelity::check(&text, &sheet.authorised())
+            } else {
+                Vec::new()
+            };
+            eprintln!(
+                "{mint}: violations={violations:?} fabricated={fabricated:?} truncated={}",
+                text.chars().count() != draft.chars().count()
+            );
+        }
+    }
+
     use crate::clause::{Kind, Voice};
     use crate::sheet::{About, Fact};
     use realorrug_agent::untrusted;
@@ -1145,6 +1200,49 @@ mod tests {
         assert!(
             digits.is_empty(),
             "the system prompt names figures a model could echo: {digits:?}"
+        );
+    }
+
+    #[test]
+    fn the_prompt_states_the_length_limit_and_the_canttell_first_sentence_rule() {
+        // 9-23-0012 cause B1: the trial's hbull and jimothy drafts lost their
+        // required "could not be read" sentence to `render::for_publication`'s
+        // truncation because it ran second, not first, in the reply. The
+        // prompt now says the exact limit (spelled out, no digit -- see the
+        // no-figure test above) and says what happens past it, and the
+        // CAN'T TELL verdict brief says the required sentence goes first.
+        assert!(
+            SYSTEM.contains("two hundred eighty characters"),
+            "the prompt dropped the exact length limit"
+        );
+        assert!(
+            SYSTEM.contains("cut before posting"),
+            "the prompt dropped what happens past the limit"
+        );
+        let brief = verdict_brief(verdict::Level::CantTell);
+        assert!(
+            brief.contains("FIRST sentence"),
+            "the CAN'T TELL brief dropped the first-sentence rule: {brief}"
+        );
+    }
+
+    #[test]
+    fn the_prompt_names_every_all_clear_word_the_canttell_ban_holds() {
+        // 9-23-0012 cause C: the trial's graduated-pumpswap draft used
+        // "clean" -- already on `forbidden::CANTTELL_WORDS` and already
+        // shown to the model per-request via `verdict_brief` -- and was
+        // refused for it. The SYSTEM prompt now states the same words as a
+        // standing rule, read from `forbidden::words_refused_at` so the two
+        // lists cannot drift apart silently.
+        for (word, _) in forbidden::words_refused_at(verdict::Level::CantTell) {
+            assert!(
+                SYSTEM.to_lowercase().contains(&word.to_lowercase()),
+                "the prompt does not name the banned word {word:?}"
+            );
+        }
+        assert!(
+            SYSTEM.contains("even to deny it"),
+            "the prompt does not say the ban holds even when the word is negated"
         );
     }
 

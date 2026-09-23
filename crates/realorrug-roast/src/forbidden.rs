@@ -1063,10 +1063,19 @@ fn topic(phrase: &str) -> &str {
 /// reach ("unread", "readable" for "read"). It still requires every content
 /// word's topic to be named, and a phrase with no content words still cannot
 /// pass -- a bare "can't tell" that names nothing still fails.
+///
+/// "Where" is filtered alongside the articles: `sheet::funding_gap_message`
+/// opens its phrase with it ("where 3 of the 4 checked early buyers got
+/// their money could not be read"), and it is a question word introducing
+/// the gap, not a thing the gap is about -- nothing a reply could write
+/// would "name" where the same way it names buyers or money. 9-23-0012 cause
+/// B: the VPS trial's ordinary-launch draft named the money and the buyers
+/// ("3 of 4 checked early buyers could not be traced to their money
+/// source") but never the interrogative "where", and was refused for it.
 fn topic_words(phrase: &str) -> Vec<String> {
     topic(phrase)
         .split_whitespace()
-        .filter(|w| !matches!(w.to_lowercase().as_str(), "the" | "a" | "an" | "of"))
+        .filter(|w| !matches!(w.to_lowercase().as_str(), "the" | "a" | "an" | "of" | "where"))
         .map(|w| {
             let w = w.to_lowercase();
             w.strip_suffix("'s").map_or(w.clone(), str::to_owned)
@@ -1091,9 +1100,17 @@ fn stem(word: &str) -> &str {
 /// Hand-written and short on purpose: the phrases `sheet::phrase_for` builds
 /// name four topics today, so a complete per-word list costs less and risks
 /// less than a general synonym lookup would.
+///
+/// "got" (as in "got their money", `sheet::funding_gap_message`'s verb) adds
+/// the plain-English ways of saying money was traced to its source: a
+/// reply naming a wallet's funding by any of these has named the same gap
+/// even though none of them shares "got"'s stem. 9-23-0012 cause B: the
+/// ordinary-launch draft wrote "could not be traced to their money source"
+/// and was refused for missing "got".
 fn synonyms(word: &str) -> &'static [&'static str] {
     match word {
         "read" => &["unread", "readable", "unreadable", "reading"],
+        "got" => &["traced", "money source", "funded", "funding", "funder"],
         _ => &[],
     }
 }
@@ -2296,6 +2313,81 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn the_ordinary_launch_funding_draft_names_the_gap_and_passes() {
+        // 9-23-0012 cause B2: the VPS trial's real refused draft
+        // (review.md, ordinary-launch), against its real
+        // `sheet.unknown` phrase built by `sheet::funding_gap_message`. The
+        // draft names the buyers, the count and "money source" but never
+        // the interrogative "where" or the verb "got" -- `topic_words` now
+        // drops "where" as a non-content word and `synonyms("got")` covers
+        // "traced".
+        let sheet = required_sheet(vec![
+            "where 3 of the 4 checked early buyers got their money could not be read".to_owned(),
+        ]);
+        let draft = "The key gap is funding: 3 of 4 checked early buyers could not be traced to \
+                      their money source, so the sheet cannot settle whether this launch's early \
+                      activity was organic or coordinated. The largest sampled non-pool account \
+                      holds just 0.08% of supply, but that does not answer the missing funding \
+                      question; the verdict is therefore CAN'T TELL.";
+        assert!(
+            check_required(draft, Level::CantTell, &sheet).is_empty(),
+            "the real draft should now name the funding gap"
+        );
+    }
+
+    #[test]
+    fn reverting_the_where_and_got_fix_refuses_the_ordinary_launch_draft() {
+        // The strongest form of the test above: re-apply cause B2's bug by
+        // calling the pre-fix word list directly (asking every word of the
+        // untouched phrase to be present, "where" and "got" included) and
+        // confirm the same draft fails, which is exactly what shipped in
+        // the 2026-09-23 VPS trial.
+        let phrase = "where 3 of the 4 checked early buyers got their money could not be read";
+        let topic = phrase.strip_suffix(" could not be read").unwrap();
+        let pre_fix_words: Vec<&str> = topic
+            .split_whitespace()
+            .filter(|w| !matches!(w.to_lowercase().as_str(), "the" | "a" | "an" | "of"))
+            .collect();
+        let lower = "the key gap is funding: 3 of 4 checked early buyers could not be traced to \
+                      their money source, so the sheet cannot settle whether this launch's early \
+                      activity was organic or coordinated."
+            .to_lowercase();
+        let all_named = pre_fix_words
+            .iter()
+            .all(|w| lower.split(|c: char| !c.is_alphanumeric()).any(|t| t == *w));
+        assert!(
+            !all_named,
+            "the pre-fix word list (with \"where\" and \"got\" required verbatim) must still \
+             fail this draft -- if it now passes, the re-applied bug no longer reproduces"
+        );
+    }
+
+    #[test]
+    fn a_bare_cant_tell_with_no_topic_is_still_refused() {
+        // 9-23-0012 cause B2's own boundary: loosening "where"/"got" must
+        // not loosen the gate itself -- a reply naming nothing still fails.
+        let sheet = required_sheet(vec![
+            "where 3 of the 4 checked early buyers got their money could not be read".to_owned(),
+        ]);
+        assert_eq!(
+            check_required("Can't tell on this one.", Level::CantTell, &sheet).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_graduated_pumpswap_draft_naming_clean_is_still_refused() {
+        // 9-23-0012 cause C: the ban itself stays strict (the lead's
+        // decision) -- only the prompt gains the warning. The trial's real
+        // draft using "clean" must still be caught.
+        let draft = "The largest sampled non-pool wallet holds 2.8% of total supply, which is \
+                      not concentrated enough by itself to settle the risk. The launch block and \
+                      the funding of early buyers could not be read, so this remains CAN'T TELL \
+                      rather than evidence that the launch was clean.";
+        assert!(!check_level(draft, Level::CantTell).is_empty());
     }
 
     /// Both halves of "says the age is unknown", one at a time.

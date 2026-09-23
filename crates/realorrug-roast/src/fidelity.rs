@@ -408,7 +408,19 @@ fn named_in(sentence: &str) -> Vec<Subject> {
         // nothing and stops "non-pool" from tripping the liquidity subject
         // when the sentence is plainly about a holder (see review.md case A,
         // 9-23-0012).
-        let negated = start >= 4 && &lower[start - 4..start] == "non-";
+        // `start - 4` is a byte offset, and the four bytes immediately before
+        // an ASCII word are not always a char boundary -- a curly apostrophe
+        // (`\u{2019}`, three UTF-8 bytes) sitting there, as in "supply\u{2019}s"
+        // just before a later word, put a slice boundary inside it and
+        // panicked on the trial's real drafts (9-23-0012b evidence step,
+        // 2026-09-23). Checked with `is_char_boundary` first; a false `start -
+        // 4` that lands mid-character cannot spell "non-" (it holds one whole
+        // multi-byte character, not four ASCII ones), so treating it as "not
+        // negated" here is exactly the answer the boundary check would have
+        // given if it could have been asked at all.
+        let negated = start >= 4
+            && lower.is_char_boundary(start - 4)
+            && &lower[start - 4..start] == "non-";
         if negated {
             continue;
         }
