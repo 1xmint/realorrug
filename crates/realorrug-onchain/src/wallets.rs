@@ -1226,7 +1226,7 @@ pub fn investigate_solana(
     let curve = realorrug_pumpfun::pda::bonding_curve(mint).map(|c| c.to_string());
     let mint_key = mint.to_string();
     let owned_signatures;
-    let (signatures, truncated): (&[SignatureInfo], bool) =
+    let (signatures, mut truncated): (&[SignatureInfo], bool) =
         if let Some((sigs, cut)) = mint_signatures {
             (sigs.as_slice(), *cut)
         } else {
@@ -1235,6 +1235,34 @@ pub fn investigate_solana(
                 .map_err(|e| format!("funding: {e}"))?;
             (owned_signatures.0.as_slice(), owned_signatures.1)
         };
+
+    // A newest-first walk that ran out of page budget before reaching the
+    // beginning gets one shot at an ascending-order read instead (research
+    // 0056 addendum, 2026-09-23: 7 of 9 real pump.fun mints hit this in
+    // production). See `RpcClient::signatures_oldest_first`'s own doc for why
+    // its list can be trusted as complete from the start even though the
+    // backward walk was not. Any failure there leaves `truncated` as it was,
+    // and the gap below still fires (AGENTS.md rule 8: unknown is not safe).
+    let owned_ascending;
+    let mut ascending = false;
+    let signatures: &[SignatureInfo] = if truncated {
+        // Same starvation `Budget::grant_pages`'s own doc describes for the
+        // other named walks: the mint's own walk above can spend the whole
+        // shared page pool getting to `truncated`, so this one-shot call
+        // gets the same floor rather than silently finding nothing left.
+        budget.grant_pages(1);
+        match client.signatures_oldest_first(budget, mint, crate::rpc::PAGE_SIZE) {
+            Ok(Some(asc)) if !asc.is_empty() => {
+                owned_ascending = asc;
+                truncated = false;
+                ascending = true;
+                owned_ascending.as_slice()
+            }
+            _ => signatures,
+        }
+    } else {
+        signatures
+    };
 
     if truncated {
         // A truncated mint history means the transactions this reader could
@@ -1260,16 +1288,22 @@ pub fn investigate_solana(
         });
     }
 
-    // `signatures` is newest-first, the same order every other reader in
-    // this crate gets from `getSignaturesForAddress`; walk it in reverse to
-    // see transactions in the order they happened, and stop once
-    // `SOLANA_WINDOW_TRANSACTIONS` of them were successfully read -- that
-    // window, not the capped candidate list, is where `buyers` comes from.
+    // `signatures` is newest-first (the shape `getSignaturesForAddress`
+    // returns), the mint's own fallback above returns oldest-first already
+    // -- walk each so transactions are visited in the order they happened,
+    // and stop once `SOLANA_WINDOW_TRANSACTIONS` of them were successfully
+    // read -- that window, not the capped candidate list, is where `buyers`
+    // comes from.
     let mut gaps = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut window_buyers: Vec<EarlyBuyer> = Vec::new();
     let mut window_read = 0usize;
-    for sig in signatures.iter().rev() {
+    let ordered: Vec<&SignatureInfo> = if ascending {
+        signatures.iter().collect()
+    } else {
+        signatures.iter().rev().collect()
+    };
+    for sig in ordered {
         if window_read >= SOLANA_WINDOW_TRANSACTIONS {
             break;
         }
@@ -3143,6 +3177,66 @@ mod tests {
         assert_eq!(funding.buyers, 0);
         assert!(funding.checked.is_empty());
         assert_eq!(funding.coverage_bps, None);
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("could not be reached within the read budget")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_busy_mints_launch_window_is_reached_via_the_ascending_fallback() {
+        // Task 9-23-0011: the newest-first walk above truncates on a busy
+        // mint (production evidence, 2026-09-23: 7 of 9 real pump.fun
+        // mints). The ascending `getTransactionsForAddress` call is tried
+        // once and its buyer is found, instead of reporting the gap this
+        // crate used to report unconditionally on any truncated walk.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let responses = [
+            full_signatures_page(),
+            r#"{"result":{"data":[{"signature":"buy-sig","slot":5,"err":null}],"paginationToken":"x"}}"#
+                .to_owned(),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None)
+            .expect("the fallback reaches the window");
+
+        assert_eq!(funding.buyers, 1, "gaps: {:?}", funding.gaps);
+        assert!(
+            !funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("could not be reached within the read budget")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_method_not_found_ascending_call_leaves_the_original_gap() {
+        // Helius-only: every other RPC refuses `getTransactionsForAddress`.
+        // That must not be mistaken for "no early buyers" -- the original
+        // truncated-history gap has to survive unchanged (AGENTS.md rule 8).
+        let mint = solana_addr(9);
+        let responses = [
+            full_signatures_page(),
+            r#"{"error":{"code":-32601,"message":"Method not found"}}"#.to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.buyers, 0);
+        assert!(funding.checked.is_empty());
         assert!(
             funding
                 .gaps

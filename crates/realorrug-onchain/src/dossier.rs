@@ -568,8 +568,8 @@ pub fn build(
         Ok(block)
     } else {
         let (signatures, truncated) = client.signatures_back_to_oldest(budget, mint)?;
-        let result =
-            oldest_launch(client, budget, &signatures, truncated, &mint_key).and_then(|block| {
+        let result = oldest_launch(client, budget, &signatures, truncated, mint, &mint_key)
+            .and_then(|block| {
                 if let Some(mem) = memory {
                     // `record` refuses to overwrite a `(what, subject, block)`
                     // key with a different value rather than replacing it
@@ -1096,19 +1096,57 @@ fn oldest_launch(
     budget: &mut Budget,
     signatures: &[crate::rpc::SignatureInfo],
     truncated: bool,
+    address: &Address,
     mint: &str,
 ) -> Result<LaunchBlock, String> {
-    if truncated {
-        // The oldest signature seen is not the oldest signature there is, so
-        // reading it as the launch would invent a launch block out of an
-        // ordinary trade. Refused rather than guessed -- AGENTS.md section 2:
-        // when something is unknown, record it as unknown.
+    // A newest-first walk that ran out of page budget before reaching the
+    // beginning gets one shot at an ascending-order read instead (research
+    // 0056 addendum, 2026-09-23: 7 of 9 real pump.fun mints hit this in
+    // production). `signatures_oldest_first`'s own doc explains why its
+    // first entry can stand in as the launch: the call starts at the
+    // beginning of the address's history, so its list is complete from the
+    // start even though the backward walk was not. Any failure there --
+    // method-not-found on a non-Helius endpoint, a node error, or the budget
+    // already spent -- comes back `Ok(None)`/`Err`, never a fabricated
+    // "complete" (AGENTS.md rule 8).
+    let ascending = if truncated {
+        // The walk above can spend the whole shared page pool getting to
+        // `truncated`, the same starvation `Budget::grant_pages`'s own doc
+        // describes for the other named walks -- so this one-shot call gets
+        // the same floor rather than silently finding nothing left to spend.
+        budget.grant_pages(1);
+        client
+            .signatures_oldest_first(budget, address, crate::rpc::PAGE_SIZE)
+            .ok()
+            .flatten()
+            .filter(|sigs| !sigs.is_empty())
+    } else {
+        None
+    };
+
+    // `block_signatures` is only used to find same-slot co-transactions
+    // (order-independent), but `oldest` itself depends on which list is in
+    // play: `signatures` is newest-first (oldest is the LAST non-error
+    // entry), `ascending` is oldest-first (oldest is the FIRST).
+    let (oldest, block_signatures) = if let Some(asc) = &ascending {
+        let Some(oldest) = asc.iter().find(|s| s.err.is_none()) else {
+            return Err("no successful transactions for this mint".to_owned());
+        };
+        (oldest, asc.as_slice())
+    } else if truncated {
+        // The fallback wasn't available either. The oldest signature seen by
+        // the backward walk is not the oldest signature there is, so reading
+        // it as the launch would invent a launch block out of an ordinary
+        // trade. Refused rather than guessed -- AGENTS.md section 2: when
+        // something is unknown, record it as unknown.
         return Err("this token has more history than the page budget allows, \
                     so its launch could not be reached"
             .to_owned());
-    }
-    let Some(oldest) = signatures.iter().rev().find(|s| s.err.is_none()) else {
-        return Err("no successful transactions for this mint".to_owned());
+    } else {
+        let Some(oldest) = signatures.iter().rev().find(|s| s.err.is_none()) else {
+            return Err("no successful transactions for this mint".to_owned());
+        };
+        (oldest, signatures)
     };
 
     let launch_slot = oldest.slot;
@@ -1121,7 +1159,7 @@ fn oldest_launch(
     // are the same-slot coordinated buys the recipient count is about.
     let mut block: Vec<Transaction> = vec![launch_tx.clone()];
     let mut stopped = false;
-    for sig in signatures
+    for sig in block_signatures
         .iter()
         .filter(|s| also_in_block(s, launch_slot, &oldest.signature))
     {
