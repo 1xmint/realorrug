@@ -544,9 +544,79 @@ before step 1 can even find the launch block. That is a separate problem
 from the funding-search shortage this paragraph fixes, and is not addressed
 by this change.
 
+## Addendum, 2026-09-23: reaching a busy mint's launch with an oldest-first read
+
+The "still open, not fixed here" gap two paragraphs up was measured again on
+the VPS, build `4f5a0ab`, 2026-09-23: 7 of 9 real pump.fun mints reported
+either
+
+    launch block: this token has more history than the page budget allows, so its launch could not be reached
+
+or, downstream in `investigate_solana` (task 9-23-0011's other quoted gap,
+same root cause — the mint's own newest-first walk in `dossier.rs` step 1
+truncating before it reaches the beginning of the mint's history):
+
+    the mint's signature history is longer than the page budget allows; the launch's first buyers could not be reached within the read budget
+
+`getSignaturesForAddress` only pages *newest*-first (`RpcClient::signatures_page`,
+`crates/realorrug-onchain/src/rpc.rs`), 1,000 signatures per page, and the
+shared page budget allows 3 pages — so a mint with more than ~3,000
+signatures never reaches its own first transaction by paging backward from
+the newest, no matter how the budget is spent.
+
+Helius's `getTransactionsForAddress` reads the other direction directly. This
+request, made against the production Helius endpoint on the VPS, 2026-09-23,
+succeeded:
+
+    {"jsonrpc":"2.0","id":1,"method":"getTransactionsForAddress","params":["<mint>",{"transactionDetails":"signatures","sortOrder":"asc","limit":3}]}
+
+and returned
+
+    {"result":{"data":[{"signature":"4wi3…","slot":448485736,"transactionIndex":975,"err":null,"memo":null,"blockTime":1789841756,"confirmationStatus":"finalized"}, …],"paginationToken":"448485750:24"}}
+
+`sortOrder: "asc"` starts the read at the very beginning of the address's
+history, so the first entry of that list IS the mint's first transaction —
+not an approximation of the launch, the launch itself — and because the read
+started at the beginning rather than wherever a newest-first walk happened to
+stop, the list it returns is complete from the start, never truncated, even
+on a mint whose backward walk truncates immediately.
+
+**Cost, not fully measured.** Helius's own docs
+(<https://www.helius.dev/docs/rpc/gettransactionsforaddress>) say a
+signatures-only call (`transactionDetails: "signatures"`) costs 10 credits
+flat, up to 1,000 signatures per call. An older Helius blog post described
+100 credits and a paid-plan-only method; that post was not re-verified here,
+and the charge for the call above was not itself measured against the
+account's credit balance — only that the call succeeded on the current key.
+Treat 10 credits as the documented figure, not yet a confirmed one.
+
+**Fixed in the PR that lands this paragraph:** `RpcClient::signatures_oldest_first`
+(`crates/realorrug-onchain/src/rpc.rs`) makes one `getTransactionsForAddress`
+call, ascending, and both of the gaps quoted above now try it once when the
+newest-first walk is truncated. `dossier::build` makes the read right after
+step 1's walk and hands the same list to both step 1's launch block and
+step 5's launch window (`investigate_solana`), so a dossier asks the node
+once, not twice; `investigate_solana` makes the read itself only when it
+walked the mint's history itself (a memory hit skipped step 1's walk). The
+first CI run of this change counted the second, redundant read in two
+existing budget tests, which is how it was found. It is a fallback, not a replacement for the cheaper newest-first
+walk: one extra call (10 Helius credits, per the documented rate above) only
+on mints whose history exceeds the walk. It is also Helius-only — every
+other RPC this repo has tried answers `getTransactionsForAddress` with a
+JSON-RPC "method not found" error, which both call sites treat like any
+other RPC failure: the original gap, not a fabricated "complete"
+(AGENTS.md rule 8).
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
   fetched directly, 2026-09-21, for candidate mints (fetched, not searched).
 - `target/debug/realorrug.exe dossier <mint>` and `... capture <mint> --out
   ...`, run against `https://api.mainnet-beta.solana.com`, 2026-09-21.
+- VPS capture against the production Helius endpoint, build `4f5a0ab`,
+  2026-09-23, for the 7-of-9 launch-unreachable finding and the
+  `getTransactionsForAddress` request/response pair quoted above.
+- Helius docs, `getTransactionsForAddress`
+  (<https://www.helius.dev/docs/rpc/gettransactionsforaddress>), read
+  2026-09-23, for the 10-credit signatures-only rate and the 1,000-per-call
+  limit.

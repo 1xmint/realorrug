@@ -201,6 +201,15 @@ struct NodeError {
     message: String,
 }
 
+/// The `data` half of `getTransactionsForAddress`'s response.
+///
+/// `paginationToken` is ignored: [`RpcClient::signatures_oldest_first`], the
+/// only caller, takes exactly one page and never pages forward.
+#[derive(Deserialize)]
+struct TransactionsForAddressEnvelope {
+    data: Vec<SignatureInfo>,
+}
+
 #[derive(Deserialize)]
 struct AccountEnvelope {
     value: Option<AccountValue>,
@@ -649,6 +658,67 @@ impl RpcClient {
         );
         let page: Vec<SignatureInfo> = self.call(budget, "getSignaturesForAddress", &params)?;
         Ok(Some(page))
+    }
+
+    /// Reaches a busy address's launch in one call by asking for its
+    /// signature history oldest-first, instead of paging backward from the
+    /// newest.
+    ///
+    /// `getSignaturesForAddress` (see [`RpcClient::signatures_back_to_oldest`])
+    /// only pages newest-first: a mint with more history than the page
+    /// budget allows never reaches its own launch that way (research 0056
+    /// addendum, 2026-09-23 -- 7 of 9 real pump.fun mints hit this in
+    /// production). Helius's `getTransactionsForAddress` accepts
+    /// `sortOrder: "asc"` and starts reading at the very beginning of the
+    /// address's history, so **the first entry of the list it returns IS
+    /// the mint's first transaction**, and because the call started at the
+    /// beginning rather than wherever a newest-first walk happened to stop,
+    /// the list is complete from the start -- never truncated, even when
+    /// the backward walk was.
+    ///
+    /// Helius-only: every other RPC this repo has tried answers
+    /// `getTransactionsForAddress` with a JSON-RPC "method not found" (or
+    /// similar) error. That comes back through [`RpcError::Node`] like any
+    /// other node error -- `Err`, never a false "complete" -- so a caller on
+    /// a non-Helius endpoint keeps today's truncated-history gap rather than
+    /// inventing a launch (AGENTS.md rule 8: unknown is not safe).
+    ///
+    /// This is a fallback, not a replacement for
+    /// [`RpcClient::signatures_back_to_oldest`]: callers should try it only
+    /// after that walk reports `truncated`. It costs one extra call (10
+    /// Helius credits per Helius's docs, for a signatures-only read) per
+    /// busy mint.
+    ///
+    /// Returns `Ok(None)` when the page budget is spent before the call is
+    /// made, the same convention [`RpcClient::signatures_page`] uses.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] on transport, node (including method-not-found) or shape
+    /// failures.
+    pub fn signatures_oldest_first(
+        &self,
+        budget: &mut Budget,
+        address: &Address,
+        limit: usize,
+    ) -> Result<Option<Vec<SignatureInfo>>, RpcError> {
+        if budget.take_page().is_err() {
+            return Ok(None);
+        }
+        let limit = limit.min(PAGE_SIZE);
+        let result: TransactionsForAddressEnvelope = self.call(
+            budget,
+            "getTransactionsForAddress",
+            &serde_json::json!([
+                address.to_string(),
+                {
+                    "transactionDetails": "signatures",
+                    "sortOrder": "asc",
+                    "limit": limit,
+                }
+            ]),
+        )?;
+        Ok(Some(result.data))
     }
 
     /// Reads one transaction.
@@ -1335,6 +1405,46 @@ mod tests {
             .expect("a walk");
         assert_eq!(sigs.len(), 2000, "two pages of allowance, two pages read");
         assert!(truncated, "stopping at the page bound must be reported");
+    }
+
+    #[test]
+    fn signatures_oldest_first_parses_the_documented_helius_response_shape() {
+        // The exact shape observed on the VPS against the production Helius
+        // endpoint, 2026-09-23 (task 9-23-0011): a "data" array of signature
+        // entries carrying fields this crate does not read
+        // (transactionIndex, memo, blockTime, confirmationStatus) alongside
+        // the ones it does, plus a `paginationToken` this call never follows.
+        let c = client(&[concat!(
+            r#"{"jsonrpc":"2.0","id":1,"result":{"data":[{"signature":"4wi3",""#,
+            r#"slot":448485736,"transactionIndex":975,"err":null,"memo":null,""#,
+            r#"blockTime":1789841756,"confirmationStatus":"finalized"}],""#,
+            r#"paginationToken":"448485750:24"}}"#,
+        )]);
+        let sigs = c
+            .signatures_oldest_first(&mut budget(), &Address::new([1u8; 32]), 3)
+            .expect("a call")
+            .expect("the page budget was not spent");
+        assert_eq!(sigs.len(), 1);
+        assert_eq!(sigs[0].signature, "4wi3");
+        assert_eq!(sigs[0].slot, 448_485_736);
+        assert!(sigs[0].err.is_none());
+    }
+
+    #[test]
+    fn signatures_oldest_first_reports_method_not_found_as_an_error() {
+        // Helius-only: every other RPC this repo has tried refuses
+        // `getTransactionsForAddress`. That must come back `Err`, never a
+        // false "complete" empty list (AGENTS.md rule 8).
+        let c = client(&[
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#,
+        ]);
+        let err = c
+            .signatures_oldest_first(&mut budget(), &Address::new([1u8; 32]), 3)
+            .expect_err("a non-Helius endpoint refuses the method");
+        assert!(
+            matches!(err, RpcError::Node(ref m) if m.contains("not found")),
+            "{err:?}"
+        );
     }
 
     #[test]
