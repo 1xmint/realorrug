@@ -3184,10 +3184,11 @@ mod tests {
 
     #[test]
     fn a_truncated_candidate_history_records_no_funder() {
-        // The overall budget allows exactly one page: the mint's own read
-        // spends it, so the candidate's own `signatures_back_to_oldest` call
-        // fails before returning anything. `signatures.last()` is unusable
-        // (there's no `last()` to take) -- the old code trusted a partial
+        // The overall budget allows exactly one page, and the mint's own read
+        // spends it; the candidates' page floor then lets the candidate walk,
+        // but its history is three full pages of signatures landed after its
+        // purchase, so the walk hits `MAX_FUNDING_SIGNATURE_PAGES` without
+        // reaching the purchase or the end. The old code trusted a partial
         // read as if it ended at the oldest transaction.
         let mint = solana_addr(9);
         let mint_key = mint.to_string();
@@ -3195,6 +3196,9 @@ mod tests {
         let responses = [
             signatures_page("mint-sig"),
             buy_tx(&mint_key, &[(&buyer, 500)]),
+            full_signatures_page_at("later", 1_000_000),
+            full_signatures_page_at("later", 1_000_000),
+            full_signatures_page_at("later", 1_000_000),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
