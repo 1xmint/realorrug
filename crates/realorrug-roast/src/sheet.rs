@@ -469,11 +469,14 @@ fn fact_value(sheet: &FactSheet, kind: crate::clause::Kind) -> Option<f64> {
 ///
 /// All five fire only when the signal itself already fired -- a factor
 /// with no signal to adjust would have nothing to attach to on the sheet
-/// the model reads. [`Signal::HolderConcentration`] is declared but not yet
-/// pushed by [`FactSheet::build`] on any chain (its own threshold is not
-/// measured for Pons v2, design 0020 §3), so this factor is exercised by a
-/// sheet built directly in a test today, the same way
-/// [`crate::assessment`]'s per-episode base weight for it already is.
+/// the model reads. [`Signal::HolderConcentration`] is now pushed by
+/// [`FactSheet::build`] on both chains (task 9-23-0007), at the same
+/// `>= 1,000` bps floor as this factor's own lower raise -- see
+/// [`HOLDER_CONCENTRATION_FLOOR_BPS`] and [`push_holders`]/
+/// [`push_token_ownership`]'s doc comments. Its own threshold beyond that
+/// floor -- where "elevated" becomes "graduated" for Pons v2 -- is still not
+/// separately measured (design 0020 §3), so the signal and this factor's two
+/// raises share one number rather than the signal carrying one of its own.
 #[must_use]
 pub fn factors(sheet: &FactSheet) -> Vec<Factor> {
     let mut factors = Vec::new();
@@ -1063,7 +1066,7 @@ impl FactSheet {
         // below. Solana's reader never counts them, and its sheet is not
         // demoted for a read it never attempts.
         if let Some(holders) = &dossier.holders {
-            push_holders(&mut facts, holders);
+            push_holders(&mut facts, &mut signals, holders);
         }
 
         // Slice 3 (design 0027): who funded the first buyers. Only the
@@ -1169,7 +1172,7 @@ impl FactSheet {
         // `dossier.unavailable`, skipped from `unknown` below the same way
         // `market` is) -- nothing further to do here in either case.
         if let Some(ownership) = &dossier.token_ownership {
-            push_token_ownership(&mut facts, ownership);
+            push_token_ownership(&mut facts, &mut signals, ownership);
         }
 
         // Design 0027 slice 5's creator cash-flow facts. `dossier.creator_cash_flow`
@@ -2063,6 +2066,21 @@ fn push_dev_buy_share(facts: &mut Vec<Fact>, launch: &ChainLaunch) {
     );
 }
 
+/// The lower of research 0052 §3.1's two `HolderConcentration` raises (S5
+/// row: a `+1,000` delta once largest non-infrastructure reaches 2,000 bps,
+/// a `+600` delta once it reaches 1,000 bps) is also the only measured line
+/// in that row shaped like a floor rather than a bonus -- the point past
+/// which a single address's share of the supply outside the curve/pool
+/// starts to matter at all. Using it as [`Signal::HolderConcentration`]'s
+/// own raise threshold, instead of inventing a separate one, means the
+/// signal fires exactly when [`holder_concentration_factors`] would grade
+/// it, on both chains: the facts differ (`Kind::LargestHolderShare` on
+/// Robinhood, `Kind::TokenOwnership` on Solana), but both already exclude
+/// curve, pool and burn accounts before this constant is ever compared
+/// against them (`Holders::largest_share_bps`'s own doc, and
+/// [`push_token_ownership`]'s `OwnerRole` filter).
+const HOLDER_CONCENTRATION_FLOOR_BPS: u16 = 1_000;
+
 /// Who holds a Robinhood token, and how much the largest single address has.
 ///
 /// **An address, never a person.** After graduation the largest holder is
@@ -2070,7 +2088,12 @@ fn push_dev_buy_share(facts: &mut Vec<Fact>, launch: &ChainLaunch) {
 /// labelled as an address's and the sentence says it may not be a person.
 /// Calling it a whale or a wallet would be a claim about who owns it, which
 /// nothing here read.
-fn push_holders(facts: &mut Vec<Fact>, holders: &Holders) {
+///
+/// Pushes [`Signal::HolderConcentration`] when the largest non-curve address
+/// clears [`HOLDER_CONCENTRATION_FLOOR_BPS`] -- absent only when
+/// `largest_share_bps` itself is absent (rule 8: no holder read, no signal,
+/// never a signal built from a share of zero).
+fn push_holders(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, holders: &Holders) {
     facts.push(
         Fact::exact(
             Kind::Holders,
@@ -2107,6 +2130,9 @@ fn push_holders(facts: &mut Vec<Fact>, holders: &Holders) {
                 )
                 .saying(Voice::Blunt, format!("Top address: {pct} of what's out.")),
         );
+        if bps >= HOLDER_CONCENTRATION_FLOOR_BPS {
+            signals.push(Signal::HolderConcentration);
+        }
     }
 }
 
@@ -3330,7 +3356,19 @@ fn render_usd(value: f64) -> String {
 /// last bullet). If every sampled account belongs to the curve or the pool,
 /// or the sample is empty, there is no other owner to report and this
 /// writes nothing rather than a fact about zero owners.
-fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::TokenOwnership) {
+///
+/// Pushes [`Signal::HolderConcentration`] when that same non-curve,
+/// non-pool owner's share clears [`HOLDER_CONCENTRATION_FLOOR_BPS`] --
+/// the same floor [`push_holders`] uses on Robinhood, so the signal means
+/// the same thing on either chain (`ADR 0028` point 3). A sample that is
+/// entirely curve/pool accounts, or an unmeasurable share, already returns
+/// above without reaching this floor, so this can never raise the signal
+/// off a read that named no other owner or no supply.
+fn push_token_ownership(
+    facts: &mut Vec<Fact>,
+    signals: &mut Vec<Signal>,
+    ownership: &realorrug_onchain::TokenOwnership,
+) {
     let Some(largest) = ownership.owners.iter().find(|o| {
         !matches!(
             o.role,
@@ -3346,6 +3384,9 @@ fn push_token_ownership(facts: &mut Vec<Fact>, ownership: &realorrug_onchain::To
     let Some(bps) = largest.share_bps else {
         return;
     };
+    if bps >= HOLDER_CONCENTRATION_FLOOR_BPS {
+        signals.push(Signal::HolderConcentration);
+    }
     let share = Fact::share(
         Kind::TokenOwnership,
         "share of the total token supply held by the largest owner among the sampled \
@@ -5768,6 +5809,92 @@ mod tests {
         assert!(!sheet.facts.iter().any(|f| f.kind == Kind::TokenOwnership));
     }
 
+    /// Task 9-23-0007, the "misleading concentration" case: a graduated
+    /// mint's largest sampled account is the PumpSwap pool, which must never
+    /// count toward `Signal::HolderConcentration` (#151, `OwnerRole::AmmPool`
+    /// excluded) -- only the largest *non*-infrastructure owner's share, at
+    /// or above the same `>= 1,000` bps floor `push_holders` uses on
+    /// Robinhood, may raise it.
+    #[test]
+    fn solana_holder_concentration_fires_on_the_non_pool_owner_at_the_floor() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![
+                token_owner(
+                    [45u8; 32],
+                    8_530,
+                    Some(8_530),
+                    realorrug_onchain::OwnerRole::AmmPool,
+                ),
+                token_owner(
+                    [46u8; 32],
+                    1_000,
+                    Some(1_000),
+                    realorrug_onchain::OwnerRole::Unresolved,
+                ),
+            ],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet.signals.contains(&Signal::HolderConcentration),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
+    /// The same pool share alone -- with no other owner clearing the floor
+    /// -- must never raise the signal: a pool or curve account is never
+    /// concentration, however large its own share is (#151).
+    #[test]
+    fn solana_holder_concentration_stays_off_when_only_the_pool_is_large() {
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![
+                token_owner(
+                    [45u8; 32],
+                    8_530,
+                    Some(8_530),
+                    realorrug_onchain::OwnerRole::AmmPool,
+                ),
+                token_owner(
+                    [46u8; 32],
+                    460,
+                    Some(460),
+                    realorrug_onchain::OwnerRole::Unresolved,
+                ),
+            ],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.signals.contains(&Signal::HolderConcentration),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
+    /// Rule 8: an unread ownership sample (`token_ownership` never set, e.g.
+    /// the read failed or was not attempted) leaves the signal off, never
+    /// treats the absence as a clean, unconcentrated holder set.
+    #[test]
+    fn solana_holder_concentration_stays_off_when_the_read_is_absent() {
+        let dossier = dossier_for([3u8; 32]);
+        assert!(dossier.token_ownership.is_none());
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.signals.contains(&Signal::HolderConcentration),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
     #[test]
     fn no_token_ownership_read_means_no_fact_and_no_unknown_line() {
         let dossier = dossier_for([3u8; 32]);
@@ -6743,6 +6870,58 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert!(fact_of(&sheet, Kind::Holders).is_some());
         assert!(fact_of(&sheet, Kind::LargestHolderShare).is_none());
+    }
+
+    /// Task 9-23-0007: `Signal::HolderConcentration` fires on a real
+    /// Robinhood sheet once the largest non-curve address clears
+    /// `HOLDER_CONCENTRATION_FLOOR_BPS` -- the same `>= 1,000` bps floor
+    /// research 0052 §3.1's S5 row already grades as a raise. Below the
+    /// same 2026-09-23, this never fired outside a directly-constructed
+    /// test sheet (sheet.rs:472's own doc comment, before this commit).
+    #[test]
+    fn robinhood_holder_concentration_fires_at_the_measured_floor() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.holders = Some(realorrug_onchain::Holders {
+            count: 42,
+            largest_share_bps: Some(1_000),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet.signals.contains(&Signal::HolderConcentration),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
+    /// A share under the floor is not concentration -- the signal must stay
+    /// off, not fire on every nonzero top holder.
+    #[test]
+    fn robinhood_holder_concentration_stays_off_below_the_floor() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.holders = Some(realorrug_onchain::Holders {
+            count: 42,
+            largest_share_bps: Some(999),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.signals.contains(&Signal::HolderConcentration),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
+    /// Rule 8, absent is not zero: no holder read means no signal, never a
+    /// signal built from treating an unread share as clean.
+    #[test]
+    fn robinhood_holder_concentration_stays_off_when_the_read_is_absent() {
+        let dossier = robinhood_dossier_for([1u8; 20]);
+        assert!(dossier.holders.is_none());
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet.signals.contains(&Signal::HolderConcentration),
+            "{:?}",
+            sheet.signals
+        );
     }
 
     /// A funding result: `checked` candidates, of `buyers`, with `shared`
