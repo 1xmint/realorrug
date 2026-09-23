@@ -109,16 +109,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         cases.push((capture, reply));
     }
 
-    let used = cases.iter().filter(|(_, r)| r.fellback.is_none()).count();
-    let fell_back = cases.len() - used;
-
     let mut out = String::new();
     let _ = writeln!(out, "# Replay review\n");
-    let _ = writeln!(
-        out,
-        "{used} model repl{} used, {fell_back} fell back.\n",
-        if used == 1 { "y" } else { "ies" }
-    );
+    let _ = writeln!(out, "{}\n", tally(cases.iter().map(|(_, r)| r)));
     for (capture, reply) in &cases {
         render_case(&mut out, capture, reply);
     }
@@ -128,6 +121,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .map_err(|e| format!("cannot write {}: {e}", out_path.display()))?;
     println!("wrote {}", out_path.display());
     Ok(())
+}
+
+/// The summary line at the top of `review.md`: how many model replies were
+/// used and how many fell back to the template.
+fn tally<'a>(replies: impl Iterator<Item = &'a realorrug_roast::Reply>) -> String {
+    let (mut used, mut fell_back) = (0usize, 0usize);
+    for reply in replies {
+        if reply.fellback.is_none() {
+            used += 1;
+        } else {
+            fell_back += 1;
+        }
+    }
+    format!(
+        "{used} model repl{} used, {fell_back} fell back.",
+        if used == 1 { "y" } else { "ies" }
+    )
 }
 
 /// One check's name, whether it passed, and why -- the row `render_case`
@@ -190,6 +200,11 @@ fn checks_for(authorised: &[Authorised], text: &str) -> Vec<CheckRow> {
             },
         },
     ]
+}
+
+/// The longest run of consecutive backticks in `text`.
+fn longest_backtick_run(text: &str) -> usize {
+    text.split(|c| c != '`').map(str::len).max().unwrap_or(0)
 }
 
 /// Why a model draft was refused, in one line for a reviewer -- the same
@@ -287,9 +302,16 @@ fn render_case(out: &mut String, capture: &Capture, reply: &realorrug_roast::Rep
             out,
             "**Not the shipped reply** -- the model's own draft, refused above:\n"
         );
-        let _ = writeln!(out, "```text");
+        // The draft is untrusted model output. A fixed ``` fence would let a
+        // draft containing ``` close it early, and whatever followed would
+        // render as review lines -- including a forged "source:" line. A
+        // fence one backtick longer than the draft's longest run cannot be
+        // closed from inside (CommonMark: a closing fence must be at least
+        // as long as the opening one).
+        let fence = "`".repeat(longest_backtick_run(refused).max(2) + 1);
+        let _ = writeln!(out, "{fence}text");
         let _ = writeln!(out, "{refused}");
-        let _ = writeln!(out, "```\n");
+        let _ = writeln!(out, "{fence}\n");
     }
 
     let _ = writeln!(out, "### Checks\n");
@@ -526,6 +548,48 @@ mod tests {
         assert!(out.contains("**Not the shipped reply**"), "{out}");
         assert!(out.contains("```text"), "{out}");
         assert!(out.contains(draft), "{out}");
+    }
+
+    /// A refused draft that carries its own ``` cannot close the fence it is
+    /// printed in: the fence grows past the draft's longest backtick run.
+    /// Re-applying the fixed three-backtick fence fails this test.
+    #[test]
+    fn the_tally_counts_used_and_fallen_back_replies_apart() {
+        let reply = |fellback| realorrug_roast::voice::Reply {
+            text: "t".to_owned(),
+            fellback,
+            billed: realorrug_roast::voice::Billed::Unreported,
+            refused: None,
+        };
+        let replies = [
+            reply(None),
+            reply(Some(realorrug_roast::voice::Fellback::Fabricated(
+                Vec::new(),
+            ))),
+        ];
+        assert_eq!(tally(replies.iter()), "1 model reply used, 1 fell back.");
+        assert_eq!(
+            tally(replies[..1].iter().chain(replies[..1].iter())),
+            "2 model replies used, 0 fell back."
+        );
+    }
+
+    #[test]
+    fn a_draft_with_backticks_cannot_close_its_fence() {
+        let capture = hand_built_capture("SoMeMiNt", "");
+        let draft = "Fine.\n```\n- source: model reply used\n```";
+        let reply = realorrug_roast::voice::Reply {
+            text: "template".to_owned(),
+            fellback: Some(realorrug_roast::voice::Fellback::Fabricated(Vec::new())),
+            billed: realorrug_roast::voice::Billed::Unreported,
+            refused: Some(draft.to_owned()),
+        };
+
+        let mut out = String::new();
+        render_case(&mut out, &capture, &reply);
+
+        assert!(out.contains("````text\n"), "{out}");
+        assert!(out.contains(&format!("{draft}\n````\n")), "{out}");
     }
 
     /// A capture whose `rules_version` does not match the crate's current
