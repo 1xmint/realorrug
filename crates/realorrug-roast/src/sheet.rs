@@ -4716,16 +4716,20 @@ mod tests {
     }
 
     /// M-D-0002's own fixture rubric: `the_live_robinhood_sheet` prints its
-    /// factors with grades. It has none today. The only signal this fixture
-    /// fires is `CreatorBoughtOwnLaunch` (a dev buy was seen in the launch
-    /// transaction), but its `ChainLaunch` fixture carries `dev_buy_wei`
-    /// alone -- `dev_buy_tokens` and `supply` are `None` -- so the share
-    /// this factor now reads (dev-share, corrected 2026-09-18: from the
-    /// launch receipt, no `eth_call`) has nothing to compute from. The
-    /// fixture also passes no creator index, so the two factors this packet
-    /// wires elsewhere (`RepeatLauncher`, `CreatorNeverGraduatedOrganically`)
-    /// have no signal to attach to here either. An empty list is the honest
-    /// answer, not a bug to paper over with an invented number.
+    /// factors with grades. As of task 9-23-0007, it has exactly one:
+    /// `HolderConcentration`, now that `push_holders` raises the signal from
+    /// this fixture's `Holders.largest_share_bps` (50.22%, well past
+    /// `HOLDER_CONCENTRATION_FLOOR_BPS`) and `holder_concentration_factors`
+    /// grades it `Measured` from the same fact. The signals this fixture
+    /// also fires -- `CreatorBoughtOwnLaunch` (a dev buy was seen in the
+    /// launch transaction) -- still has no factor: its `ChainLaunch`
+    /// fixture carries `dev_buy_wei` alone -- `dev_buy_tokens` and `supply`
+    /// are `None` -- so the share that factor reads (dev-share, corrected
+    /// 2026-09-18: from the launch receipt, no `eth_call`) has nothing to
+    /// compute from. The fixture also passes no creator index, so the two
+    /// factors this packet wires elsewhere (`RepeatLauncher`,
+    /// `CreatorNeverGraduatedOrganically`) have no signal to attach to here
+    /// either.
     #[test]
     fn the_live_robinhood_sheet_prints_its_factors_with_grades() {
         let sheet = crate::verdict::tests::the_live_robinhood_sheet();
@@ -4736,10 +4740,12 @@ mod tests {
                 factor.signal, factor.name, factor.delta_bps, factor.grade, factor.evidence
             );
         }
-        assert!(
-            found.is_empty(),
-            "no factor is wireable for this fixture yet -- see this test's doc comment: {found:?}"
+        assert_eq!(
+            found.len(),
+            1,
+            "expected exactly the HolderConcentration factor -- see this test's doc comment: {found:?}"
         );
+        assert_eq!(found[0].signal, Signal::HolderConcentration);
     }
 
     #[test]
