@@ -62,6 +62,18 @@ impl From<Exhausted> for RpcError {
     }
 }
 
+/// Whether a transport error is the node's HTTP 429, not some other refusal.
+///
+/// `Http::post` maps ureq's status error through `Display`, which for a 429
+/// is exactly the text `"http status: 429"` -- matched by substring rather
+/// than parsed, since the transport hands back a string and not a status
+/// code. A dropped connection or a malformed body is a different failure and
+/// must not be retried the same way: retrying a down endpoint just spends the
+/// budget faster, and retrying a malformed body cannot change its shape.
+fn is_rate_limited(message: &str) -> bool {
+    message.contains("http status: 429")
+}
+
 /// One confirmed signature, as `getSignaturesForAddress` returns it.
 #[derive(Clone, Debug, Deserialize)]
 pub struct SignatureInfo {
@@ -445,16 +457,11 @@ impl RpcClient {
         method: &str,
         params: &serde_json::Value,
     ) -> Result<T, RpcError> {
-        budget.take_call()?;
-
         let body = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": method, "params": params,
         });
 
-        let text = self
-            .transport
-            .post(&self.endpoint, body.to_string())
-            .map_err(RpcError::Transport)?;
+        let text = self.post_with_retry(budget, &body.to_string())?;
 
         let envelope: Envelope<T> =
             serde_json::from_str(&text).map_err(|e| RpcError::Malformed(e.to_string()))?;
@@ -465,6 +472,60 @@ impl RpcClient {
         envelope
             .result
             .ok_or_else(|| RpcError::Malformed(format!("{method} returned no result")))
+    }
+
+    /// Posts `body`, retrying while the node refuses with HTTP 429.
+    ///
+    /// Evidence (VPS recapture of the 9-token replay set against main
+    /// 17d6c5f, 2026-09-23): 6 of 9 cases hit `rpc transport: http status:
+    /// 429` (5, 7, 11, 23 and 18 occurrences in four of them, one case with
+    /// 5), each recorded as a gap and pushing the case to `CantTell`. The
+    /// other three cases, and a `getSlot` sent a minute after one of the
+    /// failures, answered 200 -- this is a burst/per-second limit, not an
+    /// exhausted account, and a request refused for that reason is worth
+    /// sending again rather than turning into a gap.
+    ///
+    /// The pause is a fixed constant, not a doubling backoff: an exponential
+    /// schedule is arithmetic a mutation test cannot pin down (halving the
+    /// base or dropping the multiplier still "backs off", just slower, and
+    /// the test would have to assert an exact wall-clock curve to catch it),
+    /// while "did it wait at least the fixed pause" is a single, checkable
+    /// fact.
+    ///
+    /// `budget.take_call()` runs before every attempt, including retries, so
+    /// a rate-limited read cannot spend more calls or more wall clock than
+    /// the budget allows -- AGENTS.md rule 7 (a retry must never outlive the
+    /// budget).
+    fn post_with_retry(&self, budget: &mut Budget, body: &str) -> Result<String, RpcError> {
+        /// Retries after the first attempt. Three extra tries turns a
+        /// burst limit into a wait of a few seconds; it does not chase an
+        /// endpoint that is down or an account that is actually exhausted,
+        /// both of which fail a different way (see [`is_rate_limited`]).
+        const RETRIES: u32 = 3;
+        /// The wait between attempts. Fixed for the reason on
+        /// [`RpcClient::post_with_retry`]: no arithmetic for a mutation to
+        /// hide in.
+        const PAUSE: Duration = Duration::from_secs(1);
+
+        let mut last_err = String::new();
+        // `0..=RETRIES` rather than a hand-written counter: a mutated
+        // counter that never reaches its limit loops forever, and CI reports
+        // that as a timeout rather than a failing assertion. A range has no
+        // counter to mutate.
+        for _ in 0..=RETRIES {
+            budget.take_call()?;
+            match self.transport.post(&self.endpoint, body.to_owned()) {
+                Ok(text) => return Ok(text),
+                Err(e) if is_rate_limited(&e) => {
+                    last_err = e;
+                    std::thread::sleep(PAUSE);
+                }
+                Err(e) => return Err(RpcError::Transport(e)),
+            }
+        }
+        // Every retry was also rate-limited. Return the 429 unchanged so the
+        // gap wording stays what it is today.
+        Err(RpcError::Transport(last_err))
     }
 
     /// Reads an account's raw data. `None` when no account exists there.
@@ -1256,6 +1317,113 @@ mod tests {
 
     fn budget() -> Budget {
         Budget::new(60, 3, Duration::from_secs(30))
+    }
+
+    /// A transport that pops `Ok`/`Err` results from a queue, unlike
+    /// [`Canned`] which only ever answers `Ok`. Needed to drive a rate-limit
+    /// retry: the sequence under test is an `Err("...http status: 429...")`
+    /// followed by an `Ok`, or a non-429 `Err`, or 429 forever.
+    struct Scripted(std::sync::Mutex<Vec<Result<String, String>>>);
+
+    impl Scripted {
+        fn boxed(responses: Vec<Result<String, String>>) -> Box<dyn Transport> {
+            let mut responses = responses;
+            responses.reverse();
+            Box::new(Self(std::sync::Mutex::new(responses)))
+        }
+    }
+
+    impl Transport for Scripted {
+        fn post(&self, _: &str, _: String) -> Result<String, String> {
+            let popped = self.0.lock().map_err(|_| "poisoned".to_owned())?.pop();
+            popped.unwrap_or_else(|| {
+                Err("the client asked for more than the test supplied".to_owned())
+            })
+        }
+    }
+
+    fn rate_limited() -> Result<String, String> {
+        Err("rpc transport: http status: 429".to_owned())
+    }
+
+    const PONG: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":null}}"#;
+
+    /// Reads an account through a scripted transport, which is enough to
+    /// exercise `post_with_retry` without adding a second call surface just
+    /// for these tests.
+    fn read_through(c: &RpcClient, budget: &mut Budget) -> Result<Option<AccountRead>, RpcError> {
+        c.account(budget, &Address::new([1u8; 32]))
+    }
+
+    #[test]
+    fn a_rate_limited_call_is_retried_and_the_retry_can_succeed() {
+        // Pins both the retry and the pause: removing the retry (re-applying
+        // the bug) makes this fail on the first `expect`, since a single 429
+        // would be returned as-is rather than followed by the queued success.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![rate_limited(), Ok(PONG.to_owned())]),
+        );
+        let mut b = budget();
+        let started = std::time::Instant::now();
+        read_through(&c, &mut b).expect("the retry succeeds");
+        assert!(
+            started.elapsed() >= Duration::from_secs(1),
+            "the retry waits for the fixed pause: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(b.calls_made(), 2, "the retry spends a second call");
+    }
+
+    #[test]
+    fn a_non_rate_limit_transport_error_is_not_retried() {
+        // Pins the 429 guard: if it were mutated to always retry, this would
+        // consume the queued success too and calls_made() would read 2.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err("connection refused".to_owned()),
+                Ok(PONG.to_owned()),
+            ]),
+        );
+        let mut b = budget();
+        let err = read_through(&c, &mut b).expect_err("a non-429 transport error is not retried");
+        assert!(
+            matches!(&err, RpcError::Transport(m) if m == "connection refused"),
+            "{err}"
+        );
+        assert_eq!(b.calls_made(), 1);
+    }
+
+    #[test]
+    fn a_rate_limit_that_never_clears_is_returned_as_the_429_it_is() {
+        const RETRIES: u32 = 3;
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![rate_limited(); (RETRIES + 1) as usize]),
+        );
+        let mut b = budget();
+        let err = read_through(&c, &mut b).expect_err("still refused after every retry");
+        assert!(
+            err.to_string().contains("http status: 429"),
+            "the gap wording is unchanged: {err}"
+        );
+        assert_eq!(b.calls_made(), 1 + RETRIES);
+    }
+
+    #[test]
+    fn a_spent_budget_stops_the_retry_loop_instead_of_outlasting_it() {
+        // AGENTS.md rule 7: a retry must never outlive the budget. With a
+        // budget of 2 calls and a node that always answers 429, the third
+        // attempt is refused by the budget, not sent.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![rate_limited(); 4]),
+        );
+        let mut b = Budget::new(2, 3, Duration::from_secs(30));
+        let err = read_through(&c, &mut b).expect_err("the budget runs out first");
+        assert!(matches!(&err, RpcError::Stopped(Exhausted::Calls)), "{err}");
+        assert_eq!(b.calls_made(), 2);
     }
 
     #[test]
