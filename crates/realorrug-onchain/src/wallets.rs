@@ -3252,6 +3252,34 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_ascending_answer_leaves_the_original_gap() {
+        // A node that answers the oldest-first call with no transactions has
+        // not shown the launch window is empty -- the mint plainly has a
+        // history, the walk above just paged through it. Taking the empty
+        // list as the window would drop the gap and report no early buyers
+        // as if that had been read (AGENTS.md rule 8: absent is not zero).
+        let mint = solana_addr(9);
+        let responses = [
+            full_signatures_page(),
+            r#"{"result":{"data":[],"paginationToken":null}}"#.to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.buyers, 0);
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("could not be reached within the read budget")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
     fn investigate_solana_does_not_rewalk_the_mints_signatures_when_given_them() {
         // The bug this fixes: `dossier::build` reads the mint's signature
         // history once (step 1) and used to make `investigate_solana` read
