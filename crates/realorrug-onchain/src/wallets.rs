@@ -3785,6 +3785,18 @@ mod tests {
         assert_eq!(funding.checked.len(), MAX_CANDIDATES);
     }
 
+    // The floor is every candidate's worst case, not merely "enough for the
+    // fixture below": that test's four candidates need about a dozen calls,
+    // so a floor of 17 or 120 passes it too (both survived cargo-mutants on
+    // #168). Pinned to the arithmetic it claims: 4 x (3 pages + 10 transactions).
+    #[test]
+    fn the_funding_call_floor_covers_every_candidate_walking_to_both_caps() {
+        assert_eq!(MAX_CANDIDATES, 4);
+        assert_eq!(MAX_FUNDING_SIGNATURE_PAGES, 3);
+        assert_eq!(MAX_FUNDING_TRANSACTIONS, 10);
+        assert_eq!(FUNDING_CALL_FLOOR, 52);
+    }
+
     #[test]
     fn a_call_floor_lets_every_candidate_be_checked_when_earlier_steps_spent_the_shared_calls() {
         // Regression for the starvation research 0056's 2026-09-23 addendum
