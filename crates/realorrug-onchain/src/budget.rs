@@ -34,6 +34,16 @@ use std::time::{Duration, Instant};
 /// page, one transaction per signature in the launch slot, the curve account,
 /// the fee config, and a creator lookup. Sixty is comfortably above a normal
 /// token and well below anything that could be used as an amplifier.
+///
+/// This is a single shared pool, not sixty calls *per step* -- research
+/// 0056's 2026-09-23 addendum found real captures spending most of it before
+/// `dossier::build`'s funding step (slice 6b, [`Budget::grant_calls`]'s own
+/// doc) even starts, which is why that step now floors its own share of this
+/// pool rather than trusting whatever the steps ahead of it left behind, the
+/// same way [`PAGES_PER_WALK`] already floors pages for every named walk.
+/// Raising this constant is not the fix: a starved step needs a guaranteed
+/// share of the sixty, not a bigger shared pool every step (including a
+/// hostile one) can draw down just the same.
 pub const DEFAULT_MAX_CALLS: u32 = 60;
 
 /// How many pages of `getSignaturesForAddress` one dossier may walk.
@@ -219,6 +229,44 @@ impl Budget {
     /// one global limit.
     pub fn grant_pages(&mut self, floor: u32) {
         self.pages_left = self.pages_left.max(floor);
+    }
+
+    /// Raises the call allowance to at least `floor`, for a named read about
+    /// to start whose own inner caps (not `Budget`'s) already bound what it
+    /// can spend.
+    ///
+    /// # Why funding needed this and the other named walks did not
+    ///
+    /// `Budget::grant_pages`'s doc explains why the *page* allowance is
+    /// floored per named walk: `dossier::build`'s steps 1, 3, 5 and 6 are
+    /// each one `getSignaturesForAddress` walk of a different address
+    /// against the shared pool, and a busy walk ahead of another must not
+    /// leave it with zero pages of its own. The *call* allowance was never
+    /// given the same treatment, and step 5 (`investigate_solana`, slice 6b)
+    /// is the one place that gap matters: unlike the other named walks,
+    /// which spend only on paging plus one or two follow-up reads, step 5
+    /// pages up to [`crate::wallets::MAX_CANDIDATES`] separate candidates
+    /// and fetches up to [`crate::wallets::MAX_FUNDING_TRANSACTIONS`]
+    /// transactions for each one -- a call shape no other step comes close
+    /// to. On a real capture, steps 1 through 4 routinely leave `calls_left`
+    /// well under what step 5 needs even though its own *pages* were
+    /// floored, so it starts several candidates and then runs out of calls
+    /// partway through -- a "read stopped: Calls" gap on the candidates it
+    /// never got to, not a genuine measured absence of a funder (AGENTS.md
+    /// rule 8). `Budget::grant_calls`, called once by `dossier::build`
+    /// immediately before step 5, exists to close exactly that gap the same
+    /// way `grant_pages` already closes it for pages.
+    ///
+    /// `max`, not addition, for the identical reason `grant_pages` uses
+    /// `max`: a budget that already has more than `floor` left keeps it
+    /// rather than stacking a second allowance on top, so raising this floor
+    /// can only ever help a starved step, never grow the overall
+    /// [`DEFAULT_MAX_CALLS`] ceiling a healthy one already respects. Step
+    /// 5's own inner caps (`MAX_CANDIDATES`, `MAX_FUNDING_SIGNATURE_PAGES`,
+    /// `MAX_FUNDING_TRANSACTIONS`) are what keep this floor itself bounded --
+    /// see the constant `dossier::build` sizes it from.
+    pub fn grant_calls(&mut self, floor: u32) {
+        self.calls_left = self.calls_left.max(floor);
     }
 
     /// How many calls have been made.

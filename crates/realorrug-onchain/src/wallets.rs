@@ -1334,6 +1334,31 @@ pub const MAX_FUNDING_TRANSACTIONS: usize = 10;
 /// to trust is honestly priced.
 pub const MAX_FUNDING_SIGNATURE_PAGES: usize = 3;
 
+/// The call floor [`dossier::build`](crate::dossier::build) grants step 5
+/// (`investigate_solana`) with [`crate::budget::Budget::grant_calls`],
+/// immediately before that step runs.
+///
+/// Sized from this module's own inner caps, the same way
+/// [`crate::budget::PAGES_PER_WALK`] sizes the page floor from
+/// [`crate::budget::DEFAULT_MAX_PAGES`]: each of up to [`MAX_CANDIDATES`]
+/// checked candidates can spend up to [`MAX_FUNDING_SIGNATURE_PAGES`] pages
+/// (a page is also a call, `Budget::take_page`'s own doc) plus
+/// [`MAX_FUNDING_TRANSACTIONS`] `getTransaction` fetches before
+/// [`funding_search`] gives up on it -- a per-candidate ceiling this floor
+/// does not raise, only guarantees each candidate actually gets to spend
+/// against. A floor, not an addition (`grant_calls`'s own doc): a budget
+/// that already has this many calls left keeps them, so this can only widen
+/// funding's share of an already-starved [`crate::budget::DEFAULT_MAX_CALLS`],
+/// never the ceiling itself.
+// The cast is exact, not lossy: `MAX_CANDIDATES`, `MAX_FUNDING_SIGNATURE_PAGES`
+// and `MAX_FUNDING_TRANSACTIONS` are all small compile-time constants (52
+// today), nowhere near `u32::MAX` -- `usize::try_from` is not yet callable in
+// a const context on stable, which is the only reason this is `as` rather
+// than the fallible conversion the rest of this module uses at runtime.
+#[allow(clippy::cast_possible_truncation)]
+pub const FUNDING_CALL_FLOOR: u32 =
+    (MAX_CANDIDATES * (MAX_FUNDING_SIGNATURE_PAGES + MAX_FUNDING_TRANSACTIONS)) as u32;
+
 /// Searches backward through one buyer's own signature history for the most
 /// recent material inbound SOL transfer at or before its first purchase of
 /// this mint -- the wallet's funder (research 0056's "the fourth read"
@@ -3758,6 +3783,87 @@ mod tests {
         assert_eq!(funding.buyers, 6);
         assert_eq!(funding.selected, u32::try_from(MAX_CANDIDATES).unwrap());
         assert_eq!(funding.checked.len(), MAX_CANDIDATES);
+    }
+
+    // The floor is every candidate's worst case, not merely "enough for the
+    // fixture below": that test's four candidates need about a dozen calls,
+    // so a floor of 17 or 120 passes it too (both survived cargo-mutants on
+    // #168). Pinned to the arithmetic it claims: 4 x (3 pages + 10 transactions).
+    #[test]
+    fn the_funding_call_floor_covers_every_candidate_walking_to_both_caps() {
+        assert_eq!(MAX_CANDIDATES, 4);
+        assert_eq!(MAX_FUNDING_SIGNATURE_PAGES, 3);
+        assert_eq!(MAX_FUNDING_TRANSACTIONS, 10);
+        assert_eq!(FUNDING_CALL_FLOOR, 52);
+    }
+
+    #[test]
+    fn a_call_floor_lets_every_candidate_be_checked_when_earlier_steps_spent_the_shared_calls() {
+        // Regression for the starvation research 0056's 2026-09-23 addendum
+        // documents: `dossier::build`'s steps 1 through 4 share one call
+        // budget with step 5 (this function), and on a real capture they
+        // routinely leave it too little of that shared pool to check every
+        // candidate -- even though step 5's own *pages* are floored
+        // (`Budget::grant_pages`), its *calls* never were before this fix.
+        //
+        // Four candidates share the mint's one buy transaction. Reading the
+        // window costs 2 calls (the mint's own signature page, then that one
+        // transaction); each candidate that is actually checked costs 2 more
+        // (its own signature page, then the funding transaction found on
+        // it) -- 10 calls in total when nothing is starved. A budget left
+        // with only 6 calls (as if steps 1 through 4 had already spent 54 of
+        // `DEFAULT_MAX_CALLS`) checks only the first two candidates and
+        // reports a `Calls` gap for the rest -- the bug -- unless it is
+        // first raised to `FUNDING_CALL_FLOOR` the way `dossier::build` now
+        // does immediately before calling this function, in which case the
+        // identical transport lets every candidate be checked.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyers: Vec<String> = (1..=4u8).map(|b| solana_addr(b).to_string()).collect();
+        let funder = solana_addr(0xf0).to_string();
+
+        let mut responses = vec![
+            signatures_page("mint-sig"),
+            buy_tx(
+                &mint_key,
+                &buyers.iter().map(|b| (b.as_str(), 500)).collect::<Vec<_>>(),
+            ),
+        ];
+        for (i, buyer) in buyers.iter().enumerate() {
+            responses.push(signatures_page(&format!("buyer{i}-sig")));
+            responses.push(funding_tx(&funder, buyer, 100));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+
+        let starved_client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut starved_budget = Budget::new(6, 60, std::time::Duration::from_secs(30));
+        let starved = investigate_solana(&starved_client, &mut starved_budget, &mint, None)
+            .expect("a result");
+        assert_eq!(starved.checked.len(), MAX_CANDIDATES);
+        let complete = starved
+            .checked
+            .iter()
+            .filter(|c| c.funding_complete)
+            .count();
+        assert_eq!(complete, 2, "{:?}", starved.gaps);
+        assert!(
+            starved.gaps.iter().any(|g| g.contains("Calls")),
+            "{:?}",
+            starved.gaps
+        );
+
+        let floored_client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut floored_budget = Budget::new(6, 60, std::time::Duration::from_secs(30));
+        floored_budget.grant_calls(FUNDING_CALL_FLOOR);
+        let floored = investigate_solana(&floored_client, &mut floored_budget, &mint, None)
+            .expect("a result");
+        assert_eq!(floored.checked.len(), MAX_CANDIDATES);
+        assert!(
+            floored.checked.iter().all(|c| c.funding_complete),
+            "{:?}",
+            floored.gaps
+        );
+        assert!(floored.gaps.is_empty(), "{:?}", floored.gaps);
     }
 
     /// A bare transaction for the pure readers below, with only the fields

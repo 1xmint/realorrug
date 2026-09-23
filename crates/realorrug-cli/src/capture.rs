@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use realorrug_onchain::{RpcClient, dispatch};
+use realorrug_onchain::{RpcClient, dispatch, dossier::Dossier};
 use realorrug_roast::{Assessment, BaseRates, Capture, FactSheet};
 
 use crate::dossier::safe;
@@ -59,6 +59,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         Err(dispatch::Error::Unreadable(why)) => return Err(why),
     };
+    print_gaps(&dossier);
 
     let rates_path = flag(args, "--rates")
         .unwrap_or_else(|| realorrug_roast::baserates::DEFAULT_PATH.to_owned());
@@ -101,6 +102,39 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
     println!("wrote {}", path.display());
     Ok(())
+}
+
+/// Prints every raw read gap this dossier hit, one `gap: ` line per gap, to
+/// stderr -- for the operator running `capture` by hand, never for the sheet
+/// or a model.
+///
+/// # Why stderr, and why here
+///
+/// `sheet.rs`'s own doc on `Dossier::unavailable` (around `phrase_for`)
+/// explains why the raw reason never reaches `FactSheet` or a reply: it is
+/// diagnostic text an attacker's own mint could shape (an injection surface,
+/// AGENTS.md rule 3), and it is bad copy even when it is not hostile. That
+/// reasoning does not apply to an operator's own terminal -- nothing printed
+/// here is stored, sent to a model, or reachable by anyone but whoever ran
+/// the command -- so `capture` can afford to say exactly what stopped a
+/// read, which is what let this file's investigation
+/// (`docs/research/0056-the-solana-replay-set.md`'s 2026-09-23 addendum)
+/// confirm the call ceiling, not the page one, was starving Solana funding
+/// reads.
+///
+/// Reads `dossier` straight from the one `dispatch::read` call `run` already
+/// made -- the same chain read `roast` builds its own reply from
+/// (`crates/realorrug-cli/src/roast.rs` calls `dispatch::read` too) -- so
+/// this never triggers a second one.
+fn print_gaps(dossier: &Dossier) {
+    for miss in &dossier.unavailable {
+        eprintln!("gap: {}: {}", miss.fact, miss.why);
+    }
+    if let Some(funding) = &dossier.funding {
+        for gap in &funding.gaps {
+            eprintln!("gap: {gap}");
+        }
+    }
 }
 
 /// The mint argument, exactly as `roast`'s own `mint_arg_from` reads it: the
