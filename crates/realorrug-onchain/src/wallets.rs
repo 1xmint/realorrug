@@ -1299,6 +1299,14 @@ pub fn investigate_solana(
 
     let buyers = u32::try_from(window_buyers.len()).unwrap_or(u32::MAX);
     let mut checked = Vec::new();
+    // The candidates' own page floor, granted here and not by the caller:
+    // by now `dossier::build` step 1 (and, for a cached launch, the walk
+    // above) has usually spent the shared page pool, and every candidate
+    // then reported "page budget exhausted" (research 0056's 2026-09-23
+    // addendum). Granted by the caller instead, the walk above would draw on
+    // it first and could spend it all. A floor, not an addition
+    // (`Budget::grant_pages`), sized for every candidate walking to its cap.
+    budget.grant_pages(FUNDING_PAGE_FLOOR);
     for buyer in window_buyers.iter().take(MAX_CANDIDATES) {
         checked.push(check_solana_candidate(client, budget, buyer, &mut gaps));
     }
@@ -1674,10 +1682,9 @@ fn check_solana_candidate(
     };
 
     // No extra page floor is granted here (contrast `dossier.rs`'s steps 3
-    // and 6): `investigate_solana`'s caller (`dossier::build` step 5) grants
-    // this whole step's page floor (`FUNDING_PAGE_FLOOR`) unconditionally,
-    // once, immediately before this step runs -- sized for every candidate
-    // this loop can check, not just one. Granting a second floor per
+    // and 6): `investigate_solana` grants the whole candidate loop's page
+    // floor (`FUNDING_PAGE_FLOOR`) once, immediately before the loop --
+    // sized for every candidate it can check, not just one. Granting a second floor per
     // candidate on top of that would let up to `MAX_CANDIDATES` candidates
     // each restack the floor, silently widening the funding step's own
     // share of the shared pool at step 6's expense. `MAX_FUNDING_SIGNATURE_PAGES`
@@ -3940,11 +3947,10 @@ mod tests {
         // step 5 used to be granted only when step 1 was skipped
         // (`mint_signatures.is_none()`) -- which almost never happens,
         // since step 1 usually succeeds. A budget left with zero pages (as
-        // if step 1 had already spent every one of them) reports "page
-        // budget exhausted" for the candidate unless the page allowance is
-        // first raised to `FUNDING_PAGE_FLOOR`, the way `dossier::build`
-        // now does unconditionally, immediately before calling this
-        // function.
+        // if step 1 had already spent every one of them) must still check
+        // the candidate, because this function grants `FUNDING_PAGE_FLOOR`
+        // itself just before its candidate loop. Remove that grant and the
+        // candidate reports "page budget exhausted" instead.
         let mint = solana_addr(9);
         let mint_key = mint.to_string();
         let buyer = solana_addr(1).to_string();
@@ -3962,29 +3968,8 @@ mod tests {
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
 
-        let starved_client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
-        let mut starved_budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
-        let starved = investigate_solana(
-            &starved_client,
-            &mut starved_budget,
-            &mint,
-            Some(&(signatures.clone(), false)),
-        )
-        .expect("a result");
-        assert_eq!(starved.checked.len(), 1);
-        assert!(!starved.checked[0].funding_complete);
-        assert!(
-            starved
-                .gaps
-                .iter()
-                .any(|g| g.contains("page budget exhausted")),
-            "{:?}",
-            starved.gaps
-        );
-
         let floored_client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
         let mut floored_budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
-        floored_budget.grant_pages(FUNDING_PAGE_FLOOR);
         let floored = investigate_solana(
             &floored_client,
             &mut floored_budget,

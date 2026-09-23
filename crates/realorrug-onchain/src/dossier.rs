@@ -659,20 +659,16 @@ pub fn build(
     // re-walking here against the same shared budget was exactly the
     // starvation bug this commit fixes (`investigate_solana`'s own doc).
     //
-    // Its own page floor, unconditionally, not only when `mint_signatures`
-    // is `None`: granting it only on that condition (the shape this floor
-    // used to have) meant that in the ordinary case -- step 1 runs first
-    // and successfully walks the mint's own history, so `mint_signatures`
-    // is `Some` -- this step got no floor of its own at all, and had to
-    // check every candidate's funding history against whatever step 1 left
-    // of the shared page pool, which was usually nothing (research 0056's
-    // 2026-09-23 addendum documents this as the actual VPS-observed cause,
-    // not the call starvation the first addendum inferred). `FUNDING_PAGE_FLOOR`
-    // is sized for every candidate this step can check, the same way
-    // `FUNDING_CALL_FLOOR` below is; a floor, not an addition
-    // (`Budget::grant_pages`'s own doc): a budget that already has this many
-    // pages left keeps them.
-    budget.grant_pages(crate::wallets::FUNDING_PAGE_FLOOR);
+    // A walk's page floor only when this step must walk the mint itself.
+    // The candidates' own page floor (`wallets::FUNDING_PAGE_FLOOR`) is
+    // granted inside `investigate_solana`, after that walk and immediately
+    // before the candidate loop -- not here: granted here, the mint walk
+    // would draw on it first and could spend all twelve pages, leaving the
+    // candidates starved exactly as before (research 0056's 2026-09-23
+    // addendum).
+    if mint_signatures.is_none() {
+        budget.grant_pages(crate::budget::PAGES_PER_WALK);
+    }
     // Its own call floor too, unlike every other named walk in this
     // function: steps 1, 3 and 6 spend on paging plus a small, fixed number
     // of follow-up reads, but this step alone can page up to

@@ -529,10 +529,13 @@ this capture's own gap lines:
 Fixed in the same PR that lands this paragraph: `funding_search` now starts
 each walk at `before = Some(first purchase signature)` instead of the
 newest signature (falling back to the old newest-first start only if the
-purchase-anchored read itself errors), and `dossier::build` grants step 5's
+purchase-anchored read itself errors), and `investigate_solana` grants a
 new `FUNDING_PAGE_FLOOR` (`MAX_CANDIDATES * MAX_FUNDING_SIGNATURE_PAGES` = 12)
-unconditionally, the same way it already grants `FUNDING_CALL_FLOOR`
-unconditionally, rather than only when `mint_signatures` is `None`.
+itself, immediately before its candidate loop. It is granted there and not by
+`dossier::build` before the call: the first version of this fix did the
+latter, and CI showed that on a cached launch (`mint_signatures` is `None`)
+the mint walk inside `investigate_solana` then drew on the twelve pages first
+and spent them, leaving the candidates starved as before.
 
 **Still open, not fixed here:** the same recapture showed 7 of 9 mints
 reporting "launch block: this token has more history than the page budget
