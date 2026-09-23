@@ -65,4 +65,4 @@ Alerts reach Josh's phone through the Claude mobile app. Don't add another alert
 
 ## Decision log
 
-Autonomous decisions and reversals: the run ledger (RUN.md under .orchestrator/runs/20260915-robinhood-7b, gitignored), "Decision log".
+Autonomous decisions and reversals: `docs/plans/0002-bot-quality-then-a-solana-launch.md` (`.orchestrator/` run ledgers are gitignored and not tracked history).

@@ -201,12 +201,18 @@ fn would_resolve_text(signal: Signal) -> &'static str {
             "a public statement of intent from the creator, which is off-chain and unverifiable"
         }
         Signal::LiquidityGone => {
+            // Rephrased, not exempted (research 0059, ADR 0027 §6): "recover"
+            // here means retrieve a trace, not a price rebound, but it sits
+            // in `hint_violations`'s movement-word list, so this generated
+            // sentence tripped the same "outcome hint" false fire the trio
+            // does not raise. Same meaning, a word the checker doesn't read
+            // as a market-movement claim.
             "a trace of where the withdrawn reserves went, which a further chain read could \
-             still recover"
+             still uncover"
         }
         Signal::CreatorSoldOut => {
             "whether the creator's tokens moved to a wallet still under the same control, which \
-             a further chain read could still recover"
+             a further chain read could still uncover"
         }
         Signal::BuyersCannotSell => {
             "a second simulated sell at a smaller size, which a further chain read could still \
@@ -636,6 +642,38 @@ mod tests {
         for signal in all {
             let _ = signal_kind(signal);
             assert!(!would_resolve_text(signal).is_empty());
+        }
+    }
+
+    /// Research 0059: `LiquidityGone`'s generated sentence used "recover" to
+    /// mean *retrieve a trace*, which sits in `hint_violations`'s
+    /// movement-word list and tripped a false "outcome hint" fire under
+    /// `forbidden::check` (blanket, production) on the Rugged report's own
+    /// commentary -- not a real hint, since the sentence names no rate, no
+    /// direction and no magnitude. Re-applying the fault (swap "uncover"
+    /// back for "recover") must make this fail; fixed, every signal's
+    /// resolution sentence clears the blanket checker.
+    #[test]
+    fn generated_resolution_sentences_clear_the_blanket_checker() {
+        let all = [
+            Signal::LaunchBlockInStrongestBand,
+            Signal::CreatorNeverGraduatedOrganically,
+            Signal::CreatorBoughtOwnLaunch,
+            Signal::LiquidityGone,
+            Signal::CreatorSoldOut,
+            Signal::BuyersCannotSell,
+            Signal::RepeatLauncher,
+            Signal::HolderConcentration,
+            Signal::OwnerCanStillMintOrPause,
+            Signal::CorrelatedSelling,
+        ];
+        for signal in all {
+            let text = would_resolve_text(signal);
+            let violations = crate::forbidden::check(text);
+            assert!(
+                violations.is_empty(),
+                "{signal:?} resolution sentence tripped forbidden::check: {violations:?} -- {text}"
+            );
         }
     }
 }
