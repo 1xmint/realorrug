@@ -657,11 +657,15 @@ pub fn build(
     //
     // Reuses step 1's mint signatures instead of paging them again --
     // re-walking here against the same shared budget was exactly the
-    // starvation bug this commit fixes (`investigate_solana`'s own doc). When
-    // step 1 was skipped (the launch block came from memory,
-    // `mint_signatures` is `None`), this is the first walk of the mint's
-    // history in this dossier, so it still needs its own allowance topped up
-    // the same way step 3's did.
+    // starvation bug this commit fixes (`investigate_solana`'s own doc).
+    //
+    // A walk's page floor only when this step must walk the mint itself.
+    // The candidates' own page floor (`wallets::FUNDING_PAGE_FLOOR`) is
+    // granted inside `investigate_solana`, after that walk and immediately
+    // before the candidate loop -- not here: granted here, the mint walk
+    // would draw on it first and could spend all twelve pages, leaving the
+    // candidates starved exactly as before (research 0056's 2026-09-23
+    // addendum).
     if mint_signatures.is_none() {
         budget.grant_pages(crate::budget::PAGES_PER_WALK);
     }
