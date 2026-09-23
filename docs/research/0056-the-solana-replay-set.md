@@ -607,6 +607,32 @@ JSON-RPC "method not found" error, which both call sites treat like any
 other RPC failure: the original gap, not a fabricated "complete"
 (AGENTS.md rule 8).
 
+## Addendum, 2026-09-23: 429s were becoming gaps, and are now retried
+
+A recapture of the same 9-token replay set against main `17d6c5f`, run on the
+VPS with the cases back to back, found 6 of 9 cases hit `rpc transport: http
+status: 429` (5, 7, 11, 23 and 18 occurrences across four of the cases, and 5
+in the fifth), each occurrence recorded as a gap and each of those six cases
+pushed to `CantTell`. The first three cases and the last had none. A single
+`getSlot` sent a minute after one of the failures answered 200 — evidence
+this is a burst/per-second limit, not an exhausted account or a dead
+endpoint, and that a 429 refused for that reason is worth retrying rather
+than turning straight into a gap.
+
+`RpcClient::call` (`crates/realorrug-onchain/src/rpc.rs`) now retries a 429
+up to 3 times with a fixed 1-second pause between attempts, still spending
+one budget call per attempt (`Budget::take_call`) so a rate-limited read
+cannot outlast the budget (AGENTS.md rule 7). If every retry is also
+refused, the 429 is returned unchanged, so the gap wording this document
+described above is unaffected on an endpoint that is actually exhausted or
+down rather than merely bursty.
+
+**Not measured here:** whether Helius charges credits for a request that
+comes back 429. The evidence above only establishes that the *node* refuses
+the request; whether the account is billed for a refused call is unmeasured
+and would need a credit-balance read straddling a captured 429, which this
+recapture did not do.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
