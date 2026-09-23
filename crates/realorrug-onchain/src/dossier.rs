@@ -665,6 +665,22 @@ pub fn build(
     if mint_signatures.is_none() {
         budget.grant_pages(crate::budget::PAGES_PER_WALK);
     }
+    // Its own call floor too, unlike every other named walk in this
+    // function: steps 1, 3 and 6 spend on paging plus a small, fixed number
+    // of follow-up reads, but this step alone can page up to
+    // `wallets::MAX_CANDIDATES` separate candidates and fetch up to
+    // `wallets::MAX_FUNDING_TRANSACTIONS` transactions for each -- a call
+    // shape no other step comes close to. Steps 1 through 4 routinely leave
+    // `calls_left` too low for that even though this step's own *pages*
+    // were already floored above; granting the same floor for calls
+    // (`Budget::grant_calls`'s own doc on why) is what actually fixes the
+    // starvation research 0056's addendum documents. `RpcClient::call`
+    // (`rpc.rs`) takes a call on every Solana read and a compute unit on
+    // none of them -- `Budget::take_cu` is drawn only by the Robinhood
+    // (Ethereum) `alchemy_getAssetTransfers` path in `wallets.rs` -- so the
+    // compute-unit ceiling cannot be what stops a Solana funding read; the
+    // call ceiling is the one this floor needed to match `grant_pages` on.
+    budget.grant_calls(crate::wallets::FUNDING_CALL_FLOOR);
     match investigate_solana(client, budget, mint, mint_signatures.as_ref()) {
         Ok(funding) => dossier.funding = Some(funding),
         Err(why) => dossier.miss("funding", why),

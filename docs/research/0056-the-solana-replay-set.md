@@ -428,6 +428,72 @@ to actually does that has not been checked against a live capture -- it is
 inference about what a provider *could* do, not a fact this document can
 settle; `rpc.rs` is unchanged by this commit.
 
+## Addendum, 2026-09-23: the shared budget was still starving funding — this time on calls, not pages
+
+The 2026-09-22 "shared page budget" addendum above fixed the *page* starvation
+and stopped `investigate_solana` re-walking the mint's own signature history a
+second time. It did not fix the whole thing: a fresh capture on 2026-09-23
+(`realorrug dossier 24RwgHxwu8icT1tcDtgH4RwyaDWao86xfacUo2xHpump`, through
+Helius) still reported "cost: 60 rpc calls" and, under "not available",
+"creator cash flow: ... read stopped: Calls" — and separately, three of the
+four checked early buyers' funding reads failed. `dossier::build`'s six steps
+share one `Budget` for *calls* too (`DEFAULT_MAX_CALLS = 60`), and step 5
+(`investigate_solana`, slice 6b) runs after steps 1 through 4 have already
+spent an unpredictable share of it — a floor was granted for its *pages*
+(`Budget::grant_pages(PAGES_PER_WALK)`, the fix above) but never for its
+*calls*, so a mint whose earlier steps left `calls_left` under roughly fifty
+starved step 5 partway through its `MAX_CANDIDATES` candidates, each of which
+can spend up to `MAX_FUNDING_SIGNATURE_PAGES + MAX_FUNDING_TRANSACTIONS` (13)
+calls of its own.
+
+**Observed, not yet confirmed against a live capture:** reading `rpc.rs`
+shows `RpcClient::call` takes one call on every Solana read and never draws
+`Budget::take_cu` — that path is drawn only by the Robinhood (Ethereum)
+`alchemy_getAssetTransfers` reader in `wallets.rs` — so the compute-unit
+ceiling (`DEFAULT_MAX_CU`, design 0027 §2.4) cannot be what stopped these
+reads; the call ceiling is. That is a code-reading inference, not something
+this addendum measured directly: the 2026-09-23 capture's own "cost: 60 rpc
+calls" line is consistent with the call ceiling being the one that bound, but
+a raw per-candidate gap was not visible in that capture's output to confirm
+it (see the fix's second half, below).
+
+Fixed in the same PR that lands this paragraph:
+
+1. `Budget` gained `grant_calls(floor)`, which raises `calls_left` to
+   `max(calls_left, floor)` — a floor, not an addition, mirroring
+   `grant_pages` exactly and for the same reason: a step that already has
+   enough calls left is never handed a second, stacking allowance, so this
+   can only help a starved step, never grow `DEFAULT_MAX_CALLS` itself.
+2. `dossier::build` calls `budget.grant_calls(wallets::FUNDING_CALL_FLOOR)`
+   immediately before step 5, the same place it already calls `grant_pages`
+   for that step's page floor. `FUNDING_CALL_FLOOR` is
+   `MAX_CANDIDATES * (MAX_FUNDING_SIGNATURE_PAGES + MAX_FUNDING_TRANSACTIONS)`
+   = 4 × (3 + 10) = 52, sized from step 5's own inner caps the same way
+   `PAGES_PER_WALK` is sized from `DEFAULT_MAX_PAGES`.
+3. `realorrug capture` now prints every raw read gap — `Dossier::unavailable`
+   and, separately, `Funding::gaps` — to stderr as `gap: ` lines, so an
+   operator can `grep gap:` a capture's output instead of inferring which
+   read stopped from the sheet's own worded phrase. These lines are operator
+   diagnostics only: `sheet.rs`'s own reasoning on why the raw reason never
+   reaches `FactSheet` or a reply (an injection surface an attacker's own
+   mint could shape, AGENTS.md rule 3) is unaffected, because nothing printed
+   here is stored or sent to a model.
+
+No global ceiling was raised. Cost note: the worst case for one Solana read
+now spends up to roughly twice `DEFAULT_MAX_CALLS` in calls once the floor
+tops up an already-spent pool (up to ~52 more on top of whatever steps 1
+through 4 already used, against a 60-call starting pool) — call it 100–120
+calls per cold dossier in the worst case. Helius bills one credit per
+standard call and the free plan carries 1,000,000 credits a month
+(`helius.dev/pricing`, read 2026-09-23); 200 reads a day × ~120 calls ≈
+720,000 credits a month, comfortably inside that plan.
+
+**What this addendum does not settle:** whether the call floor is in fact
+what was starving the 2026-09-23 capture, as opposed to something this
+reading missed, is confirmed or refuted by the next VPS capture against the
+same or an equivalent mint, run after this fix lands, with the new `gap: `
+stderr lines captured alongside it.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
