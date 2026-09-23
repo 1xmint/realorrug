@@ -386,19 +386,39 @@ fn named_in(sentence: &str) -> Vec<Subject> {
     const VENUE: &[&str] = &["launchpad", "launchpads", "venue", "pons", "pump"];
     const LIQUIDITY: &[&str] = &["liquidity", "pool", "pools", "lp"];
 
+    let lower = sentence.to_ascii_lowercase();
     let mut out: Vec<Subject> = Vec::new();
-    for word in sentence
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| !w.is_empty())
-    {
-        let word = word.to_ascii_lowercase();
-        let subject = if CREATOR.contains(&word.as_str()) {
+    let mut idx = 0;
+    let bytes = lower.as_bytes();
+    while idx < bytes.len() {
+        if !bytes[idx].is_ascii_alphanumeric() {
+            idx += 1;
+            continue;
+        }
+        let start = idx;
+        while idx < bytes.len() && bytes[idx].is_ascii_alphanumeric() {
+            idx += 1;
+        }
+        let word = &lower[start..idx];
+        // "non-pool" is not the pool: the hyphen joins "non" directly onto the
+        // next word with no space, which is the shape of a plain-English
+        // negation ("non-pool wallet", "non-pool account") rather than a
+        // sentence about the pool. A true sentence about the pool never
+        // writes it this way, so refusing to name the subject here costs
+        // nothing and stops "non-pool" from tripping the liquidity subject
+        // when the sentence is plainly about a holder (see review.md case A,
+        // 9-23-0012).
+        let negated = start >= 4 && &lower[start - 4..start] == "non-";
+        if negated {
+            continue;
+        }
+        let subject = if CREATOR.contains(&word) {
             Subject::Creator
-        } else if HOLDERS.contains(&word.as_str()) {
+        } else if HOLDERS.contains(&word) {
             Subject::Holders
-        } else if VENUE.contains(&word.as_str()) {
+        } else if VENUE.contains(&word) {
             Subject::Venue
-        } else if LIQUIDITY.contains(&word.as_str()) {
+        } else if LIQUIDITY.contains(&word) {
             Subject::Liquidity
         } else {
             continue;
@@ -920,6 +940,46 @@ mod tests {
         );
         assert_eq!(caught.len(), 1, "{caught:?}");
         assert!(matches!(caught[0].why, Why::WrongSubject { .. }));
+    }
+
+    /// A sheet that measured one thing about the holders at 4.7%.
+    fn holders_at_4_7() -> Vec<Authorised> {
+        vec![Authorised {
+            subject: Subject::Holders,
+            value: 4.7,
+        }]
+    }
+
+    #[test]
+    fn non_pool_does_not_name_the_pool() {
+        // 9-23-0012 cause A: the trial's own refused draft. "non-pool" is a
+        // holder sentence that happens to spell the word "pool" with a
+        // negating prefix directly in front of it; the sheet measured this
+        // figure about the holders, and the sentence must ship.
+        assert!(
+            super::check(
+                "The largest sampled non-pool wallet holds 4.7% of supply, which is \
+                 notable but not decisive by itself.",
+                &holders_at_4_7()
+            )
+            .is_empty(),
+            "the model's own refused draft from review.md case A must pass once fixed"
+        );
+
+        // Re-apply the bug: a plain "pool" (no negating prefix) about a
+        // figure the sheet measured for the holders is still the wrong
+        // subject, and a real liquidity sentence about a holder figure must
+        // still be refused -- the fix narrows the exemption to "non-", it
+        // does not remove the rule.
+        let still_caught = super::check("The pool holds 4.7% of supply.", &holders_at_4_7());
+        assert_eq!(still_caught.len(), 1, "{still_caught:?}");
+        assert_eq!(
+            still_caught[0].why,
+            Why::WrongSubject {
+                measured: Subject::Holders,
+                written_about: Subject::Liquidity,
+            }
+        );
     }
 
     #[test]
