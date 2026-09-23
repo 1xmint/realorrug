@@ -387,24 +387,45 @@ fn named_in(sentence: &str) -> Vec<Subject> {
     const LIQUIDITY: &[&str] = &["liquidity", "pool", "pools", "lp"];
 
     let mut out: Vec<Subject> = Vec::new();
-    for word in sentence
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| !w.is_empty())
-    {
-        let word = word.to_ascii_lowercase();
-        let subject = if CREATOR.contains(&word.as_str()) {
-            Subject::Creator
-        } else if HOLDERS.contains(&word.as_str()) {
-            Subject::Holders
-        } else if VENUE.contains(&word.as_str()) {
-            Subject::Venue
-        } else if LIQUIDITY.contains(&word.as_str()) {
-            Subject::Liquidity
-        } else {
-            continue;
-        };
-        if !out.contains(&subject) {
-            out.push(subject);
+    // Split on everything but letters, digits and the hyphen, then on the
+    // hyphen, so "non-pool" arrives as one token of two words and the word
+    // after a bare "non" can be skipped: "non-pool" is not the pool. The
+    // hyphen joins "non" directly onto the next word, which is the shape of a
+    // plain-English negation ("non-pool wallet", "non-pool account") rather
+    // than a sentence about the pool; a true sentence about the pool never
+    // writes it this way, so skipping it costs nothing and stops "non-pool"
+    // from tripping the liquidity subject when the sentence is plainly about
+    // a holder (see review.md case A, 9-23-0012).
+    //
+    // Words, not byte offsets, on purpose: an earlier version of this check
+    // sliced the four bytes before each word to look for "non-", and a curly
+    // apostrophe (`\u{2019}`, three UTF-8 bytes) there put the slice inside a
+    // character and panicked on the trial's real drafts (9-23-0012b,
+    // 2026-09-23). Its hand-written index loop also let a one-character slip
+    // spin forever, which the mutation check caught as time-outs.
+    for token in sentence.split(|c: char| !c.is_ascii_alphanumeric() && c != '-') {
+        let mut after_non = false;
+        for part in token.split('-') {
+            let word = part.to_ascii_lowercase();
+            let negated = after_non;
+            after_non = word == "non";
+            if negated {
+                continue;
+            }
+            let subject = if CREATOR.contains(&word.as_str()) {
+                Subject::Creator
+            } else if HOLDERS.contains(&word.as_str()) {
+                Subject::Holders
+            } else if VENUE.contains(&word.as_str()) {
+                Subject::Venue
+            } else if LIQUIDITY.contains(&word.as_str()) {
+                Subject::Liquidity
+            } else {
+                continue;
+            };
+            if !out.contains(&subject) {
+                out.push(subject);
+            }
         }
     }
     out
@@ -920,6 +941,68 @@ mod tests {
         );
         assert_eq!(caught.len(), 1, "{caught:?}");
         assert!(matches!(caught[0].why, Why::WrongSubject { .. }));
+    }
+
+    /// A sheet that measured one thing about the holders at 4.7%.
+    fn holders_at_4_7() -> Vec<Authorised> {
+        vec![Authorised {
+            subject: Subject::Holders,
+            value: 4.7,
+        }]
+    }
+
+    #[test]
+    fn non_pool_does_not_name_the_pool() {
+        // 9-23-0012 cause A: the trial's own refused draft. "non-pool" is a
+        // holder sentence that happens to spell the word "pool" with a
+        // negating prefix directly in front of it; the sheet measured this
+        // figure about the holders, and the sentence must ship.
+        assert!(
+            super::check(
+                "The largest sampled non-pool wallet holds 4.7% of supply, which is \
+                 notable but not decisive by itself.",
+                &holders_at_4_7()
+            )
+            .is_empty(),
+            "the model's own refused draft from review.md case A must pass once fixed"
+        );
+
+        // Re-apply the bug: a plain "pool" (no negating prefix) about a
+        // figure the sheet measured for the holders is still the wrong
+        // subject, and a real liquidity sentence about a holder figure must
+        // still be refused -- the fix narrows the exemption to "non-", it
+        // does not remove the rule.
+        let still_caught = super::check("The pool holds 4.7% of supply.", &holders_at_4_7());
+        assert_eq!(still_caught.len(), 1, "{still_caught:?}");
+        assert_eq!(
+            still_caught[0].why,
+            Why::WrongSubject {
+                measured: Subject::Holders,
+                written_about: Subject::Liquidity,
+            }
+        );
+    }
+
+    #[test]
+    fn a_multi_byte_character_before_a_word_does_not_panic_the_negation_check() {
+        // 9-23-0012b evidence step, 2026-09-23: running the trial's real
+        // drafts through `check` panicked at a byte-index slice inside
+        // `named_in`'s "non-" check --
+        // "...of supply\u{2019}s launch timing...remains unknown." puts a
+        // curly apostrophe (`\u{2019}`, three UTF-8 bytes) four bytes before
+        // "s", and `start - 4` landed inside it rather than on a char
+        // boundary. `named_in` splits words now and slices no bytes; the sentence is
+        // about the launch block (`Subject::Launch`), not negated, and
+        // must still name it.
+        let sheet = vec![Authorised {
+            subject: Subject::Launch,
+            value: 0.0,
+        }];
+        let text = "The largest sampled non-pool wallet holds 4.7% of supply\u{2019}s launch \
+                     timing, and the concentration context that would help settle this remains \
+                     unknown.";
+        // The call itself must not panic; that is the regression.
+        let _ = super::check(text, &sheet);
     }
 
     #[test]

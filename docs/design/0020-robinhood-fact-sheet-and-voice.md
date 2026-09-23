@@ -570,12 +570,22 @@ the sheet's phrase minus " could not be read" as one literal run of
 characters, so "the holders" matched and "holders couldn't be read" did not.
 That refused the only Robinhood reply the bot had written. It now asks for
 every content word of the phrase to appear somewhere in the reply, dropping
-"the", "a", "an", "of" and a trailing "'s" -- so a reply may reorder the
-words and drop the article, but a reply that names half the topic
-("the creator", when the sheet missed the creator's history) is still
-refused. It deliberately does not stem: matching "holder" to "holders" would
-also match "holding", and a check that lets the wrong sentence through is
-worse here than one that makes the model say the plain noun.
+"the", "a", "an", "of", "where" and a trailing "'s" -- so a reply may
+reorder the words and drop the article, but a reply that names half the
+topic ("the creator", when the sheet missed the creator's history) is still
+refused. "Where" joined the drop list 2026-09-23 (9-23-0012 cause B): the
+funding-gap phrase opens with it ("where 3 of 4 checked early buyers got
+their money could not be read"), and it is the question word introducing
+the gap, not a thing the gap is about -- a real Solana draft named the
+buyers and the money but never wrote "where" and was refused for it. A word
+now also matches a short hand-written list of synonyms
+(`forbidden::synonyms`) for forms a plural-only stem cannot reach -- "got"
+now also matches "traced", "money source", "funded", "funding" and
+"funder", added the same day for the same trial draft ("could not be traced
+to their money source" for the phrase's "got their money"). Matching still
+stops short of a general synonym lookup: "holder" matches "holders" (a
+shared stem) but not "holding", and a check that lets the wrong sentence
+through is worse here than one that makes the model say the plain noun.
 
 `NothingUglyYet` must account for how old the token is, and **there are two
 ways to do that, because the chain gives us two different things.** Both are

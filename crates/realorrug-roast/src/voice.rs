@@ -101,12 +101,14 @@ you think it means. If the honest read is ugly, write the ugly thing in \
 plain words.
 
 Write one to three sentences and nothing else: no greeting, no heading, no \
-explanation, no line that is not part of the reply itself. Keep it short \
-enough for one post on a platform that cuts a longer one off mid-sentence --\
-a shorter reply chosen on purpose beats a longer one truncated by the \
-platform. Two sentences that finish beat three where the last one runs \
-past the limit and is dropped, so put the thing you most want said in the \
-first sentence and never save it for the last.
+explanation, no line that is not part of the reply itself. The whole reply \
+must fit in two hundred eighty characters. Nothing you write past that limit \
+is ever seen: it is cut before posting, at the end of the last sentence that \
+finished inside it, never mid-sentence, so a sentence that would run past \
+the limit does not post half-written -- it does not post at all. Two \
+sentences that finish beat three where the last one runs past the limit and \
+is dropped, so put the thing you most want said in the first sentence and \
+never save it for the last.
 
 How to write it:
 
@@ -162,7 +164,14 @@ on the end. Somebody should come away knowing one thing about how these \
 launches work that they did not know before.
 
 The sheet also carries facts marked NOT KNOWN. Say so plainly if one of them \
-is the story; do not invent a number to fill the gap it leaves.";
+is the story; do not invent a number to fill the gap it leaves.
+
+Some words are refused outright, whatever the verdict and however you use \
+them: \"safe\", \"clean\", \"fine\", \"legit\", \"trustworthy\", \
+\"healthy\", and the phrase \"nothing ugly\". Never write one, even to deny \
+it -- a sentence that says a launch is NOT clean is refused exactly like one \
+that says it is, because the check reads the word, not your intent. Say what \
+you actually found instead: a gap unread is a gap unread, not an almost-safe.";
 
 /// Why a model reply was not used.
 #[derive(Clone, Debug, PartialEq)]
@@ -461,8 +470,10 @@ fn verdict_brief(level: verdict::Level) -> String {
         verdict::Level::CantTell => (
             "CAN'T TELL",
             "A fact the ladder needed could not be read, so there is no verdict to give. \
-             Your reply must name the thing that could not be read and say what it would \
-             have settled. Nothing unread is evidence of anything good.",
+             Name the thing that could not be read in your FIRST sentence, plainly, and say \
+             what it would have settled -- put it first because it is required, and a reply \
+             that saves it for later can lose it to the length limit above before it is \
+             said. Nothing unread is evidence of anything good.",
         ),
     };
     let mut brief =
@@ -540,6 +551,7 @@ pub fn request_for(sheet: &FactSheet) -> Request {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::clause::{Kind, Voice};
     use crate::sheet::{About, Fact};
     use realorrug_agent::untrusted;
@@ -1145,6 +1157,49 @@ mod tests {
         assert!(
             digits.is_empty(),
             "the system prompt names figures a model could echo: {digits:?}"
+        );
+    }
+
+    #[test]
+    fn the_prompt_states_the_length_limit_and_the_canttell_first_sentence_rule() {
+        // 9-23-0012 cause B1: the trial's hbull and jimothy drafts lost their
+        // required "could not be read" sentence to `render::for_publication`'s
+        // truncation because it ran second, not first, in the reply. The
+        // prompt now says the exact limit (spelled out, no digit -- see the
+        // no-figure test above) and says what happens past it, and the
+        // CAN'T TELL verdict brief says the required sentence goes first.
+        assert!(
+            SYSTEM.contains("two hundred eighty characters"),
+            "the prompt dropped the exact length limit"
+        );
+        assert!(
+            SYSTEM.contains("cut before posting"),
+            "the prompt dropped what happens past the limit"
+        );
+        let brief = verdict_brief(verdict::Level::CantTell);
+        assert!(
+            brief.contains("FIRST sentence"),
+            "the CAN'T TELL brief dropped the first-sentence rule: {brief}"
+        );
+    }
+
+    #[test]
+    fn the_prompt_names_every_all_clear_word_the_canttell_ban_holds() {
+        // 9-23-0012 cause C: the trial's graduated-pumpswap draft used
+        // "clean" -- already on `forbidden::CANTTELL_WORDS` and already
+        // shown to the model per-request via `verdict_brief` -- and was
+        // refused for it. The SYSTEM prompt now states the same words as a
+        // standing rule, read from `forbidden::words_refused_at` so the two
+        // lists cannot drift apart silently.
+        for (word, _) in forbidden::words_refused_at(verdict::Level::CantTell) {
+            assert!(
+                SYSTEM.to_lowercase().contains(&word.to_lowercase()),
+                "the prompt does not name the banned word {word:?}"
+            );
+        }
+        assert!(
+            SYSTEM.contains("even to deny it"),
+            "the prompt does not say the ban holds even when the word is negated"
         );
     }
 
