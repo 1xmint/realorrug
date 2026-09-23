@@ -351,3 +351,70 @@ quotation above) and the five `synthetic-*.sheet.json` fixtures in
 `crates/realorrug-roast/tests/ladder/` (see that directory's `README.md` for
 why those fixtures carry no `.accepted.txt`, and why they do not sit beside
 the accepted cases in `crates/realorrug-roast/tests/replay/`).
+
+## Addendum (2026-09-23): both faults fixed, and what they show about §6
+
+Task 9-23-0002 fixed the two faults this note found, without touching
+`verdict.rs`'s levels, scoring, `RULES_VERSION`, or any accepted replay
+case.
+
+**The `Rugged` reply now states and leads with the fact that earns the
+level.** `salience.rs` gained a `curve_liquidity` candidate, gated on
+`Signal::LiquidityGone` the same way `launch_recipients` is gated on its own
+signal (an ordinary non-zero curve balance is not a finding), ranked above
+`concentration`. Re-running the reproduction above now prints, for
+`Rugged`:
+
+```
+The bonding curve's reserves are drained -- it now holds 0.0000 SOL.
+- share of circulating supply at the single largest address outside the curve: 89.0%
+- addresses holding the token, not counting the bonding curve: 5
+This launch is about 0.4 hours old at the read (900 slots after its launch block).
+Read at slot 900.
+```
+
+no longer indistinguishable from a `Sketchy` reply two levels down.
+`RugMechanicsLive` already led with its own earning fact (the creator
+record) before this task; it needed no change.
+
+**The two false fires are gone, by rephrasing, not by growing
+`forbidden.rs`.** ADR 0027 §6 names the level-and-target trio
+(`check_target`/`check_level`/`check_unconditional`) as what the blanket
+`forbidden::check` is a stopgap for, and this note's own comparison section
+already showed the trio passing both false-fire texts. Per that section's
+own conclusion, the fix took the direction of leaving `forbidden.rs`'s rules
+alone and fixing what triggered them:
+
+- `hint_violations` (`forbidden.rs`) now excludes a `buy`/`sell`/`hold`
+  match whose immediately preceding word is a plural descriptive noun this
+  crate's own fact prose produces (`addresses`, `accounts`, `wallets`,
+  `holders`, `buyers`, `sellers`, `people`, `users`, `investors`) before any
+  of its three imperative arms run. "5 addresses hold it, ..." now passes;
+  "You should sell this coin.", "Buy now before it moons.", and "Holders
+  should sell it." (a real instruction sitting beside the same descriptive
+  noun) still fail, unchanged.
+- `report.rs`'s "what would change it" table stopped printing
+  `Level::Rugged`/`Level::RugMechanicsLive` as `{:?}` (which prints the
+  substring "rug") and now uses a level word rephrased for this table only
+  (`Confirmed`, `MechanicsLive`); the fired-signal row for `RepeatLauncher`
+  now says "a single human operator" instead of "one person", the exact
+  phrase `forbidden.rs` refuses under 0012 -- rephrased rather than
+  exempted, because that finding was real under both checkers in this
+  note's own comparison, not an artifact of the blanket ban.
+
+Re-running the reproduction: `Rugged` and `RugMechanicsLive` reply text and
+report text now both PASS `forbidden::check` (blanket). The one remaining
+FAIL on `Rugged` report text is "outcome hint" (`would_resolve_text`'s
+"...which a further chain read could still recover" matches the movement
+word `recover`) -- present before this task, not one of the two faults this
+task was asked to fix, and, like the rest of the report, not text that
+ships to a reader.
+
+**What this confirms about §6's direction.** Neither fault needed a new
+phrase in `forbidden.rs`'s `RULES`, and neither was fixed by adding an
+exemption there either. Both were fixed upstream of the checker: one in
+candidate selection (`salience.rs`), the other in the generated wording
+(`forbidden.rs`'s own imperative test, `report.rs`'s own prose). The trio
+`voice.rs` already carries is still the identified target for replacing the
+blanket ban outright; this task did not migrate `replay.rs`,`bio.rs`, or
+`weekly.rs` off `forbidden::check` onto it, which remains open.

@@ -138,6 +138,30 @@ pub struct Report {
 /// [`crate::sheet::twin_for`] and [`Signal::plain`] already hold themselves
 /// to: a new `Signal` variant that is not given a kind here fails to
 /// compile, rather than silently being left out of the alternatives table.
+/// The level name printed in the "what would change it" table, rephrased
+/// rather than the level's own `Debug` name.
+///
+/// Research 0059: `forbidden::check` (the blanket check `replay.rs` runs in
+/// production) refused this table's own report text on `RugMechanicsLive`
+/// and `Rugged` sheets, both times because the enum's own variant name
+/// prints the substring "rug" (`RugMechanicsLive`, `Rugged`) -- the word
+/// `forbidden.rs` refuses as "a verdict about an identifiable project".
+/// This table states the level the sheet already carried, never a new one
+/// (this module's own doc comment), so the table is not wrong to state it;
+/// the fix, per ADR 0027 §6, is the generated wording, not a carve-out in
+/// `forbidden.rs` for this one column. One exhaustive `match`, no `_ =>`
+/// arm, same discipline as [`signal_kind`] and [`would_resolve_text`]: a
+/// new [`Level`] variant that is not given a word here fails to compile.
+fn level_word(level: Level) -> &'static str {
+    match level {
+        Level::CantTell => "CantTell",
+        Level::NothingUglyYet => "NothingUglyYet",
+        Level::Sketchy => "Sketchy",
+        Level::RugMechanicsLive => "MechanicsLive",
+        Level::Rugged => "Confirmed",
+    }
+}
+
 fn signal_kind(signal: Signal) -> Kind {
     match signal {
         Signal::LaunchBlockInStrongestBand => Kind::LaunchRecipients,
@@ -177,20 +201,31 @@ fn would_resolve_text(signal: Signal) -> &'static str {
             "a public statement of intent from the creator, which is off-chain and unverifiable"
         }
         Signal::LiquidityGone => {
+            // Rephrased, not exempted (research 0059, ADR 0027 §6): "recover"
+            // here means retrieve a trace, not a price rebound, but it sits
+            // in `hint_violations`'s movement-word list, so this generated
+            // sentence tripped the same "outcome hint" false fire the trio
+            // does not raise. Same meaning, a word the checker doesn't read
+            // as a market-movement claim.
             "a trace of where the withdrawn reserves went, which a further chain read could \
-             still recover"
+             still uncover"
         }
         Signal::CreatorSoldOut => {
             "whether the creator's tokens moved to a wallet still under the same control, which \
-             a further chain read could still recover"
+             a further chain read could still uncover"
         }
         Signal::BuyersCannotSell => {
             "a second simulated sell at a smaller size, which a further chain read could still \
              perform"
         }
         Signal::RepeatLauncher => {
-            "whether one person or an automated relayer is behind the repeated launches, which \
-             no chain read settles"
+            // Rephrased, not exempted (research 0059, ADR 0027 §6):
+            // "one person" is a real identity claim the recipient count
+            // cannot carry (0012) -- `forbidden.rs`'s own rule -- so this
+            // says the same open question, a single human operator versus
+            // automated relaying, without the phrase the checker refuses.
+            "whether a single human operator or an automated relayer is behind the repeated \
+             launches, which no chain read settles"
         }
         Signal::HolderConcentration => {
             "a label for the large address -- a vesting contract, a bridge or an exchange -- \
@@ -347,8 +382,10 @@ impl Report {
             for row in &self.would_change {
                 let _ = writeln!(
                     out,
-                    "| {:?} | {:?} | {} |",
-                    row.kind, row.level, row.would_resolve
+                    "| {:?} | {} | {} |",
+                    row.kind,
+                    level_word(row.level),
+                    row.would_resolve
                 );
             }
         }
@@ -605,6 +642,38 @@ mod tests {
         for signal in all {
             let _ = signal_kind(signal);
             assert!(!would_resolve_text(signal).is_empty());
+        }
+    }
+
+    /// Research 0059: `LiquidityGone`'s generated sentence used "recover" to
+    /// mean *retrieve a trace*, which sits in `hint_violations`'s
+    /// movement-word list and tripped a false "outcome hint" fire under
+    /// `forbidden::check` (blanket, production) on the Rugged report's own
+    /// commentary -- not a real hint, since the sentence names no rate, no
+    /// direction and no magnitude. Re-applying the fault (swap "uncover"
+    /// back for "recover") must make this fail; fixed, every signal's
+    /// resolution sentence clears the blanket checker.
+    #[test]
+    fn generated_resolution_sentences_clear_the_blanket_checker() {
+        let all = [
+            Signal::LaunchBlockInStrongestBand,
+            Signal::CreatorNeverGraduatedOrganically,
+            Signal::CreatorBoughtOwnLaunch,
+            Signal::LiquidityGone,
+            Signal::CreatorSoldOut,
+            Signal::BuyersCannotSell,
+            Signal::RepeatLauncher,
+            Signal::HolderConcentration,
+            Signal::OwnerCanStillMintOrPause,
+            Signal::CorrelatedSelling,
+        ];
+        for signal in all {
+            let text = would_resolve_text(signal);
+            let violations = crate::forbidden::check(text);
+            assert!(
+                violations.is_empty(),
+                "{signal:?} resolution sentence tripped forbidden::check: {violations:?} -- {text}"
+            );
         }
     }
 }

@@ -879,14 +879,45 @@ fn hint_violations(reply: &str, has_rate: bool) -> Vec<Violation> {
             .collect();
         // Imperatives are advice; measured selling/buying and "holders can't
         // sell" must remain sayable. Also catch advice after a conjunction.
+        //
+        // **A noun subject immediately before the verb rules out an
+        // imperative.** Research 0059 found this exact rule flagging "5
+        // addresses hold it, but the biggest balance ... is still
+        // unidentified" as advice: "hold" followed by "it" matched the
+        // third arm even though the sentence's subject is "addresses", not
+        // an implied "you". An imperative has no stated subject of its
+        // own -- "hold it." -- so a plural descriptive noun sitting right
+        // before the verb (the shape this crate's own fact-label prose
+        // produces: "N addresses/holders/accounts/wallets hold/sell/buy
+        // ...") means the sentence is reporting who holds something, not
+        // instructing the reader, and is excluded before any of the three
+        // arms below gets to run.
         let advice = words.iter().enumerate().any(|(at, word)| {
-            ["buy", "sell", "hold"].contains(word)
-                && (at == 0
-                    || ["and", "then", "please", "should", "must", "just", "to"]
-                        .contains(&words[at - 1])
-                    || words
-                        .get(at + 1)
-                        .is_some_and(|next| ["now", "this", "it", "your", "until"].contains(next)))
+            if !["buy", "sell", "hold"].contains(word) {
+                return false;
+            }
+            let has_noun_subject = at > 0
+                && [
+                    "addresses",
+                    "accounts",
+                    "wallets",
+                    "holders",
+                    "buyers",
+                    "sellers",
+                    "people",
+                    "users",
+                    "investors",
+                ]
+                .contains(&words[at - 1]);
+            if has_noun_subject {
+                return false;
+            }
+            at == 0
+                || ["and", "then", "please", "should", "must", "just", "to"]
+                    .contains(&words[at - 1])
+                || words
+                    .get(at + 1)
+                    .is_some_and(|next| ["now", "this", "it", "your", "until"].contains(next))
         });
         if advice {
             violations.push(Violation {
@@ -2100,6 +2131,41 @@ mod tests {
         // following-word list. Pins `words[at + 1]` against `at - 1` or
         // `at * 1`, either of which misses.
         assert!(!hint_violations("consider sell now.", false).is_empty());
+    }
+
+    #[test]
+    fn a_plural_subject_holding_the_token_is_not_advice() {
+        // Research 0059: this exact sentence -- `salience::concentration`'s
+        // own headline -- was refused as "buy/sell/hold advice" because
+        // "hold" is followed by "it" (the third arm), even though the
+        // subject is "addresses", not an implied "you". Reapplying the bug
+        // (dropping the noun-subject exclusion) makes this fail.
+        assert!(
+            hint_violations(
+                "5 addresses hold it, but the biggest balance -- 89.0% of it -- is still \
+             unidentified.",
+                false
+            )
+            .is_empty()
+        );
+        // The bundled bullet line reads the same way and must also pass.
+        assert!(
+            hint_violations(
+                "addresses holding the token, not counting the bonding curve: 5",
+                false
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn real_advice_beside_a_plural_subject_is_still_refused() {
+        // The noun-subject exclusion is narrow: it excuses the verb right
+        // after the subject noun, not the rest of the sentence. A real
+        // instruction sitting next to descriptive prose about holders must
+        // still be caught.
+        assert!(!hint_violations("5 addresses hold it. Buy this now.", false).is_empty());
+        assert!(!hint_violations("Holders should sell it.", false).is_empty());
     }
 
     #[test]

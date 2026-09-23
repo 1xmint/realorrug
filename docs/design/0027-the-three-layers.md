@@ -473,13 +473,26 @@ pool side of every trade. `Funding::buyers` is every distinct buyer found in
 that 25-transaction window, not the capped candidate count; the first
 `MAX_CANDIDATES` (4, matching Robinhood) of them by first purchase are kept
 as candidates, in the order their balance first rose, and that transaction's
-slot is the candidate's first-purchase slot. Each candidate's own oldest
-signature is then read separately for the native lamport transfer that
-funded it (`funder_of`, the same largest-lamport-drop-in-one-transaction
-reader used before this slice), but the transfer only counts as a funder
-when its transaction's slot is at or before the candidate's first-purchase
-slot — a transfer that landed afterward did not finance the buy, and is
-dropped with a gap explaining why rather than recorded as a funder.
+slot is the candidate's first-purchase slot.
+
+Each candidate's own funder is found by `funding_search`
+(`crates/realorrug-onchain/src/wallets.rs`), added 2026-09-22 to replace
+reading the candidate's oldest transaction (research 0056's "the fourth
+read" addendum: an active wallet's history routinely truncates before its
+oldest page is reached, which left every candidate on every readable Solana
+mint with no funder recorded at all). `funding_search` instead pages the
+candidate's own signature history backward *from its first purchase of this
+mint*, newest-first — the direction `getSignaturesForAddress` already pages
+in, so this never needs the candidate's full history — and reads the most
+recent material inbound SOL transfer at or before that purchase (`funder_of`,
+the same largest-lamport-drop-in-one-transaction reader used before this
+slice, gated by `is_material` against `GAS_ALLOWANCE_LAMPORTS`). A transfer
+after the purchase it would have to finance is skipped, never counted as a
+funder. Two caps bound the cost of a wallet a stranger built to be expensive
+to read: `MAX_FUNDING_SIGNATURE_PAGES` (3 pages, matching
+`Budget::PAGES_PER_WALK`) bounds how far back the search pages, and
+`MAX_FUNDING_TRANSACTIONS` (10) bounds how many `getTransaction` calls it
+makes testing candidate signatures.
 
 **If the mint's own signature history is longer than the page budget
 allows, the buyers found in that partial read are not "the early buyers"**
@@ -487,11 +500,15 @@ allows, the buyers found in that partial read are not "the early buyers"**
 AGENTS.md rule 8) **so `investigate_solana` returns no checked candidates,
 `buyers: 0`, and a gap saying the launch's first buyers could not be reached
 within the read budget — never a partial buyer list presented as
-complete.** The same rule applies per candidate: if a candidate's own
-signature history is truncated before its oldest transaction,
-`signatures.last()` is not that transaction, so no funder is recorded (only
-the gap, with `Candidate::funding_complete` left `false`) rather than a
-funder read from whatever transaction the truncated page happened to reach.
+complete.** A parallel but distinct rule applies per candidate:
+`Candidate::funding_complete` is `true` either when a material funder was
+found, or when `funding_search` paged back to the end of the candidate's own
+history (an empty or short page) having fetched every eligible signature and
+found none material — a **measured** absence, since the whole window was
+actually read. It is `false`, with a gap naming which cap or which read
+failed, when `funding_search` stops for any other reason: either cap
+reached, or a signature-page or transaction read that errored. A capped or
+failed search is never presented as a measured absence (AGENTS.md rule 8).
 A transport failure reading the mint's own history fails the whole call,
 which `dossier.rs::build` records as "funding" in `Dossier::unavailable`; a
 failure reading one candidate's history, or one transaction, is a named gap

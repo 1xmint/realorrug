@@ -595,20 +595,15 @@ impl RpcClient {
         let mut before: Option<String> = None;
 
         loop {
-            if budget.take_page().is_err() {
+            let page = match self.signatures_page(budget, address, before.as_deref()) {
+                Ok(p) => p,
+                Err(RpcError::Stopped(_)) => return Ok((all, true)),
+                Err(e) => return Err(e),
+            };
+            let Some(page) = page else {
+                // `None` means the budget was spent before the call was made.
                 return Ok((all, true));
-            }
-            let params = before.as_ref().map_or_else(
-                || serde_json::json!([address.to_string(), { "limit": 1000 }]),
-                |b| serde_json::json!([address.to_string(), { "limit": 1000, "before": b }]),
-            );
-
-            let page: Vec<SignatureInfo> =
-                match self.call(budget, "getSignaturesForAddress", &params) {
-                    Ok(p) => p,
-                    Err(RpcError::Stopped(_)) => return Ok((all, true)),
-                    Err(e) => return Err(e),
-                };
+            };
 
             let Some(last) = page.last() else {
                 // An empty page means the history ended, which is the only way
@@ -622,6 +617,38 @@ impl RpcClient {
                 return Ok((all, false));
             }
         }
+    }
+
+    /// Fetches one page of `getSignaturesForAddress`, newest-first.
+    ///
+    /// `before`, when given, is a signature to page backwards from (the
+    /// node's own cursor); omit it to start at the newest signature. Returns
+    /// `Ok(None)` when the page budget is spent before the call is made, so a
+    /// caller paging its own walk can tell "no pages left" apart from "the
+    /// node returned nothing" without inspecting the budget itself.
+    ///
+    /// This is the one place that builds `getSignaturesForAddress`'s params;
+    /// [`RpcClient::signatures_back_to_oldest`] is built on top of it rather
+    /// than duplicating the call.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] on transport, node or shape failures.
+    pub fn signatures_page(
+        &self,
+        budget: &mut Budget,
+        address: &Address,
+        before: Option<&str>,
+    ) -> Result<Option<Vec<SignatureInfo>>, RpcError> {
+        if budget.take_page().is_err() {
+            return Ok(None);
+        }
+        let params = before.map_or_else(
+            || serde_json::json!([address.to_string(), { "limit": PAGE_SIZE }]),
+            |b| serde_json::json!([address.to_string(), { "limit": PAGE_SIZE, "before": b }]),
+        );
+        let page: Vec<SignatureInfo> = self.call(budget, "getSignaturesForAddress", &params)?;
+        Ok(Some(page))
     }
 
     /// Reads one transaction.
@@ -756,7 +783,10 @@ impl RpcClient {
 }
 
 /// How many signatures one page asks for.
-const PAGE_SIZE: usize = 1000;
+///
+/// `pub(crate)` so [`crate::wallets`]'s own backward-paging search can tell a
+/// short page from a full one without duplicating this number.
+pub(crate) const PAGE_SIZE: usize = 1000;
 
 /// Whether a page short of the requested size means the history ended.
 ///
@@ -765,7 +795,10 @@ const PAGE_SIZE: usize = 1000;
 /// the last one and stop at the newest thousand signatures, so **the launch of
 /// any active token would never be reached** and every dossier would report an
 /// ordinary trade as a launch block. `<=` would page forever past the end.
-const fn is_last_page(returned: usize) -> bool {
+///
+/// `pub(crate)`, same reason as [`PAGE_SIZE`]: [`crate::wallets`] pages
+/// `getSignaturesForAddress` too and needs the same test.
+pub(crate) const fn is_last_page(returned: usize) -> bool {
     returned < PAGE_SIZE
 }
 
