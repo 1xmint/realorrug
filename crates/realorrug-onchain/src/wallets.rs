@@ -4434,6 +4434,76 @@ mod tests {
         assert!(gaps.is_empty(), "{gaps:?}");
     }
 
+    /// Runs the full-mode search over canned pages for buyer 1 bought at
+    /// `slot`; returns (complete, funder address, calls spent, gaps).
+    fn full_mode_search(
+        responses: &[String],
+        slot: u64,
+    ) -> (bool, Option<String>, u32, Vec<String>) {
+        let buyer = solana_addr(1).to_string();
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let calls_before = budget.calls_left();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+        let (complete, found) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+        (
+            complete,
+            found.map(|f| f.address),
+            calls_before - budget.calls_left(),
+            gaps,
+        )
+    }
+
+    #[test]
+    fn a_short_full_mode_page_ends_the_history_even_with_a_token() {
+        // Fewer than 100 rows means the node had no more to give; a token
+        // that still came back must not cost a second call, and a clean end
+        // with nothing unreadable is a complete read (a buyer with no funder
+        // before the purchase), not a gap.
+        let buyer = solana_addr(1).to_string();
+        let responses = [full_mode_page(
+            &[full_mode_filler_row("only", &buyer, 5)],
+            Some("stale-token"),
+        )];
+        let (complete, found, calls, gaps) = full_mode_search(&responses, 5);
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found, None);
+        assert_eq!(calls, 1, "{gaps:?}");
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn a_transfer_after_the_purchase_is_not_its_funder() {
+        // Money that arrived after the buyer's first purchase cannot have
+        // paid for it; the slot filter is the node's, and this skip is the
+        // same rule re-read so a node that ignores the filter cannot plant
+        // a later funder.
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let responses = [full_mode_page(
+            &[full_mode_row("late-sig", &funder, &buyer, 500_000, 6)],
+            None,
+        )];
+        let (complete, found, _, gaps) = full_mode_search(&responses, 5);
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found, None, "{gaps:?}");
+    }
+
     #[test]
     fn re_applying_the_per_transaction_bug_hits_the_ten_transaction_cap() {
         // The bug this fix replaces, reproduced: forcing the legacy
