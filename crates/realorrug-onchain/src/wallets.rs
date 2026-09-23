@@ -1156,6 +1156,13 @@ fn buyers_in(tx: &Transaction, mint: &str, curve: Option<&str>) -> Vec<String> {
 struct EarlyBuyer {
     address: String,
     first_purchase_slot: u64,
+    /// The signature of the buyer's own first purchase of this mint --
+    /// [`funding_search`]'s starting `before` value, so its walk of the
+    /// buyer's signature history begins right at the purchase instead of at
+    /// the wallet's newest activity (which, for a wallet that kept trading
+    /// afterward, can be entirely unrelated history the funding search has
+    /// no reason to page through).
+    first_purchase_signature: String,
 }
 
 /// Checks funding for a Solana mint's early buyers.
@@ -1219,7 +1226,7 @@ pub fn investigate_solana(
     let curve = realorrug_pumpfun::pda::bonding_curve(mint).map(|c| c.to_string());
     let mint_key = mint.to_string();
     let owned_signatures;
-    let (signatures, truncated): (&[SignatureInfo], bool) =
+    let (signatures, mut truncated): (&[SignatureInfo], bool) =
         if let Some((sigs, cut)) = mint_signatures {
             (sigs.as_slice(), *cut)
         } else {
@@ -1228,6 +1235,38 @@ pub fn investigate_solana(
                 .map_err(|e| format!("funding: {e}"))?;
             (owned_signatures.0.as_slice(), owned_signatures.1)
         };
+
+    // A newest-first walk that ran out of page budget before reaching the
+    // beginning gets one shot at an ascending-order read instead (research
+    // 0056 addendum, 2026-09-23: 7 of 9 real pump.fun mints hit this in
+    // production). See `RpcClient::signatures_oldest_first`'s own doc for why
+    // its list can be trusted as complete from the start even though the
+    // backward walk was not. Any failure there leaves `truncated` as it was,
+    // and the gap below still fires (AGENTS.md rule 8: unknown is not safe).
+    // Only for a walk made here: a caller that hands its own history in
+    // (`dossier::build`) already made this same read before handing it over,
+    // so a list still `truncated` means the read failed there, and asking
+    // the node again would only spend a second call on the same refusal.
+    let owned_ascending;
+    let mut ascending = false;
+    let signatures: &[SignatureInfo] = if truncated && mint_signatures.is_none() {
+        // Same starvation `Budget::grant_pages`'s own doc describes for the
+        // other named walks: the mint's own walk above can spend the whole
+        // shared page pool getting to `truncated`, so this one-shot call
+        // gets the same floor rather than silently finding nothing left.
+        budget.grant_pages(1);
+        match client.signatures_oldest_first(budget, mint, crate::rpc::PAGE_SIZE) {
+            Ok(Some(asc)) if !asc.is_empty() => {
+                owned_ascending = asc;
+                truncated = false;
+                ascending = true;
+                owned_ascending.as_slice()
+            }
+            _ => signatures,
+        }
+    } else {
+        signatures
+    };
 
     if truncated {
         // A truncated mint history means the transactions this reader could
@@ -1253,16 +1292,22 @@ pub fn investigate_solana(
         });
     }
 
-    // `signatures` is newest-first, the same order every other reader in
-    // this crate gets from `getSignaturesForAddress`; walk it in reverse to
-    // see transactions in the order they happened, and stop once
-    // `SOLANA_WINDOW_TRANSACTIONS` of them were successfully read -- that
-    // window, not the capped candidate list, is where `buyers` comes from.
+    // `signatures` is newest-first (the shape `getSignaturesForAddress`
+    // returns), the mint's own fallback above returns oldest-first already
+    // -- walk each so transactions are visited in the order they happened,
+    // and stop once `SOLANA_WINDOW_TRANSACTIONS` of them were successfully
+    // read -- that window, not the capped candidate list, is where `buyers`
+    // comes from.
     let mut gaps = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut window_buyers: Vec<EarlyBuyer> = Vec::new();
     let mut window_read = 0usize;
-    for sig in signatures.iter().rev() {
+    let ordered: Vec<&SignatureInfo> = if ascending {
+        signatures.iter().collect()
+    } else {
+        signatures.iter().rev().collect()
+    };
+    for sig in ordered {
         if window_read >= SOLANA_WINDOW_TRANSACTIONS {
             break;
         }
@@ -1277,6 +1322,7 @@ pub fn investigate_solana(
                         window_buyers.push(EarlyBuyer {
                             address: buyer,
                             first_purchase_slot: sig.slot,
+                            first_purchase_signature: sig.signature.clone(),
                         });
                     }
                 }
@@ -1291,6 +1337,14 @@ pub fn investigate_solana(
 
     let buyers = u32::try_from(window_buyers.len()).unwrap_or(u32::MAX);
     let mut checked = Vec::new();
+    // The candidates' own page floor, granted here and not by the caller:
+    // by now `dossier::build` step 1 (and, for a cached launch, the walk
+    // above) has usually spent the shared page pool, and every candidate
+    // then reported "page budget exhausted" (research 0056's 2026-09-23
+    // addendum). Granted by the caller instead, the walk above would draw on
+    // it first and could spend it all. A floor, not an addition
+    // (`Budget::grant_pages`), sized for every candidate walking to its cap.
+    budget.grant_pages(FUNDING_PAGE_FLOOR);
     for buyer in window_buyers.iter().take(MAX_CANDIDATES) {
         checked.push(check_solana_candidate(client, budget, buyer, &mut gaps));
     }
@@ -1358,6 +1412,24 @@ pub const MAX_FUNDING_SIGNATURE_PAGES: usize = 3;
 #[allow(clippy::cast_possible_truncation)]
 pub const FUNDING_CALL_FLOOR: u32 =
     (MAX_CANDIDATES * (MAX_FUNDING_SIGNATURE_PAGES + MAX_FUNDING_TRANSACTIONS)) as u32;
+
+/// The page floor [`dossier::build`](crate::dossier::build) grants step 5
+/// (`investigate_solana`) with [`crate::budget::Budget::grant_pages`],
+/// unconditionally, immediately before that step runs.
+///
+/// Granted only when `mint_signatures.is_none()` before this fix -- but step
+/// 1 (the mint's own signature walk) usually runs first and spends the
+/// shared page pool, so by the time step 5 starts, `mint_signatures` is
+/// almost always `Some` and this step got no floor of its own at all. Sized
+/// the same way [`FUNDING_CALL_FLOOR`] is: each of up to [`MAX_CANDIDATES`]
+/// checked candidates can spend up to [`MAX_FUNDING_SIGNATURE_PAGES`] pages
+/// before [`funding_search`] gives up on it, so this guarantees every
+/// candidate actually gets to spend its own per-candidate page ceiling
+/// against, the same way `FUNDING_CALL_FLOOR` guarantees calls. A floor, not
+/// an addition (`grant_pages`'s own doc): a budget that already has this
+/// many pages left keeps them.
+#[allow(clippy::cast_possible_truncation)]
+pub const FUNDING_PAGE_FLOOR: u32 = (MAX_CANDIDATES * MAX_FUNDING_SIGNATURE_PAGES) as u32;
 
 /// Searches backward through one buyer's own signature history for the most
 /// recent material inbound SOL transfer at or before its first purchase of
@@ -1470,9 +1542,26 @@ fn funding_search(
     address: &realorrug_types::Address,
     address_key: &str,
     first_purchase_slot: u64,
+    first_purchase_signature: &str,
     gaps: &mut Vec<String>,
 ) -> (bool, Option<Funder>) {
-    let mut before: Option<String> = None;
+    // Start right at the purchase, not at the wallet's newest activity: the
+    // purchase signature is the buyer's own, so `getSignaturesForAddress`
+    // with it as `before` returns exactly the history at or before the
+    // purchase (Solana JSON-RPC docs), which is the only part of the wallet
+    // this search ever wants. Starting at the newest signature instead (the
+    // old behaviour) meant a wallet that kept trading after the purchase
+    // spent this search's whole page allowance on history that could never
+    // contain the funder.
+    let mut before: Option<String> = Some(first_purchase_signature.to_owned());
+    // Set once, and only matters on the very first iteration: if the node
+    // rejects the purchase signature as a `before` value (a transport or
+    // node error, not a budget exhaustion), fall back to the old
+    // newest-first walk rather than giving up on this candidate outright.
+    // In practice the purchase transaction is always in the buyer's own
+    // history, since the buyer signed it, so this fallback is a safety net
+    // for an uncooperative RPC, not the expected path.
+    let mut starting_from_purchase = true;
     let mut pages = 0usize;
     let mut fetched = 0usize;
     // Set when any eligible transaction's lamport balances could not be
@@ -1502,6 +1591,17 @@ fn funding_search(
                 return (false, None);
             }
             Err(why) => {
+                if pages == 1 && starting_from_purchase {
+                    // The purchase-anchored read itself failed -- fall back
+                    // to the old newest-first walk and retry, without
+                    // spending this failed attempt against the page cap or
+                    // recording a gap for it. If the fallback also fails,
+                    // the ordinary `Err` handling below reports it.
+                    before = None;
+                    pages = 0;
+                    starting_from_purchase = false;
+                    continue;
+                }
                 gaps.push(format!("funding of {address_key}: {why}"));
                 return (false, None);
             }
@@ -1620,23 +1720,23 @@ fn check_solana_candidate(
     };
 
     // No extra page floor is granted here (contrast `dossier.rs`'s steps 3
-    // and 6): `investigate_solana`'s caller already grants the funding
-    // step's own floor of `PAGES_PER_WALK` once, before this loop, exactly
-    // when this loop is the first walk of anything in this dossier
-    // (`mint_signatures.is_none()`); granting a second floor per candidate
-    // on top of that would let up to `MAX_CANDIDATES` candidates each
-    // restack the floor, silently widening the funding step's own share of
-    // the shared pool at step 6's expense. `MAX_FUNDING_SIGNATURE_PAGES` and
-    // `MAX_FUNDING_TRANSACTIONS` already bound what one candidate can spend,
-    // so a candidate low on shared pages simply reports a gap rather than
-    // reading past what remains -- the same honest degradation the rest of
-    // this module relies on.
+    // and 6): `investigate_solana` grants the whole candidate loop's page
+    // floor (`FUNDING_PAGE_FLOOR`) once, immediately before the loop --
+    // sized for every candidate it can check, not just one. Granting a second floor per
+    // candidate on top of that would let up to `MAX_CANDIDATES` candidates
+    // each restack the floor, silently widening the funding step's own
+    // share of the shared pool at step 6's expense. `MAX_FUNDING_SIGNATURE_PAGES`
+    // and `MAX_FUNDING_TRANSACTIONS` already bound what one candidate can
+    // spend, so a candidate low on shared pages simply reports a gap rather
+    // than reading past what remains -- the same honest degradation the
+    // rest of this module relies on.
     let (complete, funder) = funding_search(
         client,
         budget,
         &address_key,
         &address,
         buyer.first_purchase_slot,
+        &buyer.first_purchase_signature,
         gaps,
     );
     candidate.funding_complete = complete;
@@ -3092,6 +3192,94 @@ mod tests {
     }
 
     #[test]
+    fn a_busy_mints_launch_window_is_reached_via_the_ascending_fallback() {
+        // Task 9-23-0011: the newest-first walk above truncates on a busy
+        // mint (production evidence, 2026-09-23: 7 of 9 real pump.fun
+        // mints). The ascending `getTransactionsForAddress` call is tried
+        // once and its buyer is found, instead of reporting the gap this
+        // crate used to report unconditionally on any truncated walk.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let responses = [
+            full_signatures_page(),
+            r#"{"result":{"data":[{"signature":"buy-sig","slot":5,"err":null}],"paginationToken":"x"}}"#
+                .to_owned(),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None)
+            .expect("the fallback reaches the window");
+
+        assert_eq!(funding.buyers, 1, "gaps: {:?}", funding.gaps);
+        assert!(
+            !funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("could not be reached within the read budget")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn a_method_not_found_ascending_call_leaves_the_original_gap() {
+        // Helius-only: every other RPC refuses `getTransactionsForAddress`.
+        // That must not be mistaken for "no early buyers" -- the original
+        // truncated-history gap has to survive unchanged (AGENTS.md rule 8).
+        let mint = solana_addr(9);
+        let responses = [
+            full_signatures_page(),
+            r#"{"error":{"code":-32601,"message":"Method not found"}}"#.to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.buyers, 0);
+        assert!(funding.checked.is_empty());
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("could not be reached within the read budget")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
+    fn an_empty_ascending_answer_leaves_the_original_gap() {
+        // A node that answers the oldest-first call with no transactions has
+        // not shown the launch window is empty -- the mint plainly has a
+        // history, the walk above just paged through it. Taking the empty
+        // list as the window would drop the gap and report no early buyers
+        // as if that had been read (AGENTS.md rule 8: absent is not zero).
+        let mint = solana_addr(9);
+        let responses = [
+            full_signatures_page(),
+            r#"{"result":{"data":[],"paginationToken":null}}"#.to_owned(),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 1, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.buyers, 0);
+        assert!(
+            funding
+                .gaps
+                .iter()
+                .any(|g| g.contains("could not be reached within the read budget")),
+            "gaps: {:?}",
+            funding.gaps
+        );
+    }
+
+    #[test]
     fn investigate_solana_does_not_rewalk_the_mints_signatures_when_given_them() {
         // The bug this fixes: `dossier::build` reads the mint's signature
         // history once (step 1) and used to make `investigate_solana` read
@@ -3122,10 +3310,11 @@ mod tests {
 
     #[test]
     fn a_truncated_candidate_history_records_no_funder() {
-        // The overall budget allows exactly one page: the mint's own read
-        // spends it, so the candidate's own `signatures_back_to_oldest` call
-        // fails before returning anything. `signatures.last()` is unusable
-        // (there's no `last()` to take) -- the old code trusted a partial
+        // The overall budget allows exactly one page, and the mint's own read
+        // spends it; the candidates' page floor then lets the candidate walk,
+        // but its history is three full pages of signatures landed after its
+        // purchase, so the walk hits `MAX_FUNDING_SIGNATURE_PAGES` without
+        // reaching the purchase or the end. The old code trusted a partial
         // read as if it ended at the oldest transaction.
         let mint = solana_addr(9);
         let mint_key = mint.to_string();
@@ -3133,6 +3322,9 @@ mod tests {
         let responses = [
             signatures_page("mint-sig"),
             buy_tx(&mint_key, &[(&buyer, 500)]),
+            full_signatures_page_at("later", 1_000_000),
+            full_signatures_page_at("later", 1_000_000),
+            full_signatures_page_at("later", 1_000_000),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
@@ -3864,6 +4056,198 @@ mod tests {
             floored.gaps
         );
         assert!(floored.gaps.is_empty(), "{:?}", floored.gaps);
+    }
+
+    // The floor is every candidate's worst case, the same way
+    // `FUNDING_CALL_FLOOR`'s pin above is: pinned to the arithmetic it
+    // claims, 4 candidates x 3 pages each.
+    #[test]
+    fn the_funding_page_floor_covers_every_candidate_walking_to_both_caps() {
+        assert_eq!(MAX_CANDIDATES, 4);
+        assert_eq!(MAX_FUNDING_SIGNATURE_PAGES, 3);
+        assert_eq!(FUNDING_PAGE_FLOOR, 12);
+    }
+
+    #[test]
+    fn a_page_floor_lets_every_candidate_be_checked_when_earlier_steps_spent_the_shared_pages() {
+        // Regression for the shape research 0056's 2026-09-23 addendum
+        // actually captured on the VPS: `dossier::build`'s step 1 (the
+        // mint's own signature walk) routinely spends the whole shared page
+        // pool before step 5 (this function) starts, and the page floor
+        // step 5 used to be granted only when step 1 was skipped
+        // (`mint_signatures.is_none()`) -- which almost never happens,
+        // since step 1 usually succeeds. A budget left with zero pages (as
+        // if step 1 had already spent every one of them) must still check
+        // the candidate, because this function grants `FUNDING_PAGE_FLOOR`
+        // itself just before its candidate loop. Remove that grant and the
+        // candidate reports "page budget exhausted" instead.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let signatures = vec![crate::rpc::SignatureInfo {
+            signature: "mint-sig".to_owned(),
+            slot: 1,
+            err: None,
+        }];
+
+        let responses = [
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            signatures_page("buyer-sig"),
+            funding_tx(&funder, &buyer, 100_000),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+
+        let floored_client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut floored_budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
+        let floored = investigate_solana(
+            &floored_client,
+            &mut floored_budget,
+            &mint,
+            Some(&(signatures, false)),
+        )
+        .expect("a result");
+        assert_eq!(floored.checked.len(), 1);
+        assert!(floored.checked[0].funding_complete, "{:?}", floored.gaps);
+        assert_eq!(floored.checked[0].funders.len(), 1);
+        assert_eq!(floored.checked[0].funders[0].address, funder);
+        assert!(floored.gaps.is_empty(), "{:?}", floored.gaps);
+    }
+
+    #[test]
+    fn a_rejected_purchase_anchored_read_falls_back_to_the_newest_first_walk() {
+        // The node refuses the first, purchase-anchored signature read; the
+        // search must retry newest-first and still find the funder, with no
+        // gap for the refused attempt. Only the first page may fall back --
+        // an error on any later page is a real gap, not a retry.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let signatures = vec![crate::rpc::SignatureInfo {
+            signature: "mint-sig".to_owned(),
+            slot: 1,
+            err: None,
+        }];
+
+        let responses = [
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            r#"{"result":null,"error":{"code":-32602,"message":"Invalid param: before"}}"#
+                .to_owned(),
+            signatures_page("buyer-sig"),
+            funding_tx(&funder, &buyer, 100_000),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(60, 3, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, Some(&(signatures, false)))
+            .expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(funding.checked[0].funding_complete, "{:?}", funding.gaps);
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, funder);
+        assert!(funding.gaps.is_empty(), "{:?}", funding.gaps);
+    }
+
+    /// A transport for [`funding_search`]'s purchase-anchored-start test:
+    /// routes a `getSignaturesForAddress` call naming `buyer` to a canned
+    /// page chosen by that call's own `before` cursor, and every other call
+    /// (the mint's own signature page, every `getTransaction`) to a fixed
+    /// FIFO queue -- unlike [`Canned`], whose single queue answers every
+    /// call the same way regardless of `before` and so cannot tell a
+    /// purchase-anchored request from a newest-first one apart, which is
+    /// exactly the distinction
+    /// [`funding_search_starts_at_the_purchase_not_the_newest_signature`]
+    /// exists to prove.
+    struct BeforeRouted {
+        buyer: String,
+        fixed: std::sync::Mutex<Vec<String>>,
+        by_before: std::collections::HashMap<String, String>,
+    }
+
+    /// The value of a `"before":"..."` field in a raw JSON-RPC request
+    /// body, or `None` when the request carries no `before` at all (the
+    /// walk's very first page).
+    fn before_in(body: &str) -> Option<String> {
+        let marker = "\"before\":\"";
+        let start = body.find(marker)? + marker.len();
+        let rest = &body[start..];
+        let end = rest.find('"')?;
+        Some(rest[..end].to_owned())
+    }
+
+    impl crate::rpc::Transport for BeforeRouted {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            if body.contains("getSignaturesForAddress") && body.contains(&self.buyer) {
+                let before = before_in(&body).unwrap_or_default();
+                return self
+                    .by_before
+                    .get(before.as_str())
+                    .cloned()
+                    .ok_or_else(|| format!("no canned page for before={before:?}"));
+            }
+            self.fixed
+                .lock()
+                .map_err(|_| "poisoned".to_owned())?
+                .pop()
+                .ok_or_else(|| "the client asked for more than the test supplied".to_owned())
+        }
+    }
+
+    #[test]
+    fn funding_search_starts_at_the_purchase_not_the_newest_signature() {
+        // A buyer that kept trading after its purchase: more than
+        // `MAX_FUNDING_SIGNATURE_PAGES` pages of its own newest history are
+        // unrelated post-purchase activity, and its funding transfer sits
+        // right before the purchase instead. Starting the walk at
+        // `before = Some(purchase signature)` reaches the funder in a
+        // single page; starting at `before = None` (the pre-fix behaviour)
+        // spends the whole page cap on the post-purchase pages and never
+        // gets there. Temporarily reverting `funding_search` to start at
+        // `before = None` and re-running this test reproduces that: it then
+        // fails with a "more than 3 signature pages walked" gap instead of
+        // finding the funder.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+
+        let mut by_before = std::collections::HashMap::new();
+        by_before.insert(String::new(), full_signatures_page_at("junk1", 100));
+        by_before.insert(
+            "junk1-999".to_owned(),
+            full_signatures_page_at("junk2", 100),
+        );
+        by_before.insert(
+            "junk2-999".to_owned(),
+            full_signatures_page_at("junk3", 100),
+        );
+        by_before.insert("mint-sig".to_owned(), signatures_page_at("funding-sig", 1));
+
+        let fixed = vec![
+            signatures_page("mint-sig"),
+            buy_tx(&mint_key, &[(&buyer, 500)]),
+            funding_tx_at(&funder, &buyer, 500_000, 1),
+        ];
+        let transport = BeforeRouted {
+            buyer: buyer.clone(),
+            fixed: std::sync::Mutex::new(fixed.into_iter().rev().collect()),
+            by_before,
+        };
+        let client = RpcClient::with_transport("http://test.invalid", Box::new(transport));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(funding.checked.len(), 1);
+        assert!(
+            funding.checked[0].funding_complete,
+            "gaps: {:?}",
+            funding.gaps
+        );
+        assert_eq!(funding.checked[0].funders.len(), 1);
+        assert_eq!(funding.checked[0].funders[0].address, funder);
+        assert!(funding.gaps.is_empty(), "gaps: {:?}", funding.gaps);
     }
 
     /// A bare transaction for the pure readers below, with only the fields

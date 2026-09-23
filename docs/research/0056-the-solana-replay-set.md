@@ -494,9 +494,129 @@ reading missed, is confirmed or refuted by the next VPS capture against the
 same or an equivalent mint, run after this fix lands, with the new `gap: `
 stderr lines captured alongside it.
 
+## Addendum, 2026-09-23: the next capture settled it — pages, not calls, and the starting point was also wrong
+
+The VPS recapture this addendum above asked for ran against `4f5a0ab` (the
+call-floor fix, merged as #168) on two ordinary pump.fun mints, with the new
+`gap: ` stderr lines captured. It settled the open question plainly: 3 of 4
+and 4 of 4 early buyers on those two mints still reported "funding of
+\<addr\>: page budget exhausted while searching for its funder; no funder
+recorded" — a `Budget::take_page` failure inside `signatures_page`, not a
+`Calls` gap. The earlier addendum's inference that the call floor was the
+fix that mattered was only half right: `FUNDING_CALL_FLOOR` did remove the
+"read stopped: Calls" line the 2026-09-23 dossier had shown, but it moved no
+verdict, because the actual shortage on these captures was step 5's *page*
+allowance, which this recapture showed was still effectively unfloored in
+the ordinary case.
+
+Two causes, both real, found by reading `wallets.rs` and `dossier.rs` against
+this capture's own gap lines:
+
+1. `dossier.rs` step 5 granted its page floor
+   (`budget.grant_pages(PAGES_PER_WALK)`) only when `mint_signatures.is_none()`
+   — the branch reached when step 1 (the mint's own signature walk) was
+   skipped entirely. In the ordinary case step 1 runs and succeeds, so
+   `mint_signatures` is `Some`, and step 5 got no page floor of its own at
+   all: it walked every candidate's funding history against whatever step 1
+   left of the shared page pool, which on a busy mint was routinely nothing.
+2. `funding_search` started every walk at `before = None` — the buyer
+   wallet's *newest* signature — and skipped forward past everything newer
+   than the first purchase. A wallet that kept trading after the purchase
+   spent this search's entire `MAX_FUNDING_SIGNATURE_PAGES` allowance on
+   post-purchase history the funder could never be in, and never reached the
+   page that actually held it.
+
+Fixed in the same PR that lands this paragraph: `funding_search` now starts
+each walk at `before = Some(first purchase signature)` instead of the
+newest signature (falling back to the old newest-first start only if the
+purchase-anchored read itself errors), and `investigate_solana` grants a
+new `FUNDING_PAGE_FLOOR` (`MAX_CANDIDATES * MAX_FUNDING_SIGNATURE_PAGES` = 12)
+itself, immediately before its candidate loop. It is granted there and not by
+`dossier::build` before the call: the first version of this fix did the
+latter, and CI showed that on a cached launch (`mint_signatures` is `None`)
+the mint walk inside `investigate_solana` then drew on the twelve pages first
+and spent them, leaving the candidates starved as before.
+
+**Still open, not fixed here:** the same recapture showed 7 of 9 mints
+reporting "launch block: this token has more history than the page budget
+allows" — the *mint's own* signature history exceeding the page budget
+before step 1 can even find the launch block. That is a separate problem
+from the funding-search shortage this paragraph fixes, and is not addressed
+by this change.
+
+## Addendum, 2026-09-23: reaching a busy mint's launch with an oldest-first read
+
+The "still open, not fixed here" gap two paragraphs up was measured again on
+the VPS, build `4f5a0ab`, 2026-09-23: 7 of 9 real pump.fun mints reported
+either
+
+    launch block: this token has more history than the page budget allows, so its launch could not be reached
+
+or, downstream in `investigate_solana` (task 9-23-0011's other quoted gap,
+same root cause — the mint's own newest-first walk in `dossier.rs` step 1
+truncating before it reaches the beginning of the mint's history):
+
+    the mint's signature history is longer than the page budget allows; the launch's first buyers could not be reached within the read budget
+
+`getSignaturesForAddress` only pages *newest*-first (`RpcClient::signatures_page`,
+`crates/realorrug-onchain/src/rpc.rs`), 1,000 signatures per page, and the
+shared page budget allows 3 pages — so a mint with more than ~3,000
+signatures never reaches its own first transaction by paging backward from
+the newest, no matter how the budget is spent.
+
+Helius's `getTransactionsForAddress` reads the other direction directly. This
+request, made against the production Helius endpoint on the VPS, 2026-09-23,
+succeeded:
+
+    {"jsonrpc":"2.0","id":1,"method":"getTransactionsForAddress","params":["<mint>",{"transactionDetails":"signatures","sortOrder":"asc","limit":3}]}
+
+and returned
+
+    {"result":{"data":[{"signature":"4wi3…","slot":448485736,"transactionIndex":975,"err":null,"memo":null,"blockTime":1789841756,"confirmationStatus":"finalized"}, …],"paginationToken":"448485750:24"}}
+
+`sortOrder: "asc"` starts the read at the very beginning of the address's
+history, so the first entry of that list IS the mint's first transaction —
+not an approximation of the launch, the launch itself — and because the read
+started at the beginning rather than wherever a newest-first walk happened to
+stop, the list it returns is complete from the start, never truncated, even
+on a mint whose backward walk truncates immediately.
+
+**Cost, not fully measured.** Helius's own docs
+(<https://www.helius.dev/docs/rpc/gettransactionsforaddress>) say a
+signatures-only call (`transactionDetails: "signatures"`) costs 10 credits
+flat, up to 1,000 signatures per call. An older Helius blog post described
+100 credits and a paid-plan-only method; that post was not re-verified here,
+and the charge for the call above was not itself measured against the
+account's credit balance — only that the call succeeded on the current key.
+Treat 10 credits as the documented figure, not yet a confirmed one.
+
+**Fixed in the PR that lands this paragraph:** `RpcClient::signatures_oldest_first`
+(`crates/realorrug-onchain/src/rpc.rs`) makes one `getTransactionsForAddress`
+call, ascending, and both of the gaps quoted above now try it once when the
+newest-first walk is truncated. `dossier::build` makes the read right after
+step 1's walk and hands the same list to both step 1's launch block and
+step 5's launch window (`investigate_solana`), so a dossier asks the node
+once, not twice; `investigate_solana` makes the read itself only when it
+walked the mint's history itself (a memory hit skipped step 1's walk). The
+first CI run of this change counted the second, redundant read in two
+existing budget tests, which is how it was found. It is a fallback, not a replacement for the cheaper newest-first
+walk: one extra call (10 Helius credits, per the documented rate above) only
+on mints whose history exceeds the walk. It is also Helius-only — every
+other RPC this repo has tried answers `getTransactionsForAddress` with a
+JSON-RPC "method not found" error, which both call sites treat like any
+other RPC failure: the original gap, not a fabricated "complete"
+(AGENTS.md rule 8).
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
   fetched directly, 2026-09-21, for candidate mints (fetched, not searched).
 - `target/debug/realorrug.exe dossier <mint>` and `... capture <mint> --out
   ...`, run against `https://api.mainnet-beta.solana.com`, 2026-09-21.
+- VPS capture against the production Helius endpoint, build `4f5a0ab`,
+  2026-09-23, for the 7-of-9 launch-unreachable finding and the
+  `getTransactionsForAddress` request/response pair quoted above.
+- Helius docs, `getTransactionsForAddress`
+  (<https://www.helius.dev/docs/rpc/gettransactionsforaddress>), read
+  2026-09-23, for the 10-credit signatures-only rate and the 1,000-per-call
+  limit.
