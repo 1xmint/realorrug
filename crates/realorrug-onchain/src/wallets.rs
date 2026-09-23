@@ -1615,7 +1615,18 @@ fn full_mode_funding_search(
                 ));
                 return Some((false, None));
             }
-            Err(_) if page_num == 0 => return None,
+            // Only "method not found" means the node lacks full mode; the
+            // caller then turns it off for every later candidate. Any other
+            // first-page error is this candidate's read failing, so it is
+            // this candidate's gap: falling back on it switched every later
+            // candidate to the ten-transaction path over one refused page
+            // (VPS, 2026-09-23). Not `method_unsupported`, whose "not
+            // supported" also matches Helius's transaction-version refusal.
+            Err(crate::rpc::RpcError::Node(ref why))
+                if page_num == 0 && why.to_ascii_lowercase().contains("method not found") =>
+            {
+                return None;
+            }
             Err(why) => {
                 gaps.push(format!("funding of {address_key}: {why}"));
                 return Some((false, None));
@@ -4593,6 +4604,45 @@ mod tests {
         assert_eq!(found.expect("a funder").address, funder);
         assert_eq!(full_mode_supported, Some(false));
         assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn a_refused_first_page_is_this_candidates_gap_not_a_fallback() {
+        // Helius's real refusal of a page holding a version-1 transaction
+        // (VPS, 2026-09-23). It says "not supported", but the method is
+        // served: treating it as a missing method switched every later
+        // candidate to the ten-transaction path. It is this candidate's gap,
+        // and full mode stays on for the next one.
+        let buyer = solana_addr(1).to_string();
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+        let responses = [r#"{"result":null,"error":{"code":-32015,"message":"Transaction version (1) is not supported by the requesting client."}}"#.to_owned()];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot: 5,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        assert!(!complete);
+        assert!(found.is_none());
+        assert_ne!(full_mode_supported, Some(false), "{gaps:?}");
+        assert!(
+            gaps.iter().any(|g| g.contains("Transaction version (1)")),
+            "{gaps:?}"
+        );
     }
 
     #[test]

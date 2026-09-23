@@ -851,7 +851,11 @@ impl RpcClient {
             "sortOrder": "desc",
             "limit": FULL_TRANSACTIONS_PAGE_SIZE,
             "encoding": "json",
-            "maxSupportedTransactionVersion": 0,
+            // 1, not 0, for the same reason as `transaction`: with 0 Helius
+            // refuses the whole page (-32015) the moment one row is a
+            // version-1 transaction, and a quarter of one buyer's first
+            // hundred were (VPS, 2026-09-23, research 0056).
+            "maxSupportedTransactionVersion": 1,
             "filters": { "status": "succeeded", "slot": { "lte": at_or_before_slot } },
         });
         if let Some(token) = pagination_token {
@@ -1340,6 +1344,42 @@ mod tests {
                 Err("the client asked for more than the test supplied".to_owned())
             })
         }
+    }
+
+    /// Keeps every request body it is sent, and answers each with `answer`.
+    struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>, &'static str);
+
+    impl Transport for Recorder {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            self.0.lock().map_err(|_| "poisoned".to_owned())?.push(body);
+            Ok(self.1.to_owned())
+        }
+    }
+
+    #[test]
+    fn a_full_mode_page_accepts_version_one_transactions() {
+        // With 0 here Helius refused a buyer's whole page (-32015) because a
+        // quarter of its rows were version 1, and every later candidate
+        // fell back to the ten-transaction path (VPS, 2026-09-23).
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(Recorder(
+                std::sync::Arc::clone(&sent),
+                r#"{"jsonrpc":"2.0","id":1,"result":{"data":[],"paginationToken":null}}"#,
+            )),
+        );
+        let mut b = budget();
+        client
+            .funding_transactions_page(&mut b, &Address::new([1u8; 32]), 5, None)
+            .expect("a page");
+        let sent = sent.lock().expect("the record");
+        assert_eq!(sent.len(), 1);
+        assert!(
+            sent[0].contains(r#""maxSupportedTransactionVersion":1"#),
+            "{}",
+            sent[0]
+        );
     }
 
     fn rate_limited() -> Result<String, String> {

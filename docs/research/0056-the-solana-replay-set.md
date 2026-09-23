@@ -702,6 +702,23 @@ only to the fallback path; the full-mode path has its own cap,
 `MAX_FUNDING_SIGNATURE_PAGES` pages of `FULL_TRANSACTIONS_PAGE_SIZE` (100)
 rows each.
 
+## Addendum, 2026-09-23: full mode must accept version-1 transactions
+
+The first recapture with full-mode funding reads (main `e42f174`, VPS) still
+reported "more than 10 transactions fetched" for most candidates. A hand-sent
+copy of the request for one of them (`FjPsr1oj…`) returned `-32015`
+"Transaction version (1) is not supported by the requesting client": the
+request asked for `maxSupportedTransactionVersion: 0`, and Helius refuses the
+whole page when any row is newer. Resent with `1`, the same request returned
+100 rows in 0.9 s (1.6 MB), 25 of them version 1. `transaction` already sent
+`1` for the same reason.
+
+The refusal did more harm than one gap because any first-page error was read
+as "this node has no full mode", which turned full mode off for every later
+candidate. Now only a JSON-RPC "method not found" does that; any other
+first-page error is that candidate's gap. The existing `method_unsupported`
+helper was not reused: its "not supported" matches this refusal too.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
