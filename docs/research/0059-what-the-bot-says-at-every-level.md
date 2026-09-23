@@ -418,3 +418,106 @@ candidate selection (`salience.rs`), the other in the generated wording
 `voice.rs` already carries is still the identified target for replacing the
 blanket ban outright; this task did not migrate `replay.rs`,`bio.rs`, or
 `weekly.rs` off `forbidden::check` onto it, which remains open.
+
+## Addendum, 2026-09-23 — nine live Solana drafts, eight fell back
+
+A VPS trial captured nine real Solana replies
+(`.orchestrator/runs/20260923-plan-0002-phase2/evidence/trial-model-replay/`,
+`review.md`): one shipped the model's own draft, eight fell back to the
+template. All nine cases read `CantTell`. Every fallback's own draft was
+honest -- no forbidden claim, no fabricated number, nothing a person should
+be glad a bot didn't say -- and every one still failed one of the checks
+`voice::write` runs after `render::for_publication`. Task 9-23-0012 (cause
+A) and 9-23-0012b (causes B and C) trace and fix why, one commit for each
+against the same branch (`fix/model-drafts-false-refusals`).
+
+**Cause A -- 4 refused (`creator-sale-catwif`, `suspicious-launch-snappad`,
+`misleading-concentration-pool`, `suspicious-launch-pay`).** Each draft
+called a wallet "non-pool" while stating a holder-concentration figure;
+`fidelity::named_in` read "pool" out of "non-pool" and refused the number as
+about the wrong subject (`WrongSubject { measured: Holders, written_about:
+Liquidity }`). Fixed in `fidelity.rs`'s `named_in`: a plain-English negating
+prefix directly in front of a subject word, joined by a hyphen with no
+space, no longer names that subject.
+
+**Cause B -- 3 refused (`ordinary-launch`, `creator-sale-hbull`,
+`creator-sale-jimothy`).** `render::for_publication` truncates to 280
+characters, at the end of the last sentence that finished inside the
+budget, *before* `forbidden::check_required_canttell` runs -- by design, so
+the checks read what a reader would actually see. hbull and jimothy's
+drafts led with the concentration figure and put the required "could not be
+read" sentence second; when the reply ran long, truncation kept the first
+sentence and dropped the one the check needed. ordinary-launch's draft kept
+its required sentence but genuinely failed the topic-word match: it wrote
+"could not be traced to their money source" for a sheet phrase reading
+"where ... got their money could not be read," and named neither the
+interrogative "where" nor a stem of "got."
+
+The lead's decision, not reopened here: keep checking the truncated text,
+and fix at the source. Two changes, both today:
+
+- `voice.rs`'s `SYSTEM` now states the 280-character limit in words (never
+  digits -- `SYSTEM` is asserted to carry none, so a model echo of any figure
+  cannot pass `fidelity::check` unauthorised) and says plainly that nothing
+  past the limit is ever seen, cut at the end of the last sentence that
+  finished inside it. `verdict_brief`'s `CantTell` arm now asks for the
+  required sentence **first**, specifically because the length limit can
+  otherwise cost it.
+- `forbidden.rs`'s `topic_words` drops "where" as a non-content word (a
+  question word introducing the gap, not a thing named about it), and
+  `synonyms("got")` now also accepts "traced," "money source," "funded,"
+  "funding" and "funder" -- the plain-English ways of saying money was
+  traced to its source that ordinary-launch's real draft used.
+
+**ordinary-launch now passes** the real ship path against its real sheet --
+confirmed by test and by re-running all eight drafts (below). **hbull and
+jimothy are unproven.** Their fault is the truncation-ordering one, and the
+fix is a prompt change: nothing in this repository proves a live model
+reply will lead with the required sentence next time. The next live replay
+against this branch is what settles it, not this note.
+
+**Cause C -- 1 refused (`graduated-pumpswap`).** The draft ended "...rather
+than evidence that the launch was clean." `forbidden::CANTTELL_WORDS`
+refuses "clean" at every `CantTell` reply, negated or not -- this is by
+design (ADR 0027): the check reads the word, not the sentence's intent. The
+lead's decision, not reopened here: the ban stays exactly as strict. `SYSTEM`
+now names every word `forbidden::words_refused_at(Level::CantTell)` holds
+(read from that function at test time, so the prompt and the ban cannot
+silently drift apart) and states that writing one is refused even to deny
+it. graduated-pumpswap's draft is still refused by the unchanged ban -- this
+is the fix working as intended, not a gap.
+
+**A new fault found while proving this, not one of the three above.**
+Running the eight real drafts through the full ship path
+(`render::for_publication` then every check `voice::write` runs) panicked on
+`misleading-concentration-pool`'s draft: `fidelity::named_in`'s "non-"
+check reads four bytes immediately before a word and compares them to
+"non-", and a curly apostrophe (`\u{2019}`, three UTF-8 bytes) sitting in
+that span put the slice boundary inside a character rather than on one. This
+is the identical cause-A mechanism, on real trial text, and is fixed the
+same way: `fidelity.rs`'s `named_in` now checks `is_char_boundary` before
+taking the slice, and a boundary that fails the check is treated as "not
+negated" (it cannot spell four ASCII bytes of "non-" if it is not a
+four-byte ASCII run in the first place).
+
+**All eight refused drafts, re-run against their real sheets after every
+fix above** (`render::for_publication` then `check_target`, `check_level`,
+`check_unconditional`, `check_hint`, `check_required`, then `fidelity::check`
+if nothing above refused it):
+
+| case | cause | result |
+|---|---|---|
+| ordinary-launch | B | PASS |
+| creator-sale-catwif | A | PASS |
+| suspicious-launch-snappad | A | PASS |
+| creator-sale-hbull | B | still FAILS -- "canttell reply names nothing that could not be read"; prompt fix, unproven without a live rerun |
+| misleading-concentration-pool | A (+ the panic above) | PASS |
+| graduated-pumpswap | C | still FAILS -- "clean"; the ban is meant to still catch this |
+| creator-sale-jimothy | B | still FAILS -- same as hbull |
+| suspicious-launch-pay | A | PASS |
+
+Four of eight now pass without any further live model call. Two (hbull,
+jimothy) need a live rerun to know whether the prompt change actually moves
+the model's next draft. One (graduated-pumpswap) is expected to keep
+failing by design. `incomplete-read-versioned-tx`, the ninth case, was the
+one model reply the trial actually shipped and is not part of this table.

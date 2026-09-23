@@ -418,9 +418,8 @@ fn named_in(sentence: &str) -> Vec<Subject> {
         // multi-byte character, not four ASCII ones), so treating it as "not
         // negated" here is exactly the answer the boundary check would have
         // given if it could have been asked at all.
-        let negated = start >= 4
-            && lower.is_char_boundary(start - 4)
-            && &lower[start - 4..start] == "non-";
+        let negated =
+            start >= 4 && lower.is_char_boundary(start - 4) && &lower[start - 4..start] == "non-";
         if negated {
             continue;
         }
@@ -992,6 +991,28 @@ mod tests {
                 written_about: Subject::Liquidity,
             }
         );
+    }
+
+    #[test]
+    fn a_multi_byte_character_before_a_word_does_not_panic_the_negation_check() {
+        // 9-23-0012b evidence step, 2026-09-23: running the trial's real
+        // drafts through `check` panicked at a byte-index slice inside
+        // `named_in`'s "non-" check --
+        // "...of supply\u{2019}s launch timing...remains unknown." puts a
+        // curly apostrophe (`\u{2019}`, three UTF-8 bytes) four bytes before
+        // "s", and `start - 4` landed inside it rather than on a char
+        // boundary. `is_char_boundary` guards the slice now; the sentence is
+        // about the launch block (`Subject::Launch`), not negated, and
+        // must still name it.
+        let sheet = vec![Authorised {
+            subject: Subject::Launch,
+            value: 0.0,
+        }];
+        let text = "The largest sampled non-pool wallet holds 4.7% of supply\u{2019}s launch \
+                     timing, and the concentration context that would help settle this remains \
+                     unknown.";
+        // The call itself must not panic; that is the regression.
+        let _ = super::check(text, &sheet);
     }
 
     #[test]

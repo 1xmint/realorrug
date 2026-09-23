@@ -552,49 +552,6 @@ pub fn request_for(sheet: &FactSheet) -> Request {
 mod tests {
     use super::*;
 
-    #[test]
-    #[ignore = "debug harness for 9-23-0012b evidence step, not part of the suite"]
-    fn debug_all_eight_refused_drafts_through_ship_path() {
-        let base = std::path::Path::new(
-            "C:/Users/Josh/Desktop/GitHub/realorrug/.orchestrator/runs/20260923-plan-0002-phase2/evidence/trial-model-replay",
-        );
-        let cases: &[(&str, &str)] = &[
-            ("24RwgHxwu8icT1tcDtgH4RwyaDWao86xfacUo2xHpump", "The key gap is funding: 3 of 4 checked early buyers could not be traced to their money source, so the sheet cannot settle whether this launch\u{2019}s early activity was organic or coordinated. The largest sampled non-pool account holds just 0.08% of supply, but that does not answer the missing funding question; the verdict is therefore CAN\u{2019}T TELL."),
-            ("5pYB12kEhfhSFXJjZ7JtyqDpt6uUqhsF6iu6Ee9spump", "The largest sampled non-pool wallet holds 4.7% of supply, which is notable but not decisive by itself. The launch block could not be read, so the token\u{2019}s launch timing\u{2014}and the concentration context that would help settle this\u{2014}remains unknown."),
-            ("5t5keof7mNJAMq4vKMBZA5WDk6Aa5cBgUsxyRVYspump", "The launch block could not be read, so this cannot be classified: that timing would help establish the launch sequence and what happened around early trading. The largest sampled non-pool wallet holds only 0.1% of supply, but that does not settle the missing history."),
-            ("7V6Sk63y8Rr1MvcN5mYNp61wgFhy4EeQg5gUASk9pump", "One unidentified wallet holds 27.6% of supply, a concentration that could be a holder, vesting contract, bridge, or exchange\u{2014}but the address\u{2019}s role is unknown. The launch block could not be read, so this sheet cannot settle the token\u{2019}s launch history; the verdict is therefore can\u{2019}t tell."),
-            ("DsjPNCjFrQDXGZ96UzohaMm9PQJJUxWFQ6Gy6do9CSLT", "The largest sampled non-pool wallet holds 2.9% of supply, which is not a clear concentration signal by itself, but the launch block could not be read, so the token\u{2019}s launch timing and sequence cannot be verified. That missing data is why this remains CAN\u{2019}T TELL\u{2014}not evidence that anything is safe."),
-            ("GTBxUiw6wJdmmkCGZgRHLyYxqu1vG4KtRpeox6yDpump", "The largest sampled non-pool wallet holds 2.8% of total supply, which is not concentrated enough by itself to settle the risk. The launch block and the funding of early buyers could not be read, so this remains CAN\u{2019}T TELL rather than evidence that the launch was clean."),
-            ("Ge87EtsjwRQbHaqQmKRno69RFTwh9bfSsm99XNxTpump", "It has graduated to the AMM, and the largest sampled non-pool wallet holds 3.0% of supply\u{2014}concentrated, but not a one-wallet takeover. The launch block and early-buyer funding could not be read, so this settles as can\u{2019}t tell: the missing history is exactly what would show how this distribution formed."),
-            ("JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump", "The launch block and the funding path for early buyers could not be read, so this cannot be settled from the available history. The largest sampled non-pool wallet holds only 0.6% of supply, but that does not fill the missing evidence."),
-        ];
-        for (mint, draft) in cases {
-            let path = base.join(format!("{mint}.sheet.json"));
-            let json = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-            let wrapper: serde_json::Value = serde_json::from_str(&json)
-                .unwrap_or_else(|e| panic!("parsing {}: {e}", path.display()));
-            let sheet: FactSheet = serde_json::from_value(wrapper["sheet"].clone())
-                .unwrap_or_else(|e| panic!("parsing sheet in {}: {e}", path.display()));
-            let level = verdict::level(&sheet);
-            let text = render::for_publication(draft);
-            let mut violations = forbidden::check_target(&text);
-            violations.extend(forbidden::check_level(&text, level));
-            violations.extend(forbidden::check_unconditional(&text));
-            violations.extend(forbidden::check_hint(&text, &sheet));
-            violations.extend(forbidden::check_required(&text, level, &sheet));
-            let fabricated = if violations.is_empty() {
-                fidelity::check(&text, &sheet.authorised())
-            } else {
-                Vec::new()
-            };
-            eprintln!(
-                "{mint}: violations={violations:?} fabricated={fabricated:?} truncated={}",
-                text.chars().count() != draft.chars().count()
-            );
-        }
-    }
-
     use crate::clause::{Kind, Voice};
     use crate::sheet::{About, Fact};
     use realorrug_agent::untrusted;

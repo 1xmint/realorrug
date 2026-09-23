@@ -1075,7 +1075,12 @@ fn topic(phrase: &str) -> &str {
 fn topic_words(phrase: &str) -> Vec<String> {
     topic(phrase)
         .split_whitespace()
-        .filter(|w| !matches!(w.to_lowercase().as_str(), "the" | "a" | "an" | "of" | "where"))
+        .filter(|w| {
+            !matches!(
+                w.to_lowercase().as_str(),
+                "the" | "a" | "an" | "of" | "where"
+            )
+        })
         .map(|w| {
             let w = w.to_lowercase();
             w.strip_suffix("'s").map_or(w.clone(), str::to_owned)
