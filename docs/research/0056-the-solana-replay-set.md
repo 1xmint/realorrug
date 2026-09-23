@@ -308,6 +308,126 @@ For this set the owner delegated reply acceptance explicitly (2026-09-22,
 these four `yes` lines rest on. The delegation covers these replies, not the
 rule: a future set still needs the owner, or a fresh delegation.
 
+## Addendum, 2026-09-22: buyer funding stops walking for the oldest transaction
+
+The cause named in the previous addendum is fixed. `check_solana_candidate`
+(`crates/realorrug-onchain/src/wallets.rs`) no longer walks a candidate's
+signature history back to its oldest transaction; a new `funding_search`
+pages the candidate's own history backward *from its first purchase of this
+mint*, newest-first, and takes the most recent material inbound SOL transfer
+at or before that purchase as the funder. `getSignaturesForAddress` already
+pages newest-first, so this is the cheap direction: a wallet built to buy
+one launch has its funding transfer somewhere in the handful of transactions
+before the buy, not necessarily at the very start of its life, and finding
+it never requires reaching the wallet's actual beginning.
+
+Two new caps bound what a search will pay for a wallet a stranger could have
+built to be expensive to read: `MAX_FUNDING_SIGNATURE_PAGES = 3` (matching
+`Budget::PAGES_PER_WALK`'s own sizing) bounds how many `getSignaturesForAddress`
+pages the search walks, and `MAX_FUNDING_TRANSACTIONS = 10` bounds how many
+`getTransaction` calls it spends testing candidate signatures for a funder. A
+wallet created for one launch shows a handful of transactions in this window
+— the funding transfer, the buy, maybe one or two more — so both caps sit
+well above that shape without opening the read to unbounded cost against a
+wallet with thousands of signatures.
+
+What "complete" means changed with it. `Candidate::funding_complete` is
+`true` in exactly two cases: a material funder was found, or the search
+paged back to the end of the candidate's own history (an empty or short
+page, the same test `RpcClient::signatures_back_to_oldest` uses) having
+fetched every eligible signature and found none material — a **measured**
+absence, because the whole reachable window was actually read. It is
+`false`, with a gap naming which cap was hit or which read failed, whenever
+either cap stops the search or a signature-page or transaction read errors.
+A capped or failed search is never recorded as a measured absence (AGENTS.md
+rule 8): reaching a cap says nothing about whether a funder exists past the
+point the search gave up.
+
+`crates/realorrug-roast/src/sheet.rs`'s `funding_gap_message` (added by the
+previous addendum) reads `Candidate::funding_complete` and needed no change:
+the sentence it builds ("where N of the M checked early buyers got their
+money could not be read") was already written for this definition of
+complete, not the old one. On the two readable captures in this set —
+previously "where 3 of the 4 checked early buyers got their money could not
+be read" and "4 of the 4" — a fresh re-read after this fix is expected to
+name a funder, or record a measured absence, for candidates that used to
+report nothing at all; whether either mint's launch actually clears
+`CantTell` is a question for the next capture, not settled here.
+
+## Addendum, 2026-09-22: can a versioned transaction's dropped lookup-table accounts feed the wrong program id to the plain-transfer gate?
+
+Asked while fixing `is_plain_sol_transfer`'s vacuous-empty-list bug
+(`crates/realorrug-onchain/src/wallets.rs`, branch
+`who-paid-the-solana-buyers-v2`): can `collect_instructions`
+(`crates/realorrug-onchain/src/rpc.rs:890`) resolve a program id to the
+*wrong* address, or silently drop an instruction, when a versioned
+transaction's `accountKeys` omits addresses a lookup table supplied and
+`meta.loadedAddresses` is not merged in? Answer, from reading the code, not
+from a new capture: **not a wrong address, but yes, an instruction can be
+dropped -- and the drop is exactly the shape that could let a swap pass the
+plain-transfer gate.**
+
+`RpcClient::transaction` (`rpc.rs:660`) already requests
+`maxSupportedTransactionVersion: 1` with `encoding: "json"`, so instructions
+carry a numeric `programIdIndex`, never a resolved address string --
+`program_of` (`rpc.rs:921`) must look the index up in `accounts` itself.
+`parse_transaction` (`rpc.rs:812`) already merges `meta.loadedAddresses`'s
+`writable` then `readonly` arrays onto the end of the static `accountKeys`
+(added by PR #145, this same document's "what the capture command got
+wrong" section) -- the same order Solana's own account-indexing rule uses,
+so *when the node returns `loadedAddresses`*, an index into a lookup-table
+account resolves to the right address.
+
+The residual case is when it does not: an RPC response for a versioned
+transaction that used a lookup table but whose `meta.loadedAddresses` is
+missing, null, or short (a different provider's shape, a malformed capture,
+a future encoding change). Because dynamically-loaded accounts are always
+indexed *after* every static account, an instruction naming one always
+carries an index at or past `accountKeys`'s length. `program_of` reads that
+index with `accounts.get(index)` inside a `filter_map`
+(`collect_instructions`, `rpc.rs:896`), and `Vec::get` on an out-of-range
+index returns `None`, not a wraparound or a fallback to some other real
+account -- so `program_of` returns `None`, and `collect_instructions` skips
+the instruction entirely (`continue`) rather than resolving it to a
+different, wrong-but-existing program. **No instruction is ever attributed
+to the wrong program by this path; a missing address means an instruction
+disappears from `Transaction::instructions`, not that it appears under
+someone else's name.**
+
+**Revised by an independent review (2026-09-22): that "would pass the gate
+today, wrongly" conclusion does not hold, once `funder_of`'s own shape check
+is read alongside `parse_transaction`.** Verified from the code:
+`funder_of` (`wallets.rs:1009`) refuses to trust *any* index into `accounts`
+unless `tx.accounts.len()` equals both `tx.pre_balances.len()` and
+`tx.post_balances.len()`, returning `FunderRead::Unreadable` otherwise --
+before `is_plain_sol_transfer` is ever consulted, because `resolve_funder_read`
+only reaches the plain-transfer gate on a `FunderRead::Found`. A node
+computes `preBalances`/`postBalances` over the account list its runtime
+actually resolved for the transaction, including every lookup-table
+address, independently of whether it also echoes `meta.loadedAddresses`
+back in the response for `parse_transaction` to merge. So the partial-drop
+case above still happens -- `tx.accounts` stays short, holding only the
+static `accountKeys` -- but its effect is not a wrongly-accepted gate: the
+balance arrays it left full-length now disagree in length with the
+shortened `accounts`, `funder_of` catches that mismatch first, and the read
+becomes a gap ("did not report lamport balances; cannot confirm no funder
+there") rather than a silently-accepted plain transfer. This chain --
+`funder_of`'s length check firing before the gate is reached -- is verified
+by reading `wallets.rs` and by `a_partial_lookup_table_read_is_unreadable_not_a_funder`,
+the fixture added alongside this addendum.
+
+The residual risk this leaves is narrower than the original paragraph
+claimed, and is now an inference about provider behaviour, not a code
+finding: a provider that omits the lookup-table keys from
+`meta.loadedAddresses` **and** also truncates `preBalances`/`postBalances`
+to match the shortened, static-only account list (rather than reporting
+them at the full length its own runtime resolved) would make the lengths
+agree again, and the partial-drop-then-pass failure this addendum
+originally described would recur. Whether any RPC provider the crate talks
+to actually does that has not been checked against a live capture -- it is
+inference about what a provider *could* do, not a fact this document can
+settle; `rpc.rs` is unchanged by this commit.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
