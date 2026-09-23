@@ -869,6 +869,57 @@ impl RpcClient {
         Ok(Some((result.data, result.pagination_token)))
     }
 
+    /// A busy early buyer's history from its very start, in Helius's full
+    /// mode: the oldest-first sibling of [`RpcClient::funding_transactions_page`].
+    ///
+    /// Design 0031 §1: when the newest-first walk back from a purchase ends
+    /// at its page cap without a funder, one more read -- this one -- takes
+    /// the wallet's first [`FULL_TRANSACTIONS_PAGE_SIZE`] successful
+    /// transactions (`sortOrder: "asc"`), so the caller can find the
+    /// wallet's *original* funder (its first material inbound transfer)
+    /// even when the wallet is too busy for a backward walk to reach it.
+    /// Same filters as `funding_transactions_page` (`status: "succeeded"`,
+    /// `filters.slot.lte` the purchase slot, `maxSupportedTransactionVersion:
+    /// 1`) so a row this call returns parses exactly like one that call
+    /// returns.
+    ///
+    /// One page only -- no `pagination_token` parameter, and the response's
+    /// own `paginationToken` is not exposed. A wallet whose first hundred
+    /// transactions hold no material inbound transfer is not one this check
+    /// tries to explain cheaply (design 0031 §1).
+    ///
+    /// Returns `Ok(None)` when the page budget is spent before the call is
+    /// made, the same convention [`RpcClient::signatures_page`] uses.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] on transport, node (including method-not-found) or shape
+    /// failures.
+    pub fn funding_transactions_page_oldest_first(
+        &self,
+        budget: &mut Budget,
+        address: &Address,
+        at_or_before_slot: u64,
+    ) -> Result<Option<Vec<serde_json::Value>>, RpcError> {
+        if budget.take_page().is_err() {
+            return Ok(None);
+        }
+        let options = serde_json::json!({
+            "transactionDetails": "full",
+            "sortOrder": "asc",
+            "limit": FULL_TRANSACTIONS_PAGE_SIZE,
+            "encoding": "json",
+            "maxSupportedTransactionVersion": 1,
+            "filters": { "status": "succeeded", "slot": { "lte": at_or_before_slot } },
+        });
+        let result: FullTransactionsEnvelope = self.call(
+            budget,
+            "getTransactionsForAddress",
+            &serde_json::json!([address.to_string(), options]),
+        )?;
+        Ok(Some(result.data))
+    }
+
     /// Reads one transaction.
     ///
     /// # Errors
@@ -1380,6 +1431,42 @@ mod tests {
             "{}",
             sent[0]
         );
+    }
+
+    #[test]
+    fn an_oldest_first_page_carries_designed_0031_request_shape() {
+        // (d) Design 0031 §1's request body, pinned: ascending order, a full
+        // page, the same slot ceiling and version cap the backward walk
+        // uses -- a caller relying on this shape (`original_funder_search`)
+        // must get the wallet's *earliest* material transfer, not another
+        // newest-first page.
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let client = RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(Recorder(
+                std::sync::Arc::clone(&sent),
+                r#"{"jsonrpc":"2.0","id":1,"result":{"data":[],"paginationToken":null}}"#,
+            )),
+        );
+        let mut b = budget();
+        client
+            .funding_transactions_page_oldest_first(&mut b, &Address::new([1u8; 32]), 5)
+            .expect("a page");
+        let sent = sent.lock().expect("the record");
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].contains(r#""sortOrder":"asc""#), "{}", sent[0]);
+        assert!(
+            sent[0].contains(&format!(r#""limit":{FULL_TRANSACTIONS_PAGE_SIZE}"#)),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[0].contains(r#""slot":{"lte":5}"#), "{}", sent[0]);
+        assert!(
+            sent[0].contains(r#""maxSupportedTransactionVersion":1"#),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[0].contains(r#""status":"succeeded""#), "{}", sent[0]);
     }
 
     fn rate_limited() -> Result<String, String> {

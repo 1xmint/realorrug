@@ -6942,6 +6942,7 @@ mod tests {
             nonce_before_launch: Some(0),
             funders: Vec::new(),
             funding_complete: true,
+            first_active: None,
         };
         Funding {
             buyers,
@@ -7682,6 +7683,7 @@ mod tests {
             nonce_before_launch,
             funders: Vec::new(),
             funding_complete: true,
+            first_active: None,
         }
     }
 

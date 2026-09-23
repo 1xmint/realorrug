@@ -35,8 +35,12 @@ first row's time as the wallet's *first active* moment.
   mode: the candidate stays unread, exactly as today (AGENTS.md rule 8). No
   second page: a wallet whose first hundred transactions hold no material
   inbound transfer is not one this check can explain cheaply.
-- Cost: one call per unresolved candidate, at most `MAX_CANDIDATES`,
-  inside the existing funding call and page floors.
+- Cost: one call per unresolved candidate, at most `MAX_CANDIDATES`, inside
+  the existing funding call floor (`FUNDING_CALL_FLOOR`; full mode never
+  spends the `getTransaction`-per-signature fetches that floor was sized
+  for) and a raised page floor (`FUNDING_PAGE_FLOOR`, now `MAX_CANDIDATES *
+  (MAX_FUNDING_SIGNATURE_PAGES + 1)` to grant the one extra page this read
+  costs each candidate).
 
 The sheet gains one fact when any candidate was resolved this way: how
 many of the checked early buyers were already active before the launch,
