@@ -2201,8 +2201,8 @@ fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Fund
     facts.push(
         Fact::exact(
             Kind::FundingChecked,
-            "early buyers whose funding before their first purchase was checked, of the buyers \
-             in the launch window",
+            "early buyers whose funding at or before their first purchase was checked, of the \
+             buyers in the launch window",
             f64::from(checked),
             format!("{checked} of {}", funding.buyers),
         )
@@ -2213,17 +2213,17 @@ fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Fund
         facts.push(
             Fact::exact(
                 Kind::SharedFunder,
-                "checked early buyers that one address sent material value to before their first \
-                 purchase; a flow between addresses, which an exchange also produces, not \
-                 ownership",
+                "checked early buyers that one address sent material value to at or before \
+                 their first purchase; a flow between addresses, which an exchange also \
+                 produces, not ownership",
                 f64::from(top.funded),
                 format!("{} of {checked}", top.funded),
             )
             .saying(
                 Voice::Plain,
                 format!(
-                    "The same address funded {} of the {checked} early buyers checked before they \
-                     bought. That is a flow on chain; an exchange paying out withdrawals looks \
+                    "The same address funded {} of the {checked} early buyers checked at or \
+                     before they bought. That is a flow on chain; an exchange paying out withdrawals looks \
                      the same.",
                     top.funded
                 ),

@@ -6,7 +6,7 @@ on his behalf; anything not covered here is a question for Josh, not a guess.
 ## Status
 
 **Direction changed 2026-09-21** (Josh's plan, recorded as ADRs 0037–0039,
-design 0029, plan 0002). Current milestone: plan 0002 phase 1 (every doc, page
+design 0029, plan 0002). Current milestone: plan 0002 phase 2 (every doc, page
 and code path describes the pump.fun launch; the weekly prize is switched off)
 plus the Solana reply-review loop. The Robinhood launch, the weekly prize and
 the payout signer are retired; the daily five stays as a free game with
@@ -65,4 +65,4 @@ Alerts reach Josh's phone through the Claude mobile app. Don't add another alert
 
 ## Decision log
 
-Autonomous decisions and reversals: the run ledger (RUN.md under .orchestrator/runs/20260915-robinhood-7b, gitignored), "Decision log".
+Autonomous decisions and reversals: `docs/plans/0002-bot-quality-then-a-solana-launch.md` (`.orchestrator/` run ledgers are gitignored and not tracked history).
