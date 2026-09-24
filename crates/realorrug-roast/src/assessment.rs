@@ -219,10 +219,13 @@ const WEIGHT_HOLDERS: u32 = 25;
 /// decision 6: no outcome-labelled population for authority yet).
 const WEIGHT_AUTHORITY: u32 = 20;
 /// Who funded the checked early buyers: 25, the same hand-set starting
-/// weight as [`WEIGHT_LAUNCH_BLOCK`] -- design 0031 §2 puts
-/// `CreatorFundedEarlyBuyers` "on the same footing as `CreatorBoughtOwnLaunch`",
-/// and no outcome-labelled population exists yet to fit either one
-/// separately (ADR 0032 decision 6).
+/// weight as [`WEIGHT_LAUNCH_BLOCK`] -- design 0031 §2 scores
+/// `CreatorFundedEarlyBuyers` alone the same as `CreatorBoughtOwnLaunch`
+/// alone (both earn `Sketchy`, both weigh 1,200 in [`weight`]), and no
+/// outcome-labelled population exists yet to fit either one separately
+/// (ADR 0032 decision 6). Unlike `CreatorBoughtOwnLaunch`, it is not in
+/// `verdict::LIVE_RISK_SIGNALS`, so it never counts toward
+/// `RugMechanicsLive`.
 const WEIGHT_FUNDING: u32 = 25;
 
 /// The hand-set weight for one episode. A `const fn`, matched exhaustively

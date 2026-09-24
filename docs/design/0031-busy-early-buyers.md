@@ -48,6 +48,16 @@ with their first-active dates ("2 of the 4 early buyers checked were
 active before this launch, first seen 2026-03-04 and 2026-08-24"). This is
 a dated measurement, not a label: nothing calls them bots.
 
+Nothing today reads a Solana launch's wall-clock time -- `LaunchBlock`
+(`realorrug-onchain/src/launch.rs`) carries a slot, not a timestamp -- so
+in production the fact falls back to design's own contingency: it counts
+every checked candidate with a first-active reading and drops "before
+this launch" from the words ("2 of the 4 early buyers checked already had
+a transaction on chain, first seen ..."). The "before this launch"
+wording above is what the fact says once a launch timestamp exists to
+compare against; the comparison itself is implemented and tested today,
+only unfed.
+
 ### 2. The creator funding early buyers
 
 Compare each checked candidate's funder (recent or original) with the
@@ -60,10 +70,13 @@ source"). It costs no extra reads.
 
 The signal is a flow, not an identity claim, so the words stay at the flow
 (rule 4): the creator's address sent money to these wallets; nothing says
-the creator owns them. It is not a live-risk signal: on its own it earns
-`Sketchy`, the same footing as `CreatorBoughtOwnLaunch`, and its weight in
-the score is that signal's weight. Moving it up the ladder waits on a
-measured rate, like every other level change (ADR 0032).
+the creator owns them. Alone it earns `Sketchy`, exactly as
+`CreatorBoughtOwnLaunch` does alone, and its weight in the score is that
+signal's weight: 1,200. Unlike `CreatorBoughtOwnLaunch`, it is not in
+`verdict::LIVE_RISK_SIGNALS`, so it never counts toward
+`RugMechanicsLive` -- it is not a live-risk signal. Moving it up the
+ladder waits on a measured rate, like every other level change (ADR
+0032).
 
 ### 3. Exchanges are not insiders
 
