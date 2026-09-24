@@ -70,7 +70,7 @@ Before recording a payment, reconcile what the treasury has actually
 received and what is still sitting unclaimed in the fee vaults:
 
 ```
-realorrug treasury solana --treasury <treasury address> [--mint <mint>] [--rpc URL] [--seconds N]
+realorrug treasury solana --treasury <treasury address> [--mint <mint>] --rpc URL [--seconds N]
 ```
 
 Read-only: it holds no key and sends nothing. It prints one line per receipt

@@ -2,8 +2,9 @@
 //! `realorrug treasury solana`: what the treasury has received on Solana, and
 //! what is still unclaimed.
 //!
-//! `treasury solana --treasury <addr> [--mint <addr>] [--rpc URL]
-//! [--seconds N]` walks the treasury address's whole signature history,
+//! `treasury solana --treasury <addr> [--mint <addr>] --rpc URL
+//! [--seconds N]` (or `REALORRUG_RPC` in place of `--rpc`; one of the two is
+//! required) walks the treasury address's whole signature history,
 //! finds every transaction where a known fee vault's balance fell (a
 //! *receipt*, per `realorrug_onchain::treasury_receipts`), and reports the
 //! vaults' current unclaimed balances. This is the instrument ADR 0037's
@@ -49,12 +50,22 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .map(|m| m.parse().map_err(|e| format!("--mint: {e}")))
         .transpose()?;
 
-    // No default endpoint (rule 7): the public one is rate-limited, and
-    // picking it silently would be picking for the operator.
-    let client = crate::flag(args, "--rpc").map_or_else(
-        || RpcClient::from_vars(&|k| std::env::var(k).ok()),
-        RpcClient::new,
-    );
+    run_with(args, &treasury, mint.as_ref(), &|k| std::env::var(k).ok())
+}
+
+/// [`run`] after its flags are read, with the environment passed in so a test
+/// can hold what an unset one does.
+fn run_with(
+    args: &[String],
+    treasury: &Address,
+    mint: Option<&Address>,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    // No default endpoint (rule 7): `from_vars` would fall back to the public
+    // one, which is rate-limited, and a walk it cut short would read as a
+    // treasury that received less.
+    let endpoint = crate::rpc_arg::required_endpoint(args, env)?;
+    let client = RpcClient::new(endpoint.clone());
     let seconds = crate::flag(args, "--seconds")
         .and_then(|s| s.parse().ok())
         .unwrap_or(20);
@@ -64,9 +75,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         Duration::from_secs(seconds),
     );
 
-    let pumpfun_vault = realorrug_pumpfun::pda::creator_vault(&treasury)
+    let pumpfun_vault = realorrug_pumpfun::pda::creator_vault(treasury)
         .ok_or("could not derive the pump.fun creator vault")?;
-    let pumpswap_vault = realorrug_pumpfun::pda::pumpswap_coin_creator_vault_ata(&treasury)
+    let pumpswap_vault = realorrug_pumpfun::pda::pumpswap_coin_creator_vault_ata(treasury)
         .ok_or("could not derive the PumpSwap coin-creator vault")?;
     let vaults = VaultAddresses {
         pumpfun: pumpfun_vault,
@@ -74,8 +85,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
 
     let (signatures, truncated) = client
-        .signatures_back_to_oldest(&mut budget, &treasury)
-        .map_err(|e| e.to_string())?;
+        .signatures_back_to_oldest(&mut budget, treasury)
+        .map_err(|e| crate::rpc_arg::redact(&e.to_string(), &endpoint))?;
 
     let mut transactions = Vec::with_capacity(signatures.len());
     for sig in &signatures {
@@ -112,8 +123,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     print!(
         "{}",
         report(
-            &treasury,
-            mint.as_ref(),
+            treasury,
+            mint,
             &receipts,
             &unread,
             pumpfun_unclaimed,
@@ -131,16 +142,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
 }
 
 /// The pump.fun vault's unclaimed lamports: its balance minus the
-/// rent-exempt minimum it must keep, with the slot it was read at. `None`
-/// when the account could not be read (rule 8: absent, not zero).
+/// rent-exempt minimum it must keep, with the slot it was read at (`None`
+/// when the node did not say). `None` when the account could not be read
+/// (rule 8: absent, not zero).
 fn unclaimed_pumpfun(
     client: &RpcClient,
     budget: &mut Budget,
     vault: &Address,
-) -> Option<(u64, u64)> {
+) -> Option<(u64, Option<u64>)> {
     let account = client.account(budget, vault).ok().flatten()?;
     let lamports = account.lamports?;
-    let slot = account.slot.map(|s| s.0).unwrap_or_default();
+    let slot = account.slot.map(|s| s.0);
     let rent_exempt = client
         .minimum_balance_for_rent_exemption(budget, account.data.len())
         .ok()?;
@@ -153,9 +165,9 @@ fn unclaimed_pumpswap(
     client: &RpcClient,
     budget: &mut Budget,
     vault: &Address,
-) -> Option<(u64, u64)> {
+) -> Option<(u64, Option<u64>)> {
     let account = client.account(budget, vault).ok().flatten()?;
-    let slot = account.slot.map(|s| s.0).unwrap_or_default();
+    let slot = account.slot.map(|s| s.0);
     let parsed = realorrug_pumpfun::token::TokenAccount::parse(
         &account.data,
         &realorrug_pumpfun::token::SPL_TOKEN_PROGRAM,
@@ -173,6 +185,13 @@ fn sol(lamports: u64) -> String {
     format!("{sol:.9}")
 }
 
+/// The moment a balance was read at. A slot the node did not report is said
+/// so, never printed as slot 0 (rule 8), and a balance is only checkable on
+/// an explorer with its moment (rule 5).
+fn read_at(slot: Option<u64>) -> String {
+    slot.map_or_else(|| "slot not reported".to_owned(), |s| format!("slot {s}"))
+}
+
 /// What the operator reads: one line per receipt, then totals per vault
 /// kind, then unclaimed, then unread items.
 fn report(
@@ -180,8 +199,8 @@ fn report(
     mint: Option<&Address>,
     receipts: &[Receipt],
     unread: &[Unread],
-    pumpfun_unclaimed: Option<(u64, u64)>,
-    pumpswap_unclaimed: Option<(u64, u64)>,
+    pumpfun_unclaimed: Option<(u64, Option<u64>)>,
+    pumpswap_unclaimed: Option<(u64, Option<u64>)>,
 ) -> String {
     let mut lines = vec![format!("treasury {treasury}")];
     if let Some(m) = mint {
@@ -226,15 +245,17 @@ fn report(
     lines.push(String::new());
     match pumpfun_unclaimed {
         Some((amount, slot)) => lines.push(format!(
-            "{} SOL unclaimed in the pump.fun creator vault (slot {slot})",
-            sol(amount)
+            "{} SOL unclaimed in the pump.fun creator vault ({})",
+            sol(amount),
+            read_at(slot)
         )),
         None => lines.push("pump.fun creator vault: unread (balance could not be read)".to_owned()),
     }
     match pumpswap_unclaimed {
         Some((amount, slot)) => lines.push(format!(
-            "{} SOL unclaimed in the PumpSwap coin-creator vault (slot {slot})",
-            sol(amount)
+            "{} SOL unclaimed in the PumpSwap coin-creator vault ({})",
+            sol(amount),
+            read_at(slot)
         )),
         None => {
             lines
@@ -271,6 +292,45 @@ mod tests {
     fn missing_treasury_is_refused() {
         let err = run(&["treasury".to_owned(), "solana".to_owned()]).unwrap_err();
         assert!(err.contains("--treasury"), "{err}");
+    }
+
+    #[test]
+    fn no_endpoint_configured_is_refused_not_defaulted() {
+        let args = ["treasury".to_owned(), "solana".to_owned()];
+        assert_eq!(
+            run_with(&args, &addr(1), None, &|_| None),
+            Err("--rpc or REALORRUG_RPC is required".to_owned())
+        );
+    }
+
+    /// ureq's bad-URI error quotes the endpoint it was given; a scheme-less
+    /// one fails before any network call, so this never leaves the machine.
+    #[test]
+    fn the_endpoint_key_never_reaches_the_error() {
+        let args = [
+            "treasury".to_owned(),
+            "solana".to_owned(),
+            "--rpc".to_owned(),
+            "rpc.invalid/?api-key=SENTINEL-5190".to_owned(),
+        ];
+        let err = run_with(&args, &addr(1), None, &|_| None)
+            .expect_err("a scheme-less endpoint cannot be read");
+        assert!(!err.contains("SENTINEL-5190"), "{err}");
+    }
+
+    #[test]
+    fn a_balance_without_a_slot_says_so_rather_than_slot_zero() {
+        let text = report(
+            &addr(1),
+            None,
+            &[],
+            &[],
+            Some((5, None)),
+            Some((7, Some(9))),
+        );
+        assert!(text.contains("vault (slot not reported)"), "{text}");
+        assert!(!text.contains("slot 0"), "{text}");
+        assert!(text.contains("coin-creator vault (slot 9)"), "{text}");
     }
 
     #[test]

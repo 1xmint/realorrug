@@ -89,7 +89,7 @@ commands:
                                  buy matches exactly, nothing else bundled.
                                  Refuses rather than guessing on any
                                  unreadable account. Read-only
-  treasury solana --treasury <addr> [--mint <addr>] [--rpc URL] [--seconds N]
+  treasury solana --treasury <addr> [--mint <addr>] --rpc URL [--seconds N]
                                  what the treasury has received on Solana and
                                  what is still unclaimed: one receipt per
                                  signature where a known fee vault's balance

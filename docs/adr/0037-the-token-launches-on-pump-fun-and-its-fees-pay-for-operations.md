@@ -50,7 +50,7 @@ pump.fun launches and graduated PumpSwap pools.
   --treasury <addr> --dev-wallet <addr> --dev-buy-lamports <n>`;
   `deploy/LAUNCH.md` steps 6 and 9 list it.
 - Fee accounting reads the treasury's receipts on Solana. Now built:
-  `realorrug treasury solana --treasury <addr> [--mint <addr>] [--rpc URL]
+  `realorrug treasury solana --treasury <addr> [--mint <addr>] --rpc URL
   [--seconds N]` -- one receipt per signature where a known fee vault's
   balance fell (pump.fun's creator vault or PumpSwap's coin-creator vault),
   plus each vault's current unclaimed balance; `deploy/LAUNCH.md` "After
