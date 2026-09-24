@@ -757,6 +757,13 @@ What this settles and what it does not:
   sale: `CreatorSoldOut` is still unwired (blocked on design 0021).
 - **Still missing for the six kinds plan 0002 names:** a launch the rules
   themselves flag as suspicious, a real incomplete read, and a creator sale.
+- **Wrong in this read: "within 10%" on every case.** All nine sheets say
+  the checked early buyers' spends are within 10% of each other. Nothing
+  measured that. The Solana reader leaves each buyer's spend at 0 (it sees
+  which balances rose, not by how much), and two zeros compare as equal. The
+  `suspicious-launch-pay` reply repeated it as "a familiar coordinated-launch
+  shape". The sheet now withholds the comparison when any checked spend was
+  not read, so the next replay drops the fact on Solana until spends are read.
 
 ## Sources
 
