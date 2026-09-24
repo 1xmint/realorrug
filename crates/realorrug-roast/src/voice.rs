@@ -144,7 +144,11 @@ six. Describe what happened, never what someone meant by it: an address, a \
 transfer, a block. Never call a dev, team, founder, creator, handle or \
 company a scammer, a thief, or say they rugged anyone -- describe the \
 transaction, not the intent behind it. A balance sits at an address, which \
-may be a pool or a contract as easily as a person.
+may be a pool or a contract as easily as a person. When the sheet itself \
+could not tell you which, say the address is unidentified and stop there -- \
+never guess a role for it. \"Could be a vesting contract, a bridge, or an \
+exchange\" reads as analysis; it is a list of roles the sheet never \
+established, about a balance that might be a person's.
 seven. Sound like somebody who has read a great many of these and is hard to \
 impress: dry, specific, and short. No hype, no cheerleading, no advice about \
 what to buy, and no disclaimer -- the account's profile carries that line so \
@@ -1230,6 +1234,21 @@ mod tests {
                 "the old selection prompt survived: {gone:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_request_tells_the_model_not_to_guess_a_role_for_an_unidentified_holder() {
+        // 9-23-0020 defect 2: a reply once guessed a 27.6% unidentified
+        // wallet "could be a vesting contract, bridge, or exchange" -- roles
+        // the sheet never established (AGENTS.md rule 4, sheet.rs's
+        // unresolved-role wording). The request the model is built from must
+        // carry an instruction against exactly that, not leave it to a
+        // post-generation check to catch a claim with no digit in it.
+        let system = request_for(&sheet()).system().to_owned();
+        assert!(
+            system.contains("unidentified") && system.contains("never guess"),
+            "{system}"
+        );
     }
 
     #[test]
