@@ -1,0 +1,237 @@
+{
+  "mint": "5pYB12kEhfhSFXJjZ7JtyqDpt6uUqhsF6iu6Ee9spump",
+  "label": "creator-sale-catwif",
+  "captured_at": "2026-09-24T21:20:05Z",
+  "rules_version": "2026-09-21",
+  "level": "CantTell",
+  "assessment": {
+    "findings": [
+      {
+        "signal": "creator_bought_own_launch",
+        "group": "CreatorActivity",
+        "episode": "LaunchBlock"
+      }
+    ],
+    "risk_index": 25,
+    "score_bps": 1200,
+    "coverage": {
+      "read": 9,
+      "applicable": 15
+    },
+    "critical_gaps": [
+      "where 3 of the 3 checked early buyers got their money could not be read",
+      "the creator's own buys and sells were not checked"
+    ],
+    "level": "CantTell",
+    "admissible": [
+      "CantTell"
+    ],
+    "score_level": "CantTell"
+  },
+  "sheet": {
+    "mint": "5pYB12kEhfhSFXJjZ7JtyqDpt6uUqhsF6iu6Ee9spump",
+    "read_at": {
+      "Solana": 450148409
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "launch_recipients",
+        "label": "distinct token accounts receiving the token in its own launch block (token accounts, NOT owners, NOT people)",
+        "rendered": "3",
+        "values": [
+          3.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block put it into 3 token accounts -- accounts, not people."
+          },
+          {
+            "voice": "blunt",
+            "text": "It reached 3 token accounts at birth. Accounts, not owners."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "launch_transactions",
+        "label": "transactions in the launch block",
+        "rendered": "2",
+        "values": [
+          2.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block carried 2 transactions."
+          },
+          {
+            "voice": "blunt",
+            "text": "One block, 2 transactions."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "dev_buy",
+        "label": "SOL the creator spent buying their own token in the launch block",
+        "rendered": "0.5326 SOL",
+        "values": [
+          0.53262
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The creator bought 0.5326 SOL of their own token in the launch block."
+          },
+          {
+            "voice": "blunt",
+            "text": "The creator's own bid: 0.5326 SOL."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "about 2449.1 hours old at the read (22042117 slots after its launch block)",
+        "values": [
+          22042117.0,
+          2449.1
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 2449.1 hours ago -- 22042117 slots, by the read point."
+          },
+          {
+            "voice": "blunt",
+            "text": "22042117 slots old. Roughly 2449.1 hours."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "funding_checked",
+        "label": "early buyers whose funding at or before their first purchase was checked, of the buyers in the launch window",
+        "rendered": "3 of 3",
+        "values": [
+          3.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Where 3 of the 3 early buyers got their money was checked."
+          },
+          {
+            "voice": "blunt",
+            "text": "Funding checked for 3 of 3 early buyers."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "graduated",
+        "label": "has the token graduated off the bonding curve",
+        "rendered": "yes",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It has left the bonding curve and trades on an AMM."
+          },
+          {
+            "voice": "blunt",
+            "text": "Off the curve, on an AMM."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "capacity_after_graduation",
+        "label": "exit capacity",
+        "rendered": "graduated off the curve; it trades on the AMM, which Real or Rug does not price. NOT zero, and NOT 'cannot size into this'.",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Real or Rug does not price the AMM it moved to, so it has no exit size for this one."
+          },
+          {
+            "voice": "blunt",
+            "text": "Real or Rug cannot size the AMM it moved to."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "token_ownership",
+        "label": "share of the total token supply held by the largest owner among the sampled largest accounts, excluding any address proven to be the bonding curve or the PumpSwap AMM pool",
+        "rendered": "4.9%",
+        "values": [
+          0.0493,
+          4.93,
+          5.0,
+          4.9,
+          4.93
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Among the largest sampled token accounts, one unidentified wallet holds 4.9% of the total supply."
+          },
+          {
+            "voice": "blunt",
+            "text": "One unidentified wallet: 4.9% of supply."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_transactions",
+        "label": "transactions by this creator's address (transactions, not launches)",
+        "rendered": "at least 419",
+        "values": [
+          419.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Real or Rug has seen at least 419 transactions from this creator's address -- transactions, not launches."
+          },
+          {
+            "voice": "blunt",
+            "text": "That address has at least 419 transactions on it. Transactions, not launches."
+          }
+        ]
+      }
+    ],
+    "untrusted": [
+      [
+        "token name",
+        "catwifhat"
+      ],
+      [
+        "token symbol",
+        "CATWIF"
+      ]
+    ],
+    "unknown": [
+      "where 3 of the 3 checked early buyers got their money could not be read",
+      "the creator's own buys and sells were not checked"
+    ],
+    "signals": [
+      "creator_bought_own_launch"
+    ],
+    "twins": [
+      "a creator buying into their own launch block reads the same as a creator buying a token they believe in"
+    ],
+    "skipped": [
+      "same-window buyers' linked holdings needs the launch's total supply",
+      "how many same-window buyers are fresh needs every checked candidate's pre-launch transaction count, and at least one was not read",
+      "whether same-window buy sizes are close to each other needs every checked buyer's spend, and at least one was not read",
+      "whether every launch-window buyer is declared-exempt needs this launch's exemption list"
+    ]
+  }
+}

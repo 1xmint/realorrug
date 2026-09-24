@@ -1,0 +1,320 @@
+{
+  "mint": "2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump",
+  "label": "incomplete-read-funding",
+  "captured_at": "2026-09-24T21:23:20Z",
+  "rules_version": "2026-09-21",
+  "level": "CantTell",
+  "assessment": {
+    "findings": [],
+    "risk_index": 0,
+    "score_bps": 0,
+    "coverage": {
+      "read": 14,
+      "applicable": 18
+    },
+    "critical_gaps": [
+      "where 1 of the 4 checked early buyers got their money could not be read"
+    ],
+    "level": "CantTell",
+    "admissible": [
+      "CantTell"
+    ],
+    "score_level": "CantTell"
+  },
+  "sheet": {
+    "mint": "2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump",
+    "read_at": {
+      "Solana": 450149123
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "launch_recipients",
+        "label": "distinct token accounts receiving the token in its own launch block (token accounts, NOT owners, NOT people)",
+        "rendered": "2",
+        "values": [
+          2.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block put it into 2 token accounts -- accounts, not people."
+          },
+          {
+            "voice": "blunt",
+            "text": "It reached 2 token accounts at birth. Accounts, not owners."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "launch_transactions",
+        "label": "transactions in the launch block",
+        "rendered": "1",
+        "values": [
+          1.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block carried 1 transactions."
+          },
+          {
+            "voice": "blunt",
+            "text": "One block, 1 transactions."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "dev_buy_unseen",
+        "label": "creator's own buy in the launch block",
+        "rendered": "not found -- absent, NOT zero. Do not say the creator bought nothing.",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "No buy by the creator was found in the launch block, which is not the same as none."
+          },
+          {
+            "voice": "blunt",
+            "text": "Real or Rug found no creator buy. Found, not happened."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "about 0.8 hours old at the read (7254 slots after its launch block)",
+        "values": [
+          7254.0,
+          0.8
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 0.8 hours ago -- 7254 slots, by the read point."
+          },
+          {
+            "voice": "blunt",
+            "text": "7254 slots old. Roughly 0.8 hours."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "funding_checked",
+        "label": "early buyers whose funding at or before their first purchase was checked, of the buyers in the launch window",
+        "rendered": "4 of 7",
+        "values": [
+          4.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Where 4 of the 7 early buyers got their money was checked."
+          },
+          {
+            "voice": "blunt",
+            "text": "Funding checked for 4 of 7 early buyers."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "early_buyers_active_before_launch",
+        "label": "checked early buyers a busy-buyer re-read of their own history found already active on chain, with their first-seen dates",
+        "rendered": "2 of 4; first seen 2026-09-07 and 2026-09-14",
+        "values": [
+          2.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "2 of the 4 early buyers checked already had a transaction on chain, first seen 2026-09-07 and 2026-09-14."
+          },
+          {
+            "voice": "blunt",
+            "text": "2 of 4 already active, first seen 2026-09-07 and 2026-09-14."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "graduated",
+        "label": "has the token graduated off the bonding curve",
+        "rendered": "no",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It is still on its bonding curve."
+          },
+          {
+            "voice": "blunt",
+            "text": "Still on the curve."
+          }
+        ]
+      },
+      {
+        "about": "Price",
+        "kind": "curve_liquidity",
+        "label": "quote asset held in the bonding curve now, read at slot 450149123",
+        "rendered": "2.2249 SOL",
+        "values": [
+          2.224988407
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The curve holds 2.2249 SOL right now, as of slot 450149123."
+          },
+          {
+            "voice": "blunt",
+            "text": "2.2249 SOL in the curve, as of slot 450149123."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "capacity",
+        "label": "quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN impact budget, NOT a ceiling the venue imposes (research 0022)",
+        "rendered": "10.0000 SOL",
+        "values": [
+          10.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "10.0000 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
+          },
+          {
+            "voice": "blunt",
+            "text": "10.0000 SOL before the price moves one percent, by Real or Rug's budget."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "venue_fee",
+        "label": "venue fee, round trip, read from the on-chain schedule",
+        "rendered": "250 bps (2.5%)",
+        "values": [
+          250.0,
+          2.5
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The venue's own round-trip fee, from its on-chain schedule, is 250 bps, which is not the cost of trading it."
+          },
+          {
+            "voice": "blunt",
+            "text": "Venue fee alone: 250 bps round trip. That is the floor, not the bill."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "token_ownership",
+        "label": "share of the total token supply held by the largest owner among the sampled largest accounts, excluding any address proven to be the bonding curve or the PumpSwap AMM pool",
+        "rendered": "0.1%",
+        "values": [
+          0.0015,
+          0.15,
+          0.0,
+          0.2,
+          0.15
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Among the largest sampled token accounts, one unidentified wallet holds 0.1% of the total supply."
+          },
+          {
+            "voice": "blunt",
+            "text": "One unidentified wallet: 0.1% of supply."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_cash_flow",
+        "label": "SOL the creator's balance changed by across sale transactions -- their net SOL change per sale, summed across every decoded sale by the deployer or fee recipient; fees and any rent refund or rent payment are included, since Solana has no separate swap amount to isolate them from",
+        "rendered": "20.2339 SOL",
+        "values": [
+          20.23399982
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The creator's net SOL change across every decoded sale of this token is 20.2339 SOL -- their balance change per sale transaction, fees and rent included, summed across every decoded sale by the deployer or fee recipient."
+          },
+          {
+            "voice": "blunt",
+            "text": "Creator net SOL change across sales: 20.2339 SOL."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_cash_flow",
+        "label": "observed net cash flow on Pons v2 -- sale proceeds minus quote spent buying in, across every decoded trade by the deployer or fee recipient; excludes gas, fees and anything still held but not sold",
+        "rendered": "20.2231 SOL",
+        "values": [
+          20.22317358
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The creator's observed net cash flow on Pons v2 is 20.2231 SOL -- sale proceeds minus what they spent buying in, nothing else."
+          },
+          {
+            "voice": "blunt",
+            "text": "Observed net cash flow: 20.2231 SOL."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_transactions",
+        "label": "transactions by this creator's address (transactions, not launches)",
+        "rendered": "at least 453",
+        "values": [
+          453.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Real or Rug has seen at least 453 transactions from this creator's address -- transactions, not launches."
+          },
+          {
+            "voice": "blunt",
+            "text": "That address has at least 453 transactions on it. Transactions, not launches."
+          }
+        ]
+      }
+    ],
+    "untrusted": [
+      [
+        "token name",
+        "Pump Printer"
+      ],
+      [
+        "token symbol",
+        "PRINTER"
+      ]
+    ],
+    "unknown": [
+      "where 1 of the 4 checked early buyers got their money could not be read"
+    ],
+    "signals": [],
+    "twins": [],
+    "skipped": [
+      "same-window buyers' linked holdings needs the launch's total supply",
+      "how many same-window buyers are fresh needs every checked candidate's pre-launch transaction count, and at least one was not read",
+      "whether same-window buy sizes are close to each other needs every checked buyer's spend, and at least one was not read"
+    ]
+  }
+}
