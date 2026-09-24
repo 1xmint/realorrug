@@ -20,6 +20,7 @@ mod narratives;
 mod record_launches;
 mod replay;
 mod roast;
+mod rpc_arg;
 
 use std::process::ExitCode;
 
@@ -79,7 +80,7 @@ commands:
                                  no trade but the launcher's own stated buy,
                                  no extra snipe-tax exemption. Read-only
   launch-check solana --signature <sig> --treasury <addr> --dev-wallet <addr>
-                --dev-buy-lamports <n> [--rpc URL] [--seconds N]
+                --dev-buy-lamports <n> --rpc URL [--seconds N]
                                  whether a pump.fun launch (ADR 0037 decision
                                  6) is clean: exactly one create/create_v2,
                                  fees to the treasury, mint and freeze

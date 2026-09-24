@@ -477,8 +477,7 @@ fn check_allowlist(tx: &Transaction, dev_wallet: &Address) -> CheckOutcome {
         // events from instruction data); it is not one of the pumpfun
         // `Instruction` variants and would otherwise be refused as an
         // undecodable instruction below.
-        if realorrug_decode::Discriminator::from_data(&ix.data) == Some(pumpfun::ANCHOR_EVENT_CPI)
-        {
+        if realorrug_decode::Discriminator::from_data(&ix.data) == Some(pumpfun::ANCHOR_EVENT_CPI) {
             continue;
         }
         let decoded = realorrug_decode::decode(realorrug_decode::Program::PumpFun, &ix.data);
@@ -579,7 +578,9 @@ mod tests {
     }
 
     fn curve_bytes(creator: Address) -> Vec<u8> {
-        let mut data = vec![0u8; 8 + 5 * 8 + 1 + 32];
+        // Through `is_mayhem_mode` (byte 81, left 0: off); a curve that ends
+        // before it refuses, as `a_curve_too_short_for_the_mayhem_flag_refuses` holds.
+        let mut data = vec![0u8; 8 + 5 * 8 + 1 + 32 + 1];
         data[..8].copy_from_slice(&realorrug_pumpfun::curve::DISCRIMINATOR);
         // Non-zero reserves so a real curve would price; irrelevant here.
         data[8..16].copy_from_slice(&1u64.to_le_bytes());
@@ -631,7 +632,14 @@ mod tests {
     fn a_failed_transaction_refuses_every_check() {
         let (mut t, treasury, dev_wallet, _mint) = passing_tx();
         t.failed = true;
-        let result = check_launch(&t, AccountState::Absent, AccountState::Absent, &treasury, &dev_wallet, 1_000_000);
+        let result = check_launch(
+            &t,
+            AccountState::Absent,
+            AccountState::Absent,
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
         assert!(!result.clean());
         assert_eq!(
             result.transaction,
@@ -651,7 +659,14 @@ mod tests {
         let mut none = t.clone();
         none.instructions
             .retain(|ix| ix.accounts != vec![addr(3).to_string()]);
-        let result = check_launch(&none, AccountState::Absent, AccountState::Absent, &treasury, &dev_wallet, 1_000_000);
+        let result = check_launch(
+            &none,
+            AccountState::Absent,
+            AccountState::Absent,
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
         assert!(!result.single_launch.ok());
         assert_eq!(
             result.single_launch,
@@ -660,7 +675,14 @@ mod tests {
 
         let mut two = t.clone();
         two.instructions.push(create_ix(addr(4), treasury));
-        let result = check_launch(&two, AccountState::Absent, AccountState::Absent, &treasury, &dev_wallet, 1_000_000);
+        let result = check_launch(
+            &two,
+            AccountState::Absent,
+            AccountState::Absent,
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
         assert!(!result.single_launch.ok(), "{:?}", result.single_launch);
         assert!(matches!(&result.single_launch, CheckOutcome::Refuse(r) if r.contains("2 launch")));
     }
@@ -734,7 +756,14 @@ mod tests {
     #[test]
     fn an_unreadable_mint_account_refuses() {
         let (t, treasury, dev_wallet, _mint) = passing_tx();
-        let result = check_launch(&t, AccountState::Absent, AccountState::Absent, &treasury, &dev_wallet, 1_000_000);
+        let result = check_launch(
+            &t,
+            AccountState::Absent,
+            AccountState::Absent,
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
         assert!(!result.authorities.ok());
     }
 
@@ -885,6 +914,168 @@ mod tests {
             matches!(&result.fee_recipient, CheckOutcome::Refuse(r) if r.contains("the launch instruction recorded creator")),
             "{:?}",
             result.fee_recipient
+        );
+    }
+
+    /// Runs the clean launch with its curve bytes swapped for `curve`.
+    fn with_curve(curve: &[u8]) -> LaunchCheck {
+        let (t, treasury, dev_wallet, _mint) = passing_tx();
+        let mint_account = mint_bytes(None, None);
+        check_launch(
+            &t,
+            AccountState::present(curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        )
+    }
+
+    #[test]
+    fn a_curve_in_mayhem_mode_refuses_by_name() {
+        let mut curve = curve_bytes(addr(1));
+        curve[81] = 1;
+        let result = with_curve(&curve);
+        assert!(
+            matches!(&result.fee_recipient, CheckOutcome::Refuse(r) if r.contains("mayhem mode")),
+            "{:?}",
+            result.fee_recipient
+        );
+    }
+
+    #[test]
+    fn a_curve_too_short_for_the_mayhem_flag_refuses() {
+        let mut curve = curve_bytes(addr(1));
+        curve.truncate(81);
+        let result = with_curve(&curve);
+        assert!(
+            matches!(&result.fee_recipient, CheckOutcome::Refuse(r) if r.contains("is_mayhem_mode")),
+            "{:?}",
+            result.fee_recipient
+        );
+    }
+
+    /// Check 3 and 4 carry the slot a read was served at, and a failed read
+    /// its reason, so the operator can tell a node outage from a wrong address.
+    #[test]
+    fn a_read_carries_its_slot_and_a_failed_read_its_reason() {
+        let (t, treasury, dev_wallet, _mint) = passing_tx();
+        let curve = curve_bytes(treasury);
+        let result = check_launch(
+            &t,
+            AccountState::Present {
+                data: &curve,
+                slot: Some(Slot(77)),
+            },
+            AccountState::Failed("rpc transport: timed out".to_owned()),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        assert_eq!(
+            result.fee_recipient,
+            CheckOutcome::Pass(format!("{treasury} (slot 77)"))
+        );
+        assert_eq!(
+            result.authorities,
+            CheckOutcome::Refuse(
+                "the mint account could not be read: rpc transport: timed out".to_owned()
+            )
+        );
+    }
+
+    fn allowlist_with(extra: RawInstruction) -> CheckOutcome {
+        let (mut t, _treasury, dev_wallet, _mint) = passing_tx();
+        t.instructions.push(extra);
+        check_allowlist(&t, &dev_wallet)
+    }
+
+    #[test]
+    fn a_pump_fun_instruction_that_does_not_decode_refuses() {
+        let outcome = allowlist_with(RawInstruction {
+            program: pumpfun::PROGRAM_ID.to_string(),
+            data: vec![0xEE; 8],
+            accounts: Vec::new(),
+        });
+        assert!(
+            matches!(&outcome, CheckOutcome::Refuse(r) if r.contains("did not decode")),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn a_known_pump_fun_instruction_outside_a_launch_refuses_by_name() {
+        let outcome = allowlist_with(RawInstruction {
+            program: pumpfun::PROGRAM_ID.to_string(),
+            data: pumpfun::Instruction::CollectCreatorFee
+                .discriminator()
+                .as_bytes()
+                .to_vec(),
+            accounts: Vec::new(),
+        });
+        assert!(
+            matches!(&outcome, CheckOutcome::Refuse(r) if r.contains("is not allowed in a launch")),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn an_instruction_whose_program_did_not_resolve_refuses() {
+        let outcome = allowlist_with(RawInstruction {
+            program: crate::rpc::UNRESOLVED_PROGRAM.to_owned(),
+            data: Vec::new(),
+            accounts: Vec::new(),
+        });
+        assert!(!outcome.ok(), "{outcome:?}");
+    }
+
+    /// A response with no `meta` leaves `failed` false; that must not read as
+    /// a transaction that succeeded.
+    #[test]
+    fn a_transaction_whose_outcome_was_not_read_refuses() {
+        let (mut t, treasury, dev_wallet, _mint) = passing_tx();
+        t.meta_present = false;
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        let unread = CheckOutcome::Refuse("the transaction's outcome could not be read".to_owned());
+        assert_eq!(result.transaction, unread);
+        assert_eq!(result.single_launch, unread);
+        assert_eq!(result.allowlist, unread);
+    }
+
+    /// A second launch whose payload does not decode still counts as a
+    /// second launch.
+    #[test]
+    fn a_malformed_second_launch_still_counts() {
+        let (mut t, treasury, dev_wallet, _mint) = passing_tx();
+        t.instructions.push(RawInstruction {
+            program: pumpfun::PROGRAM_ID.to_string(),
+            data: pumpfun::Instruction::Create
+                .discriminator()
+                .as_bytes()
+                .to_vec(),
+            accounts: Vec::new(),
+        });
+        let result = check_launch(
+            &t,
+            AccountState::Absent,
+            AccountState::Absent,
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        assert!(
+            matches!(&result.single_launch, CheckOutcome::Refuse(r) if r.contains("2 launch")),
+            "{:?}",
+            result.single_launch
         );
     }
 }

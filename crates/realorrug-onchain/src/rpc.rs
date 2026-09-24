@@ -1985,7 +1985,11 @@ mod tests {
             }}
         });
         let tx = parse_transaction(&raw).expect("a transaction");
-        assert_eq!(tx.instructions.len(), 1, "dropped instead of kept unresolved");
+        assert_eq!(
+            tx.instructions.len(),
+            1,
+            "dropped instead of kept unresolved"
+        );
         assert_eq!(tx.instructions[0].program, UNRESOLVED_PROGRAM);
     }
 

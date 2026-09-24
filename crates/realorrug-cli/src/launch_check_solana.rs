@@ -2,7 +2,8 @@
 //! `realorrug launch-check solana`: the pump.fun arm of the launch check.
 //!
 //! `launch-check solana --signature <sig> --treasury <addr> --dev-wallet
-//! <addr> --dev-buy-lamports <n> [--rpc URL] [--seconds N]` reads the launch
+//! <addr> --dev-buy-lamports <n> --rpc URL [--seconds N]` (or `REALORRUG_RPC`
+//! in place of `--rpc`; one of the two is required) reads the launch
 //! transaction and the accounts it created, and prints either the six checks
 //! that passed or every reason it refuses. Read-only: no key, nothing
 //! signed. This is the instrument ADR 0037 decision 6 and deploy/LAUNCH.md
@@ -15,8 +16,9 @@
 use std::time::Duration;
 
 use realorrug_onchain::budget::{DEFAULT_MAX_CALLS, DEFAULT_MAX_PAGES};
+use realorrug_onchain::pumpfun_launch_check::AccountState;
 use realorrug_onchain::{
-    Budget, CheckOutcome, LaunchCheck, RpcClient, candidate_mint, check_launch,
+    AccountRead, Budget, CheckOutcome, LaunchCheck, RpcClient, candidate_mint, check_launch,
 };
 use realorrug_types::Address;
 
@@ -42,12 +44,32 @@ pub fn run(args: &[String]) -> Result<(), String> {
         .parse()
         .map_err(|e| format!("--dev-buy-lamports: {e}"))?;
 
-    // No default endpoint (rule 7): the public one is rate-limited, and
-    // picking it silently would be picking for the operator.
-    let client = crate::flag(args, "--rpc").map_or_else(
-        || RpcClient::from_vars(&|k| std::env::var(k).ok()),
-        RpcClient::new,
-    );
+    run_with(
+        args,
+        &signature,
+        &treasury,
+        &dev_wallet,
+        dev_buy_lamports,
+        &|k| std::env::var(k).ok(),
+    )
+}
+
+/// [`run`] after its flags are read, with the environment passed in so a test
+/// can hold what an unset one does.
+fn run_with(
+    args: &[String],
+    signature: &str,
+    treasury: &Address,
+    dev_wallet: &Address,
+    dev_buy_lamports: u64,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    // No default endpoint (rule 7): `from_vars` would fall back to the public
+    // one, which is rate-limited, and a refusal caused by that would read as a
+    // finding about the launch.
+    let endpoint = crate::rpc_arg::required_endpoint(args, env)?;
+    let client = RpcClient::new(endpoint.clone());
+    let hide = |e: &dyn std::fmt::Display| crate::rpc_arg::redact(&e.to_string(), &endpoint);
     let seconds = crate::flag(args, "--seconds")
         .and_then(|s| s.parse().ok())
         .unwrap_or(20);
@@ -58,8 +80,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     );
 
     let tx = client
-        .transaction(&mut budget, &signature)
-        .map_err(|e| e.to_string())?
+        .transaction(&mut budget, signature)
+        .map_err(|e| hide(&e))?
         .ok_or_else(|| format!("{signature} is not in a block yet"))?;
 
     // The mint is read from the transaction itself before any account fetch
@@ -67,30 +89,48 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // `check_launch` below still runs its own full scan and refuses on more
     // than one launch instruction, so a second one here is never silently
     // dropped for being second.
+    // A failed read keeps its (redacted) reason and a good one its slot, so a
+    // refusal says whether the node failed or the address was wrong.
     let mint = candidate_mint(&tx);
-    let curve_account = mint
-        .and_then(|m| realorrug_pumpfun::pda::bonding_curve(&m))
-        .and_then(|curve| client.account(&mut budget, &curve).ok().flatten())
-        .map(|a| a.data);
-    let mint_account = mint
-        .and_then(|m| client.account(&mut budget, &m).ok().flatten())
-        .map(|a| a.data);
+    let mut read = |addr: Option<Address>, what: &str| match addr {
+        None => Err(format!(
+            "no {what} address: no launch instruction named a mint"
+        )),
+        Some(a) => client.account(&mut budget, &a).map_err(|e| hide(&e)),
+    };
+    let curve_read = read(
+        mint.and_then(|m| realorrug_pumpfun::pda::bonding_curve(&m)),
+        "bonding curve",
+    );
+    let mint_read = read(mint, "mint");
 
     let result = check_launch(
         &tx,
-        curve_account.as_deref(),
-        mint_account.as_deref(),
-        &treasury,
-        &dev_wallet,
+        state(&curve_read),
+        state(&mint_read),
+        treasury,
+        dev_wallet,
         dev_buy_lamports,
     );
 
-    let text = report(&signature, &result);
+    let text = report(signature, &result);
     if result.clean() {
         print!("{text}");
         Ok(())
     } else {
         Err(text)
+    }
+}
+
+/// One account read, as the check takes it.
+fn state(read: &Result<Option<AccountRead>, String>) -> AccountState<'_> {
+    match read {
+        Ok(Some(a)) => AccountState::Present {
+            data: &a.data,
+            slot: a.slot,
+        },
+        Ok(None) => AccountState::Absent,
+        Err(why) => AccountState::Failed(why.clone()),
     }
 }
 
@@ -139,7 +179,12 @@ mod tests {
     #[test]
     fn only_solana_in_the_second_place_selects_this_arm() {
         let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
-        assert!(selected(&args(&["launch-check", "solana", "--signature", "x"])));
+        assert!(selected(&args(&[
+            "launch-check",
+            "solana",
+            "--signature",
+            "x"
+        ])));
         assert!(!selected(&args(&["launch-check", "--signature", "x"])));
         assert!(!selected(&args(&["launch-check", "robinhood"])));
         assert!(!selected(&args(&["launch-check"])));
@@ -180,6 +225,33 @@ mod tests {
             ])),
             Err("--dev-buy-lamports <n> is required".to_owned())
         );
+    }
+
+    fn flags(rpc: Option<&str>) -> (Vec<String>, Address, Address) {
+        let mut v = vec!["launch-check".to_owned(), "solana".to_owned()];
+        if let Some(r) = rpc {
+            v.extend(["--rpc".to_owned(), r.to_owned()]);
+        }
+        (v, Address::new([1; 32]), Address::new([2; 32]))
+    }
+
+    #[test]
+    fn no_endpoint_configured_is_refused_not_defaulted() {
+        let (args, treasury, dev) = flags(None);
+        assert_eq!(
+            run_with(&args, "sig", &treasury, &dev, 1, &|_| None),
+            Err("--rpc or REALORRUG_RPC is required".to_owned())
+        );
+    }
+
+    /// ureq's bad-URI error quotes the endpoint it was given; a scheme-less
+    /// one fails before any network call, so this never leaves the machine.
+    #[test]
+    fn the_endpoint_key_never_reaches_the_error() {
+        let (args, treasury, dev) = flags(Some("rpc.invalid/?api-key=SENTINEL-4412"));
+        let err = run_with(&args, "sig", &treasury, &dev, 1, &|_| None)
+            .expect_err("a scheme-less endpoint cannot be read");
+        assert!(!err.contains("SENTINEL-4412"), "{err}");
     }
 
     #[test]
