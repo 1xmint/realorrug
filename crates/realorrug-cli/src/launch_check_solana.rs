@@ -124,9 +124,26 @@ fn report(signature: &str, result: &LaunchCheck) -> String {
     text
 }
 
+/// Whether `launch-check`'s arguments ask for this arm rather than the
+/// Robinhood one. A named function, not a guard inline in `main`, so a test
+/// holds which arm "solana" reaches: a guard in `main` has no test to fail.
+#[must_use]
+pub fn selected(args: &[String]) -> bool {
+    args.get(1).map(String::as_str) == Some("solana")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_solana_in_the_second_place_selects_this_arm() {
+        let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert!(selected(&args(&["launch-check", "solana", "--signature", "x"])));
+        assert!(!selected(&args(&["launch-check", "--signature", "x"])));
+        assert!(!selected(&args(&["launch-check", "robinhood"])));
+        assert!(!selected(&args(&["launch-check"])));
+    }
 
     #[test]
     fn required_flags_are_enforced_in_order() {

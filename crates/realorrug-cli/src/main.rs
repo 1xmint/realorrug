@@ -183,10 +183,13 @@ fn main() -> ExitCode {
         "analyst" => analyst::run(&args),
         "audit" => audit::run(&args),
         "creator-index" => creator_index::run(&args),
-        "launch-check" if args.get(1).map(String::as_str) == Some("solana") => {
-            launch_check_solana::run(&args)
+        "launch-check" => {
+            if launch_check_solana::selected(&args) {
+                launch_check_solana::run(&args)
+            } else {
+                launch_check::run(&args)
+            }
         }
-        "launch-check" => launch_check::run(&args),
         "label-outcomes" => label_outcomes::run(&args),
         "model-prices" => model_prices::run(&args),
         "narratives" => narratives::run(&args),

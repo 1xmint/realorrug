@@ -506,6 +506,12 @@ mod tests {
             result.transaction,
             CheckOutcome::Refuse("the transaction failed".to_owned())
         );
+        // The failed transaction still carries its one create instruction, so
+        // this refusal can only come from the failure, not from "no launch".
+        assert_eq!(
+            result.single_launch,
+            CheckOutcome::Refuse("the transaction failed".to_owned())
+        );
     }
 
     #[test]
