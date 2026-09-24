@@ -396,7 +396,13 @@ pub fn write(sheet: &FactSheet, provider: Option<&dyn Provider>) -> Reply {
     // way a clause substitution did, so this is the check that now carries the
     // whole of rule 2 by itself: every digit the model wrote must be one the
     // sheet authorised, or the template ships instead.
-    let fabricated = fidelity::check(&text, &sheet.authorised());
+    // Checked with the token's own shortened mint blanked: its digits name
+    // the token and are not figures (see `fidelity::blank_mint_fragments`).
+    // The published text is `text`, unchanged.
+    let fabricated = fidelity::check(
+        &fidelity::blank_mint_fragments(&text, &sheet.mint),
+        &sheet.authorised(),
+    );
     if !fabricated.is_empty() {
         return Reply {
             text: fallback,
