@@ -1,0 +1,367 @@
+{
+  "mint": "Axo9EE6yU5B3HJpyT6i32fGgV9P13z4eSUzEy9gGpump",
+  "label": "suspicious-launch-creator-buy",
+  "captured_at": "2026-09-24T21:24:04Z",
+  "rules_version": "2026-09-21",
+  "level": "Sketchy",
+  "assessment": {
+    "findings": [
+      {
+        "signal": "creator_bought_own_launch",
+        "group": "CreatorActivity",
+        "episode": "LaunchBlock"
+      }
+    ],
+    "risk_index": 25,
+    "score_bps": 1200,
+    "coverage": {
+      "read": 16,
+      "applicable": 19
+    },
+    "critical_gaps": [],
+    "level": "Sketchy",
+    "admissible": [
+      "Sketchy",
+      "NothingUglyYet"
+    ],
+    "score_level": "Sketchy"
+  },
+  "sheet": {
+    "mint": "Axo9EE6yU5B3HJpyT6i32fGgV9P13z4eSUzEy9gGpump",
+    "read_at": {
+      "Solana": 450149309
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "launch_recipients",
+        "label": "distinct token accounts receiving the token in its own launch block (token accounts, NOT owners, NOT people)",
+        "rendered": "7",
+        "values": [
+          7.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block put it into 7 token accounts -- accounts, not people."
+          },
+          {
+            "voice": "blunt",
+            "text": "It reached 7 token accounts at birth. Accounts, not owners."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "launch_transactions",
+        "label": "transactions in the launch block",
+        "rendered": "3",
+        "values": [
+          3.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block carried 3 transactions."
+          },
+          {
+            "voice": "blunt",
+            "text": "One block, 3 transactions."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "dev_buy",
+        "label": "SOL the creator spent buying their own token in the launch block",
+        "rendered": "1.0000 SOL",
+        "values": [
+          1.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The creator bought 1.0000 SOL of their own token in the launch block."
+          },
+          {
+            "voice": "blunt",
+            "text": "The creator's own bid: 1.0000 SOL."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "about 1 hours old at the read (9258 slots after its launch block)",
+        "values": [
+          9258.0,
+          1.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 1 hours ago -- 9258 slots, by the read point."
+          },
+          {
+            "voice": "blunt",
+            "text": "9258 slots old. Roughly 1 hours."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "funding_checked",
+        "label": "early buyers whose funding at or before their first purchase was checked, of the buyers in the launch window",
+        "rendered": "4 of 19",
+        "values": [
+          4.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Where 4 of the 19 early buyers got their money was checked."
+          },
+          {
+            "voice": "blunt",
+            "text": "Funding checked for 4 of 19 early buyers."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "shared_funder",
+        "label": "checked early buyers that one address sent material value to at or before their first purchase; a flow between addresses, which an exchange also produces, not ownership",
+        "rendered": "2 of 4",
+        "values": [
+          2.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The same address funded 2 of the 4 early buyers checked at or before they bought. That is a flow on chain; an exchange paying out withdrawals looks the same."
+          },
+          {
+            "voice": "blunt",
+            "text": "One address funded 2 of the 4 early buyers checked."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "early_buyers_active_before_launch",
+        "label": "checked early buyers a busy-buyer re-read of their own history found already active on chain, with their first-seen dates",
+        "rendered": "1 of 4; first seen 2026-03-01",
+        "values": [
+          1.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "1 of the 4 early buyers checked already had a transaction on chain, first seen 2026-03-01."
+          },
+          {
+            "voice": "blunt",
+            "text": "1 of 4 already active, first seen 2026-03-01."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "graduated",
+        "label": "has the token graduated off the bonding curve",
+        "rendered": "no",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It is still on its bonding curve."
+          },
+          {
+            "voice": "blunt",
+            "text": "Still on the curve."
+          }
+        ]
+      },
+      {
+        "about": "Price",
+        "kind": "curve_liquidity",
+        "label": "quote asset held in the bonding curve now, read at slot 450149309",
+        "rendered": "2.1460 SOL",
+        "values": [
+          2.14604756
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The curve holds 2.1460 SOL right now, as of slot 450149309."
+          },
+          {
+            "voice": "blunt",
+            "text": "2.1460 SOL in the curve, as of slot 450149309."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "capacity",
+        "label": "quote asset that can be bought before price moves 1% -- this is REAL OR RUG.S OWN impact budget, NOT a ceiling the venue imposes (research 0022)",
+        "rendered": "0.3246 SOL",
+        "values": [
+          0.32467508
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "0.3246 SOL can be bought before the price moves one percent, on Real or Rug's own impact budget."
+          },
+          {
+            "voice": "blunt",
+            "text": "0.3246 SOL before the price moves one percent, by Real or Rug's budget."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "venue_fee",
+        "label": "venue fee, round trip, read from the on-chain schedule",
+        "rendered": "250 bps (2.5%)",
+        "values": [
+          250.0,
+          2.5
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The venue's own round-trip fee, from its on-chain schedule, is 250 bps, which is not the cost of trading it."
+          },
+          {
+            "voice": "blunt",
+            "text": "Venue fee alone: 250 bps round trip. That is the floor, not the bill."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "token_ownership",
+        "label": "share of the total token supply held by the largest owner among the sampled largest accounts, excluding any address proven to be the bonding curve or the PumpSwap AMM pool",
+        "rendered": "3.4%",
+        "values": [
+          0.0341,
+          3.4099999999999997,
+          3.0,
+          3.4,
+          3.41
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Among the largest sampled token accounts, one unidentified wallet holds 3.4% of the total supply."
+          },
+          {
+            "voice": "blunt",
+            "text": "One unidentified wallet: 3.4% of supply."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_cash_flow",
+        "label": "SOL the creator's balance changed by across sale transactions -- their net SOL change per sale, summed across every decoded sale by the deployer or fee recipient; fees and any rent refund or rent payment are included, since Solana has no separate swap amount to isolate them from",
+        "rendered": "0.0000 SOL",
+        "values": [
+          0.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The creator's net SOL change across every decoded sale of this token is 0.0000 SOL -- their balance change per sale transaction, fees and rent included, summed across every decoded sale by the deployer or fee recipient."
+          },
+          {
+            "voice": "blunt",
+            "text": "Creator net SOL change across sales: 0.0000 SOL."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_cash_flow",
+        "label": "observed net cash flow on Pons v2 -- sale proceeds minus quote spent buying in, across every decoded trade by the deployer or fee recipient; excludes gas, fees and anything still held but not sold",
+        "rendered": "-1.0121 SOL",
+        "values": [
+          -1.0121032
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The creator's observed net cash flow on Pons v2 is -1.0121 SOL -- sale proceeds minus what they spent buying in, nothing else."
+          },
+          {
+            "voice": "blunt",
+            "text": "Observed net cash flow: -1.0121 SOL."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_cash_flow",
+        "label": "outgoing token transfers from the creator's deployer or fee-recipient address that were not a decoded sale on the curve -- a count of transfers, never a count of sales",
+        "rendered": "1",
+        "values": [
+          1.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The creator's address also sent 1 outgoing token transfers that were not decoded sales on the curve."
+          },
+          {
+            "voice": "blunt",
+            "text": "Plus 1 outgoing transfers -- transfers, not sales."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_transactions",
+        "label": "transactions by this creator's address (transactions, not launches)",
+        "rendered": "at least 7",
+        "values": [
+          7.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Real or Rug has seen at least 7 transactions from this creator's address -- transactions, not launches."
+          },
+          {
+            "voice": "blunt",
+            "text": "That address has at least 7 transactions on it. Transactions, not launches."
+          }
+        ]
+      }
+    ],
+    "untrusted": [
+      [
+        "token name",
+        "DROPLY"
+      ],
+      [
+        "token symbol",
+        "DROPLY"
+      ]
+    ],
+    "unknown": [],
+    "signals": [
+      "creator_bought_own_launch"
+    ],
+    "twins": [
+      "a creator buying into their own launch block reads the same as a creator buying a token they believe in"
+    ],
+    "skipped": [
+      "same-window buyers' linked holdings needs the launch's total supply",
+      "how many same-window buyers are fresh needs every checked candidate's pre-launch transaction count, and at least one was not read",
+      "whether same-window buy sizes are close to each other needs every checked buyer's spend, and at least one was not read"
+    ]
+  }
+}

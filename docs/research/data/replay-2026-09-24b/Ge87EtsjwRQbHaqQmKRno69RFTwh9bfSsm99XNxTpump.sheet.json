@@ -1,0 +1,241 @@
+{
+  "mint": "Ge87EtsjwRQbHaqQmKRno69RFTwh9bfSsm99XNxTpump",
+  "label": "creator-sale-jimothy",
+  "captured_at": "2026-09-24T21:19:20Z",
+  "rules_version": "2026-09-21",
+  "level": "CantTell",
+  "assessment": {
+    "findings": [],
+    "risk_index": 0,
+    "score_bps": 0,
+    "coverage": {
+      "read": 10,
+      "applicable": 14
+    },
+    "critical_gaps": [
+      "the creator's own buys and sells were not checked"
+    ],
+    "level": "CantTell",
+    "admissible": [
+      "CantTell"
+    ],
+    "score_level": "CantTell"
+  },
+  "sheet": {
+    "mint": "Ge87EtsjwRQbHaqQmKRno69RFTwh9bfSsm99XNxTpump",
+    "read_at": {
+      "Solana": 450148229
+    },
+    "facts": [
+      {
+        "about": "Measurement",
+        "kind": "launch_recipients",
+        "label": "distinct token accounts receiving the token in its own launch block (token accounts, NOT owners, NOT people)",
+        "rendered": "5",
+        "values": [
+          5.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block put it into 5 token accounts -- accounts, not people."
+          },
+          {
+            "voice": "blunt",
+            "text": "It reached 5 token accounts at birth. Accounts, not owners."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "launch_transactions",
+        "label": "transactions in the launch block",
+        "rendered": "4",
+        "values": [
+          4.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "The launch block carried 4 transactions."
+          },
+          {
+            "voice": "blunt",
+            "text": "One block, 4 transactions."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "dev_buy_unseen",
+        "label": "creator's own buy in the launch block",
+        "rendered": "not found -- absent, NOT zero. Do not say the creator bought nothing.",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "No buy by the creator was found in the launch block, which is not the same as none."
+          },
+          {
+            "voice": "blunt",
+            "text": "Real or Rug found no creator buy. Found, not happened."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "age",
+        "label": "how long ago this token's launch block was, on the chain's own clock",
+        "rendered": "about 1882.7 hours old at the read (16944245 slots after its launch block)",
+        "values": [
+          16944245.0,
+          1882.7
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It launched about 1882.7 hours ago -- 16944245 slots, by the read point."
+          },
+          {
+            "voice": "blunt",
+            "text": "16944245 slots old. Roughly 1882.7 hours."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "funding_checked",
+        "label": "early buyers whose funding at or before their first purchase was checked, of the buyers in the launch window",
+        "rendered": "4 of 14",
+        "values": [
+          4.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Where 4 of the 14 early buyers got their money was checked."
+          },
+          {
+            "voice": "blunt",
+            "text": "Funding checked for 4 of 14 early buyers."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "early_buyers_active_before_launch",
+        "label": "checked early buyers a busy-buyer re-read of their own history found already active on chain, with their first-seen dates",
+        "rendered": "1 of 4; first seen 2026-07-14",
+        "values": [
+          1.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "1 of the 4 early buyers checked already had a transaction on chain, first seen 2026-07-14."
+          },
+          {
+            "voice": "blunt",
+            "text": "1 of 4 already active, first seen 2026-07-14."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "graduated",
+        "label": "has the token graduated off the bonding curve",
+        "rendered": "yes",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "It has left the bonding curve and trades on an AMM."
+          },
+          {
+            "voice": "blunt",
+            "text": "Off the curve, on an AMM."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "capacity_after_graduation",
+        "label": "exit capacity",
+        "rendered": "graduated off the curve; it trades on the AMM, which Real or Rug does not price. NOT zero, and NOT 'cannot size into this'.",
+        "values": [],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Real or Rug does not price the AMM it moved to, so it has no exit size for this one."
+          },
+          {
+            "voice": "blunt",
+            "text": "Real or Rug cannot size the AMM it moved to."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "token_ownership",
+        "label": "share of the total token supply held by the largest owner among the sampled largest accounts, excluding any address proven to be the bonding curve or the PumpSwap AMM pool",
+        "rendered": "3.0%",
+        "values": [
+          0.0299,
+          2.9899999999999998,
+          3.0,
+          3.0,
+          2.99
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Among the largest sampled token accounts, one unidentified wallet holds 3.0% of the total supply."
+          },
+          {
+            "voice": "blunt",
+            "text": "One unidentified wallet: 3.0% of supply."
+          }
+        ]
+      },
+      {
+        "about": "Measurement",
+        "kind": "creator_transactions",
+        "label": "transactions by this creator's address (transactions, not launches)",
+        "rendered": "at least 1164",
+        "values": [
+          1164.0
+        ],
+        "clauses": [
+          {
+            "voice": "plain",
+            "text": "Real or Rug has seen at least 1164 transactions from this creator's address -- transactions, not launches."
+          },
+          {
+            "voice": "blunt",
+            "text": "That address has at least 1164 transactions on it. Transactions, not launches."
+          }
+        ]
+      }
+    ],
+    "untrusted": [
+      [
+        "token name",
+        "Jimothy The Raccoon"
+      ],
+      [
+        "token symbol",
+        "Jimothy"
+      ]
+    ],
+    "unknown": [
+      "the creator's own buys and sells were not checked"
+    ],
+    "signals": [],
+    "twins": [],
+    "skipped": [
+      "same-window buyers' linked holdings needs the launch's total supply",
+      "how many same-window buyers are fresh needs every checked candidate's pre-launch transaction count, and at least one was not read",
+      "whether same-window buy sizes are close to each other needs every checked buyer's spend, and at least one was not read"
+    ]
+  }
+}
