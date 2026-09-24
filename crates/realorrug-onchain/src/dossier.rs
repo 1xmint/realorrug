@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use crate::budget::{Budget, Count};
 use crate::launch::{LaunchBlock, Metadata, NotALaunch};
 use crate::memory::{Kind, Memory};
+use crate::mint::mint_authorities;
 use crate::rpc::{RpcClient, RpcError, Transaction};
 use crate::wallets::investigate_solana;
 
@@ -875,52 +876,9 @@ fn share_bps(amount: u128, supply: u128) -> Option<u16> {
     u16::try_from(amount.saturating_mul(10_000) / supply).ok()
 }
 
-/// Reads a mint's two authorities directly from its raw account bytes.
-///
-/// The SPL Token and Token-2022 layouts share these two `COption<Pubkey>`
-/// fields at the same offsets (mint authority's tag at byte 0, its address at
-/// byte 4; freeze authority's tag at byte 46, its address at byte 50), so this
-/// needs no program identity and no extension walk -- unlike
-/// `realorrug_pumpfun::token::MintAccount::parse`, which refuses an
-/// unmodelled extension entirely. Refusing an authority fact because of an
-/// unrelated extension this reader has never seen would be the wrong trade:
-/// the extension might change what a balance is worth, but it cannot move
-/// where these two fields sit.
-///
-/// `MintAccount::parse` already reads `freeze_authority`, but discards
-/// `mint_authority`'s address -- it only needs to know minting is possible,
-/// not by whom. Repeating the two reads here is smaller than widening that
-/// type for the one caller that needs the address.
-///
-/// # Errors
-///
-/// [`RpcError::Malformed`] when the account is shorter than a mint's base
-/// layout, or an option tag is neither zero nor one.
-fn mint_authorities(data: &[u8]) -> Result<(Option<Address>, Option<Address>), RpcError> {
-    if data.len() < 82 {
-        return Err(RpcError::Malformed(format!(
-            "{} bytes, and a mint needs at least 82",
-            data.len()
-        )));
-    }
-    let option = |tag_at: usize, addr_at: usize| -> Result<Option<Address>, RpcError> {
-        let tag = u32::from_le_bytes(data[tag_at..tag_at + 4].try_into().expect("checked above"));
-        match tag {
-            0 => Ok(None),
-            1 => Ok(Some(Address::new(
-                data[addr_at..addr_at + 32]
-                    .try_into()
-                    .expect("checked above"),
-            ))),
-            found => Err(RpcError::Malformed(format!(
-                "mint authority option tag is {found}, which is neither none nor some"
-            ))),
-        }
-    };
-    let mint_authority = option(0, 4)?;
-    let freeze_authority = option(46, 50)?;
-    Ok((mint_authority, freeze_authority))
-}
+// `mint_authorities` moved to `crate::mint` (imported above) so
+// `pumpfun_launch_check`'s check 4 can read the same fact this reader does,
+// rather than keeping a second copy of the byte offsets.
 
 /// The seam ADR 0028 point 2 names: one chain's reads in, one [`Dossier`] out.
 ///

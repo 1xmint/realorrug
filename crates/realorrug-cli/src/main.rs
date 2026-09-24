@@ -14,6 +14,7 @@ mod creator_index;
 mod dossier;
 mod label_outcomes;
 mod launch_check;
+mod launch_check_solana;
 mod model_prices;
 mod narratives;
 mod record_launches;
@@ -77,6 +78,15 @@ commands:
                                  is clean (ADR 0029): the mint to the curve,
                                  no trade but the launcher's own stated buy,
                                  no extra snipe-tax exemption. Read-only
+  launch-check solana --signature <sig> --treasury <addr> --dev-wallet <addr>
+                --dev-buy-lamports <n> [--rpc URL] [--seconds N]
+                                 whether a pump.fun launch (ADR 0037 decision
+                                 6) is clean: exactly one create/create_v2,
+                                 fees to the treasury, mint and freeze
+                                 authorities both revoked, the dev wallet's
+                                 buy matches exactly, nothing else bundled.
+                                 Refuses rather than guessing on any
+                                 unreadable account. Read-only
   label-outcomes [--robinhood-rpc URL] [--memory PATH] [--days N] [--max N]
                  [--dry-run]
                                  what the launches this analyst already judged
@@ -173,6 +183,9 @@ fn main() -> ExitCode {
         "analyst" => analyst::run(&args),
         "audit" => audit::run(&args),
         "creator-index" => creator_index::run(&args),
+        "launch-check" if args.get(1).map(String::as_str) == Some("solana") => {
+            launch_check_solana::run(&args)
+        }
         "launch-check" => launch_check::run(&args),
         "label-outcomes" => label_outcomes::run(&args),
         "model-prices" => model_prices::run(&args),
