@@ -43,10 +43,33 @@
 //! person.
 //!
 //! So an authorised value carries the [`Subject`] it was measured about, and a
-//! sentence that names exactly one subject may only use numbers measured about
-//! that subject. A sentence naming none, or naming two, falls back to plain
-//! membership: the rule fires where it is unambiguous and stays out of the way
-//! everywhere else. See [ADR 0031](../../../docs/adr/0031-the-model-picks-the-story-and-the-evidence-licenses-the-joke.md).
+//! **clause** that names exactly one subject may only use numbers measured
+//! about that subject. A clause naming none, or naming two, falls back to
+//! plain membership: the rule fires where it is unambiguous and stays out of
+//! the way everywhere else. See [ADR 0031](../../../docs/adr/0031-the-model-picks-the-story-and-the-evidence-licenses-the-joke.md).
+//!
+//! # Per clause, not per sentence
+//!
+//! The rule used to read the subject once for the whole sentence, and a real
+//! draft (replay 2026-09-24) showed the hole that leaves: "The largest sampled
+//! owner holds 0.1%; the launch had 7 receiving token accounts, but creator
+//! activity ... remain unread." names "creator" only in its last clause, and a
+//! sentence-wide reading let that one word condemn the 0.1% and the 7 sitting
+//! in clauses of their own that name nobody. Splitting on `;`, `,`, an em or en
+//! dash, and the clause a trailing "but"/"and" starts (see [`clauses`]) fixes
+//! that: a number is judged against the subject named in **its own clause**,
+//! not the nearest one anywhere in the sentence.
+//!
+//! The alternative considered was attributing to the *nearest* subject word
+//! regardless of clause, which would also have passed both drafts above. It is
+//! not what is built here because "nearest" has no natural stopping point --
+//! the nearest subject word to a number one clause over is still a word about
+//! something else, and a rule that reaches across a comma to grab it would
+//! reintroduce exactly the misattribution ADR 0031 exists to catch, just at a
+//! shorter range. What this gives up: a number and its subject that are split
+//! across a clause boundary on purpose ("The creator, who holds 27%, ...") pass
+//! by clause-membership rather than being tied together -- clause splitting
+//! trades that reach for a boundary a reader can see in the punctuation.
 //!
 //! # What it cannot do
 //!
@@ -288,43 +311,81 @@ pub enum Why {
 pub fn check(reply: &str, authorised: &[Authorised]) -> Vec<Fabricated> {
     let mut out = Vec::new();
     for sentence in sentences(reply) {
-        // One named subject and no more. Two is not a contradiction to
-        // resolve, it is a sentence like "the creator's launches all died on
-        // this launchpad", where either subject could own the figure and
-        // refusing would cost a true reply. Ambiguity falls back to plain
-        // membership, which is exactly the rule that shipped before this.
-        let named = named_in(sentence);
-        let about = if named.len() == 1 {
-            named.first()
-        } else {
-            None
-        };
+        for clause in clauses(sentence) {
+            // One named subject and no more. Two is not a contradiction to
+            // resolve, it is a clause like "the creator's largest launch died
+            // on this launchpad", where either subject could own the figure
+            // and refusing would cost a true reply. Ambiguity falls back to
+            // plain membership, which is exactly the rule that shipped before
+            // this. Read per clause, not per sentence -- see the module doc.
+            let named = named_in(clause);
+            let about = if named.len() == 1 {
+                named.first()
+            } else {
+                None
+            };
 
-        for (literal, value) in literals(sentence) {
-            let measured = subjects_of(value, &literal, authorised);
-            if measured.is_empty() {
-                out.push(Fabricated {
-                    literal,
-                    value,
-                    why: Why::NotMeasured,
-                });
-            } else if let Some(&about) = about
-                && !measured.contains(&about)
-                && !measured.contains(&Subject::Anywhere)
-            {
-                out.push(Fabricated {
-                    literal,
-                    value,
-                    // The first, because the list is in sheet order and the
-                    // first fact carrying the value is the one an operator
-                    // reading the log will go and look at.
-                    why: Why::WrongSubject {
-                        measured: measured[0],
-                        written_about: about,
-                    },
-                });
+            for (literal, value) in literals(clause) {
+                let measured = subjects_of(value, &literal, authorised);
+                if measured.is_empty() {
+                    out.push(Fabricated {
+                        literal,
+                        value,
+                        why: Why::NotMeasured,
+                    });
+                } else if let Some(&about) = about
+                    && !measured.contains(&about)
+                    && !measured.contains(&Subject::Anywhere)
+                {
+                    out.push(Fabricated {
+                        literal,
+                        value,
+                        // The first, because the list is in sheet order and the
+                        // first fact carrying the value is the one an operator
+                        // reading the log will go and look at.
+                        why: Why::WrongSubject {
+                            measured: measured[0],
+                            written_about: about,
+                        },
+                    });
+                }
             }
         }
+    }
+    out
+}
+
+/// Splits a sentence into clauses for the per-clause subject rule.
+///
+/// On `;`, an em dash (`—`) or an en dash (`–`) always; on `,` only when it is
+/// not a thousands separator -- the same digit-on-both-sides test
+/// [`literals`] uses to keep "17,497" one number, so clause splitting can
+/// never cut a literal in half. A clause that begins with "but" or "and"
+/// after one of these splits is exactly the shape the module doc's example
+/// needs and needs no separate rule: splitting on the comma or dash in front
+/// of it already starts a new clause there.
+fn clauses(sentence: &str) -> Vec<&str> {
+    let chars: Vec<(usize, char)> = sentence.char_indices().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for (idx, &(byte_i, c)) in chars.iter().enumerate() {
+        let splits = match c {
+            ';' | '—' | '–' => true,
+            ',' => {
+                let prev_digit = idx > 0 && chars[idx - 1].1.is_ascii_digit();
+                let next_digit = chars.get(idx + 1).is_some_and(|&(_, c)| c.is_ascii_digit());
+                !(prev_digit && next_digit)
+            }
+            _ => false,
+        };
+        if splits {
+            let end = byte_i + c.len_utf8();
+            out.push(&sentence[start..end]);
+            start = end;
+        }
+    }
+    if start < sentence.len() {
+        out.push(&sentence[start..]);
     }
     out
 }
@@ -1087,5 +1148,90 @@ mod tests {
             named_in("the DEV, the dev's holder"),
             vec![Subject::Creator, Subject::Holders]
         );
+    }
+
+    // -- 9-23-0020: the subject is read per clause, not per sentence --------
+
+    #[test]
+    fn a_creator_word_in_one_clause_does_not_condemn_a_number_in_another() {
+        // replay 2026-09-24, the snappad draft: every digit is true to the
+        // sheet, and the old sentence-wide reading let "creator" -- named
+        // only in the trailing clause -- refuse the 0.1% and the 7 sitting in
+        // clauses that name nobody at all.
+        let sheet = vec![
+            Authorised {
+                subject: Subject::Holders,
+                value: 0.1,
+            },
+            Authorised {
+                subject: Subject::Launch,
+                value: 7.0,
+            },
+        ];
+        let draft = "The largest sampled owner holds 0.1%; the launch had 7 receiving token \
+                     accounts, but creator activity and most early-buyer funding remain unread.";
+        assert_eq!(super::check(draft, &sheet), Vec::new());
+    }
+
+    #[test]
+    fn a_holder_word_after_a_dash_does_not_condemn_an_earlier_clause() {
+        // replay 2026-09-24, the bingus draft: "holder" arrives after an em
+        // dash, in a clause of its own with no number in it, and must not
+        // reach back across the dash to condemn the token's age.
+        let sheet = vec![
+            Authorised {
+                subject: Subject::Token,
+                value: 114.9,
+            },
+            Authorised {
+                subject: Subject::Holders,
+                value: 2.9,
+            },
+        ];
+        let draft = "BINGUS is about 114.9 hours old, graduated to an AMM, and the largest \
+                     sampled owner holds 2.9%\u{2014}no oversized holder signal.";
+        assert_eq!(super::check(draft, &sheet), Vec::new());
+    }
+
+    #[test]
+    fn a_misattribution_across_a_comma_within_one_clause_is_still_caught() {
+        // The rule narrows to the clause, it does not stop reading the clause
+        // a number is actually written in. "The creator holds 27.6%" is one
+        // clause on its own -- the comma after it starts the next one -- so
+        // the false attribution here must still be refused.
+        let sheet = vec![Authorised {
+            subject: Subject::Holders,
+            value: 27.6,
+        }];
+        let caught = super::check("The creator holds 27.6%, a big share.", &sheet);
+        assert_eq!(caught.len(), 1, "{caught:?}");
+        assert_eq!(
+            caught[0].why,
+            Why::WrongSubject {
+                measured: Subject::Holders,
+                written_about: Subject::Creator,
+            }
+        );
+    }
+
+    #[test]
+    fn clauses_split_on_the_punctuation_the_rule_promises() {
+        assert_eq!(
+            clauses("a; b, c\u{2014}d\u{2013}e"),
+            vec!["a;", " b,", " c\u{2014}", "d\u{2013}", "e"]
+        );
+        // A comma between two digits is a thousands separator and stays in
+        // one clause with the number either side of it, the same test
+        // `literals` itself is held to.
+        assert_eq!(
+            clauses("it moved 17,497 tokens"),
+            vec!["it moved 17,497 tokens"]
+        );
+        // A digit on one side only is still a clause break: both sides must
+        // be digits for a thousands separator. And a trailing break leaves no
+        // empty clause behind it.
+        assert_eq!(clauses("a,5"), vec!["a,", "5"]);
+        assert_eq!(clauses("5,a"), vec!["5,", "a"]);
+        assert_eq!(clauses("a;"), vec!["a;"]);
     }
 }
