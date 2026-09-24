@@ -5079,6 +5079,56 @@ mod tests {
     }
 
     #[test]
+    fn an_original_funder_in_the_purchase_slot_itself_counts() {
+        // The oldest-first read keeps a transfer in the very slot of the
+        // purchase (`slot > first_purchase_slot` skips, not `>=`): a wallet
+        // funded and buying in the same block was funded "at or before" it
+        // bought. Re-applying the bug either way (`>=`, or `==`) skips this
+        // row and leaves the candidate unresolved, so this test fails.
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf1).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let mut responses = three_exhausted_desc_pages(&buyer, slot);
+        responses.push(full_mode_page(
+            &[full_mode_row_timed(
+                "same-slot-sig",
+                &funder,
+                &buyer,
+                500_000,
+                slot,
+                1_700_000_000,
+            )],
+            None,
+        ));
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found, _) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        let found = found.expect("the same-slot funder");
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found.address, funder);
+        assert!(found.original);
+    }
+
+    #[test]
     fn an_original_funder_read_that_finds_nothing_stays_a_gap() {
         // (b) The oldest-first read's own 100 rows hold no material inbound
         // transfer -- the candidate must stay incomplete with a gap, not be

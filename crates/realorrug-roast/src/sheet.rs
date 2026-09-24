@@ -7591,6 +7591,33 @@ mod tests {
         assert_eq!(fact.values, [1.0]);
     }
 
+    /// Two before and one after the launch counts two. The test above has
+    /// one of each, so a reversed comparison (`t > launch`) also counts one
+    /// there and passes; here the reversed comparison counts one, not two.
+    #[test]
+    fn two_early_buyers_active_before_launch_and_one_after_count_two() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        let launch = FIRST_ACTIVE_2026_08_24;
+        funding.checked[0].first_active = Some(launch - 2); // before
+        funding.checked[1].first_active = Some(launch - 1); // before
+        funding.checked[2].first_active = Some(launch + 1); // after
+        dossier.funding = Some(funding);
+        let mut facts = Vec::new();
+        push_early_buyers_active_before_launch(
+            &mut facts,
+            dossier.funding.as_ref().unwrap(),
+            4,
+            Some(launch),
+        );
+
+        let fact = facts
+            .iter()
+            .find(|f| f.kind == Kind::EarlyBuyersActiveBeforeLaunch)
+            .expect("two candidates are before the launch");
+        assert_eq!(fact.values, [2.0]);
+    }
+
     /// No checked candidate ever got a first-active read -> no fact at all,
     /// never a fabricated "0 of 4" (rule 8: absent is not zero).
     #[test]
