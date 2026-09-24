@@ -580,7 +580,10 @@ mod tests {
         // on, and rule 9 says that is not the same as the flag being off.
         assert!(matches!(
             BondingCurve::is_mayhem_mode(&curve_bytes_at_offset_81(None)),
-            Err(Malformed::TooShort { .. })
+            Err(Malformed::TooShort {
+                len: LAYOUT_LEN,
+                needed
+            }) if needed == LAYOUT_LEN + 1
         ));
     }
 

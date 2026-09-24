@@ -40,15 +40,22 @@ pub(crate) fn redact(text: &str, endpoint: &str) -> String {
         text.replace(endpoint, REDACTED)
     };
     for marker in ["api-key=", "api_key=", "API-KEY=", "API_KEY="] {
-        let mut from = 0;
-        while let Some(at) = out[from..].find(marker) {
-            let start = from + at + marker.len();
-            let end = out[start..]
+        // Rebuilt rather than edited in place: each pass consumes the text it
+        // has looked at, so a marker is never found twice and the loop always
+        // ends.
+        let mut kept = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find(marker) {
+            let (head, tail) = rest.split_at(at + marker.len());
+            kept.push_str(head);
+            kept.push_str("REDACTED");
+            let end = tail
                 .find(|c: char| c == '&' || c == '"' || c == '\'' || c.is_whitespace())
-                .map_or(out.len(), |n| start + n);
-            out.replace_range(start..end, "REDACTED");
-            from = start + "REDACTED".len();
+                .unwrap_or(tail.len());
+            rest = &tail[end..];
         }
+        kept.push_str(rest);
+        out = kept;
     }
     out
 }
@@ -94,5 +101,16 @@ mod tests {
         assert!(!out.contains("SENTINEL-7731"), "{out}");
         assert!(out.contains(REDACTED), "{out}");
         assert!(out.ends_with("api_key=REDACTED&a=1"), "{out}");
+    }
+
+    /// A key ends at whatever an error message puts after a URL: a quote,
+    /// an apostrophe or a space, as well as the next query parameter.
+    #[test]
+    fn a_key_ends_at_a_quote_an_apostrophe_or_a_space() {
+        let text = "a \"x/?api-key=K1\" b 'y/?api_key=K2' c z/?API-KEY=K3 d";
+        assert_eq!(
+            redact(text, ""),
+            "a \"x/?api-key=REDACTED\" b 'y/?api_key=REDACTED' c z/?API-KEY=REDACTED d"
+        );
     }
 }

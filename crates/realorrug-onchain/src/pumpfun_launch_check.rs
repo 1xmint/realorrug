@@ -632,6 +632,35 @@ mod tests {
     fn a_failed_transaction_refuses_every_check() {
         let (mut t, treasury, dev_wallet, _mint) = passing_tx();
         t.failed = true;
+        // Accounts that would pass, and a transaction whose outcome *was*
+        // read: every refusal below can only come from the failure itself,
+        // not from "no launch", an unreadable account or an unread outcome.
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        assert!(!result.clean());
+        let failed = CheckOutcome::Refuse("the transaction failed".to_owned());
+        assert_eq!(result.transaction, failed);
+        assert_eq!(result.single_launch, failed);
+        assert_eq!(result.fee_recipient, failed);
+        assert_eq!(result.dev_buy, failed);
+        assert_eq!(result.allowlist, failed);
+    }
+
+    #[test]
+    fn a_single_launch_that_does_not_decode_refuses_with_its_reason() {
+        let (mut t, treasury, dev_wallet, _mint) = passing_tx();
+        // A create discriminator with no accounts and no args: one launch,
+        // and it names no mint.
+        t.instructions[0].accounts.clear();
+        t.instructions[0].data.truncate(8);
         let result = check_launch(
             &t,
             AccountState::Absent,
@@ -640,16 +669,9 @@ mod tests {
             &dev_wallet,
             1_000_000,
         );
-        assert!(!result.clean());
-        assert_eq!(
-            result.transaction,
-            CheckOutcome::Refuse("the transaction failed".to_owned())
-        );
-        // The failed transaction still carries its one create instruction, so
-        // this refusal can only come from the failure, not from "no launch".
         assert_eq!(
             result.single_launch,
-            CheckOutcome::Refuse("the transaction failed".to_owned())
+            CheckOutcome::Refuse("a pump.fun create instruction did not decode".to_owned())
         );
     }
 
