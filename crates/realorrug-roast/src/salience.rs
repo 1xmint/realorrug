@@ -426,17 +426,19 @@ fn token_ownership(sheet: &FactSheet) -> Option<Candidate> {
 /// Gated on the signal, the same reason [`launch_recipients`] and
 /// [`curve_liquidity`] are gated on theirs: `Kind::DevBuy`'s mere presence
 /// (including a measured zero, `push_holders`/the launch-transaction reader's
-/// own "no buy" fact) is not a concern by itself. Ranked at 91, just above
-/// [`concentration`] and [`token_ownership`] (90/85): this fact names the
-/// address as the creator's own, a confirmed action by an identified party,
-/// where concentration and token ownership both say a balance sits at an
-/// *unidentified* one -- research replay 2026-09-24 (case creator-sale-catwif)
-/// found a sheet whose only fired signal was this one still leading with an
-/// unrelated, unfired 4.7% holder share, because no candidate here existed
-/// for `Kind::DevBuy` at all. Still below [`curve_liquidity`] (92): a drained
-/// curve is the fact that actually pairs with `HolderConcentration` to earn
-/// `Rugged` (`crate::verdict::rugged_pair`), and stays the strongest single
-/// fact on any sheet that carries it.
+/// own "no buy" fact) is not a concern by itself. Research replay 2026-09-24
+/// (case creator-sale-catwif) found a sheet whose only fired signal was this
+/// one still leading with an unrelated, unfired 4.7% holder share, because no
+/// candidate here existed for `Kind::DevBuy` at all; [`rank`]'s fired-first
+/// grouping is what puts it ahead of that share, not its priority.
+///
+/// Ranked at 84, just below [`concentration`] and [`token_ownership`]
+/// (90/85), for the sheet where both signals fired: a creator's own buy is
+/// usually small and is disclosed on the same footing as the bot's own
+/// holding (AGENTS.md rule 6), while half the supply at one address is the
+/// number that changes what a reader does next. Ranking it above them (91,
+/// as first written) made the Robinhood fixture lead with a 0.05 ETH buy
+/// over a 50.2% holder (the three Robinhood-fixture tests in `verdict.rs`).
 ///
 /// The sentence reuses the fact's own `Plain` clause rather than a fresh one
 /// written here: `Kind::DevBuy` is worded "in the launch block" on Solana and
@@ -456,7 +458,7 @@ fn dev_buy(sheet: &FactSheet) -> Option<Candidate> {
         .map(|c| c.text.clone())?;
     Some(Candidate {
         id: CandidateId(vec![Kind::DevBuy]),
-        priority: 91,
+        priority: 84,
         sentence,
     })
 }
@@ -949,6 +951,18 @@ mod tests {
             "{}",
             concern.evidence
         );
+    }
+
+    /// Both signals fired: the holder share leads, the creator's buy follows.
+    /// Re-applying the bug (dev buy ranked above the holder shares, 91) makes
+    /// this fail: the buy would lead.
+    #[test]
+    fn a_fired_holder_share_leads_over_a_fired_dev_buy() {
+        let mut sheet = sheet_with(vec![dev_buy_fact(), token_ownership_fact(0.276, "27.6%")]);
+        sheet.signals = vec![Signal::CreatorBoughtOwnLaunch, Signal::HolderConcentration];
+        let ranked = rank(&sheet);
+        assert_eq!(ranked[0].id, CandidateId(vec![Kind::TokenOwnership]));
+        assert_eq!(ranked[1].id, CandidateId(vec![Kind::DevBuy]));
     }
 
     /// A `Kind::DevBuy` fact with no `CreatorBoughtOwnLaunch` signal is a
