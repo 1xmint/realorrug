@@ -1072,14 +1072,23 @@ fn topic(phrase: &str) -> &str {
 /// B: the VPS trial's ordinary-launch draft named the money and the buyers
 /// ("3 of 4 checked early buyers could not be traced to their money
 /// source") but never the interrogative "where", and was refused for it.
+///
+/// "Their", "and", "were", "was" and "own" join them, and so does any bare
+/// count: none of them is the thing that could not be read. The 2026-09-24
+/// replay refused four of five `CantTell` drafts that named the buyers and
+/// their funding plainly ("the funding sources for all 3 checked early
+/// buyers were unreadable") for lacking "their", or for writing "One of 4"
+/// where the phrase said "1 of the 4". A count a reply does state is still
+/// held to the sheet by `fidelity::check`; this check asks only whether the
+/// gap was named.
 fn topic_words(phrase: &str) -> Vec<String> {
     topic(phrase)
         .split_whitespace()
         .filter(|w| {
             !matches!(
                 w.to_lowercase().as_str(),
-                "the" | "a" | "an" | "of" | "where"
-            )
+                "the" | "a" | "an" | "of" | "where" | "their" | "and" | "were" | "was" | "own"
+            ) && !w.chars().all(|c| c.is_ascii_digit())
         })
         .map(|w| {
             let w = w.to_lowercase();
@@ -1112,10 +1121,18 @@ fn stem(word: &str) -> &str {
 /// even though none of them shares "got"'s stem. 9-23-0012 cause B: the
 /// ordinary-launch draft wrote "could not be traced to their money source"
 /// and was refused for missing "got".
+///
+/// "money" takes the same funding words, and the creator's "buys" and
+/// "sells" (`sheet.rs`'s creator-trades gap) take their other tenses: the
+/// 2026-09-24 replay's drafts wrote "funding sources" for the one and
+/// "creator selling was not checked" for the other.
 fn synonyms(word: &str) -> &'static [&'static str] {
     match word {
         "read" => &["unread", "readable", "unreadable", "reading"],
         "got" => &["traced", "money source", "funded", "funding", "funder"],
+        "money" => &["funding", "funds", "funded", "funder"],
+        "buys" => &["buying", "bought"],
+        "sells" => &["selling", "sold"],
         _ => &[],
     }
 }
@@ -2340,6 +2357,59 @@ mod tests {
         assert!(
             check_required(draft, Level::CantTell, &sheet).is_empty(),
             "the real draft should now name the funding gap"
+        );
+    }
+
+    #[test]
+    fn the_2026_09_24_funding_drafts_name_the_gap_and_pass() {
+        // Real drafts the 2026-09-24 replay refused (review.md, cases
+        // incomplete-read-funding, creator-sale-hbull, graduated-pumpswap),
+        // each against its real `sheet.unknown` phrase. Every one names the
+        // checked early buyers and their funding; none writes "their money",
+        // and the first writes "One of 4" for "1 of the 4". Re-apply by
+        // removing "their" from `topic_words`' filter, or its digit filter:
+        // every assertion here fails.
+        let cases = [
+            (
+                "where 1 of the 4 checked early buyers got their money could not be read",
+                "One of 4 checked early buyers has unreadable funding, so its source cannot be \
+                 settled.",
+            ),
+            (
+                "where 4 of the 4 checked early buyers got their money could not be read",
+                "The funding sources for all 4 checked early buyers were unreadable, so the \
+                 early-buy pattern cannot be settled.",
+            ),
+            (
+                "where 4 of the 4 checked early buyers got their money could not be read",
+                "Funding for all 4 checked early buyers was unread, so the launch's \
+                 buyer-funding pattern cannot be settled.",
+            ),
+        ];
+        for (gap, draft) in cases {
+            let sheet = required_sheet(vec![gap.to_owned()]);
+            assert!(
+                check_required(draft, Level::CantTell, &sheet).is_empty(),
+                "{draft}"
+            );
+        }
+
+        // The creator-trades gap: naming the selling alone is half the
+        // topic and still refused; naming both, in any tense, passes.
+        let sheet = required_sheet(vec![
+            "the creator's own buys and sells were not checked".to_owned(),
+        ]);
+        assert_eq!(
+            check_required("Creator selling was not checked.", Level::CantTell, &sheet).len(),
+            1
+        );
+        assert!(
+            check_required(
+                "What the creator bought and sold was not checked.",
+                Level::CantTell,
+                &sheet
+            )
+            .is_empty()
         );
     }
 
