@@ -139,11 +139,12 @@ fn unclaimed_pumpfun(
     vault: &Address,
 ) -> Option<(u64, u64)> {
     let account = client.account(budget, vault).ok().flatten()?;
+    let lamports = account.lamports?;
     let slot = account.slot.map(|s| s.0).unwrap_or_default();
     let rent_exempt = client
         .minimum_balance_for_rent_exemption(budget, account.data.len())
         .ok()?;
-    Some((account.lamports.saturating_sub(rent_exempt), slot))
+    Some((lamports.saturating_sub(rent_exempt), slot))
 }
 
 /// The PumpSwap vault's unclaimed WSOL, with the slot it was read at. `None`
@@ -155,14 +156,21 @@ fn unclaimed_pumpswap(
 ) -> Option<(u64, u64)> {
     let account = client.account(budget, vault).ok().flatten()?;
     let slot = account.slot.map(|s| s.0).unwrap_or_default();
-    let parsed =
-        realorrug_pumpfun::token::TokenAccount::parse(&account.data, &realorrug_pumpfun::token::SPL_TOKEN_PROGRAM)
-            .ok()?;
+    let parsed = realorrug_pumpfun::token::TokenAccount::parse(
+        &account.data,
+        &realorrug_pumpfun::token::SPL_TOKEN_PROGRAM,
+    )
+    .ok()?;
     Some((parsed.amount, slot))
 }
 
 fn sol(lamports: u64) -> String {
-    format!("{:.9}", lamports as f64 / LAMPORTS_PER_SOL)
+    // Display only: a treasury's lifetime lamports stay far below the point
+    // where a `u64` stops being exact in an `f64` (2^53), so nothing here
+    // rounds a receipt away.
+    #[expect(clippy::cast_precision_loss, reason = "display only; see above")]
+    let sol = lamports as f64 / LAMPORTS_PER_SOL;
+    format!("{sol:.9}")
 }
 
 /// What the operator reads: one line per receipt, then totals per vault
@@ -221,14 +229,17 @@ fn report(
             "{} SOL unclaimed in the pump.fun creator vault (slot {slot})",
             sol(amount)
         )),
-        None => lines.push("pump.fun creator vault: could not be read".to_owned()),
+        None => lines.push("pump.fun creator vault: unread (balance could not be read)".to_owned()),
     }
     match pumpswap_unclaimed {
         Some((amount, slot)) => lines.push(format!(
             "{} SOL unclaimed in the PumpSwap coin-creator vault (slot {slot})",
             sol(amount)
         )),
-        None => lines.push("PumpSwap coin-creator vault: could not be read".to_owned()),
+        None => {
+            lines
+                .push("PumpSwap coin-creator vault: unread (balance could not be read)".to_owned());
+        }
     }
 
     if !unread.is_empty() {
@@ -266,9 +277,9 @@ mod tests {
     fn a_report_with_no_receipts_still_names_both_vaults() {
         let text = report(&addr(1), None, &[], &[], None, None);
         assert!(text.contains("(none read)"), "{text}");
-        assert!(text.contains("pump.fun creator vault: could not be read"), "{text}");
+        assert!(text.contains("pump.fun creator vault: unread"), "{text}");
         assert!(
-            text.contains("PumpSwap coin-creator vault: could not be read"),
+            text.contains("PumpSwap coin-creator vault: unread"),
             "{text}"
         );
     }

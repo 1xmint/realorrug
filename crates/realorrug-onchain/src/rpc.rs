@@ -277,11 +277,13 @@ struct AccountValue {
     /// "unclaimed" figure (a vault's lamports minus its rent-exempt
     /// minimum) -- absent from this struct until that reader needed it,
     /// because nothing before it read a balance through `getAccountInfo`
-    /// rather than `pre_balances`/`post_balances`. Defaulted rather than
-    /// required so a canned response written before this field existed
-    /// still parses.
+    /// rather than `pre_balances`/`post_balances`. `Option` rather than a
+    /// defaulted `u64` (AGENTS §3 rule 8: absent is not zero) -- a node
+    /// response that omits this field is a balance we did not read, not a
+    /// vault that holds nothing, and a canned response written before this
+    /// field existed still parses either way.
     #[serde(default)]
-    lamports: u64,
+    lamports: Option<u64>,
 }
 
 /// One account out of a multi-account read.
@@ -333,8 +335,10 @@ pub struct MultiAccountRead {
 pub struct AccountRead {
     /// The account's raw data.
     pub data: Vec<u8>,
-    /// The account's native balance, in lamports.
-    pub lamports: u64,
+    /// The account's native balance, in lamports, when the node reported
+    /// one. `None` is a balance we did not read, not a vault that holds
+    /// nothing (AGENTS §3 rule 8: absent is not zero).
+    pub lamports: Option<u64>,
     /// The slot the node served it at, when the node said.
     pub slot: Option<Slot>,
 }

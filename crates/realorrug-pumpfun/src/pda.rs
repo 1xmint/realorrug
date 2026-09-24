@@ -367,9 +367,7 @@ mod tests {
         // The IDL's seed is a `const` byte array, not a string literal --
         // this is what would catch those thirteen numbers being transcribed
         // as the wrong word.
-        let ascii_seed: &[u8] = &[
-            99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116,
-        ];
+        let ascii_seed: &[u8] = &[99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116];
         assert_eq!(ascii_seed, b"creator_vault");
         assert_eq!(
             pumpswap_coin_creator_vault_authority(&addr(OBSERVED_CREATOR)),
