@@ -86,12 +86,23 @@ that labels it, and the date it was checked. On-chain, the address must
 show the fan-out an exchange has (many distinct recipients in a short
 window), measured and dated in the list's own research note.
 
-When a shared funder is on the list, the sheet says so in place of the
-shared-funder sentence: "N of the checked early buyers were paid out by
-<exchange>'s withdrawal wallet (labelled by <source>, checked <date>)".
-That funder is left out of the shared-funder tally, because thousands of
-strangers withdraw from the same exchange wallet. An exchange-funded buyer
-still counts as resolved: where its money came from was read.
+A funder on the list is left out of the shared-funder tally entirely --
+`shared_funders` (`realorrug-onchain`) sorts it into `Funding::exchange_paid`
+instead of `Funding::shared`, because thousands of strangers withdraw from
+the same exchange wallet. When `exchange_paid` is non-empty, the sheet
+carries a separate fact for the most-funded listed wallet, its own
+`Kind::ExchangePaidEarlyBuyers`, never folded into `Kind::SharedFunder`: "N
+of the checked early buyers were paid out by `<exchange>`'s withdrawal
+wallet (labelled by `<source>`, checked `<date>`)" -- e.g. "Binance's
+withdrawal wallet (labelled by Solscan, checked 2026-09-23) paid out to 2 of
+the 4 early buyers checked, at or before they bought." A single
+exchange-funded buyer (1 of 4) still earns the fact. It is not a signal and
+never moves the score or the level (AGENTS.md rule 4); it ranks in
+`salience.rs` at or below `Kind::SharedFunder`'s own bundle, the resolved
+reading being the less alarming one. Nothing stops both facts appearing on
+the same sheet -- an unlisted address can still share-fund several buyers
+while a listed exchange wallet separately funds others. An exchange-funded
+buyer still counts as resolved: where its money came from was read.
 
 An address not on the list is treated as today. Absence from the list is
 not a claim that the address is not an exchange.
