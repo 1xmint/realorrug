@@ -469,7 +469,9 @@ fn verdict_brief(level: verdict::Level) -> String {
             "NOTHING UGLY YET",
             "Every fact the ladder needed was read, and none of them is bad. The word that \
              earns its place is \"yet\": your reply must state how old the token is, using \
-             the age figure from the sheet, because almost nothing has had time to go wrong.",
+             the age figure from the sheet, in your FIRST sentence, because almost nothing \
+             has had time to go wrong -- put it first because it is required, and a reply \
+             cut at the length limit keeps only its opening.",
         ),
         verdict::Level::CantTell => (
             "CAN'T TELL",
