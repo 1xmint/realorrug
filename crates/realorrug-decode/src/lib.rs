@@ -40,7 +40,7 @@ pub mod pumpswap;
 
 use realorrug_types::Address;
 
-pub use args::{Amount, ArgError, Launch, Layout, Side, Trade};
+pub use args::{Amount, ArgError, Launch, Layout, Side, Trade, TradeEvent};
 pub use discriminator::Discriminator;
 
 /// A program this crate can decode instructions for.
