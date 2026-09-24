@@ -5369,6 +5369,7 @@ mod tests {
             pre_balances: pre.to_vec(),
             post_balances: post.to_vec(),
             failed: false,
+            meta_present: true,
         }
     }
 
@@ -5701,6 +5702,7 @@ mod tests {
             pre_balances: vec![lamports_before],
             post_balances: vec![lamports_after],
             failed: false,
+            meta_present: true,
         };
         tx.pre_token_balances
             .push(token_balance(0, mint, creator, token_before));

@@ -30,11 +30,15 @@ Nothing here is automatic. Signing, spending and launching are Josh's.
    [fee schedule](https://pump.fun/docs/fees) (the creator rate depends on
    stage and market cap), and how the creator fee recipient is set and
    changed.
-6. **Build and run the pump.fun launch check** (not built yet;
-   `realorrug launch-check` today reads Robinhood Pons v2 only). Against the
-   launch transaction it must confirm: the fee recipient is the treasury, mint
-   and freeze authorities are as pump.fun documents them, the dev buy matches
-   what will be published, and nothing else was bundled in.
+6. **Build and run the pump.fun launch check** (built:
+   `realorrug launch-check solana --signature <sig> --treasury <addr>
+   --dev-wallet <addr> --dev-buy-lamports <n> --rpc URL`). Against the launch
+   transaction it confirms: the fee recipient is the treasury, mint and
+   freeze authorities are both revoked, the dev buy matches what will be
+   published, and nothing else was bundled in. The endpoint is required
+   (`--rpc`, or `REALORRUG_RPC` in the environment): with neither it refuses
+   rather than falling back to the rate-limited public one, and it never
+   prints the endpoint, since a Helius URL carries its key.
 
 ## Launch (Josh)
 
@@ -44,8 +48,10 @@ Nothing here is automatic. Signing, spending and launching are Josh's.
 
 ## Right after launch
 
-9. **Run the launch check** from step 6 against the signature. Do not
-   announce a launch it refuses.
+9. **Run the launch check** from step 6 against the signature:
+   `realorrug launch-check solana --signature <sig> --treasury <treasury>
+   --dev-wallet <dev-wallet> --dev-buy-lamports <n> --rpc URL`. Do not announce a
+   launch it refuses.
 10. **Tell the analyst which token is its own:** set `REALORRUG_SELF_MINT` in
     `/etc/realorrug/analyst.env` and restart it. Its start-up log names the
     token.

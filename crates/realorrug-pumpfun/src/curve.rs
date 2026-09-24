@@ -247,6 +247,46 @@ impl BondingCurve {
         })
     }
 
+    /// Reads `is_mayhem_mode` out of raw bonding-curve account data.
+    ///
+    /// Not a field on [`Self`] -- mayhem mode changes the fee math this
+    /// struct's `buy`/`sell` do not model, so a caller pricing a trade should
+    /// never see a curve that silently claims to be a normal one. It lives
+    /// here as its own read instead, for the one caller that needs to know
+    /// the flag exists at all: `realorrug-onchain`'s launch check, which
+    /// refuses a launch created in mayhem mode by name.
+    ///
+    /// Offset 81, straight after the five `u64` reserves (40 bytes), the
+    /// `complete` flag (1 byte) and the 32-byte `creator` this struct already
+    /// reads -- `idl/pump.json`'s `BondingCurve` account, same commit
+    /// `realorrug_onchain::pumpfun_launch_check::ALLOWED_PROGRAMS`'s doc
+    /// cites, field order `complete, creator, is_mayhem_mode`.
+    ///
+    /// # Errors
+    ///
+    /// [`Malformed::TooShort`] when the account does not reach byte 81 at
+    /// all -- rule 9: an account too short to hold the flag is not one that
+    /// reads as mayhem mode being off. Also anything [`Self::parse`] itself
+    /// refuses, since a flag read off an account of the wrong shape is not a
+    /// flag reading at all.
+    pub fn is_mayhem_mode(data: &[u8]) -> Result<bool, Malformed> {
+        Self::parse(data)?;
+        if data.len() <= LAYOUT_LEN {
+            return Err(Malformed::TooShort {
+                len: data.len(),
+                needed: LAYOUT_LEN + 1,
+            });
+        }
+        match data[LAYOUT_LEN] {
+            0 => Ok(false),
+            1 => Ok(true),
+            found => Err(Malformed::NotABool {
+                field: "is_mayhem_mode",
+                found,
+            }),
+        }
+    }
+
     /// The largest buy whose price impact stays within `max_bps`.
     ///
     /// Binary search rather than the closed form, because the closed form would
@@ -505,6 +545,54 @@ mod tests {
         assert_eq!(parsed.token_total_supply, 1_000_000_000_000_000);
         assert!(!parsed.complete);
         assert_eq!(parsed.creator, Address::new([7u8; 32]));
+    }
+
+    fn curve_bytes_at_offset_81(byte_81: Option<u8>) -> Vec<u8> {
+        let len = if byte_81.is_some() {
+            LAYOUT_LEN + 1
+        } else {
+            LAYOUT_LEN
+        };
+        let mut data = vec![0u8; len];
+        data[..8].copy_from_slice(&DISCRIMINATOR);
+        if let Some(b) = byte_81 {
+            data[LAYOUT_LEN] = b;
+        }
+        data
+    }
+
+    #[test]
+    fn is_mayhem_mode_reads_byte_81() {
+        assert_eq!(
+            BondingCurve::is_mayhem_mode(&curve_bytes_at_offset_81(Some(1))),
+            Ok(true)
+        );
+        assert_eq!(
+            BondingCurve::is_mayhem_mode(&curve_bytes_at_offset_81(Some(0))),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn is_mayhem_mode_refuses_an_account_too_short_to_hold_the_flag() {
+        // The core 81-byte layout parses fine on its own -- an account this
+        // short is a bonding curve, just not one this read can see the flag
+        // on, and rule 9 says that is not the same as the flag being off.
+        assert!(matches!(
+            BondingCurve::is_mayhem_mode(&curve_bytes_at_offset_81(None)),
+            Err(Malformed::TooShort {
+                len: LAYOUT_LEN,
+                needed
+            }) if needed == LAYOUT_LEN + 1
+        ));
+    }
+
+    #[test]
+    fn is_mayhem_mode_refuses_a_byte_that_is_not_a_bool() {
+        assert!(matches!(
+            BondingCurve::is_mayhem_mode(&curve_bytes_at_offset_81(Some(2))),
+            Err(Malformed::NotABool { .. })
+        ));
     }
 
     #[test]

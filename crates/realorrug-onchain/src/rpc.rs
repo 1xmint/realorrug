@@ -120,6 +120,17 @@ pub struct Transaction {
     pub post_balances: Vec<u64>,
     /// Whether the transaction failed.
     pub failed: bool,
+    /// Whether the node's response carried a `meta` object at all.
+    ///
+    /// **Load-bearing for the launch check.** `failed` reads `meta.err`, and an
+    /// absent `meta` makes that read `None` the same way a present-but-null
+    /// `err` does -- so without this field a malformed response with no
+    /// `meta` reads identically to a transaction that succeeded (rule 8:
+    /// absent is not zero). Every other caller in this crate still reads
+    /// `failed` alone; this field exists so the launch check specifically can
+    /// tell the two apart and refuse rather than pass a transaction it never
+    /// actually read the outcome of.
+    pub meta_present: bool,
 }
 
 /// One instruction, reduced to what a discriminator match needs.
@@ -1152,6 +1163,7 @@ pub fn parse_transaction(raw: &serde_json::Value) -> Option<Transaction> {
         accounts,
         instructions,
         failed,
+        meta_present: meta.is_some(),
     })
 }
 
@@ -1168,15 +1180,22 @@ fn lamport_balances(meta: Option<&serde_json::Value>, field: &str) -> Vec<u64> {
     list.iter().filter_map(serde_json::Value::as_u64).collect()
 }
 
+/// What an instruction's program reads as when its `programIdIndex` does not
+/// resolve against the account list -- a versioned transaction whose lookup
+/// table did not come back whole, for instance.
+///
+/// Not on the allowlist by construction, so check 6 refuses it by name
+/// instead of the instruction silently vanishing from the scan the way
+/// `continue`-and-drop used to leave it (rule 8: unknown is not safe).
+pub(crate) const UNRESOLVED_PROGRAM: &str = "<program index did not resolve>";
+
 fn collect_instructions(
     list: &[serde_json::Value],
     accounts: &[String],
     out: &mut Vec<RawInstruction>,
 ) {
     for ix in list {
-        let Some(program) = program_of(ix, accounts) else {
-            continue;
-        };
+        let program = program_of(ix, accounts).unwrap_or_else(|| UNRESOLVED_PROGRAM.to_owned());
         let data = ix
             .get("data")
             .and_then(|d| d.as_str())
@@ -1936,6 +1955,42 @@ mod tests {
             "transaction": { "message": { "accountKeys": [], "instructions": [] } }
         });
         assert!(parse_transaction(&raw).expect("a transaction").failed);
+    }
+
+    #[test]
+    fn a_response_with_no_meta_is_not_read_as_succeeded() {
+        // `failed` reads `meta.err`, which is `None` both when `meta.err` is
+        // present-and-null and when `meta` is missing entirely -- a malformed
+        // response must not read as the first case (rule 8).
+        let raw = serde_json::json!({
+            "slot": 1u64,
+            "transaction": { "message": { "accountKeys": [], "instructions": [] } }
+        });
+        let tx = parse_transaction(&raw).expect("a transaction");
+        assert!(!tx.failed);
+        assert!(!tx.meta_present, "meta was never in the response");
+    }
+
+    #[test]
+    fn an_instruction_whose_program_index_does_not_resolve_is_kept_not_dropped() {
+        // A launch-check scan that never sees this instruction at all would
+        // wave a bundled unknown program through -- rule 8 says unknown is
+        // not safe, so it has to show up as *something* to refuse against.
+        let raw = serde_json::json!({
+            "slot": 1u64,
+            "meta": {"err": null},
+            "transaction": { "message": {
+                "accountKeys": ["A"],
+                "instructions": [ { "programIdIndex": 9, "data": "2", "accounts": [] } ]
+            }}
+        });
+        let tx = parse_transaction(&raw).expect("a transaction");
+        assert_eq!(
+            tx.instructions.len(),
+            1,
+            "dropped instead of kept unresolved"
+        );
+        assert_eq!(tx.instructions[0].program, UNRESOLVED_PROGRAM);
     }
 
     #[test]
