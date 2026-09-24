@@ -1085,11 +1085,28 @@ impl FactSheet {
             push_holders(&mut facts, &mut signals, holders);
         }
 
+        // Read once, used both to compare against each checked candidate's
+        // funder (just below) and to look up the creator's own launch record
+        // (further down): the launch block is preferred, the curve account
+        // is the fallback for a launch block past the signature-page budget
+        // (see the fuller comment at the creator-record lookup below).
+        let creator_address = dossier
+            .launch
+            .as_ref()
+            .map(|l| realorrug_types::ChainAddress::Solana(l.creator))
+            .or_else(|| dossier.curve.as_ref().map(|c| c.creator));
+
         // Slice 3 (design 0027): who funded the first buyers. Only the
         // Robinhood reader fills this; a read that stopped short names its
         // gap in `unknown` beside the facts it did get.
         if let Some(funding) = &dossier.funding {
-            push_funding(&mut facts, &mut unknown, funding);
+            push_funding(
+                &mut facts,
+                &mut unknown,
+                &mut signals,
+                funding,
+                creator_address.map(|a| a.to_string()).as_deref(),
+            );
             // Research 0052 §3.1's S2 row's four buyer-derived factors --
             // split out because they read `dossier.powers` and
             // `dossier.chain_launch`'s supply too, neither of which
@@ -1117,12 +1134,7 @@ impl FactSheet {
         // every coin with real history, which is every coin somebody bothers to
         // ask about. The curve account carries the creator regardless of age,
         // so the launch block is preferred and the curve is the fallback.
-        let creator = dossier
-            .launch
-            .as_ref()
-            .map(|l| realorrug_types::ChainAddress::Solana(l.creator))
-            .or_else(|| dossier.curve.as_ref().map(|c| c.creator));
-        if let (Some(index), Some(address)) = (creators, creator) {
+        if let (Some(index), Some(address)) = (creators, creator_address) {
             let creator = address.to_string();
             push_creator(&mut facts, &mut unknown, &creator, index, chain);
             // Measured and none organic. A creator whose launches have not been
@@ -2168,7 +2180,21 @@ fn push_holders(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, holders: &Hold
 ///
 /// Dust never reaches here: `wallets.rs` marks a funder material only
 /// against the purchase, and `Funding::shared` counts material funders only.
-fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Funding) {
+///
+/// `creator` is the launch's own creator address, in the same canonical text
+/// form `Funder::address` is written in (`ChainAddress::to_string`,
+/// `FactSheet::build`'s own call site) -- so a case difference between the
+/// two can never hide a match. `None` when the creator could not be read:
+/// design 0031 §2 and AGENTS.md rule 8 both refuse to publish a comparison
+/// against an unmeasured address, so no fact and no signal follow, the same
+/// as any other "creator unknown" branch on this sheet.
+fn push_funding(
+    facts: &mut Vec<Fact>,
+    unknown: &mut Vec<String>,
+    signals: &mut Vec<Signal>,
+    funding: &Funding,
+    creator: Option<&str>,
+) {
     let checked = u32::try_from(funding.checked.len()).unwrap_or(u32::MAX);
     if checked == 0 {
         // No candidate checked is not "nobody funded anybody"; the gap
@@ -2253,9 +2279,64 @@ fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Fund
             ),
         );
     }
+    push_creator_funded_early_buyers(facts, signals, funding, creator, checked);
     if !funding.gaps.is_empty() {
         unknown.push(funding_gap_message(funding, checked));
     }
+}
+
+/// Design 0031 §2: the creator's own address compared against each checked
+/// candidate's *material* funders (recent or original alike --
+/// [`Funder::original`]'s own doc comment says an original funder counts
+/// toward this exactly as a recent one does). A non-material transfer
+/// (dust) never matches here, because the filter below reads
+/// [`Funder::material`] the same way [`shared_funders`] does. Creator
+/// unknown -> `creator` is `None` -> no fact, no signal (AGENTS.md rule 8).
+///
+/// Split out of [`push_funding`] only to stay under clippy's line-count cap,
+/// not because the comparison differs in kind from the shared-funder one
+/// just above it.
+fn push_creator_funded_early_buyers(
+    facts: &mut Vec<Fact>,
+    signals: &mut Vec<Signal>,
+    funding: &Funding,
+    creator: Option<&str>,
+    checked: u32,
+) {
+    let Some(creator) = creator else { return };
+    let funded = u32::try_from(
+        funding
+            .checked
+            .iter()
+            .filter(|c| c.funders.iter().any(|f| f.material && f.address == creator))
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    if funded == 0 {
+        return;
+    }
+    facts.push(
+        Fact::exact(
+            Kind::CreatorFundedEarlyBuyers,
+            "checked early buyers the launch's own creator address sent material value to at \
+             or before their first purchase; a flow between addresses, not ownership or \
+             control",
+            f64::from(funded),
+            format!("{funded} of {checked}"),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "The creator's address sent money to {funded} of the {checked} early buyers \
+                 checked, at or before they bought."
+            ),
+        )
+        .saying(
+            Voice::Blunt,
+            format!("Creator's address funded {funded} of the {checked} early buyers checked."),
+        ),
+    );
+    signals.push(Signal::CreatorFundedEarlyBuyers);
 }
 
 /// The sentence for an unfinished funding check, once `funding.gaps` says
@@ -7083,6 +7164,128 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert!(fact_of(&sheet, Kind::FundingChecked).is_some());
         assert!(fact_of(&sheet, Kind::SharedFunder).is_none());
+    }
+
+    /// `robinhood_dossier_for`'s own creator address ([9u8; 20], its
+    /// `curve.creator`), in the same canonical text form `Funder::address`
+    /// is written in -- so a test can hand a candidate a funder that *is* or
+    /// *is not* the creator without duplicating the address literal.
+    fn robinhood_creator_address() -> String {
+        realorrug_robinhood::Address([9u8; 20]).to_string()
+    }
+
+    /// A material funder into one candidate at the creator's own address.
+    fn creator_funder(material: bool) -> realorrug_onchain::Funder {
+        realorrug_onchain::Funder {
+            address: robinhood_creator_address(),
+            amount_wei: 1,
+            block: 1,
+            transaction: "0x1".to_owned(),
+            unique_id: "1".to_owned(),
+            material,
+            original: false,
+        }
+    }
+
+    #[test]
+    fn creator_funding_a_material_candidate_is_a_fact_and_a_signal() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].funders.push(creator_funder(true));
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let fact = fact_of(&sheet, Kind::CreatorFundedEarlyBuyers)
+            .expect("the creator materially funded a checked candidate");
+        assert_eq!(fact.values, [1.0]);
+        assert_eq!(fact.rendered, "1 of 4");
+        let words = clause_words(fact);
+        for word in OWNERSHIP_WORDS {
+            assert!(!words.contains(word), "{word:?} in {words}");
+        }
+        assert!(
+            !words.contains("owns") && !words.contains("controls") && !words.contains("insider"),
+            "{words}"
+        );
+        assert!(
+            sheet.signals.contains(&Signal::CreatorFundedEarlyBuyers),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
+    /// A funder that lands at the creator's own address but was marked
+    /// non-material (dust) must not count: only `Funder::material` transfers
+    /// are compared, the same rule `shared_funders` applies.
+    #[test]
+    fn creator_funding_a_non_material_candidate_is_neither_fact_nor_signal() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].funders.push(creator_funder(false));
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        assert!(fact_of(&sheet, Kind::CreatorFundedEarlyBuyers).is_none());
+        assert!(!sheet.signals.contains(&Signal::CreatorFundedEarlyBuyers));
+    }
+
+    /// No creator address read at all (neither launch nor curve) -> the
+    /// comparison never runs: absent is not zero (rule 8).
+    #[test]
+    fn creator_funding_with_no_creator_read_is_neither_fact_nor_signal() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.curve = None;
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].funders.push(creator_funder(true));
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        assert!(fact_of(&sheet, Kind::CreatorFundedEarlyBuyers).is_none());
+        assert!(!sheet.signals.contains(&Signal::CreatorFundedEarlyBuyers));
+    }
+
+    /// Two candidates materially funded by the creator -> "2 of 4": the
+    /// count is pinned, not just its presence.
+    #[test]
+    fn creator_funding_counts_every_candidate_it_touched() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].funders.push(creator_funder(true));
+        funding.checked[1].funders.push(creator_funder(true));
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let fact = fact_of(&sheet, Kind::CreatorFundedEarlyBuyers).expect("two funded");
+        assert_eq!(fact.values, [2.0]);
+        assert_eq!(fact.rendered, "2 of 4");
+    }
+
+    /// Design 0031 §2: on its own this signal earns `Sketchy`, the same
+    /// footing as `CreatorBoughtOwnLaunch` -- not `RugMechanicsLive`, which
+    /// needs two distinct episodes.
+    #[test]
+    fn creator_funded_early_buyers_alone_is_sketchy() {
+        // Built directly rather than through `FactSheet::build`: that path
+        // (via `robinhood_dossier_for`, which sets no `launch`/`chain_launch`)
+        // always adds "the launch block could not be read" to `unknown`, and
+        // `verdict::level` checks `unknown` before it counts signals -- this
+        // test would see `CantTell` no matter what the signal did. Mirrors
+        // `verdict.rs`'s own `sheet_with` fixture, which exists for exactly
+        // this reason.
+        let signals = vec![Signal::CreatorFundedEarlyBuyers];
+        let twins = signals.iter().map(|&s| twin_for(s).to_owned()).collect();
+        let sheet = FactSheet {
+            mint: "MintCreatorFunding".to_owned(),
+            read_at: None,
+            facts: Vec::new(),
+            untrusted: Vec::new(),
+            unknown: Vec::new(),
+            signals,
+            twins,
+            skipped: Vec::new(),
+        };
+
+        assert_eq!(crate::verdict::level(&sheet), crate::verdict::Level::Sketchy);
     }
 
     #[test]
