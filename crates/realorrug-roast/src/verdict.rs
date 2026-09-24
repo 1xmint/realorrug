@@ -1783,9 +1783,20 @@ pub(crate) mod tests {
         dossier_sheet
             .facts
             .retain(|f| !f.label.contains("held by the single largest address"));
-        assert_eq!(
-            headline(&dossier_sheet).as_deref(),
-            Some("529 addresses hold it, not counting the bonding curve.")
+        // Not asserted as the headline any more: with the share gone the
+        // fixture's only fact behind a fired signal is the launcher's own
+        // buy, and a fired signal's fact leads (salience::rank). The count
+        // still ranks, and still says nothing about a share it lacks.
+        let ranked = crate::salience::rank(&dossier_sheet);
+        assert!(
+            ranked
+                .iter()
+                .any(|c| c.sentence == "529 addresses hold it, not counting the bonding curve."),
+            "{ranked:?}"
+        );
+        assert!(
+            ranked.iter().all(|c| !c.sentence.contains("0%")),
+            "{ranked:?}"
         );
     }
 

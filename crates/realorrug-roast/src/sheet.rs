@@ -2686,6 +2686,21 @@ fn push_window_sizes_and_exemption(
              checked candidates"
                 .to_owned(),
         );
+    } else if funding
+        .checked
+        .iter()
+        .any(|candidate| candidate.bought_wei == 0)
+    {
+        // A buyer is a wallet that bought, so a spend of 0 is a spend not
+        // read, never a measured zero: the Solana reader leaves it 0 because
+        // `buyers_in` sees which balances rose, not by how much. Comparing
+        // those zeros said "within 10%" on every Solana case (research 0056
+        // addendum), a claim nothing measured (AGENTS.md rule 8).
+        skipped.push(
+            "whether same-window buy sizes are close to each other needs every checked \
+             buyer's spend, and at least one was not read"
+                .to_owned(),
+        );
     } else {
         let smallest = funding
             .checked
@@ -8389,6 +8404,31 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         let f = fact_of(&sheet, Kind::WindowBuySizesWithinTenPercent).expect("two candidates");
         assert_eq!(f.rendered, "within 10%");
+    }
+
+    #[test]
+    fn an_unread_spend_gives_no_buy_size_comparison() {
+        // The Solana reader leaves `bought_wei` at 0; two zeros once read as
+        // "within 10%" on every Solana case. One unread spend is enough to
+        // withhold the comparison, not just all of them.
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with(
+            2,
+            vec![
+                s2_candidate(1, 0, Some(1), Some(0)),
+                s2_candidate(2, 100, Some(1), Some(0)),
+            ],
+        ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::WindowBuySizesWithinTenPercent).is_none());
+        assert!(
+            sheet
+                .skipped
+                .iter()
+                .any(|s| s.contains("buy sizes are close") && s.contains("not read")),
+            "{:?}",
+            sheet.skipped
+        );
     }
 
     #[test]
