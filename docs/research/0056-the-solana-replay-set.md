@@ -719,6 +719,45 @@ candidate. Now only a JSON-RPC "method not found" does that; any other
 first-page error is that candidate's gap. The existing `method_unsupported`
 helper was not reused: its "not supported" matches this refusal too.
 
+## Addendum, 2026-09-24: with busy buyers read, no case is `CantTell`
+
+The build of `bba06c2` ([design 0031](../design/0031-busy-early-buyers.md):
+original funder, creator-funded buyers, exchange wallets) recaptured the
+same nine mints on the VPS, then `replay cases --model` wrote
+[`data/replay-2026-09-24/review.md`](data/replay-2026-09-24/review.md).
+Sheets and review are exactly what the build wrote.
+
+| label | before (`d152e9c`) | now (`bba06c2`) | funding facts now | reply |
+|---|---|---|---|---|
+| ordinary-launch | `CantTell` | `NothingUglyYet` | 4 of 4 checked; exchange paid 2; 1 active before | model |
+| creator-sale-catwif | `Sketchy` (creator bought own launch) | same | 4 of 4; exchange paid 1 | model |
+| suspicious-launch-snappad | `CantTell` | `NothingUglyYet` | 4 of 4; one address funded 2 (a fact, no signal fired); 1 active before | template (model draft refused, `WrongSubject`) |
+| creator-sale-hbull | `CantTell` (holder concentration) | `Sketchy` (holder concentration) | 4 of 4; 1 active before | model |
+| misleading-concentration-pool | `CantTell` | `NothingUglyYet` | 4 of 4; exchange paid 2; 2 active before | template (model draft refused, `WrongSubject`) |
+| incomplete-read-versioned-tx | `CantTell` | `NothingUglyYet` | 4 of 4; exchange paid 1; 2 active before | model |
+| graduated-pumpswap | `CantTell` | `NothingUglyYet` | 4 of 4; 1 active before | model |
+| creator-sale-jimothy | `CantTell` | `NothingUglyYet` | 4 of 4; 1 active before | model |
+| suspicious-launch-pay | `CantTell` | `NothingUglyYet` | 4 of 4; 3 active before | model |
+
+Every capture reported zero gaps and no critical gap. All 54 checks in the
+review pass (three per reply and three per report, nine cases). The
+creator-funded fact fired on none of the nine.
+
+What this settles and what it does not:
+
+- **Observed:** the `CantTell` in eight of nine was only the unread busy
+  buyer, as the previous addendum said. Nothing else was holding the level.
+- **The labels no longer describe the verdicts.** The two
+  `suspicious-launch-*` mints were chosen from DexScreener price shape
+  alone (a fast pump then a fast drop), expected to be unreadable; read in
+  full, the chain shows nothing the rules count as a signal. That is either
+  an honest "nothing ugly yet" or a signal the rules lack; the owner's
+  review decides which. The `incomplete-read-*` mint now reads completely,
+  so the set holds no real incomplete read. No `creator-sale-*` case shows a
+  sale: `CreatorSoldOut` is still unwired (blocked on design 0021).
+- **Still missing for the six kinds plan 0002 names:** a launch the rules
+  themselves flag as suspicious, a real incomplete read, and a creator sale.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
