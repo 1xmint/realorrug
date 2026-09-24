@@ -67,6 +67,7 @@ pub mod reserves;
 pub mod robinhood;
 pub mod roles;
 pub mod rpc;
+pub mod treasury_receipts;
 pub mod wallets;
 
 pub use budget::{Budget, Count, Exhausted};
@@ -83,4 +84,7 @@ pub use pumpfun_launch_check::{CheckOutcome, LaunchCheck, candidate_mint, check_
 pub use reserves::{PoolReserves, Role, Unreadable};
 pub use robinhood::{Error as RobinhoodError, RobinhoodReader};
 pub use rpc::{AccountRead, MultiAccountRead, OwnedAccount, RpcClient, RpcError};
+pub use treasury_receipts::{
+    Receipt, SignedTransaction, Unread, VaultAddresses, VaultKind, find_receipts,
+};
 pub use wallets::{Candidate, ExchangePaid, Funder, Funding, SharedFunder};
