@@ -75,6 +75,7 @@ use realorrug_robinhood::pons::{self, CreatorRole, LaunchedToken, Side, Trade, T
 use realorrug_robinhood::{Address, Hash32, Log, LogsError, Rpc, quantity, quantity_u128};
 
 use crate::budget::Budget;
+use crate::exchange_wallets;
 use crate::memory::{CheckRun, Completeness, FundingEdge, Memory};
 use crate::rpc::{
     FULL_TRANSACTIONS_PAGE_SIZE, RpcClient, SignatureInfo, Transaction, is_last_page,
@@ -306,6 +307,16 @@ pub struct Funder {
     pub unique_id: String,
     /// Whether it was material against the candidate's purchase.
     pub material: bool,
+    /// Whether this is the wallet's *original* funder -- its first material
+    /// inbound transfer of all, found by reading its history from the start
+    /// (design 0031 §1) after a backward walk from the purchase failed to
+    /// find one -- rather than a *recent* one, found walking back from the
+    /// purchase itself. An original funder still landed at or before the
+    /// purchase, so it counts toward the shared-funder tally exactly as a
+    /// recent one does (ADR 0040 #1); the distinction is only for wording
+    /// ("the sheet never says an original funder was the most recent one",
+    /// design 0031 §1).
+    pub original: bool,
 }
 
 /// One checked buyer.
@@ -333,6 +344,12 @@ pub struct Candidate {
     pub funders: Vec<Funder>,
     /// Whether every page of its transfer history was read.
     pub funding_complete: bool,
+    /// Unix seconds of the wallet's own first transaction, when design
+    /// 0031 §1's oldest-first read ran (a busy buyer whose backward walk
+    /// found no funder). `None` when that read never ran, including every
+    /// candidate resolved by the ordinary backward walk -- absent, not a
+    /// fabricated "not active before launch" (AGENTS.md rule 8).
+    pub first_active: Option<i64>,
 }
 
 /// A wallet that materially funded more than one checked candidate.
@@ -343,6 +360,29 @@ pub struct Candidate {
 pub struct SharedFunder {
     /// The funder, in the chain's own canonical text form.
     pub address: String,
+    /// How many distinct checked candidates it materially funded.
+    pub funded: u32,
+}
+
+/// A known exchange withdrawal wallet ([`exchange_wallets`]) that materially
+/// funded at least one checked candidate (design 0031 §3).
+///
+/// Kept apart from [`SharedFunder`] rather than folded into it: thousands of
+/// strangers withdraw from the same exchange wallet, so "the same address
+/// funded N of the checked buyers" is true and misleading here in a way it
+/// is not for an ordinary shared funder. A candidate it funded is still
+/// resolved -- where its money came from was read -- so it never affects
+/// [`Funding::checked`] or `funding_complete`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExchangePaid {
+    /// The exchange's name, as the sheet should say it.
+    pub exchange: &'static str,
+    /// The withdrawal wallet, in the chain's own canonical text form.
+    pub address: String,
+    /// The labelling service the exchange and address came from.
+    pub source: &'static str,
+    /// The date the label was read, `YYYY-MM-DD`.
+    pub checked: &'static str,
     /// How many distinct checked candidates it materially funded.
     pub funded: u32,
 }
@@ -365,21 +405,35 @@ pub struct Funding {
     /// The candidates actually checked.
     pub checked: Vec<Candidate>,
     /// Funders that materially funded at least two checked candidates,
-    /// most-funded first.
+    /// most-funded first. Never includes a listed exchange withdrawal
+    /// wallet -- that funder is in [`Funding::exchange_paid`] instead.
     pub shared: Vec<SharedFunder>,
+    /// Listed exchange withdrawal wallets ([`exchange_wallets`]) that
+    /// materially funded at least one checked candidate, most-funded first
+    /// (design 0031 §3). Solana-only today: the table has no Robinhood
+    /// addresses, so this is always empty there.
+    pub exchange_paid: Vec<ExchangePaid>,
     /// What could not be read, each named (AGENTS.md §3 rule 8).
     pub gaps: Vec<String>,
     /// Compute units this investigation spent.
     pub cu_spent: u32,
 }
 
-/// Funders that materially funded two or more of `checked`.
+/// Funders that materially funded two or more of `checked`, split into
+/// ordinary shared funders and listed exchange withdrawal wallets (design
+/// 0031 §3): a wallet on [`exchange_wallets::exchange_withdrawal_wallet`] is
+/// left out of `shared` -- thousands of strangers withdraw from it too, so it
+/// is not evidence the buyers are connected -- and reported in the second
+/// list instead, counted from just one materially-funded candidate (an
+/// exchange did pay that buyer out, however few others it also paid).
 ///
 /// Chain-agnostic: it works from `Funder::address`'s canonical text form and
 /// never parses or compares raw address bytes, so the same function serves
-/// Robinhood's 0x-hex and Solana's base58 without a per-chain branch.
+/// Robinhood's 0x-hex and Solana's base58 without a per-chain branch. The
+/// exchange table is Solana-only, so a Robinhood address never matches it and
+/// the second list is always empty there.
 #[must_use]
-pub fn shared_funders(checked: &[Candidate]) -> Vec<SharedFunder> {
+pub fn shared_funders(checked: &[Candidate]) -> (Vec<SharedFunder>, Vec<ExchangePaid>) {
     let mut counts: BTreeMap<String, u32> = BTreeMap::new();
     for candidate in checked {
         let mut seen: Vec<&str> = Vec::new();
@@ -391,13 +445,24 @@ pub fn shared_funders(checked: &[Candidate]) -> Vec<SharedFunder> {
             }
         }
     }
-    let mut shared: Vec<SharedFunder> = counts
-        .into_iter()
-        .filter(|(_, n)| *n >= 2)
-        .map(|(address, funded)| SharedFunder { address, funded })
-        .collect();
+    let mut shared: Vec<SharedFunder> = Vec::new();
+    let mut exchange_paid: Vec<ExchangePaid> = Vec::new();
+    for (address, funded) in counts {
+        if let Some(wallet) = exchange_wallets::exchange_withdrawal_wallet(&address) {
+            exchange_paid.push(ExchangePaid {
+                exchange: wallet.exchange,
+                address,
+                source: wallet.source,
+                checked: wallet.checked,
+                funded,
+            });
+        } else if funded >= 2 {
+            shared.push(SharedFunder { address, funded });
+        }
+    }
     shared.sort_by(|a, b| b.funded.cmp(&a.funded).then(a.address.cmp(&b.address)));
-    shared
+    exchange_paid.sort_by(|a, b| b.funded.cmp(&a.funded).then(a.address.cmp(&b.address)));
+    (shared, exchange_paid)
 }
 
 /// One call's worth of calls and `cu`, or why there is none.
@@ -496,6 +561,10 @@ fn check_candidate(
         nonce_before_launch: None,
         funders: Vec::new(),
         funding_complete: false,
+        // Robinhood has no busy-buyer original-funder read (design 0031 §1
+        // is Solana-only, built on Helius full mode); this path never sets
+        // it.
+        first_active: None,
     };
 
     match take(budget, CU_GET_CODE).and_then(|()| client.code(&buyer.address)) {
@@ -538,6 +607,7 @@ fn check_candidate(
                         transaction: hash,
                         unique_id,
                         material: is_material(amount, buyer.quote, GAS_ALLOWANCE_WEI),
+                        original: false,
                     });
                 }
                 if let Some(key) = next {
@@ -660,7 +730,7 @@ pub fn investigate(
         }
     }
 
-    let shared = shared_funders(&checked);
+    let (shared, exchange_paid) = shared_funders(&checked);
     let funding = Funding {
         buyers: selection.buyers,
         selected: u32::try_from(selection.candidates.len()).unwrap_or(u32::MAX),
@@ -668,6 +738,7 @@ pub fn investigate(
         rule: SELECTION_RULE,
         checked,
         shared,
+        exchange_paid,
         gaps,
         cu_spent: budget.cu_spent().saturating_sub(cu_before),
     };
@@ -1290,6 +1361,7 @@ pub fn investigate_solana(
             rule: SOLANA_SELECTION_RULE,
             checked: Vec::new(),
             shared: Vec::new(),
+            exchange_paid: Vec::new(),
             gaps: vec![
                 "the mint's signature history is longer than the page budget allows; the \
                  launch's first buyers could not be reached within the read budget"
@@ -1365,7 +1437,7 @@ pub fn investigate_solana(
         ));
     }
 
-    let shared = shared_funders(&checked);
+    let (shared, exchange_paid) = shared_funders(&checked);
     Ok(Funding {
         buyers,
         selected: u32::try_from(checked.len()).unwrap_or(u32::MAX),
@@ -1373,6 +1445,7 @@ pub fn investigate_solana(
         rule: SOLANA_SELECTION_RULE,
         checked,
         shared,
+        exchange_paid,
         gaps,
         cu_spent: 0,
     })
@@ -1426,6 +1499,15 @@ pub const MAX_FUNDING_SIGNATURE_PAGES: usize = 3;
 /// that already has this many calls left keeps them, so this can only widen
 /// funding's share of an already-starved [`crate::budget::DEFAULT_MAX_CALLS`],
 /// never the ceiling itself.
+///
+/// Design 0031 §1's busy-buyer read (`original_funder_search`) does not
+/// change this floor: it costs one more page (one more call) per candidate
+/// on top of [`MAX_FUNDING_SIGNATURE_PAGES`], not one more `getTransaction`
+/// fetch, so full mode's own per-candidate ceiling
+/// (`MAX_FUNDING_SIGNATURE_PAGES + 1`, `FUNDING_PAGE_FLOOR`'s own doc) stays
+/// well inside `MAX_FUNDING_SIGNATURE_PAGES + MAX_FUNDING_TRANSACTIONS`, the
+/// fallback per-transaction path's higher ceiling this constant is sized to
+/// -- full mode never spends `MAX_FUNDING_TRANSACTIONS` fetches at all.
 // The cast is exact, not lossy: `MAX_CANDIDATES`, `MAX_FUNDING_SIGNATURE_PAGES`
 // and `MAX_FUNDING_TRANSACTIONS` are all small compile-time constants (52
 // today), nowhere near `u32::MAX` -- `usize::try_from` is not yet callable in
@@ -1450,8 +1532,16 @@ pub const FUNDING_CALL_FLOOR: u32 =
 /// against, the same way `FUNDING_CALL_FLOOR` guarantees calls. A floor, not
 /// an addition (`grant_pages`'s own doc): a budget that already has this
 /// many pages left keeps them.
+///
+/// `+ 1`, not just `MAX_FUNDING_SIGNATURE_PAGES` (design 0031 §1): a busy
+/// candidate whose backward walk exhausts its page cap gets one more page
+/// for `original_funder_search`'s oldest-first read, and that read takes a
+/// page from this same budget like its sibling
+/// (`RpcClient::funding_transactions_page`) does -- without the `+ 1` here,
+/// the last candidate checked could be starved of the one page that finds
+/// its original funder by every earlier candidate's own backward walk.
 #[allow(clippy::cast_possible_truncation)]
-pub const FUNDING_PAGE_FLOOR: u32 = (MAX_CANDIDATES * MAX_FUNDING_SIGNATURE_PAGES) as u32;
+pub const FUNDING_PAGE_FLOOR: u32 = (MAX_CANDIDATES * (MAX_FUNDING_SIGNATURE_PAGES + 1)) as u32;
 
 /// Searches backward through one buyer's own signature history for the most
 /// recent material inbound SOL transfer at or before its first purchase of
@@ -1526,6 +1616,12 @@ fn resolve_funder_read(
                     transaction: signature.to_owned(),
                     unique_id: signature.to_owned(),
                     material: true,
+                    // A recent funder: `resolve_funder_read` is shared by the
+                    // backward walk (this call) and design 0031 §1's
+                    // oldest-first original-funder read
+                    // (`original_funder_search`), which flips this to `true`
+                    // on the `Funder` it gets back -- see there.
+                    original: false,
                 }),
             ))
         }
@@ -1579,9 +1675,13 @@ fn full_mode_row_signature(raw: &serde_json::Value) -> Option<&str> {
 /// two paths share one funder test rather than carrying two.
 ///
 /// Returns:
-/// - `Some((complete, funder))` when full mode answered the question --
-///   found, a measured absence, or a gap it recorded itself (a later page's
-///   error, or its own page/signature-page caps).
+/// - `Some((complete, funder, first_active))` when full mode answered the
+///   question -- found, a measured absence, or a gap it recorded itself (a
+///   later page's error, or its own page/signature-page caps). `first_active`
+///   is `Some` only when the walk exhausted its page cap and design 0031
+///   §1's oldest-first read ([`original_funder_search`]) then found the
+///   wallet's own start of history -- `None` in every other case, including
+///   an original-funder read that found no funder.
 /// - `None` when the **first** page could not be read at all -- JSON-RPC
 ///   method-not-found or any other error -- the caller's cue to fall back to
 ///   today's path exactly as before, without a gap for this attempt (CHANGE
@@ -1596,7 +1696,7 @@ fn full_mode_funding_search(
     address_key: &str,
     first_purchase_slot: u64,
     gaps: &mut Vec<String>,
-) -> Option<(bool, Option<Funder>)> {
+) -> Option<(bool, Option<Funder>, Option<i64>)> {
     let mut pagination_token: Option<String> = None;
     let mut unreadable = false;
 
@@ -1613,7 +1713,7 @@ fn full_mode_funding_search(
                     "funding of {address_key}: page budget exhausted while searching for its \
                      funder; no funder recorded"
                 ));
-                return Some((false, None));
+                return Some((false, None, None));
             }
             // Only "method not found" means the node lacks full mode; the
             // caller then turns it off for every later candidate. Any other
@@ -1629,7 +1729,7 @@ fn full_mode_funding_search(
             }
             Err(why) => {
                 gaps.push(format!("funding of {address_key}: {why}"));
-                return Some((false, None));
+                return Some((false, None, None));
             }
         };
         let (rows, next_token) = page;
@@ -1670,25 +1770,137 @@ fn full_mode_funding_search(
                 continue;
             }
             let read = funder_of(&tx, address_key);
-            if let Some(result) =
+            if let Some((complete, funder)) =
                 resolve_funder_read(read, &tx, &signature, address_key, gaps, &mut unreadable)
             {
-                return Some(result);
+                return Some((complete, funder, None));
             }
         }
 
         if reached_end || next_token.is_none() {
-            return Some((!unreadable, None));
+            return Some((!unreadable, None, None));
         }
         pagination_token = next_token;
     }
 
+    // Design 0031 §1: the backward walk hit its page cap without a funder --
+    // exactly the busy-buyer case the rest of this fix exists for. One more
+    // read, from the wallet's own start of history, before giving up.
+    if let Some((funder, first_active)) = original_funder_search(
+        client,
+        budget,
+        address,
+        address_key,
+        first_purchase_slot,
+        gaps,
+    ) {
+        return Some((true, Some(funder), first_active));
+    }
+    Some((false, None, None))
+}
+
+/// Design 0031 §1's busy-buyer read: after [`full_mode_funding_search`]'s
+/// backward walk exhausts [`MAX_FUNDING_SIGNATURE_PAGES`] without a funder,
+/// one oldest-first read of the wallet's own history
+/// ([`RpcClient::funding_transactions_page_oldest_first`]), run through the
+/// same [`funder_of`]/[`resolve_funder_read`] test the backward walk uses,
+/// in ascending order -- so the first row that resolves to a funder IS the
+/// wallet's earliest material inbound transfer, its *original* funder. The
+/// first row of the page, whether or not it turns out to be the funder, is
+/// chronologically the wallet's very first transaction, so its `blockTime`
+/// is the candidate's *first-active* moment.
+///
+/// No second page: a wallet whose first hundred transactions hold no
+/// material inbound transfer is not one this check tries to explain cheaply
+/// (design 0031 §1). Every non-`Some` outcome -- a page budget exhausted, a
+/// read error, or a full page with no funder in it -- pushes exactly one
+/// gap reworded from the backward walk's own ("...; the start of its
+/// history was also read...") so the two reads read as one search to
+/// anything downstream (AGENTS.md rule 8: still incomplete, still a gap).
+fn original_funder_search(
+    client: &RpcClient,
+    budget: &mut Budget,
+    address: &realorrug_types::Address,
+    address_key: &str,
+    first_purchase_slot: u64,
+    gaps: &mut Vec<String>,
+) -> Option<(Funder, Option<i64>)> {
+    let rows =
+        match client.funding_transactions_page_oldest_first(budget, address, first_purchase_slot) {
+            Ok(Some(rows)) => rows,
+            Ok(None) => {
+                gaps.push(format!(
+                    "funding of {address_key}: more than {MAX_FUNDING_SIGNATURE_PAGES} signature \
+                 pages walked without reaching its first purchase or the end of its history; \
+                 the page budget was also spent reading the start of its history; no funder \
+                 recorded"
+                ));
+                return None;
+            }
+            Err(why) => {
+                gaps.push(format!(
+                    "funding of {address_key}: more than {MAX_FUNDING_SIGNATURE_PAGES} signature \
+                 pages walked without reaching its first purchase or the end of its history; \
+                 reading the start of its history also failed: {why}"
+                ));
+                return None;
+            }
+        };
+
+    let first_active = rows
+        .first()
+        .and_then(|raw| raw.get("blockTime"))
+        .and_then(serde_json::Value::as_i64);
+
+    let mut unreadable = false;
+    for raw in &rows {
+        // Same same-slot rule as the backward walk (CHANGE point 3 there):
+        // `>`, not `>=`.
+        let Some(slot) = raw.get("slot").and_then(serde_json::Value::as_u64) else {
+            gaps.push(unreadable_gap(
+                address_key,
+                full_mode_row_signature(raw).unwrap_or("(unknown)"),
+                "did not report a slot; cannot confirm no funder there",
+            ));
+            unreadable = true;
+            continue;
+        };
+        if slot > first_purchase_slot {
+            continue;
+        }
+        let signature = full_mode_row_signature(raw)
+            .unwrap_or("(unknown)")
+            .to_owned();
+        let Some(tx) = parse_transaction(raw) else {
+            gaps.push(unreadable_gap(
+                address_key,
+                &signature,
+                "could not be parsed; cannot confirm no funder there",
+            ));
+            unreadable = true;
+            continue;
+        };
+        if tx.failed {
+            // The oldest-first request already filters to
+            // `filters.status: "succeeded"`; this is a defensive second read
+            // of the same fact, not a new filter (same as the backward walk).
+            continue;
+        }
+        let read = funder_of(&tx, address_key);
+        if let Some((_, Some(mut funder))) =
+            resolve_funder_read(read, &tx, &signature, address_key, gaps, &mut unreadable)
+        {
+            funder.original = true;
+            return Some((funder, first_active));
+        }
+    }
+
     gaps.push(format!(
         "funding of {address_key}: more than {MAX_FUNDING_SIGNATURE_PAGES} signature pages \
-         walked without reaching its first purchase or the end of its history; no funder \
-         recorded"
+         walked without reaching its first purchase or the end of its history; the start of \
+         its history was also read and held no funder"
     ));
-    Some((false, None))
+    None
 }
 
 /// [`funding_search`]'s anchor: the buyer's first purchase of this mint,
@@ -1714,7 +1926,7 @@ fn funding_search(
     first_purchase: FirstPurchase<'_>,
     full_mode_supported: &mut Option<bool>,
     gaps: &mut Vec<String>,
-) -> (bool, Option<Funder>) {
+) -> (bool, Option<Funder>, Option<i64>) {
     let FirstPurchase {
         slot: first_purchase_slot,
         signature: first_purchase_signature,
@@ -1773,7 +1985,7 @@ fn funding_search(
                  pages walked without reaching its first purchase or the end of its history; no \
                  funder recorded"
             ));
-            return (false, None);
+            return (false, None, None);
         }
         pages += 1;
 
@@ -1784,7 +1996,7 @@ fn funding_search(
                     "funding of {address_key}: page budget exhausted while searching for its \
                      funder; no funder recorded"
                 ));
-                return (false, None);
+                return (false, None, None);
             }
             Err(why) => {
                 if pages == 1 && starting_from_purchase {
@@ -1799,7 +2011,7 @@ fn funding_search(
                     continue;
                 }
                 gaps.push(format!("funding of {address_key}: {why}"));
-                return (false, None);
+                return (false, None, None);
             }
         };
 
@@ -1823,13 +2035,13 @@ fn funding_search(
                     "funding of {address_key}: more than {MAX_FUNDING_TRANSACTIONS} \
                      transactions fetched; no funder recorded"
                 ));
-                return (false, None);
+                return (false, None, None);
             }
             fetched += 1;
             match client.transaction(budget, &sig.signature) {
                 Ok(Some(tx)) => {
                     let read = funder_of(&tx, address_key);
-                    if let Some(result) = resolve_funder_read(
+                    if let Some((complete, funder)) = resolve_funder_read(
                         read,
                         &tx,
                         &sig.signature,
@@ -1837,7 +2049,7 @@ fn funding_search(
                         gaps,
                         &mut unreadable,
                     ) {
-                        return result;
+                        return (complete, funder, None);
                     }
                 }
                 Ok(None) => {
@@ -1845,14 +2057,14 @@ fn funding_search(
                         "funding of {address_key}: transaction {} could not be fetched",
                         sig.signature
                     ));
-                    return (false, None);
+                    return (false, None, None);
                 }
                 Err(why) => {
                     gaps.push(format!(
                         "funding of {address_key}: transaction {}: {why}",
                         sig.signature
                     ));
-                    return (false, None);
+                    return (false, None, None);
                 }
             }
         }
@@ -1871,14 +2083,14 @@ fn funding_search(
                     "funding of {address_key}: no signature at or before its first purchase \
                      (slot {first_purchase_slot}) was readable; nothing was measured"
                 ));
-                return (false, None);
+                return (false, None, None);
             }
             // Every eligible signature in the wallet's whole history was
             // read and none was a material inbound transfer: a measurement,
             // not a guess (AGENTS.md rule 8) -- but only if every one of
             // those reads actually had lamport balances to look at. If any
             // did not, the absence is not measured; say so.
-            return (!unreadable, None);
+            return (!unreadable, None, None);
         }
     }
 }
@@ -1908,6 +2120,7 @@ fn check_solana_candidate(
         nonce_before_launch: None,
         funders: Vec::new(),
         funding_complete: true,
+        first_active: None,
     };
 
     let Ok(address_key) = address.parse::<realorrug_types::Address>() else {
@@ -1927,7 +2140,7 @@ fn check_solana_candidate(
     // spend, so a candidate low on shared pages simply reports a gap rather
     // than reading past what remains -- the same honest degradation the
     // rest of this module relies on.
-    let (complete, funder) = funding_search(
+    let (complete, funder, first_active) = funding_search(
         client,
         budget,
         &address_key,
@@ -1940,6 +2153,7 @@ fn check_solana_candidate(
         gaps,
     );
     candidate.funding_complete = complete;
+    candidate.first_active = first_active;
     if let Some(funder) = funder {
         candidate.funders.push(funder);
     }
@@ -2969,9 +3183,11 @@ mod tests {
                     transaction: format!("0x{i}"),
                     unique_id: format!("0x{i}:external:0"),
                     material: is_material(*amount, quote, GAS_ALLOWANCE_WEI),
+                    original: false,
                 })
                 .collect(),
             funding_complete: true,
+            first_active: None,
         }
     }
 
@@ -3104,7 +3320,7 @@ mod tests {
             candidate(3, ETH, &[(0xf0, ETH), (0xf1, ETH)]),
             candidate(4, ETH, &[(0xf1, ETH)]),
         ];
-        let shared = shared_funders(&checked);
+        let (shared, exchange_paid) = shared_funders(&checked);
         assert_eq!(
             shared,
             vec![
@@ -3118,8 +3334,9 @@ mod tests {
                 },
             ]
         );
+        assert!(exchange_paid.is_empty());
         // Exactly one candidate funded is not shared.
-        assert!(shared_funders(&checked[..1]).is_empty());
+        assert!(shared_funders(&checked[..1]).0.is_empty());
     }
 
     #[test]
@@ -3129,7 +3346,82 @@ mod tests {
             .map(|b| candidate(b, one_eth, &[(0xd0, 1_000)]))
             .collect();
         assert!(checked.iter().all(|c| !c.funders[0].material));
-        assert!(shared_funders(&checked).is_empty());
+        let (shared, exchange_paid) = shared_funders(&checked);
+        assert!(shared.is_empty());
+        assert!(exchange_paid.is_empty());
+    }
+
+    /// Replaces one candidate's material funder with a real address from
+    /// [`exchange_wallets`], keeping everything else `candidate()` built.
+    fn fund_from(mut c: Candidate, exchange_address: &str) -> Candidate {
+        for funder in &mut c.funders {
+            if funder.material {
+                funder.address = exchange_address.to_owned();
+            }
+        }
+        c
+    }
+
+    // Binance's own listed wallet (research 0061): real enough to exercise
+    // the lookup, not a fixture standing in for a chain fact.
+    const BINANCE: &str = "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
+
+    #[test]
+    fn an_exchange_funder_is_left_out_of_shared_and_reported_separately() {
+        const ETH: u128 = 1_000_000_000_000_000_000;
+        // Re-applied bug: without the exchange-table check, this is the
+        // same shape as `a_shared_funder_needs_two_materially_funded_candidates`
+        // and would land 3 funded candidates in `shared` instead.
+        let checked: Vec<Candidate> = (1..=3)
+            .map(|b| fund_from(candidate(b, ETH, &[(0xf0, ETH)]), BINANCE))
+            .collect();
+        let (shared, exchange_paid) = shared_funders(&checked);
+        assert!(
+            shared.is_empty(),
+            "an exchange wallet is not a shared funder"
+        );
+        assert_eq!(
+            exchange_paid,
+            vec![ExchangePaid {
+                exchange: "Binance",
+                address: BINANCE.to_owned(),
+                source: "Solscan",
+                checked: "2026-09-23",
+                funded: 3,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_single_exchange_funded_candidate_still_reports() {
+        const ETH: u128 = 1_000_000_000_000_000_000;
+        let checked = [fund_from(candidate(1, ETH, &[(0xf0, ETH)]), BINANCE)];
+        let (shared, exchange_paid) = shared_funders(&checked);
+        assert!(shared.is_empty());
+        assert_eq!(exchange_paid[0].funded, 1);
+    }
+
+    #[test]
+    fn an_exchange_funder_and_an_ordinary_shared_funder_are_reported_separately() {
+        const ETH: u128 = 1_000_000_000_000_000_000;
+        // Candidates 1-2 share an exchange wallet; 3-4 share an ordinary one.
+        let checked = [
+            fund_from(candidate(1, ETH, &[(0xf0, ETH)]), BINANCE),
+            fund_from(candidate(2, ETH, &[(0xf0, ETH)]), BINANCE),
+            candidate(3, ETH, &[(0xf1, ETH)]),
+            candidate(4, ETH, &[(0xf1, ETH)]),
+        ];
+        let (shared, exchange_paid) = shared_funders(&checked);
+        assert_eq!(
+            shared,
+            vec![SharedFunder {
+                address: addr(0xf1).to_string(),
+                funded: 2,
+            }]
+        );
+        assert_eq!(exchange_paid.len(), 1);
+        assert_eq!(exchange_paid[0].exchange, "Binance");
+        assert_eq!(exchange_paid[0].funded, 2);
     }
 
     // -- Slice 6b: investigate_solana ---------------------------------
@@ -3245,6 +3537,24 @@ mod tests {
     fn full_mode_row(signature: &str, from: &str, to: &str, amount: u64, slot: u64) -> String {
         format!(
             r#"{{"slot":{slot},"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"signatures":["{signature}"],"message":{{"accountKeys":["{from}","{to}"],"instructions":[{{"programId":"11111111111111111111111111111111","accounts":[0,1]}}]}}}}}}"#,
+            pre_left = 1_000_000u64.saturating_sub(amount),
+        )
+    }
+
+    /// Like [`full_mode_row`], but with a `blockTime` field -- design
+    /// 0031 §1's oldest-first read uses the first row's `blockTime` as the
+    /// candidate's first-active moment, which [`full_mode_row`]'s rows never
+    /// carry (the backward walk never reads it).
+    fn full_mode_row_timed(
+        signature: &str,
+        from: &str,
+        to: &str,
+        amount: u64,
+        slot: u64,
+        block_time: i64,
+    ) -> String {
+        format!(
+            r#"{{"slot":{slot},"blockTime":{block_time},"meta":{{"err":null,"preBalances":[1000000,0],"postBalances":[{pre_left},{amount}],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"signatures":["{signature}"],"message":{{"accountKeys":["{from}","{to}"],"instructions":[{{"programId":"11111111111111111111111111111111","accounts":[0,1]}}]}}}}}}"#,
             pre_left = 1_000_000u64.saturating_sub(amount),
         )
     }
@@ -4337,12 +4647,13 @@ mod tests {
 
     // The floor is every candidate's worst case, the same way
     // `FUNDING_CALL_FLOOR`'s pin above is: pinned to the arithmetic it
-    // claims, 4 candidates x 3 pages each.
+    // claims, 4 candidates x (3 backward-walk pages + 1 design-0031-§1
+    // original-funder page) each.
     #[test]
     fn the_funding_page_floor_covers_every_candidate_walking_to_both_caps() {
         assert_eq!(MAX_CANDIDATES, 4);
         assert_eq!(MAX_FUNDING_SIGNATURE_PAGES, 3);
-        assert_eq!(FUNDING_PAGE_FLOOR, 12);
+        assert_eq!(FUNDING_PAGE_FLOOR, 16);
     }
 
     #[test]
@@ -4426,7 +4737,7 @@ mod tests {
         let mut gaps = Vec::new();
         let mut full_mode_supported: Option<bool> = None;
 
-        let (complete, found) = funding_search(
+        let (complete, found, _first_active) = funding_search(
             &client,
             &mut budget,
             &parsed,
@@ -4460,7 +4771,7 @@ mod tests {
         let calls_before = budget.calls_left();
         let mut gaps = Vec::new();
         let mut full_mode_supported: Option<bool> = None;
-        let (complete, found) = funding_search(
+        let (complete, found, _first_active) = funding_search(
             &client,
             &mut budget,
             &parsed,
@@ -4542,7 +4853,7 @@ mod tests {
         // supported it.
         let mut full_mode_supported: Option<bool> = Some(false);
 
-        let (complete, found) = funding_search(
+        let (complete, found, _first_active) = funding_search(
             &client,
             &mut budget,
             &parsed,
@@ -4587,7 +4898,7 @@ mod tests {
         let mut gaps = Vec::new();
         let mut full_mode_supported: Option<bool> = None;
 
-        let (complete, found) = funding_search(
+        let (complete, found, _first_active) = funding_search(
             &client,
             &mut budget,
             &parsed,
@@ -4623,7 +4934,7 @@ mod tests {
         let mut gaps = Vec::new();
         let mut full_mode_supported: Option<bool> = None;
 
-        let (complete, found) = funding_search(
+        let (complete, found, _first_active) = funding_search(
             &client,
             &mut budget,
             &parsed,
@@ -4670,7 +4981,7 @@ mod tests {
         let mut gaps = Vec::new();
         let mut full_mode_supported: Option<bool> = None;
 
-        let (complete, found) = funding_search(
+        let (complete, found, _first_active) = funding_search(
             &client,
             &mut budget,
             &parsed,
@@ -4690,6 +5001,214 @@ mod tests {
             Some(true),
             "a later page's error is not a fallback trigger"
         );
+        assert!(
+            gaps.iter().any(|g| g.contains("internal error")),
+            "{gaps:?}"
+        );
+    }
+
+    /// Three full desc pages of unrelated history, each 100 rows with a
+    /// pagination token, so the backward walk exhausts
+    /// `MAX_FUNDING_SIGNATURE_PAGES` without ever finding a funder or
+    /// reaching the end of history -- exactly the busy-buyer case design
+    /// 0031 §1 exists for.
+    fn three_exhausted_desc_pages(buyer: &str, slot: u64) -> Vec<String> {
+        (0..MAX_FUNDING_SIGNATURE_PAGES)
+            .map(|p| {
+                let rows: Vec<String> = (0..100)
+                    .map(|i| full_mode_filler_row(&format!("p{p}-{i}"), buyer, slot))
+                    .collect();
+                full_mode_page(&rows, Some(&format!("token-{p}")))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_busy_buyer_walked_to_both_caps_is_resolved_by_its_original_funder() {
+        // (a) Test (a) from the design-0031-§1 packet: the backward walk
+        // exhausts every page it is allowed, then the oldest-first read
+        // finds the wallet's very first material inbound transfer -- the
+        // candidate ends complete, its funder marked original (not recent),
+        // and its first-active moment recorded, with no gap at all.
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf0).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let mut responses = three_exhausted_desc_pages(&buyer, slot);
+        // The oldest-first read: the wallet's very first transaction is its
+        // funding transfer, so the first row is both the first-active
+        // moment and the original funder in the same row.
+        responses.push(full_mode_page(
+            &[full_mode_row_timed(
+                "origin-sig",
+                &funder,
+                &buyer,
+                500_000,
+                1,
+                1_700_000_000,
+            )],
+            None,
+        ));
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found, first_active) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        let found = found.expect("the original funder");
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found.address, funder);
+        assert!(found.original, "the funder must be marked original");
+        assert_eq!(first_active, Some(1_700_000_000));
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    #[test]
+    fn an_original_funder_in_the_purchase_slot_itself_counts() {
+        // The oldest-first read keeps a transfer in the very slot of the
+        // purchase (`slot > first_purchase_slot` skips, not `>=`): a wallet
+        // funded and buying in the same block was funded "at or before" it
+        // bought. Re-applying the bug either way (`>=`, or `==`) skips this
+        // row and leaves the candidate unresolved, so this test fails.
+        let buyer = solana_addr(1).to_string();
+        let funder = solana_addr(0xf1).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let mut responses = three_exhausted_desc_pages(&buyer, slot);
+        responses.push(full_mode_page(
+            &[full_mode_row_timed(
+                "same-slot-sig",
+                &funder,
+                &buyer,
+                500_000,
+                slot,
+                1_700_000_000,
+            )],
+            None,
+        ));
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found, _) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        let found = found.expect("the same-slot funder");
+        assert!(complete, "{gaps:?}");
+        assert_eq!(found.address, funder);
+        assert!(found.original);
+    }
+
+    #[test]
+    fn an_original_funder_read_that_finds_nothing_stays_a_gap() {
+        // (b) The oldest-first read's own 100 rows hold no material inbound
+        // transfer -- the candidate must stay incomplete with a gap, not be
+        // reported as genuinely funder-less (AGENTS.md rule 8): a wallet's
+        // first hundred transactions holding no funder is not the same
+        // claim as "this wallet has no funder".
+        let buyer = solana_addr(1).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let mut responses = three_exhausted_desc_pages(&buyer, slot);
+        responses.push(full_mode_page(
+            &[full_mode_filler_row("origin-filler", &buyer, 1)],
+            None,
+        ));
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found, first_active) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        assert!(!complete);
+        assert!(found.is_none());
+        assert_eq!(first_active, None);
+        assert!(
+            gaps.iter().any(|g| g.contains("held no funder")),
+            "{gaps:?}"
+        );
+    }
+
+    #[test]
+    fn an_original_funder_read_that_errors_stays_a_gap() {
+        // (c) The oldest-first read itself fails (transport/node error) --
+        // same outcome as (b), a gap and an incomplete candidate, with the
+        // underlying error surfaced in the gap text.
+        let buyer = solana_addr(1).to_string();
+        let slot = 5u64;
+        let parsed: realorrug_types::Address = buyer.parse().expect("a parseable address");
+
+        let mut responses = three_exhausted_desc_pages(&buyer, slot);
+        responses.push(
+            r#"{"result":null,"error":{"code":-32000,"message":"internal error"}}"#.to_owned(),
+        );
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client =
+            RpcClient::with_transport("http://test.invalid", Canned::boxed_full_mode(&refs));
+        let mut budget = solana_budget();
+        let mut gaps = Vec::new();
+        let mut full_mode_supported: Option<bool> = None;
+
+        let (complete, found, first_active) = funding_search(
+            &client,
+            &mut budget,
+            &parsed,
+            &buyer,
+            FirstPurchase {
+                slot,
+                signature: "purchase-sig",
+            },
+            &mut full_mode_supported,
+            &mut gaps,
+        );
+
+        assert!(!complete);
+        assert!(found.is_none());
+        assert_eq!(first_active, None);
         assert!(
             gaps.iter().any(|g| g.contains("internal error")),
             "{gaps:?}"

@@ -180,6 +180,7 @@ fn signal_kind(signal: Signal) -> Kind {
         Signal::HolderConcentration => Kind::LargestHolderShare,
         Signal::OwnerCanStillMintOrPause => Kind::CreatorTaxBps,
         Signal::CorrelatedSelling => Kind::CorrelatedSellWallets,
+        Signal::CreatorFundedEarlyBuyers => Kind::CreatorFundedEarlyBuyers,
     }
 }
 
@@ -238,6 +239,9 @@ fn would_resolve_text(signal: Signal) -> &'static str {
         Signal::CorrelatedSelling => {
             "whether the linked wallets share a controller or only share a launch window, which \
              no chain read settles"
+        }
+        Signal::CreatorFundedEarlyBuyers => {
+            "why the creator's address sent that money, which no chain read settles"
         }
     }
 }

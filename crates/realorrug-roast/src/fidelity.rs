@@ -143,6 +143,22 @@ impl Subject {
             | Kind::LargestHolderShare
             | Kind::FundingChecked
             | Kind::SharedFunder
+            // The creator funding early buyers is a flow measured about the
+            // buyer wallets, the same subject `Kind::SharedFunder` carries
+            // (its own doc comment on `sheet.rs`'s `Signal` variant): a
+            // sentence naming the creator alone may not cite it as the
+            // creator's own spending the way `Kind::DevBuy` is.
+            | Kind::CreatorFundedEarlyBuyers
+            // Whether checked early buyers were active before the launch is
+            // a fact about those wallets, not the creator or the launch
+            // block.
+            | Kind::EarlyBuyersActiveBeforeLaunch
+            // An exchange withdrawal wallet funding checked early buyers is
+            // a flow measured about those buyer wallets, the same subject
+            // `Kind::SharedFunder` carries -- it names the exchange's
+            // wallet, never the creator, and is not a claim about the venue
+            // either.
+            | Kind::ExchangePaidEarlyBuyers
             | Kind::TokenOwnership
             | Kind::CorrelatedSellWallets
             | Kind::CorrelatedSellVolumeBps

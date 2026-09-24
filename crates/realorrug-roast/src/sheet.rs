@@ -260,6 +260,17 @@ pub enum Signal {
     /// (`realorrug_onchain::wallets::correlated_selling`'s own doc), so this
     /// only ever fires from reads inside the bonding-curve window.
     CorrelatedSelling,
+    /// The launch's creator address materially funded one or more of the
+    /// checked early buyers, at or before they bought (design 0031 §2).
+    ///
+    /// A flow, not an identity claim (rule 4): the creator's address sent
+    /// money to these wallets; nothing here says the creator owns or
+    /// controls them. Read from the same comparison as
+    /// [`Kind::SharedFunder`](crate::clause::Kind::SharedFunder) -- a
+    /// funder's canonical address equal to the launch's own creator address
+    /// -- so it costs no extra reads. Not live-risk (design 0031 §2: "on its
+    /// own it earns `Sketchy`, the same footing as `CreatorBoughtOwnLaunch`").
+    CreatorFundedEarlyBuyers,
 }
 
 /// The innocent, on-chain-identical reading of a signal, from design 0020
@@ -325,6 +336,10 @@ pub(crate) fn twin_for(signal: Signal) -> &'static str {
              they are one actor cashing out or several separate early buyers who all decided, \
              on their own, that the same moment was a good time to take profit"
         }
+        Signal::CreatorFundedEarlyBuyers => {
+            "a creator's address paying early buyers reads the same as a creator sending money \
+             to friends or to its own other wallets for reasons unrelated to the launch"
+        }
     }
 }
 
@@ -359,6 +374,7 @@ impl Signal {
             Signal::HolderConcentration => "one address holds most of the supply",
             Signal::OwnerCanStillMintOrPause => "the creator still holds live powers over it",
             Signal::CorrelatedSelling => "wallets that look linked sold together",
+            Signal::CreatorFundedEarlyBuyers => "the creator's address paid early buyers",
         }
     }
 }
@@ -1069,11 +1085,28 @@ impl FactSheet {
             push_holders(&mut facts, &mut signals, holders);
         }
 
+        // Read once, used both to compare against each checked candidate's
+        // funder (just below) and to look up the creator's own launch record
+        // (further down): the launch block is preferred, the curve account
+        // is the fallback for a launch block past the signature-page budget
+        // (see the fuller comment at the creator-record lookup below).
+        let creator_address = dossier
+            .launch
+            .as_ref()
+            .map(|l| realorrug_types::ChainAddress::Solana(l.creator))
+            .or_else(|| dossier.curve.as_ref().map(|c| c.creator));
+
         // Slice 3 (design 0027): who funded the first buyers. Only the
         // Robinhood reader fills this; a read that stopped short names its
         // gap in `unknown` beside the facts it did get.
         if let Some(funding) = &dossier.funding {
-            push_funding(&mut facts, &mut unknown, funding);
+            push_funding(
+                &mut facts,
+                &mut unknown,
+                &mut signals,
+                funding,
+                creator_address.map(|a| a.to_string()).as_deref(),
+            );
             // Research 0052 §3.1's S2 row's four buyer-derived factors --
             // split out because they read `dossier.powers` and
             // `dossier.chain_launch`'s supply too, neither of which
@@ -1101,12 +1134,7 @@ impl FactSheet {
         // every coin with real history, which is every coin somebody bothers to
         // ask about. The curve account carries the creator regardless of age,
         // so the launch block is preferred and the curve is the fallback.
-        let creator = dossier
-            .launch
-            .as_ref()
-            .map(|l| realorrug_types::ChainAddress::Solana(l.creator))
-            .or_else(|| dossier.curve.as_ref().map(|c| c.creator));
-        if let (Some(index), Some(address)) = (creators, creator) {
+        if let (Some(index), Some(address)) = (creators, creator_address) {
             let creator = address.to_string();
             push_creator(&mut facts, &mut unknown, &creator, index, chain);
             // Measured and none organic. A creator whose launches have not been
@@ -2152,7 +2180,21 @@ fn push_holders(facts: &mut Vec<Fact>, signals: &mut Vec<Signal>, holders: &Hold
 ///
 /// Dust never reaches here: `wallets.rs` marks a funder material only
 /// against the purchase, and `Funding::shared` counts material funders only.
-fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Funding) {
+///
+/// `creator` is the launch's own creator address, in the same canonical text
+/// form `Funder::address` is written in (`ChainAddress::to_string`,
+/// `FactSheet::build`'s own call site) -- so a case difference between the
+/// two can never hide a match. `None` when the creator could not be read:
+/// design 0031 §2 and AGENTS.md rule 8 both refuse to publish a comparison
+/// against an unmeasured address, so no fact and no signal follow, the same
+/// as any other "creator unknown" branch on this sheet.
+fn push_funding(
+    facts: &mut Vec<Fact>,
+    unknown: &mut Vec<String>,
+    signals: &mut Vec<Signal>,
+    funding: &Funding,
+    creator: Option<&str>,
+) {
     let checked = u32::try_from(funding.checked.len()).unwrap_or(u32::MAX);
     if checked == 0 {
         // No candidate checked is not "nobody funded anybody"; the gap
@@ -2237,8 +2279,222 @@ fn push_funding(facts: &mut Vec<Fact>, unknown: &mut Vec<String>, funding: &Fund
             ),
         );
     }
+    push_creator_funded_early_buyers(facts, signals, funding, creator, checked);
+    push_exchange_paid_early_buyers(facts, funding, checked);
+    // `None`: `LaunchBlock` (Solana's own launch record, `realorrug-onchain`'s
+    // `launch.rs`) carries a slot, never a wall-clock timestamp, so there is
+    // nothing to compare a candidate's first-active moment against yet. Once
+    // a launch timestamp is plumbed through, this becomes `Some(...)` and
+    // the dated "before this launch" branch below starts doing real work;
+    // design 0031 §1's own fallback covers the gap until then.
+    push_early_buyers_active_before_launch(facts, funding, checked, None);
     if !funding.gaps.is_empty() {
         unknown.push(funding_gap_message(funding, checked));
+    }
+}
+
+/// Design 0031 §2: the creator's own address compared against each checked
+/// candidate's *material* funders (recent or original alike --
+/// [`Funder::original`]'s own doc comment says an original funder counts
+/// toward this exactly as a recent one does). A non-material transfer
+/// (dust) never matches here, because the filter below reads
+/// [`Funder::material`] the same way [`shared_funders`] does. Creator
+/// unknown -> `creator` is `None` -> no fact, no signal (AGENTS.md rule 8).
+///
+/// Split out of [`push_funding`] only to stay under clippy's line-count cap,
+/// not because the comparison differs in kind from the shared-funder one
+/// just above it.
+fn push_creator_funded_early_buyers(
+    facts: &mut Vec<Fact>,
+    signals: &mut Vec<Signal>,
+    funding: &Funding,
+    creator: Option<&str>,
+    checked: u32,
+) {
+    let Some(creator) = creator else { return };
+    let funded = u32::try_from(
+        funding
+            .checked
+            .iter()
+            .filter(|c| c.funders.iter().any(|f| f.material && f.address == creator))
+            .count(),
+    )
+    .unwrap_or(u32::MAX);
+    if funded == 0 {
+        return;
+    }
+    facts.push(
+        Fact::exact(
+            Kind::CreatorFundedEarlyBuyers,
+            "checked early buyers the launch's own creator address sent material value to at \
+             or before their first purchase; a flow between addresses, not ownership or \
+             control",
+            f64::from(funded),
+            format!("{funded} of {checked}"),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "The creator's address sent money to {funded} of the {checked} early buyers \
+                 checked, at or before they bought."
+            ),
+        )
+        .saying(
+            Voice::Blunt,
+            format!("Creator's address funded {funded} of the {checked} early buyers checked."),
+        ),
+    );
+    signals.push(Signal::CreatorFundedEarlyBuyers);
+}
+
+/// Design 0031 §3: a listed exchange withdrawal wallet
+/// (`realorrug_onchain::exchange_wallets`) that materially funded checked
+/// early buyers is reported by name instead of folded into
+/// [`Kind::SharedFunder`] -- [`shared_funders`] already left it out of
+/// `funding.shared` for exactly this reason. Only the top-funded exchange
+/// wallet is said, the same "one fact, most-funded first" shape
+/// [`push_funding`]'s own `Kind::SharedFunder` clause uses. Never a signal:
+/// it does not move the score or the level (design 0031 §3, AGENTS.md
+/// rule 4).
+fn push_exchange_paid_early_buyers(facts: &mut Vec<Fact>, funding: &Funding, checked: u32) {
+    let Some(top) = funding.exchange_paid.first() else {
+        return;
+    };
+    facts.push(
+        Fact::exact(
+            Kind::ExchangePaidEarlyBuyers,
+            "checked early buyers a listed exchange withdrawal wallet sent material value to \
+             at or before their first purchase; the wallet pays out withdrawals for many \
+             strangers, not proof of who is behind the buyers",
+            f64::from(top.funded),
+            format!("{} of {checked}", top.funded),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "{}'s withdrawal wallet (labelled by {}, checked {}) paid out to {} of the \
+                 {checked} early buyers checked, at or before they bought.",
+                top.exchange, top.source, top.checked, top.funded
+            ),
+        )
+        .saying(
+            Voice::Blunt,
+            format!(
+                "{}'s withdrawal wallet ({}, checked {}) funded {} of {checked} early buyers \
+                 checked.",
+                top.exchange, top.source, top.checked, top.funded
+            ),
+        ),
+    );
+}
+
+/// Design 0031 §1's last paragraph: how many of the checked early buyers
+/// already had on-chain history before this launch, and when they were
+/// first seen.
+///
+/// A candidate's `first_active` is `Some` only when the backward walk from
+/// its purchase found no funder and the oldest-first re-read of its own
+/// history ran (`Funder::original`'s own doc comment) -- a candidate the
+/// ordinary backward walk resolved carries no first-active moment at all.
+/// So this is never "did any of them ever transact"; it is "of the ones a
+/// busy-buyer re-read actually touched, how many predate this launch".
+///
+/// Informational, per the design doc: no signal is built from this alone,
+/// and the words never say "bot" -- a wallet active before a launch is not
+/// thereby a program, only measured to have sent a transaction earlier.
+///
+/// `launch_unix_seconds` is `None` while nothing plumbs a Solana launch
+/// timestamp through (see the call site's own comment); design 0031 §1's
+/// fallback -- count every candidate with a first-active moment and drop
+/// "before this launch" from the words -- covers that case exactly.
+fn push_early_buyers_active_before_launch(
+    facts: &mut Vec<Fact>,
+    funding: &Funding,
+    checked: u32,
+    launch_unix_seconds: Option<i64>,
+) {
+    let times: Vec<i64> = funding
+        .checked
+        .iter()
+        .filter_map(|c| c.first_active)
+        .collect();
+    if times.is_empty() {
+        return;
+    }
+    let selected: Vec<i64> = match launch_unix_seconds {
+        Some(launch) => times
+            .into_iter()
+            // Strictly earlier, not "at or before": a first-active moment in
+            // the same second as the launch is not evidence of anything
+            // that predates it, and a count must answer the same input the
+            // same way every time -- `<` pins that one way, permanently,
+            // rather than leaving the tie to whichever branch got written
+            // last.
+            .filter(|t| *t < launch)
+            .collect(),
+        None => times,
+    };
+    if selected.is_empty() {
+        return;
+    }
+    let count = u32::try_from(selected.len()).unwrap_or(u32::MAX);
+    let mut dates = selected;
+    dates.sort_unstable();
+    dates.dedup();
+    let dates_words = join_with_and(
+        &dates
+            .iter()
+            .map(|&t| render_unix_date(t))
+            .collect::<Vec<_>>(),
+    );
+    let rendered = format!("{count} of {checked}; first seen {dates_words}");
+    let (plain, blunt) = if launch_unix_seconds.is_some() {
+        (
+            format!(
+                "{count} of the {checked} early buyers checked were active before this launch, \
+                 first seen {dates_words}."
+            ),
+            format!("{count} of {checked} active before launch, first seen {dates_words}."),
+        )
+    } else {
+        (
+            format!(
+                "{count} of the {checked} early buyers checked already had a transaction on \
+                 chain, first seen {dates_words}."
+            ),
+            format!("{count} of {checked} already active, first seen {dates_words}."),
+        )
+    };
+    facts.push(
+        Fact::exact(
+            Kind::EarlyBuyersActiveBeforeLaunch,
+            "checked early buyers a busy-buyer re-read of their own history found already \
+             active on chain, with their first-seen dates",
+            f64::from(count),
+            rendered,
+        )
+        .saying(Voice::Plain, plain)
+        .saying(Voice::Blunt, blunt),
+    );
+}
+
+/// Unix seconds to a UTC calendar date, `YYYY-MM-DD` -- the same
+/// [`civil_from_days`] conversion [`render_observed_at`] uses for a full
+/// moment, without the time-of-day this fact never carries.
+fn render_unix_date(unix_seconds: i64) -> String {
+    let days = u64::try_from(unix_seconds).unwrap_or(0) / 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// `["a"]` -> `"a"`, `["a", "b"]` -> `"a and b"`, `["a", "b", "c"]` -> `"a, b
+/// and c"` -- the join a reader expects for a short dated list, not a bare
+/// comma-separated dump.
+fn join_with_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -6942,6 +7198,7 @@ mod tests {
             nonce_before_launch: Some(0),
             funders: Vec::new(),
             funding_complete: true,
+            first_active: None,
         };
         Funding {
             buyers,
@@ -6960,6 +7217,7 @@ mod tests {
                     funded: *funded,
                 })
                 .collect(),
+            exchange_paid: Vec::new(),
             gaps: gaps.iter().map(|g| (*g).to_owned()).collect(),
             cu_spent: 0,
         }
@@ -7037,6 +7295,72 @@ mod tests {
         );
     }
 
+    /// A funding result whose top `exchange_paid` entry is Binance, on top
+    /// of [`funding_of`]'s ordinary shape.
+    fn funding_with_exchange_paid(buyers: u32, checked: u32, funded: u32) -> Funding {
+        let mut funding = funding_of(buyers, checked, &[], &[]);
+        funding.exchange_paid = vec![realorrug_onchain::ExchangePaid {
+            exchange: "Binance",
+            address: "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9".to_owned(),
+            source: "Solscan",
+            checked: "2026-09-23",
+            funded,
+        }];
+        funding
+    }
+
+    #[test]
+    fn an_exchange_paid_fact_names_the_exchange_source_and_date_not_ownership() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with_exchange_paid(4, 4, 2));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let paid = fact_of(&sheet, Kind::ExchangePaidEarlyBuyers).expect("an exchange-paid fact");
+        assert_eq!(paid.values, [2.0]);
+        assert_eq!(paid.rendered, "2 of 4");
+        let words = clause_words(paid);
+        assert!(words.contains("binance"), "{words}");
+        assert!(words.contains("solscan"), "{words}");
+        assert!(words.contains("2026-09-23"), "{words}");
+        assert!(words.contains("2 of the 4 early buyers checked"), "{words}");
+        for word in OWNERSHIP_WORDS {
+            assert!(!words.contains(word), "{word:?} in {words}");
+        }
+        assert!(!words.contains("owns"), "{words}");
+        assert!(!words.contains("controls"), "{words}");
+    }
+
+    /// A single exchange-funded buyer (1 of 4) is still worth the fact.
+    #[test]
+    fn a_single_exchange_funded_buyer_is_still_reported() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with_exchange_paid(4, 4, 1));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let paid = fact_of(&sheet, Kind::ExchangePaidEarlyBuyers).expect("an exchange-paid fact");
+        assert_eq!(paid.rendered, "1 of 4");
+    }
+
+    #[test]
+    fn no_exchange_paid_funder_means_no_exchange_paid_fact() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_of(4, 4, &[3], &[]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::ExchangePaidEarlyBuyers).is_none());
+    }
+
+    #[test]
+    fn an_exchange_paid_fact_is_never_a_signal() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with_exchange_paid(4, 4, 3));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet
+                .signals
+                .iter()
+                .any(|s| format!("{s:?}").contains("Exchange"))
+        );
+    }
+
     #[test]
     fn an_exchange_like_hub_funding_every_buyer_is_still_only_a_flow() {
         // Four fresh wallets each withdrew from the same hot wallet before
@@ -7066,6 +7390,263 @@ mod tests {
         let sheet = FactSheet::build(&dossier, None, None, None, None);
         assert!(fact_of(&sheet, Kind::FundingChecked).is_some());
         assert!(fact_of(&sheet, Kind::SharedFunder).is_none());
+    }
+
+    /// `robinhood_dossier_for`'s own creator address ([9u8; 20], its
+    /// `curve.creator`), in the same canonical text form `Funder::address`
+    /// is written in -- so a test can hand a candidate a funder that *is* or
+    /// *is not* the creator without duplicating the address literal.
+    fn robinhood_creator_address() -> String {
+        realorrug_robinhood::Address([9u8; 20]).to_string()
+    }
+
+    /// A material funder into one candidate at the creator's own address.
+    fn creator_funder(material: bool) -> realorrug_onchain::Funder {
+        realorrug_onchain::Funder {
+            address: robinhood_creator_address(),
+            amount_wei: 1,
+            block: 1,
+            transaction: "0x1".to_owned(),
+            unique_id: "1".to_owned(),
+            material,
+            original: false,
+        }
+    }
+
+    #[test]
+    fn creator_funding_a_material_candidate_is_a_fact_and_a_signal() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].funders.push(creator_funder(true));
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let fact = fact_of(&sheet, Kind::CreatorFundedEarlyBuyers)
+            .expect("the creator materially funded a checked candidate");
+        assert_eq!(fact.values, [1.0]);
+        assert_eq!(fact.rendered, "1 of 4");
+        let words = clause_words(fact);
+        for word in OWNERSHIP_WORDS {
+            assert!(!words.contains(word), "{word:?} in {words}");
+        }
+        assert!(
+            !words.contains("owns") && !words.contains("controls") && !words.contains("insider"),
+            "{words}"
+        );
+        assert!(
+            sheet.signals.contains(&Signal::CreatorFundedEarlyBuyers),
+            "{:?}",
+            sheet.signals
+        );
+    }
+
+    /// A funder that lands at the creator's own address but was marked
+    /// non-material (dust) must not count: only `Funder::material` transfers
+    /// are compared, the same rule `shared_funders` applies.
+    #[test]
+    fn creator_funding_a_non_material_candidate_is_neither_fact_nor_signal() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].funders.push(creator_funder(false));
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        assert!(fact_of(&sheet, Kind::CreatorFundedEarlyBuyers).is_none());
+        assert!(!sheet.signals.contains(&Signal::CreatorFundedEarlyBuyers));
+    }
+
+    /// No creator address read at all (neither launch nor curve) -> the
+    /// comparison never runs: absent is not zero (rule 8).
+    #[test]
+    fn creator_funding_with_no_creator_read_is_neither_fact_nor_signal() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.curve = None;
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].funders.push(creator_funder(true));
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        assert!(fact_of(&sheet, Kind::CreatorFundedEarlyBuyers).is_none());
+        assert!(!sheet.signals.contains(&Signal::CreatorFundedEarlyBuyers));
+    }
+
+    /// Two candidates materially funded by the creator -> "2 of 4": the
+    /// count is pinned, not just its presence.
+    #[test]
+    fn creator_funding_counts_every_candidate_it_touched() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].funders.push(creator_funder(true));
+        funding.checked[1].funders.push(creator_funder(true));
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let fact = fact_of(&sheet, Kind::CreatorFundedEarlyBuyers).expect("two funded");
+        assert_eq!(fact.values, [2.0]);
+        assert_eq!(fact.rendered, "2 of 4");
+    }
+
+    /// Design 0031 §2: on its own this signal earns `Sketchy`, the same
+    /// footing as `CreatorBoughtOwnLaunch` -- not `RugMechanicsLive`, which
+    /// needs two distinct episodes.
+    #[test]
+    fn creator_funded_early_buyers_alone_is_sketchy() {
+        // Built directly rather than through `FactSheet::build`: that path
+        // (via `robinhood_dossier_for`, which sets no `launch`/`chain_launch`)
+        // always adds "the launch block could not be read" to `unknown`, and
+        // `verdict::level` checks `unknown` before it counts signals -- this
+        // test would see `CantTell` no matter what the signal did. Mirrors
+        // `verdict.rs`'s own `sheet_with` fixture, which exists for exactly
+        // this reason.
+        let signals = vec![Signal::CreatorFundedEarlyBuyers];
+        let twins = signals.iter().map(|&s| twin_for(s).to_owned()).collect();
+        let sheet = FactSheet {
+            mint: "MintCreatorFunding".to_owned(),
+            read_at: None,
+            facts: Vec::new(),
+            untrusted: Vec::new(),
+            unknown: Vec::new(),
+            signals,
+            twins,
+            skipped: Vec::new(),
+        };
+
+        assert_eq!(
+            crate::verdict::level(&sheet),
+            crate::verdict::Level::Sketchy
+        );
+    }
+
+    /// 2026-03-04 and 2026-08-24, UTC midnight, as unix seconds -- shared by
+    /// the first-active tests below so a date literal only appears once.
+    const FIRST_ACTIVE_2026_03_04: i64 = 1_772_582_400;
+    const FIRST_ACTIVE_2026_08_24: i64 = 1_787_529_600;
+
+    /// No launch time plumbed through (today's production call): every
+    /// checked candidate with a first-active moment counts, sorted and
+    /// deduplicated, and the words never claim to know about "this launch".
+    #[test]
+    fn early_buyers_active_before_launch_dates_render_sorted_and_deduplicated() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].first_active = Some(FIRST_ACTIVE_2026_08_24);
+        funding.checked[1].first_active = Some(FIRST_ACTIVE_2026_03_04);
+        funding.checked[2].first_active = Some(FIRST_ACTIVE_2026_03_04); // duplicate
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let fact =
+            fact_of(&sheet, Kind::EarlyBuyersActiveBeforeLaunch).expect("a first-active fact");
+        assert_eq!(
+            fact.values,
+            [3.0],
+            "all three checked candidates are counted"
+        );
+        let words = clause_words(fact);
+        assert!(
+            words.contains("2026-03-04") && words.contains("2026-08-24"),
+            "{words}"
+        );
+        // The repeated date is written once per sentence, not twice: a
+        // reader is told two distinct first-seen dates for the three
+        // counted candidates, not the raw three timestamps.
+        let plain = fact
+            .clauses
+            .iter()
+            .find(|c| c.voice == Voice::Plain)
+            .expect("a plain clause");
+        assert_eq!(
+            plain.text.matches("2026-03-04").count(),
+            1,
+            "the duplicate date renders once: {}",
+            plain.text
+        );
+        assert!(!words.contains("bot"), "{words}");
+    }
+
+    /// A candidate active only after the launch is not "before this launch":
+    /// re-applying the bug (drop the `t < launch` filter, using every
+    /// first-active time regardless of the launch) makes this fail, because
+    /// the later candidate would then be counted too.
+    #[test]
+    fn one_early_buyer_active_after_launch_is_not_counted() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        let launch = FIRST_ACTIVE_2026_08_24;
+        funding.checked[0].first_active = Some(launch - 1); // before
+        funding.checked[1].first_active = Some(launch + 1); // after
+        dossier.funding = Some(funding);
+        let mut facts = Vec::new();
+        push_early_buyers_active_before_launch(
+            &mut facts,
+            dossier.funding.as_ref().unwrap(),
+            4,
+            Some(launch),
+        );
+
+        let fact = facts
+            .iter()
+            .find(|f| f.kind == Kind::EarlyBuyersActiveBeforeLaunch)
+            .expect("one candidate is before the launch");
+        assert_eq!(fact.values, [1.0]);
+    }
+
+    /// Two before and one after the launch counts two. The test above has
+    /// one of each, so a reversed comparison (`t > launch`) also counts one
+    /// there and passes; here the reversed comparison counts one, not two.
+    #[test]
+    fn two_early_buyers_active_before_launch_and_one_after_count_two() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        let launch = FIRST_ACTIVE_2026_08_24;
+        funding.checked[0].first_active = Some(launch - 2); // before
+        funding.checked[1].first_active = Some(launch - 1); // before
+        funding.checked[2].first_active = Some(launch + 1); // after
+        dossier.funding = Some(funding);
+        let mut facts = Vec::new();
+        push_early_buyers_active_before_launch(
+            &mut facts,
+            dossier.funding.as_ref().unwrap(),
+            4,
+            Some(launch),
+        );
+
+        let fact = facts
+            .iter()
+            .find(|f| f.kind == Kind::EarlyBuyersActiveBeforeLaunch)
+            .expect("two candidates are before the launch");
+        assert_eq!(fact.values, [2.0]);
+    }
+
+    /// No checked candidate ever got a first-active read -> no fact at all,
+    /// never a fabricated "0 of 4" (rule 8: absent is not zero).
+    #[test]
+    fn no_first_active_reads_means_no_first_active_fact() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_of(4, 4, &[], &[]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::EarlyBuyersActiveBeforeLaunch).is_none());
+    }
+
+    /// The boundary: a first-active moment landing in the same second as the
+    /// launch is pinned as *not* "before" it (`push_early_buyers_active_before_launch`'s
+    /// own doc comment says why -- a tie must answer the same input the same
+    /// way every time). Picking the other side would also be defensible;
+    /// this test exists so a future edit changes it on purpose, not by
+    /// accident.
+    #[test]
+    fn a_first_active_moment_equal_to_the_launch_is_not_before_it() {
+        let mut funding = funding_of(4, 4, &[], &[]);
+        let launch = FIRST_ACTIVE_2026_08_24;
+        funding.checked[0].first_active = Some(launch);
+        let mut facts = Vec::new();
+        push_early_buyers_active_before_launch(&mut facts, &funding, 4, Some(launch));
+        assert!(
+            facts
+                .iter()
+                .all(|f| f.kind != Kind::EarlyBuyersActiveBeforeLaunch),
+            "a first-active moment equal to the launch time must not count as before it"
+        );
     }
 
     #[test]
@@ -7682,6 +8263,7 @@ mod tests {
             nonce_before_launch,
             funders: Vec::new(),
             funding_complete: true,
+            first_active: None,
         }
     }
 
@@ -7693,6 +8275,7 @@ mod tests {
             rule: "test",
             checked,
             shared: Vec::new(),
+            exchange_paid: Vec::new(),
             gaps: Vec::new(),
             cu_spent: 0,
         }

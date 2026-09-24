@@ -74,6 +74,12 @@ pub enum Episode {
     Holders,
     /// A live owner-only authority (mint, pause, blacklist).
     Authority,
+    /// Who funded the checked early buyers (design 0027 slice 3, design
+    /// 0031 §2). A separate read from the launch block itself -- the
+    /// funding check walks each candidate's own transfer history, not the
+    /// launch transaction -- so it does not share an episode with
+    /// `LaunchBlock`.
+    Funding,
 }
 
 /// The episode a signal is evidence of.
@@ -101,6 +107,7 @@ pub const fn episode(signal: Signal) -> Episode {
         | Signal::CorrelatedSelling => Episode::Exit,
         Signal::HolderConcentration => Episode::Holders,
         Signal::OwnerCanStillMintOrPause => Episode::Authority,
+        Signal::CreatorFundedEarlyBuyers => Episode::Funding,
     }
 }
 
@@ -117,7 +124,8 @@ pub const fn group(signal: Signal) -> Group {
         Signal::LaunchBlockInStrongestBand => Group::LaunchStructure,
         Signal::CreatorNeverGraduatedOrganically
         | Signal::CreatorBoughtOwnLaunch
-        | Signal::RepeatLauncher => Group::CreatorActivity,
+        | Signal::RepeatLauncher
+        | Signal::CreatorFundedEarlyBuyers => Group::CreatorActivity,
         Signal::HolderConcentration | Signal::OwnerCanStillMintOrPause => Group::Ownership,
         Signal::LiquidityGone | Signal::CreatorSoldOut | Signal::BuyersCannotSell => {
             Group::ExitMechanics
@@ -210,6 +218,15 @@ const WEIGHT_HOLDERS: u32 = 25;
 /// A live owner-only mint/pause/blacklist authority: 20, hand-set (ADR 0032
 /// decision 6: no outcome-labelled population for authority yet).
 const WEIGHT_AUTHORITY: u32 = 20;
+/// Who funded the checked early buyers: 25, the same hand-set starting
+/// weight as [`WEIGHT_LAUNCH_BLOCK`] -- design 0031 §2 scores
+/// `CreatorFundedEarlyBuyers` alone the same as `CreatorBoughtOwnLaunch`
+/// alone (both earn `Sketchy`, both weigh 1,200 in [`weight`]), and no
+/// outcome-labelled population exists yet to fit either one separately
+/// (ADR 0032 decision 6). Unlike `CreatorBoughtOwnLaunch`, it is not in
+/// `verdict::LIVE_RISK_SIGNALS`, so it never counts toward
+/// `RugMechanicsLive`.
+const WEIGHT_FUNDING: u32 = 25;
 
 /// The hand-set weight for one episode. A `const fn`, matched exhaustively
 /// for the same reason [`episode`] is: [`Episode`] grows a variant, this
@@ -222,6 +239,7 @@ const fn weight(episode: Episode) -> u32 {
         Episode::Exit => WEIGHT_EXIT,
         Episode::Holders => WEIGHT_HOLDERS,
         Episode::Authority => WEIGHT_AUTHORITY,
+        Episode::Funding => WEIGHT_FUNDING,
     }
 }
 
@@ -281,7 +299,9 @@ const fn signal_base_bps(signal: Signal) -> u32 {
         Signal::LaunchBlockInStrongestBand => 1_500,
         Signal::RepeatLauncher | Signal::CorrelatedSelling => 1_000,
         Signal::CreatorNeverGraduatedOrganically => 600,
-        Signal::CreatorBoughtOwnLaunch | Signal::HolderConcentration => 1_200,
+        Signal::CreatorBoughtOwnLaunch
+        | Signal::HolderConcentration
+        | Signal::CreatorFundedEarlyBuyers => 1_200,
         Signal::LiquidityGone | Signal::BuyersCannotSell => 4_000,
         Signal::CreatorSoldOut => 2_500,
         Signal::OwnerCanStillMintOrPause => 800,
