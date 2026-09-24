@@ -75,6 +75,7 @@ use realorrug_robinhood::pons::{self, CreatorRole, LaunchedToken, Side, Trade, T
 use realorrug_robinhood::{Address, Hash32, Log, LogsError, Rpc, quantity, quantity_u128};
 
 use crate::budget::Budget;
+use crate::exchange_wallets;
 use crate::memory::{CheckRun, Completeness, FundingEdge, Memory};
 use crate::rpc::{
     FULL_TRANSACTIONS_PAGE_SIZE, RpcClient, SignatureInfo, Transaction, is_last_page,
@@ -363,6 +364,29 @@ pub struct SharedFunder {
     pub funded: u32,
 }
 
+/// A known exchange withdrawal wallet ([`exchange_wallets`]) that materially
+/// funded at least one checked candidate (design 0031 §3).
+///
+/// Kept apart from [`SharedFunder`] rather than folded into it: thousands of
+/// strangers withdraw from the same exchange wallet, so "the same address
+/// funded N of the checked buyers" is true and misleading here in a way it
+/// is not for an ordinary shared funder. A candidate it funded is still
+/// resolved -- where its money came from was read -- so it never affects
+/// [`Funding::checked`] or `funding_complete`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExchangePaid {
+    /// The exchange's name, as the sheet should say it.
+    pub exchange: &'static str,
+    /// The withdrawal wallet, in the chain's own canonical text form.
+    pub address: String,
+    /// The labelling service the exchange and address came from.
+    pub source: &'static str,
+    /// The date the label was read, `YYYY-MM-DD`.
+    pub checked: &'static str,
+    /// How many distinct checked candidates it materially funded.
+    pub funded: u32,
+}
+
 /// The investigation's result: what was checked, what it found, what it
 /// could not do.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -381,21 +405,35 @@ pub struct Funding {
     /// The candidates actually checked.
     pub checked: Vec<Candidate>,
     /// Funders that materially funded at least two checked candidates,
-    /// most-funded first.
+    /// most-funded first. Never includes a listed exchange withdrawal
+    /// wallet -- that funder is in [`Funding::exchange_paid`] instead.
     pub shared: Vec<SharedFunder>,
+    /// Listed exchange withdrawal wallets ([`exchange_wallets`]) that
+    /// materially funded at least one checked candidate, most-funded first
+    /// (design 0031 §3). Solana-only today: the table has no Robinhood
+    /// addresses, so this is always empty there.
+    pub exchange_paid: Vec<ExchangePaid>,
     /// What could not be read, each named (AGENTS.md §3 rule 8).
     pub gaps: Vec<String>,
     /// Compute units this investigation spent.
     pub cu_spent: u32,
 }
 
-/// Funders that materially funded two or more of `checked`.
+/// Funders that materially funded two or more of `checked`, split into
+/// ordinary shared funders and listed exchange withdrawal wallets (design
+/// 0031 §3): a wallet on [`exchange_wallets::exchange_withdrawal_wallet`] is
+/// left out of `shared` -- thousands of strangers withdraw from it too, so it
+/// is not evidence the buyers are connected -- and reported in the second
+/// list instead, counted from just one materially-funded candidate (an
+/// exchange did pay that buyer out, however few others it also paid).
 ///
 /// Chain-agnostic: it works from `Funder::address`'s canonical text form and
 /// never parses or compares raw address bytes, so the same function serves
-/// Robinhood's 0x-hex and Solana's base58 without a per-chain branch.
+/// Robinhood's 0x-hex and Solana's base58 without a per-chain branch. The
+/// exchange table is Solana-only, so a Robinhood address never matches it and
+/// the second list is always empty there.
 #[must_use]
-pub fn shared_funders(checked: &[Candidate]) -> Vec<SharedFunder> {
+pub fn shared_funders(checked: &[Candidate]) -> (Vec<SharedFunder>, Vec<ExchangePaid>) {
     let mut counts: BTreeMap<String, u32> = BTreeMap::new();
     for candidate in checked {
         let mut seen: Vec<&str> = Vec::new();
@@ -407,13 +445,24 @@ pub fn shared_funders(checked: &[Candidate]) -> Vec<SharedFunder> {
             }
         }
     }
-    let mut shared: Vec<SharedFunder> = counts
-        .into_iter()
-        .filter(|(_, n)| *n >= 2)
-        .map(|(address, funded)| SharedFunder { address, funded })
-        .collect();
+    let mut shared: Vec<SharedFunder> = Vec::new();
+    let mut exchange_paid: Vec<ExchangePaid> = Vec::new();
+    for (address, funded) in counts {
+        if let Some(wallet) = exchange_wallets::exchange_withdrawal_wallet(&address) {
+            exchange_paid.push(ExchangePaid {
+                exchange: wallet.exchange,
+                address,
+                source: wallet.source,
+                checked: wallet.checked,
+                funded,
+            });
+        } else if funded >= 2 {
+            shared.push(SharedFunder { address, funded });
+        }
+    }
     shared.sort_by(|a, b| b.funded.cmp(&a.funded).then(a.address.cmp(&b.address)));
-    shared
+    exchange_paid.sort_by(|a, b| b.funded.cmp(&a.funded).then(a.address.cmp(&b.address)));
+    (shared, exchange_paid)
 }
 
 /// One call's worth of calls and `cu`, or why there is none.
@@ -681,7 +730,7 @@ pub fn investigate(
         }
     }
 
-    let shared = shared_funders(&checked);
+    let (shared, exchange_paid) = shared_funders(&checked);
     let funding = Funding {
         buyers: selection.buyers,
         selected: u32::try_from(selection.candidates.len()).unwrap_or(u32::MAX),
@@ -689,6 +738,7 @@ pub fn investigate(
         rule: SELECTION_RULE,
         checked,
         shared,
+        exchange_paid,
         gaps,
         cu_spent: budget.cu_spent().saturating_sub(cu_before),
     };
@@ -1311,6 +1361,7 @@ pub fn investigate_solana(
             rule: SOLANA_SELECTION_RULE,
             checked: Vec::new(),
             shared: Vec::new(),
+            exchange_paid: Vec::new(),
             gaps: vec![
                 "the mint's signature history is longer than the page budget allows; the \
                  launch's first buyers could not be reached within the read budget"
@@ -1386,7 +1437,7 @@ pub fn investigate_solana(
         ));
     }
 
-    let shared = shared_funders(&checked);
+    let (shared, exchange_paid) = shared_funders(&checked);
     Ok(Funding {
         buyers,
         selected: u32::try_from(checked.len()).unwrap_or(u32::MAX),
@@ -1394,6 +1445,7 @@ pub fn investigate_solana(
         rule: SOLANA_SELECTION_RULE,
         checked,
         shared,
+        exchange_paid,
         gaps,
         cu_spent: 0,
     })
@@ -3268,7 +3320,7 @@ mod tests {
             candidate(3, ETH, &[(0xf0, ETH), (0xf1, ETH)]),
             candidate(4, ETH, &[(0xf1, ETH)]),
         ];
-        let shared = shared_funders(&checked);
+        let (shared, exchange_paid) = shared_funders(&checked);
         assert_eq!(
             shared,
             vec![
@@ -3282,8 +3334,9 @@ mod tests {
                 },
             ]
         );
+        assert!(exchange_paid.is_empty());
         // Exactly one candidate funded is not shared.
-        assert!(shared_funders(&checked[..1]).is_empty());
+        assert!(shared_funders(&checked[..1]).0.is_empty());
     }
 
     #[test]
@@ -3293,7 +3346,82 @@ mod tests {
             .map(|b| candidate(b, one_eth, &[(0xd0, 1_000)]))
             .collect();
         assert!(checked.iter().all(|c| !c.funders[0].material));
-        assert!(shared_funders(&checked).is_empty());
+        let (shared, exchange_paid) = shared_funders(&checked);
+        assert!(shared.is_empty());
+        assert!(exchange_paid.is_empty());
+    }
+
+    /// Replaces one candidate's material funder with a real address from
+    /// [`exchange_wallets`], keeping everything else `candidate()` built.
+    fn fund_from(mut c: Candidate, exchange_address: &str) -> Candidate {
+        for funder in &mut c.funders {
+            if funder.material {
+                funder.address = exchange_address.to_owned();
+            }
+        }
+        c
+    }
+
+    // Binance's own listed wallet (research 0061): real enough to exercise
+    // the lookup, not a fixture standing in for a chain fact.
+    const BINANCE: &str = "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
+
+    #[test]
+    fn an_exchange_funder_is_left_out_of_shared_and_reported_separately() {
+        const ETH: u128 = 1_000_000_000_000_000_000;
+        // Re-applied bug: without the exchange-table check, this is the
+        // same shape as `a_shared_funder_needs_two_materially_funded_candidates`
+        // and would land 3 funded candidates in `shared` instead.
+        let checked: Vec<Candidate> = (1..=3)
+            .map(|b| fund_from(candidate(b, ETH, &[(0xf0, ETH)]), BINANCE))
+            .collect();
+        let (shared, exchange_paid) = shared_funders(&checked);
+        assert!(
+            shared.is_empty(),
+            "an exchange wallet is not a shared funder"
+        );
+        assert_eq!(
+            exchange_paid,
+            vec![ExchangePaid {
+                exchange: "Binance",
+                address: BINANCE.to_owned(),
+                source: "Solscan",
+                checked: "2026-09-23",
+                funded: 3,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_single_exchange_funded_candidate_still_reports() {
+        const ETH: u128 = 1_000_000_000_000_000_000;
+        let checked = [fund_from(candidate(1, ETH, &[(0xf0, ETH)]), BINANCE)];
+        let (shared, exchange_paid) = shared_funders(&checked);
+        assert!(shared.is_empty());
+        assert_eq!(exchange_paid[0].funded, 1);
+    }
+
+    #[test]
+    fn an_exchange_funder_and_an_ordinary_shared_funder_are_reported_separately() {
+        const ETH: u128 = 1_000_000_000_000_000_000;
+        // Candidates 1-2 share an exchange wallet; 3-4 share an ordinary one.
+        let checked = [
+            fund_from(candidate(1, ETH, &[(0xf0, ETH)]), BINANCE),
+            fund_from(candidate(2, ETH, &[(0xf0, ETH)]), BINANCE),
+            candidate(3, ETH, &[(0xf1, ETH)]),
+            candidate(4, ETH, &[(0xf1, ETH)]),
+        ];
+        let (shared, exchange_paid) = shared_funders(&checked);
+        assert_eq!(
+            shared,
+            vec![SharedFunder {
+                address: addr(0xf1).to_string(),
+                funded: 2,
+            }]
+        );
+        assert_eq!(exchange_paid.len(), 1);
+        assert_eq!(exchange_paid[0].exchange, "Binance");
+        assert_eq!(exchange_paid[0].funded, 2);
     }
 
     // -- Slice 6b: investigate_solana ---------------------------------
