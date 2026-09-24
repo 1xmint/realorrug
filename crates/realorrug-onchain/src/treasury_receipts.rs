@@ -135,6 +135,16 @@ pub fn find_receipts(
             });
             continue;
         };
+        // Without `meta` there are no balances to compare, so every vault
+        // would read as unmoved and the transaction would vanish from the
+        // report as "no fee collected" (rule 8: absent is not zero).
+        if !tx.meta_present {
+            unread.push(Unread {
+                signature: entry.signature.clone(),
+                why: "the node returned no outcome for this transaction".to_owned(),
+            });
+            continue;
+        }
         // A failed transaction moved nothing -- SignatureInfo::err already
         // filters most of these out before a caller gets here, but a
         // caller building `transactions` some other way (a test, or a
@@ -249,6 +259,7 @@ mod tests {
             pre_balances: vec![0; len],
             post_balances: vec![0; len],
             failed: false,
+            meta_present: true,
         }
     }
 
@@ -423,5 +434,33 @@ mod tests {
 
         assert!(receipts.is_empty());
         assert!(unread.is_empty());
+    }
+
+    /// A transaction the node returned without `meta` has no balances, so
+    /// without the guard it would read as "no vault moved" and disappear.
+    #[test]
+    fn a_transaction_without_its_outcome_is_listed_as_unread() {
+        let v = vaults();
+        let mut tx = base_tx(&[addr(9), v.pumpfun]);
+        tx.pre_balances = Vec::new();
+        tx.post_balances = Vec::new();
+        tx.meta_present = false;
+
+        let (receipts, unread) = find_receipts(
+            &v,
+            &[SignedTransaction {
+                signature: "sig8".to_owned(),
+                transaction: Some(tx),
+            }],
+        );
+
+        assert!(receipts.is_empty());
+        assert_eq!(
+            unread,
+            vec![Unread {
+                signature: "sig8".to_owned(),
+                why: "the node returned no outcome for this transaction".to_owned(),
+            }]
+        );
     }
 }
