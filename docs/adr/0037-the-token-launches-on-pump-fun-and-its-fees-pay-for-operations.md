@@ -44,9 +44,11 @@ pump.fun launches and graduated PumpSwap pools.
 - `crates/realorrug-payout` signs nothing. Its binary refuses to run, its
   systemd units leave `deploy/`, and it leaves the Linux release. The code
   stays so the history it wrote can be read and replayed.
-- `realorrug launch-check` is a Robinhood Pons v2 check. A pump.fun
+- `realorrug launch-check` is a Robinhood Pons v2 check. The pump.fun
   equivalent (fee recipient, authorities, a readback of the launch
-  transaction) is built before launch day; `deploy/LAUNCH.md` lists it.
+  transaction) is now built: `realorrug launch-check solana --signature <sig>
+  --treasury <addr> --dev-wallet <addr> --dev-buy-lamports <n>`;
+  `deploy/LAUNCH.md` steps 6 and 9 list it.
 - Fee accounting reads the treasury's receipts on Solana. The Robinhood
   escrow reader stays for history only.
 - AGENTS §3 rule 1 changes from "the payout key" to "no key": model

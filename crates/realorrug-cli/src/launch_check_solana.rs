@@ -15,7 +15,9 @@
 use std::time::Duration;
 
 use realorrug_onchain::budget::{DEFAULT_MAX_CALLS, DEFAULT_MAX_PAGES};
-use realorrug_onchain::{Budget, CheckOutcome, LaunchCheck, RpcClient, candidate_mint, check_launch};
+use realorrug_onchain::{
+    Budget, CheckOutcome, LaunchCheck, RpcClient, candidate_mint, check_launch,
+};
 use realorrug_types::Address;
 
 /// Runs the command.
@@ -97,7 +99,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
 fn report(signature: &str, result: &LaunchCheck) -> String {
     let mut lines = vec![format!(
         "{} launch {signature} (slot {})",
-        if result.clean() { "CLEAN" } else { "NOT CLEAN:" },
+        if result.clean() {
+            "CLEAN"
+        } else {
+            "NOT CLEAN:"
+        },
         result.slot.0
     )];
     for (name, outcome) in [
@@ -171,8 +177,14 @@ mod tests {
             allowlist: CheckOutcome::Pass("only allowed programs, no other buy".to_owned()),
         };
         let text = report("sig123", &result);
-        assert!(text.starts_with("NOT CLEAN: launch sig123 (slot 5)\n"), "{text}");
-        assert!(text.contains("REFUSE  fee recipient: not the treasury"), "{text}");
+        assert!(
+            text.starts_with("NOT CLEAN: launch sig123 (slot 5)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("REFUSE  fee recipient: not the treasury"),
+            "{text}"
+        );
         assert!(text.contains("PASS    single launch: mint abc"), "{text}");
     }
 }
