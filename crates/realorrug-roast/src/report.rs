@@ -132,14 +132,19 @@ pub struct Report {
     pub context: Option<Concern>,
 }
 
-/// The fact kind a fired [`Signal`] is read from.
+/// The fact kind a fired [`Signal`] is read from, for this table's single
+/// display column.
 ///
-/// One exhaustive `match`, no `_ =>` arm, the same discipline
-/// [`crate::sheet::twin_for`] and [`Signal::plain`] already hold themselves
-/// to: a new `Signal` variant that is not given a kind here fails to
-/// compile, rather than silently being left out of the alternatives table.
-/// The level name printed in the "what would change it" table, rephrased
-/// rather than the level's own `Debug` name.
+/// **Not its own table.** [`crate::salience::signal_kinds`] is the one map
+/// from a signal to the kinds it can be read from -- kept there, not
+/// duplicated here, because [`crate::salience::rank`] needs the same mapping
+/// to recognise a chain-dependent signal like `HolderConcentration` (read
+/// from `Kind::LargestHolderShare` on Robinhood, `Kind::TokenOwnership` on
+/// Solana) and a second copy of the table is exactly how the two drifted
+/// apart before (see that function's own doc comment). This table shows one
+/// kind per row, so it takes the first of whatever `signal_kinds` returns,
+/// which is `Kind::LargestHolderShare` for `HolderConcentration` -- unchanged
+/// from every existing report test.
 ///
 /// Research 0059: `forbidden::check` (the blanket check `replay.rs` runs in
 /// production) refused this table's own report text on `RugMechanicsLive`
@@ -163,25 +168,10 @@ fn level_word(level: Level) -> &'static str {
 }
 
 fn signal_kind(signal: Signal) -> Kind {
-    match signal {
-        Signal::LaunchBlockInStrongestBand => Kind::LaunchRecipients,
-        Signal::CreatorNeverGraduatedOrganically => Kind::CreatorOrganic,
-        Signal::CreatorBoughtOwnLaunch => Kind::DevBuy,
-        // No dossier constructs `BuyersCannotSell` yet (`sheet.rs`'s own
-        // doc comment); the nearest measured kind for both is the curve's
-        // own liquidity, which is what a simulated sell reads against and
-        // what a drain of reserves is a read of.
-        Signal::LiquidityGone | Signal::BuyersCannotSell => Kind::CurveLiquidity,
-        // The creator's balance going to zero is read from the same
-        // observed cash flow `Kind::CreatorCashFlow` already names -- there
-        // is no separate "creator balance" kind on the sheet.
-        Signal::CreatorSoldOut => Kind::CreatorCashFlow,
-        Signal::RepeatLauncher => Kind::CreatorLaunches,
-        Signal::HolderConcentration => Kind::LargestHolderShare,
-        Signal::OwnerCanStillMintOrPause => Kind::CreatorTaxBps,
-        Signal::CorrelatedSelling => Kind::CorrelatedSellWallets,
-        Signal::CreatorFundedEarlyBuyers => Kind::CreatorFundedEarlyBuyers,
-    }
+    // `signal_kinds` is never empty for a real `Signal` (its own exhaustive
+    // match gives every variant at least one kind), so this first entry
+    // always exists.
+    crate::salience::signal_kinds(signal)[0]
 }
 
 /// What kind of read would let a fired signal's alternative reading be

@@ -44,7 +44,52 @@
 
 use crate::clause::Kind;
 use crate::sheet::{Fact, FactSheet, Signal};
+use std::collections::HashSet;
 use std::fmt;
+
+/// The fact kinds a fired [`Signal`] can be read from, across chains.
+///
+/// **The one place signal-to-kind is written down.** [`crate::report::signal_kind`]
+/// used to keep its own single-`Kind` copy of this table for the report's
+/// "Alternative explanations" column; that table said `HolderConcentration`
+/// meant `Kind::LargestHolderShare` always, which is only true on Robinhood
+/// Chain -- on Solana the same signal is read from `Kind::TokenOwnership`
+/// (`push_token_ownership`'s own doc comment; `push_holders`'s for the
+/// Robinhood side). A sheet whose only fired signal was `HolderConcentration`
+/// off a Solana `TokenOwnership` share found nothing in that single-`Kind`
+/// table, so [`rank`] could not tell the fact that earned the level from one
+/// that never fired (2026-09-24 replay, case creator-sale-hbull). Returning
+/// every kind a signal can be read from, rather than picking one, is what
+/// lets [`rank`] recognise either chain's fact as the one that fired; the
+/// report still renders a single column and takes this slice's first entry,
+/// which stays `Kind::LargestHolderShare` for every existing report test.
+///
+/// One exhaustive `match`, no `_ =>` arm, the same discipline
+/// [`crate::report::would_resolve_text`] holds itself to: a new [`Signal`]
+/// variant that is not given a kind here fails to compile.
+pub(crate) fn signal_kinds(signal: Signal) -> &'static [Kind] {
+    match signal {
+        Signal::LaunchBlockInStrongestBand => &[Kind::LaunchRecipients],
+        Signal::CreatorNeverGraduatedOrganically => &[Kind::CreatorOrganic],
+        Signal::CreatorBoughtOwnLaunch => &[Kind::DevBuy],
+        // No dossier constructs `BuyersCannotSell` yet (`sheet.rs`'s own doc
+        // comment); the nearest measured kind for both is the curve's own
+        // liquidity, which is what a simulated sell reads against and what a
+        // drain of reserves is a read of.
+        Signal::LiquidityGone | Signal::BuyersCannotSell => &[Kind::CurveLiquidity],
+        // The creator's balance going to zero is read from the same observed
+        // cash flow `Kind::CreatorCashFlow` already names -- there is no
+        // separate "creator balance" kind on the sheet.
+        Signal::CreatorSoldOut => &[Kind::CreatorCashFlow],
+        Signal::RepeatLauncher => &[Kind::CreatorLaunches],
+        // Chain-dependent: `Kind::LargestHolderShare` on Robinhood Chain,
+        // `Kind::TokenOwnership` on Solana (see this fn's own doc comment).
+        Signal::HolderConcentration => &[Kind::LargestHolderShare, Kind::TokenOwnership],
+        Signal::OwnerCanStillMintOrPause => &[Kind::CreatorTaxBps],
+        Signal::CorrelatedSelling => &[Kind::CorrelatedSellWallets],
+        Signal::CreatorFundedEarlyBuyers => &[Kind::CreatorFundedEarlyBuyers],
+    }
+}
 
 /// A stable name for a ranked candidate: the [`Kind`]s whose facts it bundles.
 ///
@@ -375,6 +420,49 @@ fn token_ownership(sheet: &FactSheet) -> Option<Candidate> {
     })
 }
 
+/// The dev-buy bundle: the creator's own address bought into its own launch,
+/// once that crossed [`Signal::CreatorBoughtOwnLaunch`]'s own threshold.
+///
+/// Gated on the signal, the same reason [`launch_recipients`] and
+/// [`curve_liquidity`] are gated on theirs: `Kind::DevBuy`'s mere presence
+/// (including a measured zero, `push_holders`/the launch-transaction reader's
+/// own "no buy" fact) is not a concern by itself. Research replay 2026-09-24
+/// (case creator-sale-catwif) found a sheet whose only fired signal was this
+/// one still leading with an unrelated, unfired 4.7% holder share, because no
+/// candidate here existed for `Kind::DevBuy` at all; [`rank`]'s fired-first
+/// grouping is what puts it ahead of that share, not its priority.
+///
+/// Ranked at 84, just below [`concentration`] and [`token_ownership`]
+/// (90/85), for the sheet where both signals fired: a creator's own buy is
+/// usually small and is disclosed on the same footing as the bot's own
+/// holding (AGENTS.md rule 6), while half the supply at one address is the
+/// number that changes what a reader does next. Ranking it above them (91,
+/// as first written) made the Robinhood fixture lead with a 0.05 ETH buy
+/// over a 50.2% holder (the three Robinhood-fixture tests in `verdict.rs`).
+///
+/// The sentence reuses the fact's own `Plain` clause rather than a fresh one
+/// written here: `Kind::DevBuy` is worded "in the launch block" on Solana and
+/// "in the launch transaction" on Robinhood Chain (`sheet.rs`'s two writers
+/// of this kind), and a candidate that hard-coded either wording would be
+/// right on one chain and wrong on the other -- the same reason [`market`]
+/// above reuses its fact's own clause instead of writing a new sentence.
+fn dev_buy(sheet: &FactSheet) -> Option<Candidate> {
+    let buy = fact(sheet, Kind::DevBuy)?;
+    if !sheet.signals.contains(&Signal::CreatorBoughtOwnLaunch) {
+        return None;
+    }
+    let sentence = buy
+        .clauses
+        .iter()
+        .find(|c| c.voice == crate::clause::Voice::Plain)
+        .map(|c| c.text.clone())?;
+    Some(Candidate {
+        id: CandidateId(vec![Kind::DevBuy]),
+        priority: 84,
+        sentence,
+    })
+}
+
 /// Every candidate this sheet supports, ranked highest priority first.
 ///
 /// **The one ranking every caller shares.** [`crate::verdict::headline`],
@@ -383,6 +471,20 @@ fn token_ownership(sheet: &FactSheet) -> Option<Candidate> {
 /// new bundle here is what makes it available to all three at once, and
 /// removing one removes it from all three, instead of three edits that can
 /// drift apart the way the old per-file `LEAD` lists did.
+///
+/// **A candidate backing a fired signal always outranks one that backs
+/// none**, before priority is ever consulted. `priority` alone used to
+/// decide this, and a sheet whose only fired signal was `CreatorBoughtOwnLaunch`
+/// (a 0.5326 SOL dev buy, `Sketchy`) still led with `token_ownership`'s
+/// unrelated, unfired 4.7% holder share, because 85 outranks a `DevBuy`
+/// candidate that plain didn't exist -- and would still have outranked one at
+/// a lower priority even once it did (2026-09-24 replay, case
+/// creator-sale-catwif). [`signal_kinds`] is the one map from a fired signal
+/// to the kinds it can be read from; a candidate whose id contains any of
+/// them is "backed" and sorts before every candidate whose id contains none.
+/// A sheet with no fired signal has an empty backed set, so every candidate
+/// falls into the same "backs none" group and this ordering is exactly the
+/// old priority-only one -- no signals, ranking unchanged.
 #[must_use]
 pub fn rank(sheet: &FactSheet) -> Vec<Candidate> {
     let mut candidates: Vec<Candidate> = [
@@ -393,16 +495,29 @@ pub fn rank(sheet: &FactSheet) -> Vec<Candidate> {
         curve_liquidity(sheet),
         concentration(sheet),
         token_ownership(sheet),
+        dev_buy(sheet),
         launch_recipients(sheet),
         market(sheet),
     ]
     .into_iter()
     .flatten()
     .collect();
-    // Stable: two candidates never share a priority today, but a tie should
-    // keep the order they were considered in rather than an implementation
-    // detail of the sort.
-    candidates.sort_by_key(|c| std::cmp::Reverse(c.priority));
+    let backed_kinds: HashSet<Kind> = sheet
+        .signals
+        .iter()
+        .flat_map(|&signal| signal_kinds(signal).iter().copied())
+        .collect();
+    let backs_a_fired_signal =
+        |candidate: &Candidate| candidate.id.0.iter().any(|k| backed_kinds.contains(k));
+    // Stable: two candidates never share a (backed, priority) pair today, but
+    // a tie should keep the order they were considered in rather than an
+    // implementation detail of the sort.
+    candidates.sort_by_key(|c| {
+        (
+            std::cmp::Reverse(backs_a_fired_signal(c)),
+            std::cmp::Reverse(c.priority),
+        )
+    });
     candidates
 }
 
@@ -768,6 +883,142 @@ mod tests {
         let top = lead(&sheet).expect("a fired signal is eligible to lead");
         assert_eq!(top.id, CandidateId(vec![Kind::LaunchRecipients]));
         assert!(top.sentence.contains('3'));
+    }
+
+    fn dev_buy_fact() -> Fact {
+        Fact::exact(
+            Kind::DevBuy,
+            "SOL the creator spent buying their own token in the launch block",
+            0.5326,
+            "0.5326 SOL",
+        )
+        .saying(
+            Voice::Plain,
+            "The creator bought 0.5326 SOL of their own token in the launch block.",
+        )
+    }
+
+    fn token_ownership_fact(share: f64, rendered: &str) -> Fact {
+        Fact::exact(
+            Kind::TokenOwnership,
+            "share of the total token supply held by the largest owner among the sampled \
+             largest accounts",
+            share,
+            rendered,
+        )
+    }
+
+    fn creator_record_facts() -> Vec<Fact> {
+        vec![
+            Fact::exact(
+                Kind::CreatorLaunches,
+                "tokens this creator has launched",
+                12.0,
+                "12",
+            ),
+            Fact::exact(
+                Kind::CreatorOrganic,
+                "how many reached an AMM by filling over time",
+                0.0,
+                "0",
+            ),
+        ]
+    }
+
+    /// The 2026-09-24 replay's own shape (case creator-sale-catwif, mint
+    /// 5pYB12...): the only fired signal is `CreatorBoughtOwnLaunch`, backed
+    /// by a 0.5326 SOL dev buy, and the sheet also carries an unrelated,
+    /// unfired 4.7% `TokenOwnership` share. Before [`dev_buy`] existed, `lead`
+    /// returned that 4.7% share -- the wrong fact for a `Sketchy` verdict this
+    /// signal alone produced. Re-applying the bug (delete the `dev_buy` call
+    /// from [`rank`]'s candidate list, or drop its `sheet.signals.contains`
+    /// gate so it fires unconditionally and a different priority wins) makes
+    /// this fail.
+    #[test]
+    fn a_fired_dev_buy_leads_over_an_unrelated_unfired_token_ownership_share() {
+        let mut sheet = sheet_with(vec![dev_buy_fact(), token_ownership_fact(0.047, "4.7%")]);
+        sheet.signals = vec![Signal::CreatorBoughtOwnLaunch];
+        let top = lead(&sheet).expect("a candidate exists");
+        assert_eq!(top.id, CandidateId(vec![Kind::DevBuy]));
+        assert!(top.sentence.contains("0.5326 SOL"), "{}", top.sentence);
+
+        let report = crate::report::build(&sheet);
+        let concern = report
+            .strongest_concern
+            .expect("a fired signal has a strongest concern");
+        assert!(
+            concern.evidence.contains("0.5326 SOL"),
+            "{}",
+            concern.evidence
+        );
+    }
+
+    /// Both signals fired: the holder share leads, the creator's buy follows.
+    /// Re-applying the bug (dev buy ranked above the holder shares, 91) makes
+    /// this fail: the buy would lead.
+    #[test]
+    fn a_fired_holder_share_leads_over_a_fired_dev_buy() {
+        let mut sheet = sheet_with(vec![dev_buy_fact(), token_ownership_fact(0.276, "27.6%")]);
+        sheet.signals = vec![Signal::CreatorBoughtOwnLaunch, Signal::HolderConcentration];
+        let ranked = rank(&sheet);
+        assert_eq!(ranked[0].id, CandidateId(vec![Kind::TokenOwnership]));
+        assert_eq!(ranked[1].id, CandidateId(vec![Kind::DevBuy]));
+    }
+
+    /// A `Kind::DevBuy` fact with no `CreatorBoughtOwnLaunch` signal is a
+    /// measured buy (or a measured zero) that never crossed the signal's own
+    /// threshold -- not a concern, the same "absent is not zero" gate
+    /// [`launch_recipients`] and [`curve_liquidity`] already hold themselves
+    /// to. Re-applying the bug (drop the `sheet.signals.contains` gate in
+    /// [`dev_buy`]) makes this fail: an unfired buy would rank and `lead`
+    /// would return it.
+    #[test]
+    fn a_dev_buy_fact_without_its_signal_does_not_rank() {
+        let sheet = sheet_with(vec![dev_buy_fact()]);
+        assert!(lead(&sheet).is_none());
+        assert!(rank(&sheet).is_empty());
+    }
+
+    /// The 2026-09-24 replay's other case (creator-sale-hbull): `HolderConcentration`
+    /// fires off a Solana `Kind::TokenOwnership` share, not `Kind::LargestHolderShare`
+    /// -- the kind [`crate::report::signal_kind`] alone would have named. A
+    /// sheet that also carries an unfired, higher-priority creator record
+    /// must still lead with the 27.6% share the signal actually fired on.
+    /// Re-applying the bug (drop `Kind::TokenOwnership` from
+    /// [`signal_kinds`]'s `HolderConcentration` arm) makes this fail: the
+    /// creator record, unfired but priority 100, would lead instead.
+    #[test]
+    fn a_fired_holder_concentration_share_leads_over_an_unfired_creator_record() {
+        let mut sheet = sheet_with(creator_record_facts());
+        sheet.facts.push(token_ownership_fact(0.276, "27.6%"));
+        sheet.signals = vec![Signal::HolderConcentration];
+        let top = lead(&sheet).expect("a candidate exists");
+        assert_eq!(top.id, CandidateId(vec![Kind::TokenOwnership]));
+        assert!(top.sentence.contains("27.6%"), "{}", top.sentence);
+    }
+
+    /// No fired signal: every candidate falls into the same "backs none"
+    /// group, so the ranking is exactly the old priority-only order --
+    /// creator record (100), then concentration (90), then token ownership
+    /// (85). Re-applying a bug that always grouped by "backed" (rather than
+    /// only when a candidate's kind is in a fired signal's set) makes this
+    /// fail if it ever reordered a signal-less sheet.
+    #[test]
+    fn no_fired_signal_keeps_the_old_priority_only_ordering() {
+        let mut sheet = sheet_with(creator_record_facts());
+        sheet
+            .facts
+            .push(holders_fact("addresses holding the token now"));
+        sheet
+            .facts
+            .push(share_fact("held by the single largest address"));
+        sheet.facts.push(token_ownership_fact(0.047, "4.7%"));
+        let ranked = rank(&sheet);
+        let leads: Vec<Kind> = ranked.iter().map(|c| c.id.0[0]).collect();
+        assert_eq!(
+            leads,
+            vec![Kind::CreatorLaunches, Kind::Holders, Kind::TokenOwnership]
+        );
     }
 
     /// Silences an unused-import warning for `About`/`Voice` if a future edit
