@@ -79,4 +79,4 @@ pub use memory::{Error as MemoryError, Fact, Kind, Memory, PaidRequest, Recorded
 pub use reserves::{PoolReserves, Role, Unreadable};
 pub use robinhood::{Error as RobinhoodError, RobinhoodReader};
 pub use rpc::{AccountRead, MultiAccountRead, OwnedAccount, RpcClient, RpcError};
-pub use wallets::{Candidate, Funder, Funding, SharedFunder};
+pub use wallets::{Candidate, ExchangePaid, Funder, Funding, SharedFunder};

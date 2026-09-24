@@ -201,6 +201,14 @@ pub enum Kind {
     /// (design 0031 §1's last paragraph). Informational: no signal is built
     /// from this alone, and it never says "bot".
     EarlyBuyersActiveBeforeLaunch,
+    /// How many of the checked early buyers a listed exchange withdrawal
+    /// wallet (`realorrug_onchain::exchange_wallets`) materially funded, at
+    /// or before they bought (design 0031 §3). The wallet, not the buyers,
+    /// is what is named here: thousands of strangers withdraw from the same
+    /// exchange address, so this is never a signal and never moves the
+    /// score or level. The sentence names the exchange, the labelling
+    /// source and the date it was checked -- never ownership.
+    ExchangePaidEarlyBuyers,
     /// A dated USD price or market-cap read from an off-chain aggregator
     /// (design 0027 §2.2, "Market and exit"; `realorrug-onchain::market`).
     ///

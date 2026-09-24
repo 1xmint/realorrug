@@ -153,6 +153,12 @@ impl Subject {
             // a fact about those wallets, not the creator or the launch
             // block.
             | Kind::EarlyBuyersActiveBeforeLaunch
+            // An exchange withdrawal wallet funding checked early buyers is
+            // a flow measured about those buyer wallets, the same subject
+            // `Kind::SharedFunder` carries -- it names the exchange's
+            // wallet, never the creator, and is not a claim about the venue
+            // either.
+            | Kind::ExchangePaidEarlyBuyers
             | Kind::TokenOwnership
             | Kind::CorrelatedSellWallets
             | Kind::CorrelatedSellVolumeBps

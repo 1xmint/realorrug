@@ -2280,6 +2280,7 @@ fn push_funding(
         );
     }
     push_creator_funded_early_buyers(facts, signals, funding, creator, checked);
+    push_exchange_paid_early_buyers(facts, funding, checked);
     // `None`: `LaunchBlock` (Solana's own launch record, `realorrug-onchain`'s
     // `launch.rs`) carries a slot, never a wall-clock timestamp, so there is
     // nothing to compare a candidate's first-active moment against yet. Once
@@ -2344,6 +2345,47 @@ fn push_creator_funded_early_buyers(
         ),
     );
     signals.push(Signal::CreatorFundedEarlyBuyers);
+}
+
+/// Design 0031 §3: a listed exchange withdrawal wallet
+/// (`realorrug_onchain::exchange_wallets`) that materially funded checked
+/// early buyers is reported by name instead of folded into
+/// [`Kind::SharedFunder`] -- [`shared_funders`] already left it out of
+/// `funding.shared` for exactly this reason. Only the top-funded exchange
+/// wallet is said, the same "one fact, most-funded first" shape
+/// [`push_funding`]'s own `Kind::SharedFunder` clause uses. Never a signal:
+/// it does not move the score or the level (design 0031 §3, AGENTS.md
+/// rule 4).
+fn push_exchange_paid_early_buyers(facts: &mut Vec<Fact>, funding: &Funding, checked: u32) {
+    let Some(top) = funding.exchange_paid.first() else {
+        return;
+    };
+    facts.push(
+        Fact::exact(
+            Kind::ExchangePaidEarlyBuyers,
+            "checked early buyers a listed exchange withdrawal wallet sent material value to \
+             at or before their first purchase; the wallet pays out withdrawals for many \
+             strangers, not proof of who is behind the buyers",
+            f64::from(top.funded),
+            format!("{} of {checked}", top.funded),
+        )
+        .saying(
+            Voice::Plain,
+            format!(
+                "{}'s withdrawal wallet (labelled by {}, checked {}) paid out to {} of the \
+                 {checked} early buyers checked, at or before they bought.",
+                top.exchange, top.source, top.checked, top.funded
+            ),
+        )
+        .saying(
+            Voice::Blunt,
+            format!(
+                "{}'s withdrawal wallet ({}, checked {}) funded {} of {checked} early buyers \
+                 checked.",
+                top.exchange, top.source, top.checked, top.funded
+            ),
+        ),
+    );
 }
 
 /// Design 0031 §1's last paragraph: how many of the checked early buyers
@@ -7175,6 +7217,7 @@ mod tests {
                     funded: *funded,
                 })
                 .collect(),
+            exchange_paid: Vec::new(),
             gaps: gaps.iter().map(|g| (*g).to_owned()).collect(),
             cu_spent: 0,
         }
@@ -7249,6 +7292,72 @@ mod tests {
             !sheet.unknown.iter().any(|u| u.contains("funding")),
             "a finished check named a gap: {:?}",
             sheet.unknown
+        );
+    }
+
+    /// A funding result whose top `exchange_paid` entry is Binance, on top
+    /// of [`funding_of`]'s ordinary shape.
+    fn funding_with_exchange_paid(buyers: u32, checked: u32, funded: u32) -> Funding {
+        let mut funding = funding_of(buyers, checked, &[], &[]);
+        funding.exchange_paid = vec![realorrug_onchain::ExchangePaid {
+            exchange: "Binance",
+            address: "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9".to_owned(),
+            source: "Solscan",
+            checked: "2026-09-23",
+            funded,
+        }];
+        funding
+    }
+
+    #[test]
+    fn an_exchange_paid_fact_names_the_exchange_source_and_date_not_ownership() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with_exchange_paid(4, 4, 2));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let paid = fact_of(&sheet, Kind::ExchangePaidEarlyBuyers).expect("an exchange-paid fact");
+        assert_eq!(paid.values, [2.0]);
+        assert_eq!(paid.rendered, "2 of 4");
+        let words = clause_words(paid);
+        assert!(words.contains("binance"), "{words}");
+        assert!(words.contains("solscan"), "{words}");
+        assert!(words.contains("2026-09-23"), "{words}");
+        assert!(words.contains("2 of the 4 early buyers checked"), "{words}");
+        for word in OWNERSHIP_WORDS {
+            assert!(!words.contains(word), "{word:?} in {words}");
+        }
+        assert!(!words.contains("owns"), "{words}");
+        assert!(!words.contains("controls"), "{words}");
+    }
+
+    /// A single exchange-funded buyer (1 of 4) is still worth the fact.
+    #[test]
+    fn a_single_exchange_funded_buyer_is_still_reported() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with_exchange_paid(4, 4, 1));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        let paid = fact_of(&sheet, Kind::ExchangePaidEarlyBuyers).expect("an exchange-paid fact");
+        assert_eq!(paid.rendered, "1 of 4");
+    }
+
+    #[test]
+    fn no_exchange_paid_funder_means_no_exchange_paid_fact() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_of(4, 4, &[3], &[]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::ExchangePaidEarlyBuyers).is_none());
+    }
+
+    #[test]
+    fn an_exchange_paid_fact_is_never_a_signal() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_with_exchange_paid(4, 4, 3));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            !sheet
+                .signals
+                .iter()
+                .any(|s| format!("{s:?}").contains("Exchange"))
         );
     }
 
@@ -8139,6 +8248,7 @@ mod tests {
             rule: "test",
             checked,
             shared: Vec::new(),
+            exchange_paid: Vec::new(),
             gaps: Vec::new(),
             cu_spent: 0,
         }

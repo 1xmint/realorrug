@@ -251,6 +251,34 @@ fn creator_funded_early_buyers(sheet: &FactSheet) -> Option<Candidate> {
     })
 }
 
+/// The exchange-paid-early-buyers bundle: a listed exchange withdrawal
+/// wallet materially funded one or more checked early buyers (design 0031
+/// §3).
+///
+/// Ranked below [`shared_funder`]'s own minority priority (80): the sheet
+/// only carries this fact when [`crate::sheet`] already resolved the funder
+/// to a named, dated exchange wallet rather than an anonymous shared
+/// address, which is the less alarming of the two readings by design (§3:
+/// "exchanges are not insiders") -- it is informational, never a signal, and
+/// ranking it above an unresolved shared funder would say the opposite.
+fn exchange_paid_early_buyers(sheet: &FactSheet) -> Option<Candidate> {
+    let paid = fact(sheet, Kind::ExchangePaidEarlyBuyers)?;
+    let checked = fact(sheet, Kind::FundingChecked);
+    let mut id = vec![Kind::ExchangePaidEarlyBuyers];
+    if checked.is_some() {
+        id.push(Kind::FundingChecked);
+    }
+    Some(Candidate {
+        id: CandidateId(id),
+        priority: 60,
+        sentence: format!(
+            "A listed exchange withdrawal wallet paid out to {} of the early buyers checked, \
+             at or before they bought.",
+            paid.rendered
+        ),
+    })
+}
+
 /// The market bundle: a dated USD price and/or market cap (design 0027
 /// §2.2, ADR 0033).
 ///
@@ -361,6 +389,7 @@ pub fn rank(sheet: &FactSheet) -> Vec<Candidate> {
         creator_record(sheet),
         creator_funded_early_buyers(sheet),
         shared_funder(sheet),
+        exchange_paid_early_buyers(sheet),
         curve_liquidity(sheet),
         concentration(sheet),
         token_ownership(sheet),
@@ -622,6 +651,68 @@ mod tests {
             .expect("still ranked");
         assert_eq!(shared.id, CandidateId(vec![Kind::SharedFunder]));
         assert_eq!(shared.priority, 80);
+    }
+
+    /// Design 0031 §3: a listed exchange withdrawal wallet ranks below an
+    /// anonymous shared funder, and below concentration too -- it is the
+    /// resolved, less alarming reading, informational only.
+    #[test]
+    fn an_exchange_paid_fact_ranks_below_a_shared_funder_and_concentration() {
+        let mut sheet = funding_sheet(3, Some(4));
+        sheet.facts.push(Fact::exact(
+            Kind::ExchangePaidEarlyBuyers,
+            "checked early buyers a listed exchange wallet funded",
+            2.0,
+            "2 of 4",
+        ));
+        let ranked = rank(&sheet);
+        let exchange = ranked
+            .iter()
+            .find(|c| c.id.0[0] == Kind::ExchangePaidEarlyBuyers)
+            .expect("still ranked");
+        assert_eq!(
+            exchange.id,
+            CandidateId(vec![Kind::ExchangePaidEarlyBuyers, Kind::FundingChecked])
+        );
+        assert_eq!(exchange.priority, 60);
+        let shared_index = ranked
+            .iter()
+            .position(|c| c.id.0[0] == Kind::SharedFunder)
+            .expect("shared funder ranked");
+        let holders_index = ranked
+            .iter()
+            .position(|c| c.id.0[0] == Kind::Holders)
+            .expect("concentration ranked");
+        let exchange_index = ranked
+            .iter()
+            .position(|c| c.id.0[0] == Kind::ExchangePaidEarlyBuyers)
+            .expect("exchange ranked");
+        assert!(exchange_index > shared_index);
+        assert!(exchange_index > holders_index);
+    }
+
+    /// Without a checked count the exchange fact still ranks, claiming no
+    /// denominator in its id -- the same shape `shared_funder` falls back to.
+    #[test]
+    fn an_exchange_paid_fact_without_a_checked_count_still_ranks() {
+        let sheet = funding_sheet(3, None);
+        let mut sheet = sheet;
+        sheet.facts.push(Fact::exact(
+            Kind::ExchangePaidEarlyBuyers,
+            "checked early buyers a listed exchange wallet funded",
+            1.0,
+            "1 of 4",
+        ));
+        let ranked = rank(&sheet);
+        let exchange = ranked
+            .iter()
+            .find(|c| c.id.0[0] == Kind::ExchangePaidEarlyBuyers)
+            .expect("still ranked");
+        assert_eq!(
+            exchange.id,
+            CandidateId(vec![Kind::ExchangePaidEarlyBuyers])
+        );
+        assert_eq!(exchange.priority, 60);
     }
 
     /// Design 0031 §2: the creator's own address funding checked early
