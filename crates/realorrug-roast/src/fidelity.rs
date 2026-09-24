@@ -1227,5 +1227,11 @@ mod tests {
             clauses("it moved 17,497 tokens"),
             vec!["it moved 17,497 tokens"]
         );
+        // A digit on one side only is still a clause break: both sides must
+        // be digits for a thousands separator. And a trailing break leaves no
+        // empty clause behind it.
+        assert_eq!(clauses("a,5"), vec!["a,", "5"]);
+        assert_eq!(clauses("5,a"), vec!["5,", "a"]);
+        assert_eq!(clauses("a;"), vec!["a;"]);
     }
 }
