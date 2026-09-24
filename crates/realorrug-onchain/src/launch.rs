@@ -294,6 +294,7 @@ mod tests {
             pre_balances: Vec::new(),
             post_balances: Vec::new(),
             failed: false,
+            meta_present: true,
         }
     }
 

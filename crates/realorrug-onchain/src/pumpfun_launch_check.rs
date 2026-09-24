@@ -91,11 +91,17 @@ impl LaunchCheck {
 /// [`idl/pump.json`](https://github.com/pump-fun/pump-public-docs/blob/81091419e4457566469d4e2a27f64ed84d42419c/idl/pump.json)
 /// at commit `81091419e4457566469d4e2a27f64ed84d42419c` (read 2026-09-24):
 /// `create`'s account list names `system_program`, `token_program`,
-/// `associated_token_program`, `mpl_token_metadata` and the program itself;
-/// `create_v2`'s names the same four with Token-2022 in place of SPL Token.
-/// Compute Budget is not in either instruction's account list -- it is its
-/// own top-level instruction, universal on Solana for setting a priority fee,
-/// and carries no accounts to check.
+/// `associated_token_program`, `mpl_token_metadata` and the program itself.
+/// `create_v2`'s names the same, but with Token-2022 in place of SPL Token,
+/// and does **not** name `mpl_token_metadata` at all -- in its place it
+/// names `mayhem_program_id`, which this list does not carry as an allowed
+/// program: a `create_v2` that actually touches it is refused by
+/// [`check_allowlist`], and a curve created in mayhem mode is refused
+/// separately, by name, in [`check_fee_recipient`] (the mayhem fee math is
+/// not one this check models). Compute Budget is not in either
+/// instruction's account list -- it is its own top-level instruction,
+/// universal on Solana for setting a priority fee, and carries no accounts
+/// to check.
 const ALLOWED_PROGRAMS: &[(&str, &str)] = &[
     (
         "11111111111111111111111111111111",
@@ -127,43 +133,92 @@ const ALLOWED_PROGRAMS: &[(&str, &str)] = &[
     ),
 ];
 
+/// What reading one account for checks 3 or 4 produced.
+///
+/// A plain `Option<&[u8]>` cannot say *why* an account came back empty, and
+/// dropping that reason is exactly what the CLI's old `.ok().flatten()` did
+/// -- a transport failure and "no account at that address" both collapsed
+/// into the same `None`, and the operator reading the refusal had no way to
+/// tell a node outage from an address that was simply wrong. Carrying the
+/// slot for the same reason: a figure a check passes with is only checkable
+/// on an explorer if the moment it was read at travels with it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AccountState<'a> {
+    /// The account exists; its bytes and the slot the node read them at.
+    Present {
+        /// The account's raw data.
+        data: &'a [u8],
+        /// The slot the node served it at, when the node said.
+        slot: Option<Slot>,
+    },
+    /// No account exists at that address.
+    Absent,
+    /// The read itself failed. Carries why, already redacted of the RPC
+    /// endpoint by the caller (the CLI never lets that string reach here
+    /// unredacted).
+    Failed(String),
+}
+
+impl<'a> AccountState<'a> {
+    /// An account that was read successfully, with no slot recorded --
+    /// convenience for callers (mostly tests) that do not have one.
+    #[must_use]
+    pub const fn present(data: &'a [u8]) -> Self {
+        Self::Present { data, slot: None }
+    }
+}
+
 /// Runs the six checks.
 ///
-/// `curve_account` and `mint_account` are the raw bytes read from chain
-/// *after* the transaction, at whatever slot the caller read them -- passing
-/// `None` for either is what an unreadable account looks like, and both
-/// checks that need one refuse rather than guess (rule 8).
+/// `curve_account` and `mint_account` describe whatever the caller managed to
+/// read *after* the transaction landed -- [`AccountState::Absent`] or
+/// [`AccountState::Failed`] is what an unreadable account looks like, and
+/// both checks that need one refuse rather than guess (rule 8).
 #[must_use]
 pub fn check_launch(
     tx: &Transaction,
-    curve_account: Option<&[u8]>,
-    mint_account: Option<&[u8]>,
+    curve_account: AccountState<'_>,
+    mint_account: AccountState<'_>,
     treasury: &Address,
     dev_wallet: &Address,
     dev_buy_lamports: u64,
 ) -> LaunchCheck {
-    let transaction = if tx.failed {
-        CheckOutcome::Refuse("the transaction failed".to_owned())
+    // `tx.failed` reads `meta.err`, which is `None` both when the node said
+    // the transaction succeeded and when the node's response never carried a
+    // `meta` object at all -- `!tx.meta_present` catches the second case,
+    // which `failed` alone cannot (rule 8: absent is not zero).
+    let unreadable = !tx.meta_present;
+    let refused_outcome = || {
+        CheckOutcome::Refuse(if unreadable {
+            "the transaction's outcome could not be read".to_owned()
+        } else {
+            "the transaction failed".to_owned()
+        })
+    };
+
+    let transaction = if tx.failed || unreadable {
+        refused_outcome()
     } else {
         CheckOutcome::Pass(format!("slot {}", tx.slot.0))
     };
 
     let launches = find_launches(tx);
     let single_launch = match launches.as_slice() {
-        _ if tx.failed => CheckOutcome::Refuse("the transaction failed".to_owned()),
+        _ if tx.failed || unreadable => refused_outcome(),
         [] => CheckOutcome::Refuse("no pump.fun create or create_v2 instruction".to_owned()),
-        [one] => CheckOutcome::Pass(format!("mint {}", one.mint)),
+        [Ok(one)] => CheckOutcome::Pass(format!("mint {}", one.mint)),
+        [Err(reason)] => CheckOutcome::Refuse(reason.clone()),
         many => CheckOutcome::Refuse(format!(
             "{} launch instructions in one transaction",
             many.len()
         )),
     };
 
-    let fee_recipient = if tx.failed {
-        CheckOutcome::Refuse("the transaction failed".to_owned())
+    let fee_recipient = if tx.failed || unreadable {
+        refused_outcome()
     } else {
         match launches.as_slice() {
-            [one] => check_fee_recipient(one, curve_account, treasury),
+            [Ok(one)] => check_fee_recipient(one, curve_account, treasury),
             _ => {
                 CheckOutcome::Refuse("no single launch to check a fee recipient against".to_owned())
             }
@@ -172,14 +227,14 @@ pub fn check_launch(
 
     let authorities = check_authorities(mint_account);
 
-    let dev_buy = if tx.failed {
-        CheckOutcome::Refuse("the transaction failed".to_owned())
+    let dev_buy = if tx.failed || unreadable {
+        refused_outcome()
     } else {
         check_dev_buy(tx, dev_wallet, dev_buy_lamports)
     };
 
-    let allowlist = if tx.failed {
-        CheckOutcome::Refuse("the transaction failed".to_owned())
+    let allowlist = if tx.failed || unreadable {
+        refused_outcome()
     } else {
         check_allowlist(tx, dev_wallet)
     };
@@ -207,7 +262,7 @@ pub fn check_launch(
 /// job to catch it.
 #[must_use]
 pub fn candidate_mint(tx: &Transaction) -> Option<Address> {
-    find_launches(tx).first().map(|f| f.mint)
+    find_launches(tx).first()?.as_ref().ok().map(|f| f.mint)
 }
 
 /// A launch instruction found in the transaction, with what it recorded.
@@ -216,14 +271,21 @@ struct Found {
     creator: Address,
 }
 
-/// Every pump.fun `create`/`create_v2` instruction in the transaction.
+/// Every pump.fun `create`/`create_v2` instruction in the transaction, and
+/// whether it actually decoded.
 ///
 /// Scans every instruction the transaction carries, top-level and inner
 /// (CPI) alike -- [`Transaction::instructions`] is already flattened that
 /// way, on purpose (see `crate::launch`'s module doc), and a launch instruction
 /// hidden inside a CPI is exactly the kind of bundling check 6 exists to
 /// catch, not a reason to stop looking.
-fn find_launches(tx: &Transaction) -> Vec<Found> {
+///
+/// `Err` rather than dropped when the discriminator says "launch" but the
+/// mint account or the argument payload does not decode -- a transaction
+/// carrying two launch instructions where the second is merely malformed
+/// still has two launch instructions in it, and check 2 has to see that
+/// count, not a count that quietly went back to one.
+fn find_launches(tx: &Transaction) -> Vec<Result<Found, String>> {
     let program = pumpfun::PROGRAM_ID.to_string();
     tx.instructions
         .iter()
@@ -240,11 +302,17 @@ fn find_launches(tx: &Transaction) -> Vec<Found> {
             // The mint is the launch instruction's first account on both
             // paths (IDL `create.accounts[0]` and `create_v2.accounts[0]`,
             // same commit cited on `ALLOWED_PROGRAMS`).
-            let mint: Address = ix.accounts.first()?.parse().ok()?;
-            let args = pumpfun::launch_args(instruction, &ix.data)?.ok()?;
-            Some(Found {
-                mint,
-                creator: args.creator,
+            let mint = ix.accounts.first().and_then(|a| a.parse::<Address>().ok());
+            let args = pumpfun::launch_args(instruction, &ix.data).and_then(Result::ok);
+            Some(match (mint, args) {
+                (Some(mint), Some(args)) => Ok(Found {
+                    mint,
+                    creator: args.creator,
+                }),
+                _ => Err(format!(
+                    "a pump.fun {} instruction did not decode",
+                    instruction.anchor_name()
+                )),
             })
         })
         .collect()
@@ -263,7 +331,7 @@ fn find_launches(tx: &Transaction) -> Vec<Found> {
 /// -- exactly [`BondingCurve::parse`]'s layout.
 fn check_fee_recipient(
     found: &Found,
-    curve_account: Option<&[u8]>,
+    curve_account: AccountState<'_>,
     treasury: &Address,
 ) -> CheckOutcome {
     if found.creator != *treasury {
@@ -272,11 +340,28 @@ fn check_fee_recipient(
             found.creator
         ));
     }
-    let Some(data) = curve_account else {
-        return CheckOutcome::Refuse("the bonding-curve account could not be read".to_owned());
+    let (data, slot) = match curve_account {
+        AccountState::Present { data, slot } => (data, slot),
+        AccountState::Absent => {
+            return CheckOutcome::Refuse("the bonding-curve account could not be read".to_owned());
+        }
+        AccountState::Failed(reason) => {
+            return CheckOutcome::Refuse(format!(
+                "the bonding-curve account could not be read: {reason}"
+            ));
+        }
     };
     match BondingCurve::parse(data) {
-        Ok(curve) if curve.creator == *treasury => CheckOutcome::Pass(format!("{treasury}")),
+        Ok(curve) if curve.creator == *treasury => match BondingCurve::is_mayhem_mode(data) {
+            Ok(true) => CheckOutcome::Refuse(
+                "the bonding curve is in mayhem mode, which changes the fee math this check does not model"
+                    .to_owned(),
+            ),
+            Ok(false) => CheckOutcome::Pass(slot_suffix(format!("{treasury}"), slot)),
+            Err(e) => CheckOutcome::Refuse(format!(
+                "the bonding curve's is_mayhem_mode flag did not read: {e:?}"
+            )),
+        },
         Ok(curve) => CheckOutcome::Refuse(format!(
             "the bonding curve's creator is {}, not the treasury",
             curve.creator
@@ -285,12 +370,27 @@ fn check_fee_recipient(
     }
 }
 
+/// Appends "at slot N" to a passing check's text when the read carried a
+/// slot -- so the value is checkable on an explorer, not just asserted.
+fn slot_suffix(text: String, slot: Option<Slot>) -> String {
+    match slot {
+        Some(s) => format!("{text} (slot {})", s.0),
+        None => text,
+    }
+}
+
 /// Check 4: mint and freeze authorities are both absent, read from the mint
 /// account now (not from the launch transaction, which cannot see a later
 /// revocation).
-fn check_authorities(mint_account: Option<&[u8]>) -> CheckOutcome {
-    let Some(data) = mint_account else {
-        return CheckOutcome::Refuse("the mint account could not be read".to_owned());
+fn check_authorities(mint_account: AccountState<'_>) -> CheckOutcome {
+    let (data, slot) = match mint_account {
+        AccountState::Present { data, slot } => (data, slot),
+        AccountState::Absent => {
+            return CheckOutcome::Refuse("the mint account could not be read".to_owned());
+        }
+        AccountState::Failed(reason) => {
+            return CheckOutcome::Refuse(format!("the mint account could not be read: {reason}"));
+        }
     };
     match mint_authorities(data) {
         Ok((Some(mint_authority), _)) => {
@@ -299,7 +399,7 @@ fn check_authorities(mint_account: Option<&[u8]>) -> CheckOutcome {
         Ok((_, Some(freeze_authority))) => {
             CheckOutcome::Refuse(format!("freeze authority is still {freeze_authority}"))
         }
-        Ok((None, None)) => CheckOutcome::Pass("both revoked".to_owned()),
+        Ok((None, None)) => CheckOutcome::Pass(slot_suffix("both revoked".to_owned(), slot)),
         Err(e) => CheckOutcome::Refuse(format!("the mint account did not parse: {e}")),
     }
 }
@@ -372,24 +472,54 @@ fn check_allowlist(tx: &Transaction, dev_wallet: &Address) -> CheckOutcome {
         if ix.program != pumpfun_program {
             continue;
         }
-        let Some(instruction) =
-            realorrug_decode::decode(realorrug_decode::Program::PumpFun, &ix.data)
-                .known()
-                .copied()
-                .and_then(realorrug_decode::Instruction::pumpfun)
-        else {
+        // The event-CPI self-invocation carries no instruction of its own
+        // (it is pump.fun logging via a self-CPI so an indexer can read
+        // events from instruction data); it is not one of the pumpfun
+        // `Instruction` variants and would otherwise be refused as an
+        // undecodable instruction below.
+        if realorrug_decode::Discriminator::from_data(&ix.data) == Some(pumpfun::ANCHOR_EVENT_CPI)
+        {
             continue;
+        }
+        let decoded = realorrug_decode::decode(realorrug_decode::Program::PumpFun, &ix.data);
+        let Some(instruction) = decoded
+            .known()
+            .copied()
+            .and_then(realorrug_decode::Instruction::pumpfun)
+        else {
+            // Rule 8: an instruction this check cannot name is not one it can
+            // vouch for. Silently skipping it (the old behaviour) let an
+            // unrecognised pump.fun instruction ride along unchecked.
+            return CheckOutcome::Refuse(format!(
+                "a pump.fun instruction did not decode ({decoded:?})"
+            ));
         };
+        if matches!(
+            instruction,
+            pumpfun::Instruction::Create
+                | pumpfun::Instruction::CreateV2
+                | pumpfun::Instruction::ExtendAccount
+                | pumpfun::Instruction::InitUserVolumeAccumulator
+        ) {
+            continue;
+        }
         if instruction.is_sell() {
             return CheckOutcome::Refuse(
                 "a sell instruction is bundled into the launch".to_owned(),
             );
         }
-        if instruction.is_buy() && !ix.accounts.iter().any(|a| a == &dev_wallet_key) {
-            return CheckOutcome::Refuse(
-                "a buy in this transaction is not the dev wallet's".to_owned(),
-            );
+        if instruction.is_buy() {
+            if !ix.accounts.iter().any(|a| a == &dev_wallet_key) {
+                return CheckOutcome::Refuse(
+                    "a buy in this transaction is not the dev wallet's".to_owned(),
+                );
+            }
+            continue;
         }
+        return CheckOutcome::Refuse(format!(
+            "a pump.fun {} instruction is not allowed in a launch",
+            instruction.anchor_name()
+        ));
     }
     CheckOutcome::Pass("only allowed programs, no other buy".to_owned())
 }
@@ -409,6 +539,7 @@ mod tests {
             pre_balances: Vec::new(),
             post_balances: Vec::new(),
             failed,
+            meta_present: true,
         }
     }
 
@@ -486,8 +617,8 @@ mod tests {
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             1_000_000,
@@ -500,7 +631,7 @@ mod tests {
     fn a_failed_transaction_refuses_every_check() {
         let (mut t, treasury, dev_wallet, _mint) = passing_tx();
         t.failed = true;
-        let result = check_launch(&t, None, None, &treasury, &dev_wallet, 1_000_000);
+        let result = check_launch(&t, AccountState::Absent, AccountState::Absent, &treasury, &dev_wallet, 1_000_000);
         assert!(!result.clean());
         assert_eq!(
             result.transaction,
@@ -520,12 +651,16 @@ mod tests {
         let mut none = t.clone();
         none.instructions
             .retain(|ix| ix.accounts != vec![addr(3).to_string()]);
-        let result = check_launch(&none, None, None, &treasury, &dev_wallet, 1_000_000);
+        let result = check_launch(&none, AccountState::Absent, AccountState::Absent, &treasury, &dev_wallet, 1_000_000);
         assert!(!result.single_launch.ok());
+        assert_eq!(
+            result.single_launch,
+            CheckOutcome::Refuse("no pump.fun create or create_v2 instruction".to_owned())
+        );
 
         let mut two = t.clone();
         two.instructions.push(create_ix(addr(4), treasury));
-        let result = check_launch(&two, None, None, &treasury, &dev_wallet, 1_000_000);
+        let result = check_launch(&two, AccountState::Absent, AccountState::Absent, &treasury, &dev_wallet, 1_000_000);
         assert!(!result.single_launch.ok(), "{:?}", result.single_launch);
         assert!(matches!(&result.single_launch, CheckOutcome::Refuse(r) if r.contains("2 launch")));
     }
@@ -537,8 +672,8 @@ mod tests {
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             1_000_000,
@@ -552,8 +687,8 @@ mod tests {
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
             &t,
-            None,
-            Some(&mint_account),
+            AccountState::Absent,
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             1_000_000,
@@ -568,8 +703,8 @@ mod tests {
         let mint_account = mint_bytes(Some(addr(7)), None);
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             1_000_000,
@@ -587,8 +722,8 @@ mod tests {
         let mint_account = mint_bytes(None, Some(addr(8)));
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             1_000_000,
@@ -599,7 +734,7 @@ mod tests {
     #[test]
     fn an_unreadable_mint_account_refuses() {
         let (t, treasury, dev_wallet, _mint) = passing_tx();
-        let result = check_launch(&t, None, None, &treasury, &dev_wallet, 1_000_000);
+        let result = check_launch(&t, AccountState::Absent, AccountState::Absent, &treasury, &dev_wallet, 1_000_000);
         assert!(!result.authorities.ok());
     }
 
@@ -610,8 +745,8 @@ mod tests {
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             2_000_000,
@@ -628,8 +763,8 @@ mod tests {
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             1_000_000,
@@ -646,8 +781,8 @@ mod tests {
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             0,
@@ -663,8 +798,8 @@ mod tests {
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             1_000_000,
@@ -684,14 +819,72 @@ mod tests {
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
             &t,
-            Some(&curve),
-            Some(&mint_account),
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
             &treasury,
             &dev_wallet,
             1_000_000,
         );
         assert!(
             matches!(&result.allowlist, CheckOutcome::Refuse(r) if r.contains("SomeOtherProgram"))
+        );
+    }
+
+    #[test]
+    fn clean_is_false_when_exactly_one_check_refuses() {
+        // Five of the six checks pass; only `authorities` refuses (a present
+        // mint authority). `clean()` folds all six with `all`, so this is
+        // the case a fold that started `true` and only ORed in failures
+        // would get wrong -- it has to catch the single refusal, not just
+        // the all-refuse or all-pass extremes the other tests cover.
+        let (t, treasury, dev_wallet, _mint) = passing_tx();
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(Some(addr(7)), None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        assert!(result.transaction.ok());
+        assert!(result.single_launch.ok());
+        assert!(result.fee_recipient.ok());
+        assert!(!result.authorities.ok(), "{:?}", result.authorities);
+        assert!(result.dev_buy.ok());
+        assert!(result.allowlist.ok());
+        assert!(!result.clean(), "one refusal must fail clean()");
+    }
+
+    #[test]
+    fn a_launch_instruction_whose_recorded_creator_differs_from_the_treasury_refuses() {
+        // Distinct from `a_fee_recipient_that_is_not_the_treasury_refuses`:
+        // there the *curve's* creator field disagrees with the treasury.
+        // Here the curve agrees, but the `create` instruction's own args
+        // name a different creator -- `check_fee_recipient` must catch this
+        // before it ever reads the curve, or a launch could record one
+        // creator on-instruction and land a curve stamped with another.
+        let treasury = addr(1);
+        let dev_wallet = addr(2);
+        let mint = addr(3);
+        let mut t = tx(&[dev_wallet.to_string().leak()], false);
+        t.instructions = vec![create_ix(mint, addr(9)), buy_ix(dev_wallet, 1_000_000)];
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        assert!(!result.fee_recipient.ok(), "{:?}", result.fee_recipient);
+        assert!(
+            matches!(&result.fee_recipient, CheckOutcome::Refuse(r) if r.contains("the launch instruction recorded creator")),
+            "{:?}",
+            result.fee_recipient
         );
     }
 }
