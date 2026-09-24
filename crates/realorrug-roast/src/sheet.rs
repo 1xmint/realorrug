@@ -2280,6 +2280,13 @@ fn push_funding(
         );
     }
     push_creator_funded_early_buyers(facts, signals, funding, creator, checked);
+    // `None`: `LaunchBlock` (Solana's own launch record, `realorrug-onchain`'s
+    // `launch.rs`) carries a slot, never a wall-clock timestamp, so there is
+    // nothing to compare a candidate's first-active moment against yet. Once
+    // a launch timestamp is plumbed through, this becomes `Some(...)` and
+    // the dated "before this launch" branch below starts doing real work;
+    // design 0031 §1's own fallback covers the gap until then.
+    push_early_buyers_active_before_launch(facts, funding, checked, None);
     if !funding.gaps.is_empty() {
         unknown.push(funding_gap_message(funding, checked));
     }
@@ -2337,6 +2344,116 @@ fn push_creator_funded_early_buyers(
         ),
     );
     signals.push(Signal::CreatorFundedEarlyBuyers);
+}
+
+/// Design 0031 §1's last paragraph: how many of the checked early buyers
+/// already had on-chain history before this launch, and when they were
+/// first seen.
+///
+/// A candidate's `first_active` is `Some` only when the backward walk from
+/// its purchase found no funder and the oldest-first re-read of its own
+/// history ran (`Funder::original`'s own doc comment) -- a candidate the
+/// ordinary backward walk resolved carries no first-active moment at all.
+/// So this is never "did any of them ever transact"; it is "of the ones a
+/// busy-buyer re-read actually touched, how many predate this launch".
+///
+/// Informational, per the design doc: no signal is built from this alone,
+/// and the words never say "bot" -- a wallet active before a launch is not
+/// thereby a program, only measured to have sent a transaction earlier.
+///
+/// `launch_unix_seconds` is `None` while nothing plumbs a Solana launch
+/// timestamp through (see the call site's own comment); design 0031 §1's
+/// fallback -- count every candidate with a first-active moment and drop
+/// "before this launch" from the words -- covers that case exactly.
+fn push_early_buyers_active_before_launch(
+    facts: &mut Vec<Fact>,
+    funding: &Funding,
+    checked: u32,
+    launch_unix_seconds: Option<i64>,
+) {
+    let times: Vec<i64> = funding
+        .checked
+        .iter()
+        .filter_map(|c| c.first_active)
+        .collect();
+    if times.is_empty() {
+        return;
+    }
+    let selected: Vec<i64> = match launch_unix_seconds {
+        Some(launch) => times
+            .into_iter()
+            // Strictly earlier, not "at or before": a first-active moment in
+            // the same second as the launch is not evidence of anything
+            // that predates it, and a count must answer the same input the
+            // same way every time -- `<` pins that one way, permanently,
+            // rather than leaving the tie to whichever branch got written
+            // last.
+            .filter(|t| *t < launch)
+            .collect(),
+        None => times,
+    };
+    if selected.is_empty() {
+        return;
+    }
+    let count = u32::try_from(selected.len()).unwrap_or(u32::MAX);
+    let mut dates = selected;
+    dates.sort_unstable();
+    dates.dedup();
+    let dates_words = join_with_and(
+        &dates
+            .iter()
+            .map(|&t| render_unix_date(t))
+            .collect::<Vec<_>>(),
+    );
+    let rendered = format!("{count} of {checked}; first seen {dates_words}");
+    let (plain, blunt) = if launch_unix_seconds.is_some() {
+        (
+            format!(
+                "{count} of the {checked} early buyers checked were active before this launch, \
+                 first seen {dates_words}."
+            ),
+            format!("{count} of {checked} active before launch, first seen {dates_words}."),
+        )
+    } else {
+        (
+            format!(
+                "{count} of the {checked} early buyers checked already had a transaction on \
+                 chain, first seen {dates_words}."
+            ),
+            format!("{count} of {checked} already active, first seen {dates_words}."),
+        )
+    };
+    facts.push(
+        Fact::exact(
+            Kind::EarlyBuyersActiveBeforeLaunch,
+            "checked early buyers a busy-buyer re-read of their own history found already \
+             active on chain, with their first-seen dates",
+            f64::from(count),
+            rendered,
+        )
+        .saying(Voice::Plain, plain)
+        .saying(Voice::Blunt, blunt),
+    );
+}
+
+/// Unix seconds to a UTC calendar date, `YYYY-MM-DD` -- the same
+/// [`civil_from_days`] conversion [`render_observed_at`] uses for a full
+/// moment, without the time-of-day this fact never carries.
+fn render_unix_date(unix_seconds: i64) -> String {
+    let days = u64::try_from(unix_seconds).unwrap_or(0) / 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// `["a"]` -> `"a"`, `["a", "b"]` -> `"a and b"`, `["a", "b", "c"]` -> `"a, b
+/// and c"` -- the join a reader expects for a short dated list, not a bare
+/// comma-separated dump.
+fn join_with_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// The sentence for an unfinished funding check, once `funding.gaps` says
@@ -7285,7 +7402,115 @@ mod tests {
             skipped: Vec::new(),
         };
 
-        assert_eq!(crate::verdict::level(&sheet), crate::verdict::Level::Sketchy);
+        assert_eq!(
+            crate::verdict::level(&sheet),
+            crate::verdict::Level::Sketchy
+        );
+    }
+
+    /// 2026-03-04 and 2026-08-24, UTC midnight, as unix seconds -- shared by
+    /// the first-active tests below so a date literal only appears once.
+    const FIRST_ACTIVE_2026_03_04: i64 = 1_772_582_400;
+    const FIRST_ACTIVE_2026_08_24: i64 = 1_787_529_600;
+
+    /// No launch time plumbed through (today's production call): every
+    /// checked candidate with a first-active moment counts, sorted and
+    /// deduplicated, and the words never claim to know about "this launch".
+    #[test]
+    fn early_buyers_active_before_launch_dates_render_sorted_and_deduplicated() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        funding.checked[0].first_active = Some(FIRST_ACTIVE_2026_08_24);
+        funding.checked[1].first_active = Some(FIRST_ACTIVE_2026_03_04);
+        funding.checked[2].first_active = Some(FIRST_ACTIVE_2026_03_04); // duplicate
+        dossier.funding = Some(funding);
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+
+        let fact =
+            fact_of(&sheet, Kind::EarlyBuyersActiveBeforeLaunch).expect("a first-active fact");
+        assert_eq!(
+            fact.values,
+            [3.0],
+            "all three checked candidates are counted"
+        );
+        let words = clause_words(fact);
+        assert!(
+            words.contains("2026-03-04") && words.contains("2026-08-24"),
+            "{words}"
+        );
+        // The repeated date is written once per sentence, not twice: a
+        // reader is told two distinct first-seen dates for the three
+        // counted candidates, not the raw three timestamps.
+        let plain = fact
+            .clauses
+            .iter()
+            .find(|c| c.voice == Voice::Plain)
+            .expect("a plain clause");
+        assert_eq!(
+            plain.text.matches("2026-03-04").count(),
+            1,
+            "the duplicate date renders once: {}",
+            plain.text
+        );
+        assert!(!words.contains("bot"), "{words}");
+    }
+
+    /// A candidate active only after the launch is not "before this launch":
+    /// re-applying the bug (drop the `t < launch` filter, using every
+    /// first-active time regardless of the launch) makes this fail, because
+    /// the later candidate would then be counted too.
+    #[test]
+    fn one_early_buyer_active_after_launch_is_not_counted() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        let mut funding = funding_of(4, 4, &[], &[]);
+        let launch = FIRST_ACTIVE_2026_08_24;
+        funding.checked[0].first_active = Some(launch - 1); // before
+        funding.checked[1].first_active = Some(launch + 1); // after
+        dossier.funding = Some(funding);
+        let mut facts = Vec::new();
+        push_early_buyers_active_before_launch(
+            &mut facts,
+            dossier.funding.as_ref().unwrap(),
+            4,
+            Some(launch),
+        );
+
+        let fact = facts
+            .iter()
+            .find(|f| f.kind == Kind::EarlyBuyersActiveBeforeLaunch)
+            .expect("one candidate is before the launch");
+        assert_eq!(fact.values, [1.0]);
+    }
+
+    /// No checked candidate ever got a first-active read -> no fact at all,
+    /// never a fabricated "0 of 4" (rule 8: absent is not zero).
+    #[test]
+    fn no_first_active_reads_means_no_first_active_fact() {
+        let mut dossier = robinhood_dossier_for([1u8; 20]);
+        dossier.funding = Some(funding_of(4, 4, &[], &[]));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(fact_of(&sheet, Kind::EarlyBuyersActiveBeforeLaunch).is_none());
+    }
+
+    /// The boundary: a first-active moment landing in the same second as the
+    /// launch is pinned as *not* "before" it (`push_early_buyers_active_before_launch`'s
+    /// own doc comment says why -- a tie must answer the same input the same
+    /// way every time). Picking the other side would also be defensible;
+    /// this test exists so a future edit changes it on purpose, not by
+    /// accident.
+    #[test]
+    fn a_first_active_moment_equal_to_the_launch_is_not_before_it() {
+        let mut funding = funding_of(4, 4, &[], &[]);
+        let launch = FIRST_ACTIVE_2026_08_24;
+        funding.checked[0].first_active = Some(launch);
+        let mut facts = Vec::new();
+        push_early_buyers_active_before_launch(&mut facts, &funding, 4, Some(launch));
+        assert!(
+            facts
+                .iter()
+                .all(|f| f.kind != Kind::EarlyBuyersActiveBeforeLaunch),
+            "a first-active moment equal to the launch time must not count as before it"
+        );
     }
 
     #[test]
