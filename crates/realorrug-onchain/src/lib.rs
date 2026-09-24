@@ -55,6 +55,7 @@
 pub mod budget;
 pub mod dispatch;
 pub mod dossier;
+pub mod exchange_wallets;
 pub mod launch;
 pub mod market;
 pub mod memory;
@@ -72,6 +73,7 @@ pub use dossier::{
     ChainLaunch, ChainReader, CurveFacts, Dossier, Holders, OwnerRole, QuoteAsset, SolanaReader,
     TokenOwner, TokenOwnership, Unavailable, build,
 };
+pub use exchange_wallets::{ExchangeWallet, exchange_withdrawal_wallet};
 pub use launch::{LaunchBlock, Metadata, NotALaunch};
 pub use memory::{Error as MemoryError, Fact, Kind, Memory, PaidRequest, Recorded};
 pub use reserves::{PoolReserves, Role, Unreadable};
