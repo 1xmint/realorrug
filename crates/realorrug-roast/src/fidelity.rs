@@ -601,6 +601,61 @@ fn blank_addresses(text: &str) -> String {
     out.into_iter().collect()
 }
 
+/// Blanks every shortened form of the sheet's own mint before a reply is
+/// checked.
+///
+/// A reply naming its token as "JB2rSP" is naming it, not stating a 2 --
+/// but six characters is far below [`ADDRESS_MIN_LEN`], so without this the
+/// scanner read that 2 as a figure, matched it to the creator's 1.5459 SOL at
+/// whole-number precision, and refused an honest reply for citing a creator
+/// number in a clause about holders (the 2026-09-24 replay's `clean-read-pay`).
+///
+/// Lowering [`ADDRESS_MIN_LEN`] instead is wrong: a short base58 run is
+/// usually a word or a unit ("4200bps"), and only this token's mint says which
+/// short runs are addresses. Two limits keep it from hiding a real figure. A
+/// run is blanked only when it is at least four characters, so "2x" or "v2"
+/// are still read; and only when it holds a letter as well as a digit, so a
+/// bare number that happens to appear inside the mint ("2026") is still
+/// checked. The security note on [`blank_addresses`] holds unchanged: nothing
+/// here authorises a digit, it only stops the mint's own digits being read as
+/// claims.
+#[must_use]
+pub fn blank_mint_fragments(text: &str, mint: &str) -> String {
+    const MIN_FRAGMENT: usize = 4;
+    const B58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    // Bounded for the reason `literals` gives.
+    for _ in 0..=chars.len() {
+        if i >= chars.len() {
+            break;
+        }
+        let start = i;
+        for _ in 0..=chars.len() {
+            if i >= chars.len() || !B58.contains(chars[i]) {
+                break;
+            }
+            i += 1;
+        }
+        let run: String = chars[start..i].iter().collect();
+        let fragment = run.chars().count() >= MIN_FRAGMENT
+            && run.chars().any(|c| c.is_ascii_digit())
+            && run.chars().any(|c| c.is_ascii_alphabetic())
+            && mint.contains(run.as_str());
+        if fragment {
+            out.extend(std::iter::repeat_n(' ', i - start));
+        } else {
+            out.extend_from_slice(&chars[start..i]);
+        }
+        if i < chars.len() {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// Every numeric literal in a piece of text, with its value.
 ///
 /// Address-shaped tokens are blanked first — see [`blank_addresses`]. Commas
@@ -713,6 +768,55 @@ fn date_time_at(bytes: &[char], start: usize) -> Option<(usize, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 2026-09-24 replay's `clean-read-pay` draft, refused for the 2 in
+    /// its own shortened mint.
+    #[test]
+    fn a_shortened_mint_is_a_name_not_a_figure() {
+        let mint = "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump";
+        let draft = "About 42.7 hours old, JB2rSP shows no major holder \
+                     concentration: the largest sampled unidentified wallet has 0.2% of supply.";
+        let sheet = [
+            Authorised {
+                subject: Subject::Token,
+                value: 42.7,
+            },
+            Authorised {
+                subject: Subject::Holders,
+                value: 0.2,
+            },
+            // The creator's 1.5459 SOL, which a bare "2" matches at
+            // whole-number precision.
+            Authorised {
+                subject: Subject::Creator,
+                value: 1.545_904_903,
+            },
+        ];
+        // The bug, re-applied: checked as written, the mint's 2 is refused.
+        assert!(matches!(
+            super::check(draft, &sheet)[..],
+            [Fabricated {
+                why: Why::WrongSubject { .. },
+                ..
+            }]
+        ));
+        assert!(super::check(&blank_mint_fragments(draft, mint), &sheet).is_empty());
+    }
+
+    #[test]
+    fn only_mixed_fragments_of_this_mint_are_blanked() {
+        let mint = "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump";
+        // Another token's prefix, a bare number found inside the mint, a
+        // short run and a word with no digit are all left for the scanner.
+        for kept in ["Axo9EE", "17", "b4", "pump"] {
+            assert_eq!(blank_mint_fragments(kept, mint), kept);
+        }
+        assert_eq!(
+            blank_mint_fragments("JB2rSP holds 3", mint),
+            "       holds 3"
+        );
+        assert_eq!(blank_mint_fragments("see 7gMbvd.", mint), "see       .");
+    }
 
     #[test]
     fn a_written_moment_is_one_number_not_five() {
