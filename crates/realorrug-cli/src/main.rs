@@ -202,7 +202,16 @@ fn main() -> ExitCode {
                 launch_check::run(&args)
             }
         }
-        "treasury" if treasury_solana::selected(&args) => treasury_solana::run(&args),
+        "treasury" => {
+            if treasury_solana::selected(&args) {
+                treasury_solana::run(&args)
+            } else {
+                Err(format!(
+                    "treasury reads Solana only: treasury solana --treasury <addr>\n\n{}",
+                    usage()
+                ))
+            }
+        }
         "label-outcomes" => label_outcomes::run(&args),
         "model-prices" => model_prices::run(&args),
         "narratives" => narratives::run(&args),

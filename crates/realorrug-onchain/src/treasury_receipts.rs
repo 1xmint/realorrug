@@ -300,6 +300,14 @@ mod tests {
         assert!(receipts[0].collect_instruction_seen);
     }
 
+    /// The report names each vault by this label; an empty or wrong one
+    /// would print totals under no name.
+    #[test]
+    fn each_vault_has_its_own_label() {
+        assert_eq!(VaultKind::PumpFun.label(), "pump.fun creator vault");
+        assert_eq!(VaultKind::PumpSwap.label(), "PumpSwap coin-creator vault");
+    }
+
     /// A pump.fun instruction that is not a collect (here a buy) does not
     /// corroborate a vault decrease: both the program and the variant must
     /// match.
