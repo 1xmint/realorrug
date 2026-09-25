@@ -545,6 +545,16 @@ mod tests {
         let mut not_event = Instruction::BuyV2.discriminator().as_bytes().to_vec();
         not_event.extend_from_slice(&[0u8; 16]);
         assert_eq!(trade_event(&not_event), None);
+
+        // The trade discriminator behind the wrong first tag is not an
+        // event-CPI: both tags must match, not either.
+        let mut wrong_tag = Instruction::BuyV2.discriminator().as_bytes().to_vec();
+        wrong_tag.extend_from_slice(TRADE_EVENT.as_bytes());
+        wrong_tag.extend_from_slice(&[0u8; 200]);
+        assert_eq!(trade_event(&wrong_tag), None);
+
+        // Too short to hold both tags is not recognised, and does not panic.
+        assert_eq!(trade_event(ANCHOR_EVENT_CPI.as_bytes()), None);
     }
 
     #[test]
