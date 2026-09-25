@@ -68,3 +68,17 @@ Nothing here is automatic. Signing, spending and launching are Josh's.
 
 Fees collect to the treasury. Josh pays operating costs from it by hand and
 records each payment. No prize, buyback or holder payment exists to switch on.
+
+Before recording a payment, reconcile what the treasury has actually
+received and what is still sitting unclaimed in the fee vaults:
+
+```
+realorrug treasury solana --treasury <treasury address> [--mint <mint>] --rpc URL [--seconds N]
+```
+
+Read-only: it holds no key and sends nothing. It prints one line per receipt
+(a transaction where the pump.fun or PumpSwap creator-fee vault's balance
+fell), then totals per vault, then each vault's current unclaimed balance.
+An unreadable transaction or a budget-truncated walk is listed rather than
+dropped, and the totals print "at least" with a non-zero exit in that case
+(AGENTS §3 rule 8: absent is not zero).

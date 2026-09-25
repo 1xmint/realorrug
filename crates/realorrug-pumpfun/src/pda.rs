@@ -188,6 +188,51 @@ pub fn fee_config() -> Option<Address> {
     find(&[b"fee_config", PROGRAM_ID.as_bytes()], &FEE_PROGRAM).map(|(a, _)| a)
 }
 
+/// Where a coin creator's fees accrue on PumpSwap, after graduation.
+///
+/// `["creator_vault", coin_creator]` under the **PumpSwap** program
+/// (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`, re-exported below), not
+/// pump.fun's bonding-curve program -- confirmed against
+/// [`idl/pump_amm.json`](https://github.com/pump-fun/pump-public-docs/blob/81091419e4457566469d4e2a27f64ed84d42419c/idl/pump_amm.json)
+/// at commit `81091419e4457566469d4e2a27f64ed84d42419c` (fetched
+/// 2026-09-24), the `collect_coin_creator_fee` instruction's
+/// `coin_creator_vault_authority` account: its PDA seeds are a `const` byte
+/// array `[99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116]`
+/// (ASCII `"creator_vault"`) followed by the `coin_creator` account. This is
+/// an **authority**, not itself a token account -- the vault that actually
+/// holds WSOL is its associated token account, [`pumpswap_coin_creator_vault_ata`].
+#[must_use]
+pub fn pumpswap_coin_creator_vault_authority(coin_creator: &Address) -> Option<Address> {
+    find(
+        &[b"creator_vault", coin_creator.as_bytes()],
+        &realorrug_decode::pumpswap::PROGRAM_ID,
+    )
+    .map(|(a, _)| a)
+}
+
+/// The WSOL token account fees actually accrue in: the associated token
+/// account of [`pumpswap_coin_creator_vault_authority`], for the quote mint
+/// and quote token program.
+///
+/// The IDL derives this as `[authority, quote_token_program, quote_mint]`
+/// under the associated-token-account program (the same three-seed shape as
+/// [`associated_token_account`]) -- confirmed against the same
+/// `pump_amm.json` commit cited on
+/// [`pumpswap_coin_creator_vault_authority`]. Every realorrug pool pairs
+/// with SOL, so `quote_mint` is `Asset::WRAPPED_SOL_MINT` and
+/// `quote_token_program` is the classic SPL Token program
+/// (`realorrug_pumpfun::token::SPL_TOKEN_PROGRAM`) in every case this crate
+/// derives for.
+#[must_use]
+pub fn pumpswap_coin_creator_vault_ata(coin_creator: &Address) -> Option<Address> {
+    let authority = pumpswap_coin_creator_vault_authority(coin_creator)?;
+    associated_token_account(
+        &authority,
+        &realorrug_types::Asset::WRAPPED_SOL_MINT,
+        &crate::token::SPL_TOKEN_PROGRAM,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,6 +359,47 @@ mod tests {
         assert_eq!(
             creator_vault(&addr(OBSERVED_CREATOR)).expect("a derivation"),
             addr(OBSERVED_CREATOR_VAULT)
+        );
+    }
+
+    #[test]
+    fn the_pumpswap_vault_authority_seed_is_creator_vault_ascii() {
+        // The IDL's seed is a `const` byte array, not a string literal --
+        // this is what would catch those thirteen numbers being transcribed
+        // as the wrong word.
+        let ascii_seed: &[u8] = &[99, 114, 101, 97, 116, 111, 114, 95, 118, 97, 117, 108, 116];
+        assert_eq!(ascii_seed, b"creator_vault");
+        assert_eq!(
+            pumpswap_coin_creator_vault_authority(&addr(OBSERVED_CREATOR)),
+            find(
+                &[ascii_seed, addr(OBSERVED_CREATOR).as_bytes()],
+                &realorrug_decode::pumpswap::PROGRAM_ID
+            )
+            .map(|(a, _)| a)
+        );
+    }
+
+    #[test]
+    fn the_pumpswap_vault_ata_is_the_authoritys_wsol_associated_token_account() {
+        let creator = addr(OBSERVED_CREATOR);
+        let authority = pumpswap_coin_creator_vault_authority(&creator).expect("a derivation");
+        let expected = associated_token_account(
+            &authority,
+            &realorrug_types::Asset::WRAPPED_SOL_MINT,
+            &crate::token::SPL_TOKEN_PROGRAM,
+        )
+        .expect("a derivation");
+        assert_eq!(
+            pumpswap_coin_creator_vault_ata(&creator).expect("a derivation"),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_different_creator_derives_a_different_pumpswap_vault() {
+        assert_ne!(
+            pumpswap_coin_creator_vault_authority(&addr(OBSERVED_CREATOR)),
+            pumpswap_coin_creator_vault_authority(&addr(OBSERVED_USER))
         );
     }
 

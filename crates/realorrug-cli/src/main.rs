@@ -21,6 +21,7 @@ mod record_launches;
 mod replay;
 mod roast;
 mod rpc_arg;
+mod treasury_solana;
 
 use std::process::ExitCode;
 
@@ -88,6 +89,16 @@ commands:
                                  buy matches exactly, nothing else bundled.
                                  Refuses rather than guessing on any
                                  unreadable account. Read-only
+  treasury solana --treasury <addr> [--mint <addr>] --rpc URL [--seconds N]
+                                 what the treasury has received on Solana and
+                                 what is still unclaimed: one receipt per
+                                 signature where a known fee vault's balance
+                                 fell, then each vault's current unclaimed
+                                 balance. `--mint` is header only -- the
+                                 vaults key on creator, not mint. Absent is
+                                 not zero: an unreadable transaction or a
+                                 truncated walk is listed and totals print
+                                 \"at least\". Read-only, holds no key
   label-outcomes [--robinhood-rpc URL] [--memory PATH] [--days N] [--max N]
                  [--dry-run]
                                  what the launches this analyst already judged
@@ -189,6 +200,16 @@ fn main() -> ExitCode {
                 launch_check_solana::run(&args)
             } else {
                 launch_check::run(&args)
+            }
+        }
+        "treasury" => {
+            if treasury_solana::selected(&args) {
+                treasury_solana::run(&args)
+            } else {
+                Err(format!(
+                    "treasury reads Solana only: treasury solana --treasury <addr>\n\n{}",
+                    usage()
+                ))
             }
         }
         "label-outcomes" => label_outcomes::run(&args),

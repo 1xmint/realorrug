@@ -273,6 +273,17 @@ struct MultiEnvelope {
 struct AccountValue {
     data: Vec<String>,
     owner: Option<String>,
+    /// The account's native balance. Needed by `treasury_receipts`'s
+    /// "unclaimed" figure (a vault's lamports minus its rent-exempt
+    /// minimum) -- absent from this struct until that reader needed it,
+    /// because nothing before it read a balance through `getAccountInfo`
+    /// rather than `pre_balances`/`post_balances`. `Option` rather than a
+    /// defaulted `u64` (AGENTS §3 rule 8: absent is not zero) -- a node
+    /// response that omits this field is a balance we did not read, not a
+    /// vault that holds nothing, and a canned response written before this
+    /// field existed still parses either way.
+    #[serde(default)]
+    lamports: Option<u64>,
 }
 
 /// One account out of a multi-account read.
@@ -324,6 +335,10 @@ pub struct MultiAccountRead {
 pub struct AccountRead {
     /// The account's raw data.
     pub data: Vec<u8>,
+    /// The account's native balance, in lamports, when the node reported
+    /// one. `None` is a balance we did not read, not a vault that holds
+    /// nothing (AGENTS §3 rule 8: absent is not zero).
+    pub lamports: Option<u64>,
     /// The slot the node served it at, when the node said.
     pub slot: Option<Slot>,
 }
@@ -570,7 +585,38 @@ impl RpcClient {
             .ok_or_else(|| RpcError::Malformed("account data was empty".to_owned()))?;
         let data = decode_base64(encoded)
             .ok_or_else(|| RpcError::Malformed("account data was not base64".to_owned()))?;
-        Ok(Some(AccountRead { data, slot }))
+        Ok(Some(AccountRead {
+            data,
+            lamports: account.lamports,
+            slot,
+        }))
+    }
+
+    /// The minimum lamports an account of `data_len` bytes needs to be
+    /// rent-exempt.
+    ///
+    /// A fee vault's raw lamports balance is not the same figure as what is
+    /// actually claimable: rent-exempt minimum is capital that stays behind
+    /// so the account is not swept, not fees. Calling the node for this
+    /// rather than computing it from a hand-carried formula is deliberate --
+    /// AGENTS.md §1 "check a number before deciding on it": the rent
+    /// schedule is the cluster's, and asking it is cheaper than one more
+    /// constant to get wrong and never notice.
+    ///
+    /// # Errors
+    ///
+    /// [`RpcError`] on transport, node or shape failures, or when the budget
+    /// is spent.
+    pub fn minimum_balance_for_rent_exemption(
+        &self,
+        budget: &mut Budget,
+        data_len: usize,
+    ) -> Result<u64, RpcError> {
+        self.call(
+            budget,
+            "getMinimumBalanceForRentExemption",
+            &serde_json::json!([data_len]),
+        )
     }
 
     /// Reads several accounts in one call, so that they share one slot.
