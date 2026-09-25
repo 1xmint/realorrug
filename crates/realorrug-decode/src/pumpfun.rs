@@ -13,7 +13,7 @@
 
 use realorrug_types::Address;
 
-use crate::args::{ArgError, Launch, Layout, Side, Trade};
+use crate::args::{ArgError, Launch, Layout, Side, Trade, TradeEvent};
 use crate::discriminator::Discriminator;
 
 /// The pump.fun program address, `6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P`.
@@ -31,6 +31,16 @@ pub const PROGRAM_ID: Address = Address::new([
 /// reconstructed from account balance deltas.
 pub const ANCHOR_EVENT_CPI: Discriminator =
     Discriminator::new([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]);
+
+/// The `TradeEvent` discriminator, following [`ANCHOR_EVENT_CPI`] on an
+/// event-CPI self-invocation that logs a buy or sell.
+///
+/// Observed on mainnet signature
+/// 2xhvyYRjNLMiP8e5p1so7EPDAH21WwpnDeicYjVxAofhf5xBR81dDRacxkNkd25PVhXPjLr94QCdCtKNMexkYLYf
+/// (slot 450167660), a `buy_v2` whose event carried the realised SOL spend
+/// that the instruction itself only bounds -- see [`trade_event`].
+pub const TRADE_EVENT: Discriminator =
+    Discriminator::new([0xbd, 0xdb, 0x7f, 0xd3, 0x4e, 0xe6, 0x61, 0xee]);
 
 /// A pump.fun instruction, identified by discriminator.
 ///
@@ -228,6 +238,32 @@ pub fn trade_args(instruction: Instruction, data: &[u8]) -> Option<Result<Trade,
 #[must_use]
 pub fn launch_args(instruction: Instruction, data: &[u8]) -> Option<Result<Launch<'_>, ArgError>> {
     instruction.is_launch().then(|| crate::args::launch(data))
+}
+
+/// Reads a `TradeEvent` from a pump.fun event-CPI self-invocation's raw
+/// instruction data.
+///
+/// Takes raw bytes rather than an [`Instruction`], unlike [`trade_args`] and
+/// [`launch_args`]: the event-CPI self-invocation is not one of this
+/// program's named instructions at all (see [`ANCHOR_EVENT_CPI`]'s doc), so
+/// there is no `Instruction` variant to require here -- the sixteen bytes of
+/// tag are the only gate, and this function checks both of them itself.
+///
+/// # Errors
+///
+/// Returns `None` unless `data` starts with [`ANCHOR_EVENT_CPI`] followed by
+/// [`TRADE_EVENT`] -- any other event-CPI (e.g. a `CreateEvent`) or any
+/// unrelated instruction. Returns [`ArgError`] if those sixteen bytes are
+/// present but the payload after them is truncated.
+#[must_use]
+pub fn trade_event(data: &[u8]) -> Option<Result<TradeEvent, ArgError>> {
+    if data.len() < 16
+        || Discriminator::from_data(&data[..8]) != Some(ANCHOR_EVENT_CPI)
+        || Discriminator::from_data(&data[8..16]) != Some(TRADE_EVENT)
+    {
+        return None;
+    }
+    Some(crate::args::trade_event(data, 16))
 }
 
 impl Instruction {
@@ -464,6 +500,71 @@ mod tests {
         // It is a self-CPI marker, not something a user submits. Treating it as
         // an instruction would double-count every trade that emits an event.
         assert_eq!(Instruction::from_discriminator(ANCHOR_EVENT_CPI), None);
+    }
+
+    /// Builds a raw event-CPI instruction's data: the two tags plus a
+    /// `TradeEvent` payload for the given user and lamport figures.
+    fn event_ix(user: Address, sol: u64, fee: u64, creator_fee: u64) -> Vec<u8> {
+        let mut data = ANCHOR_EVENT_CPI.as_bytes().to_vec();
+        data.extend_from_slice(TRADE_EVENT.as_bytes());
+        data.extend_from_slice(Address::new([9u8; 32]).as_bytes()); // mint
+        data.extend_from_slice(&sol.to_le_bytes()); // sol_amount
+        data.extend_from_slice(&0u64.to_le_bytes()); // token_amount
+        data.push(1); // is_buy
+        data.extend_from_slice(user.as_bytes());
+        data.extend_from_slice(&0i64.to_le_bytes()); // timestamp
+        data.extend_from_slice(&0u64.to_le_bytes()); // virtual_sol_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // virtual_token_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // real_sol_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // real_token_reserves
+        data.extend_from_slice(Address::new([8u8; 32]).as_bytes()); // fee_recipient
+        data.extend_from_slice(&0u64.to_le_bytes()); // fee_basis_points
+        data.extend_from_slice(&fee.to_le_bytes()); // fee
+        data.extend_from_slice(user.as_bytes()); // creator
+        data.extend_from_slice(&0u64.to_le_bytes()); // creator_fee_basis_points
+        data.extend_from_slice(&creator_fee.to_le_bytes()); // creator_fee
+        data
+    }
+
+    #[test]
+    fn a_trade_event_decodes_only_behind_both_tags() {
+        let data = event_ix(Address::new([2u8; 32]), 1, 2, 3);
+        let event = trade_event(&data).expect("recognised").expect("decodes");
+        assert_eq!(event.sol_amount, 1);
+        assert_eq!(event.fee, 2);
+        assert_eq!(event.creator_fee, 3);
+        assert_eq!(event.total_lamports_paid(), 6);
+
+        // The event-CPI tag alone, without the trade discriminator, is some
+        // other event (e.g. `CreateEvent`) and must not be read as a trade.
+        let mut other_event = ANCHOR_EVENT_CPI.as_bytes().to_vec();
+        other_event.extend_from_slice(&[0u8; 100]);
+        assert_eq!(trade_event(&other_event), None);
+
+        // An ordinary instruction, not an event-CPI at all.
+        let mut not_event = Instruction::BuyV2.discriminator().as_bytes().to_vec();
+        not_event.extend_from_slice(&[0u8; 16]);
+        assert_eq!(trade_event(&not_event), None);
+
+        // The trade discriminator behind the wrong first tag is not an
+        // event-CPI: both tags must match, not either.
+        let mut wrong_tag = Instruction::BuyV2.discriminator().as_bytes().to_vec();
+        wrong_tag.extend_from_slice(TRADE_EVENT.as_bytes());
+        wrong_tag.extend_from_slice(&[0u8; 200]);
+        assert_eq!(trade_event(&wrong_tag), None);
+
+        // Too short to hold both tags is not recognised, and does not panic.
+        assert_eq!(trade_event(ANCHOR_EVENT_CPI.as_bytes()), None);
+    }
+
+    #[test]
+    fn a_truncated_trade_event_errors_rather_than_panicking() {
+        let mut data = ANCHOR_EVENT_CPI.as_bytes().to_vec();
+        data.extend_from_slice(TRADE_EVENT.as_bytes());
+        assert!(matches!(
+            trade_event(&data),
+            Some(Err(ArgError::Truncated { .. }))
+        ));
     }
 
     #[test]

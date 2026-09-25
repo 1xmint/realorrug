@@ -148,6 +148,51 @@ pub struct Launch<'a> {
     pub creator: Address,
 }
 
+/// A decoded pump.fun `TradeEvent`, emitted via the Anchor event-CPI
+/// self-invocation that follows a buy or sell.
+///
+/// This is the only place a token-exact buy's (`buy`/`buy_v2`) realised SOL
+/// spend can be read at all: the instruction itself states a *bound*, not an
+/// outcome (see the module doc), and the event is pump.fun's own record of
+/// what actually happened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TradeEvent {
+    /// The mint traded.
+    pub mint: Address,
+    /// SOL paid or received against the curve, before fees.
+    pub sol_amount: u64,
+    /// Tokens bought or sold.
+    pub token_amount: u64,
+    /// Whether this was a buy (`true`) or a sell (`false`).
+    pub is_buy: bool,
+    /// The trader.
+    pub user: Address,
+    /// pump.fun's protocol fee, in lamports.
+    pub fee: u64,
+    /// The creator fee, in lamports, paid to whoever the curve names as
+    /// creator.
+    pub creator_fee: u64,
+}
+
+impl TradeEvent {
+    /// Total lamports the trader paid: `sol_amount + fee + creator_fee` for a
+    /// buy.
+    ///
+    /// Saturating rather than checked: these three fields are each read
+    /// straight off a live pump.fun curve, where sums stay far below `u64`'s
+    /// range, and a launch-day check that panicked (or had to plumb a new
+    /// error variant) on an adversarial or corrupted event would refuse *less*
+    /// safely than clamping to `u64::MAX` — a caller comparing the total
+    /// against a stated figure refuses that just as surely as an overflow
+    /// would.
+    #[must_use]
+    pub const fn total_lamports_paid(&self) -> u64 {
+        self.sol_amount
+            .saturating_add(self.fee)
+            .saturating_add(self.creator_fee)
+    }
+}
+
 /// Why an instruction's arguments could not be read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, thiserror::Error)]
 pub enum ArgError {
@@ -180,13 +225,13 @@ pub enum ArgError {
 }
 
 /// A cursor that reads Borsh-ish little-endian fields without panicking.
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     buf: &'a [u8],
     at: usize,
 }
 
 impl<'a> Reader<'a> {
-    const fn new(buf: &'a [u8], at: usize) -> Self {
+    pub(crate) const fn new(buf: &'a [u8], at: usize) -> Self {
         Self { buf, at }
     }
 
@@ -213,11 +258,23 @@ impl<'a> Reader<'a> {
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
-    fn u64(&mut self, field: &'static str) -> Result<u64, ArgError> {
+    pub(crate) fn u64(&mut self, field: &'static str) -> Result<u64, ArgError> {
         let b = self.take(8, field)?;
         Ok(u64::from_le_bytes([
             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
         ]))
+    }
+
+    pub(crate) fn i64(&mut self, field: &'static str) -> Result<i64, ArgError> {
+        let b = self.take(8, field)?;
+        Ok(i64::from_le_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ]))
+    }
+
+    pub(crate) fn u8(&mut self, field: &'static str) -> Result<u8, ArgError> {
+        let b = self.take(1, field)?;
+        Ok(b[0])
     }
 
     fn string(&mut self, field: &'static str) -> Result<&'a str, ArgError> {
@@ -234,7 +291,7 @@ impl<'a> Reader<'a> {
         core::str::from_utf8(bytes).map_err(|_| ArgError::NotUtf8 { field })
     }
 
-    fn address(&mut self, field: &'static str) -> Result<Address, ArgError> {
+    pub(crate) fn address(&mut self, field: &'static str) -> Result<Address, ArgError> {
         let b = self.take(32, field)?;
         let mut out = [0u8; 32];
         out.copy_from_slice(b);
@@ -266,6 +323,51 @@ pub fn trade(data: &[u8], side: Side, layout: Layout) -> Result<Trade, ArgError>
         Layout::SolThenTokenBound => (Amount::Lamports(first), Amount::Tokens(second)),
     };
     Ok(Trade { side, exact, limit })
+}
+
+/// Reads a `TradeEvent` payload, starting after the two eight-byte tags
+/// (Anchor's event-CPI marker and the event's own discriminator) that
+/// identify it — see [`crate::pumpfun::trade_event`].
+///
+/// Layout observed on mainnet (capture cited on
+/// [`crate::pumpfun::TRADE_EVENT`]): mint, `sol_amount` u64, `token_amount`
+/// u64, `is_buy` u8, `user`, `timestamp` i64, four `u64` reserve fields,
+/// `fee_recipient`, `fee_basis_points` u64, `fee` u64, `creator`,
+/// `creator_fee_basis_points` u64, `creator_fee` u64, then further fields this
+/// reader does not need and does not require the payload to carry.
+///
+/// # Errors
+///
+/// Returns [`ArgError::Truncated`] if the payload ends before `creator_fee`
+/// does. Trailing bytes beyond that are never read, so a newer pump.fun build
+/// that appends fields cannot make this fail.
+pub(crate) fn trade_event(data: &[u8], at: usize) -> Result<TradeEvent, ArgError> {
+    let mut r = Reader::new(data, at);
+    let mint = r.address("mint")?;
+    let sol_amount = r.u64("sol_amount")?;
+    let token_amount = r.u64("token_amount")?;
+    let is_buy = r.u8("is_buy")? != 0;
+    let user = r.address("user")?;
+    let _timestamp = r.i64("timestamp")?;
+    let _virtual_sol_reserves = r.u64("virtual_sol_reserves")?;
+    let _virtual_token_reserves = r.u64("virtual_token_reserves")?;
+    let _real_sol_reserves = r.u64("real_sol_reserves")?;
+    let _real_token_reserves = r.u64("real_token_reserves")?;
+    let _fee_recipient = r.address("fee_recipient")?;
+    let _fee_basis_points = r.u64("fee_basis_points")?;
+    let fee = r.u64("fee")?;
+    let _creator = r.address("creator")?;
+    let _creator_fee_basis_points = r.u64("creator_fee_basis_points")?;
+    let creator_fee = r.u64("creator_fee")?;
+    Ok(TradeEvent {
+        mint,
+        sol_amount,
+        token_amount,
+        is_buy,
+        user,
+        fee,
+        creator_fee,
+    })
 }
 
 /// Reads a launch instruction's arguments: three Borsh strings then the creator.
@@ -360,6 +462,53 @@ mod tests {
         assert!(matches!(
             launch(&data),
             Err(ArgError::NotUtf8 { field: "name" })
+        ));
+    }
+
+    #[test]
+    fn a_trade_event_payload_decodes_and_sums_to_the_captured_total() {
+        // Values captured from mainnet signature
+        // 2xhvyYRjNLMiP8e5p1so7EPDAH21WwpnDeicYjVxAofhf5xBR81dDRacxkNkd25PVhXPjLr94QCdCtKNMexkYLYf
+        // (slot 450167660).
+        let mint = Address::new([1u8; 32]);
+        let user = Address::new([2u8; 32]);
+        let fee_recipient = Address::new([3u8; 32]);
+        let creator = user;
+        let mut data = vec![0u8; 16]; // the two tags; unread by this function
+        data.extend_from_slice(mint.as_bytes());
+        data.extend_from_slice(&967_264_352u64.to_le_bytes()); // sol_amount
+        data.extend_from_slice(&33_515_219_091_058u64.to_le_bytes()); // token_amount
+        data.push(1); // is_buy
+        data.extend_from_slice(user.as_bytes());
+        data.extend_from_slice(&0i64.to_le_bytes()); // timestamp
+        data.extend_from_slice(&0u64.to_le_bytes()); // virtual_sol_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // virtual_token_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // real_sol_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // real_token_reserves
+        data.extend_from_slice(fee_recipient.as_bytes());
+        data.extend_from_slice(&95u64.to_le_bytes()); // fee_basis_points
+        data.extend_from_slice(&9_189_012u64.to_le_bytes()); // fee
+        data.extend_from_slice(creator.as_bytes());
+        data.extend_from_slice(&30u64.to_le_bytes()); // creator_fee_basis_points
+        data.extend_from_slice(&2_901_794u64.to_le_bytes()); // creator_fee
+        data.extend_from_slice(&[0u8; 149]); // newer fields this reader ignores
+
+        let event = trade_event(&data, 16).expect("decodes");
+        assert_eq!(event.mint, mint);
+        assert_eq!(event.sol_amount, 967_264_352);
+        assert_eq!(event.token_amount, 33_515_219_091_058);
+        assert!(event.is_buy);
+        assert_eq!(event.user, user);
+        assert_eq!(event.fee, 9_189_012);
+        assert_eq!(event.creator_fee, 2_901_794);
+        assert_eq!(event.total_lamports_paid(), 979_355_158);
+    }
+
+    #[test]
+    fn a_truncated_trade_event_errors_rather_than_panicking() {
+        assert!(matches!(
+            trade_event(&[0u8; 16 + 32 + 8], 16),
+            Err(ArgError::Truncated { .. })
         ));
     }
 

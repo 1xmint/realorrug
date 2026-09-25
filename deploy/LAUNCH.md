@@ -35,7 +35,10 @@ Nothing here is automatic. Signing, spending and launching are Josh's.
    --dev-wallet <addr> --dev-buy-lamports <n> --rpc URL`). Against the launch
    transaction it confirms: the fee recipient is the treasury, mint and
    freeze authorities are both revoked, the dev buy matches what will be
-   published, and nothing else was bundled in. The endpoint is required
+   published, and nothing else was bundled in. `<n>` is the **total** the dev
+   wallet paid -- the SOL that reached the curve plus pump.fun's protocol fee
+   plus the creator fee, read from the buy's own pump.fun `TradeEvent`, not
+   just the amount the curve received. The endpoint is required
    (`--rpc`, or `REALORRUG_RPC` in the environment): with neither it refuses
    rather than falling back to the rate-limited public one, and it never
    prints the endpoint, since a Helius URL carries its key.

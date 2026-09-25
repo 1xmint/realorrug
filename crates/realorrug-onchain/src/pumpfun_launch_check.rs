@@ -131,6 +131,12 @@ const ALLOWED_PROGRAMS: &[(&str, &str)] = &[
         "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
         "pump.fun itself",
     ),
+    (
+        "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ",
+        "pump.fun's fee program -- buy_v2 reads its fee tier from it \
+         (GetFeesWithQuoteMint), observed in launch \
+         2xhvyYRjNLMiP8e5p1so7EPDAH21WwpnDeicYjVxAofhf5xBR81dDRacxkNkd25PVhXPjLr94QCdCtKNMexkYLYf",
+    ),
 ];
 
 /// What reading one account for checks 3 or 4 produced.
@@ -410,42 +416,74 @@ fn check_authorities(mint_account: AccountState<'_>) -> CheckOutcome {
 /// list names it (the `user` account every buy variant carries) -- never the
 /// fee payer, which lets anyone else's buy in the same transaction be
 /// attributed to the dev wallet by paying for it.
+///
+/// The spend itself comes from pump.fun's own `TradeEvent`s, summed for every
+/// event whose `is_buy` and `user` name the dev wallet, never from the buy
+/// instruction's own arguments: `buy`/`buy_v2` (the common launch-day
+/// variants) state a *bound* on the SOL side, not an outcome, and the total
+/// paid -- curve amount, protocol fee and creator fee together -- is only
+/// recorded in the event (see `realorrug_decode::pumpfun::trade_event`).
 fn check_dev_buy(tx: &Transaction, dev_wallet: &Address, expected: u64) -> CheckOutcome {
     let dev_wallet_key = dev_wallet.to_string();
     let program = pumpfun::PROGRAM_ID.to_string();
-    let mut total: Option<u64> = None;
 
-    for ix in tx.instructions.iter().filter(|i| i.program == program) {
-        if !ix.accounts.iter().any(|a| a == &dev_wallet_key) {
-            continue;
-        }
-        let Some(instruction) =
+    // A buy instruction naming the dev wallet with no matching receipt would
+    // let a buy silently spend nothing -- count both so a shortfall is
+    // caught rather than read as "no dev buy" (rule 8).
+    let dev_buy_instructions = tx
+        .instructions
+        .iter()
+        .filter(|ix| ix.program == program)
+        .filter(|ix| ix.accounts.iter().any(|a| a == &dev_wallet_key))
+        .filter_map(|ix| {
             realorrug_decode::decode(realorrug_decode::Program::PumpFun, &ix.data)
                 .known()
                 .copied()
                 .and_then(realorrug_decode::Instruction::pumpfun)
-        else {
+        })
+        .filter(|instruction| instruction.is_buy())
+        .count();
+
+    let mut sol_sum: u64 = 0;
+    let mut fee_sum: u64 = 0;
+    let mut creator_fee_sum: u64 = 0;
+    let mut dev_buy_events = 0usize;
+
+    for ix in tx.instructions.iter().filter(|i| i.program == program) {
+        let Some(decoded) = pumpfun::trade_event(&ix.data) else {
             continue;
         };
-        if !instruction.is_buy() {
-            continue;
-        }
-        let Some(Ok(trade)) = pumpfun::trade_args(instruction, &ix.data) else {
-            return CheckOutcome::Refuse("a buy by the dev wallet did not decode".to_owned());
-        };
-        let Some(lamports) = trade.exact_lamports() else {
-            // A token-exact buy (`buy`/`buy_v2`) states a SOL *bound*, not an
-            // outcome -- rule 9, publishing the bound as the spend would be
-            // stating a number the chain does not carry.
+        let Ok(event) = decoded else {
             return CheckOutcome::Refuse(
-                "the dev wallet's buy names a token amount, not a SOL spend, and the exact spend cannot be read".to_owned(),
+                "a pump.fun trade event in this transaction did not decode".to_owned(),
             );
         };
-        total = Some(total.unwrap_or(0).saturating_add(lamports));
+        if !event.is_buy || event.user != *dev_wallet {
+            continue;
+        }
+        dev_buy_events += 1;
+        sol_sum = sol_sum.saturating_add(event.sol_amount);
+        fee_sum = fee_sum.saturating_add(event.fee);
+        creator_fee_sum = creator_fee_sum.saturating_add(event.creator_fee);
     }
 
+    if dev_buy_events < dev_buy_instructions {
+        return CheckOutcome::Refuse(format!(
+            "{dev_buy_instructions} buy instruction(s) name the dev wallet but only \
+             {dev_buy_events} carried a trade-event receipt"
+        ));
+    }
+
+    let total = (dev_buy_events > 0).then(|| {
+        sol_sum
+            .saturating_add(fee_sum)
+            .saturating_add(creator_fee_sum)
+    });
+
     match total {
-        Some(found) if found == expected => CheckOutcome::Pass(format!("{found} lamports")),
+        Some(found) if found == expected => CheckOutcome::Pass(format!(
+            "{found} lamports ({sol_sum} to the curve, {fee_sum} fee, {creator_fee_sum} creator fee)"
+        )),
         Some(found) => CheckOutcome::Refuse(format!(
             "the dev wallet spent {found} lamports, not the stated {expected}"
         )),
@@ -577,6 +615,35 @@ mod tests {
         }
     }
 
+    /// A pump.fun event-CPI instruction carrying a `TradeEvent` for `user`,
+    /// with the given lamport breakdown. `token_amount` and the reserve
+    /// fields do not matter to this check, so they are zeroed.
+    fn event_ix(user: Address, sol: u64, fee: u64, creator_fee: u64) -> RawInstruction {
+        let mut data = pumpfun::ANCHOR_EVENT_CPI.as_bytes().to_vec();
+        data.extend_from_slice(pumpfun::TRADE_EVENT.as_bytes());
+        data.extend_from_slice(addr(3).as_bytes()); // mint
+        data.extend_from_slice(&sol.to_le_bytes()); // sol_amount
+        data.extend_from_slice(&0u64.to_le_bytes()); // token_amount
+        data.push(1); // is_buy
+        data.extend_from_slice(user.as_bytes());
+        data.extend_from_slice(&0i64.to_le_bytes()); // timestamp
+        data.extend_from_slice(&0u64.to_le_bytes()); // virtual_sol_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // virtual_token_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // real_sol_reserves
+        data.extend_from_slice(&0u64.to_le_bytes()); // real_token_reserves
+        data.extend_from_slice(addr(6).as_bytes()); // fee_recipient
+        data.extend_from_slice(&0u64.to_le_bytes()); // fee_basis_points
+        data.extend_from_slice(&fee.to_le_bytes()); // fee
+        data.extend_from_slice(user.as_bytes()); // creator
+        data.extend_from_slice(&0u64.to_le_bytes()); // creator_fee_basis_points
+        data.extend_from_slice(&creator_fee.to_le_bytes()); // creator_fee
+        RawInstruction {
+            program: pumpfun::PROGRAM_ID.to_string(),
+            data,
+            accounts: Vec::new(),
+        }
+    }
+
     fn curve_bytes(creator: Address) -> Vec<u8> {
         // Through `is_mayhem_mode` (byte 81, left 0: off); a curve that ends
         // before it refuses, as `a_curve_too_short_for_the_mayhem_flag_refuses` holds.
@@ -607,7 +674,11 @@ mod tests {
         let dev_wallet = addr(2);
         let mint = addr(3);
         let mut t = tx(&[dev_wallet.to_string().leak()], false);
-        t.instructions = vec![create_ix(mint, treasury), buy_ix(dev_wallet, 1_000_000)];
+        t.instructions = vec![
+            create_ix(mint, treasury),
+            buy_ix(dev_wallet, 1_000_000),
+            event_ix(dev_wallet, 1_000_000, 0, 0),
+        ];
         (t, treasury, dev_wallet, mint)
     }
 
@@ -810,6 +881,10 @@ mod tests {
         let (mut t, treasury, dev_wallet, _mint) = passing_tx();
         t.instructions
             .retain(|ix| ix.accounts != vec![dev_wallet.to_string()]);
+        // Also drop the matching receipt -- this test is about no evidence
+        // of a dev buy existing at all, not just the instruction.
+        t.instructions
+            .retain(|ix| pumpfun::trade_event(&ix.data).is_none());
         let curve = curve_bytes(treasury);
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
@@ -828,6 +903,8 @@ mod tests {
         let (mut t, treasury, dev_wallet, _mint) = passing_tx();
         t.instructions
             .retain(|ix| ix.accounts != vec![dev_wallet.to_string()]);
+        t.instructions
+            .retain(|ix| pumpfun::trade_event(&ix.data).is_none());
         let curve = curve_bytes(treasury);
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
@@ -838,6 +915,130 @@ mod tests {
             &dev_wallet,
             0,
         );
+        assert!(result.dev_buy.ok(), "{:?}", result.dev_buy);
+    }
+
+    /// A token-exact `buy_v2` (the common launch-day variant) states only a
+    /// SOL *bound* -- the real spend, fees included, has to come from the
+    /// event-CPI receipt, not the instruction's own arguments.
+    fn buy_v2_ix(user: Address, token_bound: u64, sol_bound: u64) -> RawInstruction {
+        let mut data = pumpfun::Instruction::BuyV2
+            .discriminator()
+            .as_bytes()
+            .to_vec();
+        data.extend_from_slice(&token_bound.to_le_bytes());
+        data.extend_from_slice(&sol_bound.to_le_bytes());
+        RawInstruction {
+            program: pumpfun::PROGRAM_ID.to_string(),
+            data,
+            accounts: vec![user.to_string()],
+        }
+    }
+
+    #[test]
+    fn a_token_exact_dev_buy_passes_with_its_receipt_total() {
+        let treasury = addr(1);
+        let dev_wallet = addr(2);
+        let mint = addr(3);
+        let mut t = tx(&[dev_wallet.to_string().leak()], false);
+        t.instructions = vec![
+            create_ix(mint, treasury),
+            buy_v2_ix(dev_wallet, 33_515_219_091_058, u64::MAX),
+            event_ix(dev_wallet, 967_264_352, 9_189_012, 2_901_794),
+        ];
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            979_355_158,
+        );
+        assert_eq!(
+            result.dev_buy,
+            CheckOutcome::Pass(
+                "979355158 lamports (967264352 to the curve, 9189012 fee, 2901794 creator fee)"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn a_buy_naming_the_dev_wallet_with_no_receipt_refuses() {
+        // The instruction is there but its event either never landed in this
+        // slice or was dropped -- a buy with no receipt must not silently
+        // read as "no dev buy" (rule 8), which a zero-decoded default would.
+        let treasury = addr(1);
+        let dev_wallet = addr(2);
+        let mint = addr(3);
+        let mut t = tx(&[dev_wallet.to_string().leak()], false);
+        t.instructions = vec![
+            create_ix(mint, treasury),
+            buy_v2_ix(dev_wallet, 1, u64::MAX),
+        ];
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1,
+        );
+        assert!(
+            matches!(&result.dev_buy, CheckOutcome::Refuse(r) if r.contains('1') && r.contains("receipt")),
+            "{:?}",
+            result.dev_buy
+        );
+    }
+
+    #[test]
+    fn an_undecodable_trade_event_refuses() {
+        let (mut t, treasury, dev_wallet, _mint) = passing_tx();
+        let mut bad = pumpfun::ANCHOR_EVENT_CPI.as_bytes().to_vec();
+        bad.extend_from_slice(pumpfun::TRADE_EVENT.as_bytes());
+        // No payload after the tags -- truncated.
+        t.instructions.push(RawInstruction {
+            program: pumpfun::PROGRAM_ID.to_string(),
+            data: bad,
+            accounts: Vec::new(),
+        });
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        assert!(
+            matches!(&result.dev_buy, CheckOutcome::Refuse(r) if r.contains("did not decode")),
+            "{:?}",
+            result.dev_buy
+        );
+    }
+
+    #[test]
+    fn another_wallets_receipt_is_not_counted() {
+        let (mut t, treasury, dev_wallet, _mint) = passing_tx();
+        t.instructions.push(event_ix(addr(5), 500_000, 0, 0));
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        // Unchanged from `passing_tx`'s own dev-wallet receipt: the extra
+        // event for someone else must not be folded into the total.
         assert!(result.dev_buy.ok(), "{:?}", result.dev_buy);
     }
 
@@ -856,6 +1057,30 @@ mod tests {
             1_000_000,
         );
         assert!(!result.allowlist.ok(), "{:?}", result.allowlist);
+    }
+
+    #[test]
+    fn the_fee_program_is_allowed() {
+        // pump.fun's own `buy_v2` invokes this program (GetFeesWithQuoteMint)
+        // to read its fee tier -- the allowlist has to permit it or every
+        // ordinary token-exact launch refuses.
+        let (mut t, treasury, dev_wallet, _mint) = passing_tx();
+        t.instructions.push(RawInstruction {
+            program: "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ".to_owned(),
+            data: vec![0; 8],
+            accounts: Vec::new(),
+        });
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+        );
+        assert!(result.allowlist.ok(), "{:?}", result.allowlist);
     }
 
     #[test]
