@@ -202,9 +202,7 @@ fn main() -> ExitCode {
                 launch_check::run(&args)
             }
         }
-        "treasury" if args.get(1).map(String::as_str) == Some("solana") => {
-            treasury_solana::run(&args)
-        }
+        "treasury" if treasury_solana::selected(&args) => treasury_solana::run(&args),
         "label-outcomes" => label_outcomes::run(&args),
         "model-prices" => model_prices::run(&args),
         "narratives" => narratives::run(&args),

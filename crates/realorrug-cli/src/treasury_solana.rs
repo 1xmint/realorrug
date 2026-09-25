@@ -33,6 +33,14 @@ use realorrug_types::Address;
 
 const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 
+/// Whether `treasury`'s arguments name Solana, the only chain it reads.
+/// A named function, not a guard inline in `main`, so a test holds it: a
+/// guard in `main` has no test to fail.
+#[must_use]
+pub fn selected(args: &[String]) -> bool {
+    args.get(1).map(String::as_str) == Some("solana")
+}
+
 /// Runs the command.
 ///
 /// # Errors
@@ -360,6 +368,40 @@ mod tests {
         let text = report(&addr(1), None, &[receipt], &[unread], None, None);
         assert!(text.contains("at least 1.000000000 SOL"), "{text}");
         assert!(text.contains("unread (totals above are at least"), "{text}");
+    }
+
+    #[test]
+    fn only_solana_selects_the_treasury_reading() {
+        let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert!(selected(&args(&["treasury", "solana", "--treasury", "x"])));
+        assert!(!selected(&args(&["treasury", "robinhood"])));
+        assert!(!selected(&args(&["treasury"])));
+    }
+
+    /// A total lands under its own vault's name: a pump.fun receipt must not
+    /// be summed into the PumpSwap line, nor either line lose its label.
+    #[test]
+    fn each_total_is_summed_under_its_own_vault() {
+        let receipt = Receipt {
+            signature: "sig1".to_owned(),
+            slot: Slot(10),
+            vault: VaultKind::PumpFun,
+            amount: 1_000_000_000,
+            collect_instruction_seen: true,
+        };
+        let text = report(&addr(1), None, &[receipt], &[], None, None);
+        assert!(
+            text.contains("1.000000000 SOL received into the pump.fun creator vault"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("1.000000000 SOL received into the PumpSwap coin-creator vault"),
+            "{text}"
+        );
+        assert!(
+            text.contains("SOL received into the PumpSwap coin-creator vault"),
+            "{text}"
+        );
     }
 
     #[test]

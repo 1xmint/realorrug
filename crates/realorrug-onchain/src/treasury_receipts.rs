@@ -300,6 +300,35 @@ mod tests {
         assert!(receipts[0].collect_instruction_seen);
     }
 
+    /// A pump.fun instruction that is not a collect (here a buy) does not
+    /// corroborate a vault decrease: both the program and the variant must
+    /// match.
+    #[test]
+    fn a_non_collect_pumpfun_instruction_is_not_a_collect() {
+        let v = vaults();
+        let mut tx = base_tx(&[addr(9), v.pumpfun]);
+        tx.pre_balances = vec![0, 5_000_000_000];
+        tx.post_balances = vec![0, 1_000_000_000];
+        tx.instructions = vec![collect_ix(
+            &realorrug_decode::pumpfun::PROGRAM_ID,
+            realorrug_decode::pumpfun::Instruction::Buy
+                .discriminator()
+                .as_bytes()
+                .to_owned(),
+        )];
+
+        let (receipts, _) = find_receipts(
+            &v,
+            &[SignedTransaction {
+                signature: "sig9".to_owned(),
+                transaction: Some(tx),
+            }],
+        );
+
+        assert_eq!(receipts.len(), 1);
+        assert!(!receipts[0].collect_instruction_seen);
+    }
+
     #[test]
     fn a_pumpswap_wsol_receipt_is_counted() {
         let v = vaults();
