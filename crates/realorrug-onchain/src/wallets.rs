@@ -1386,31 +1386,50 @@ pub fn investigate_solana(
     } else {
         signatures.iter().rev().collect()
     };
-    for sig in ordered {
-        if window_read >= SOLANA_WINDOW_TRANSACTIONS {
+    // A failed signature is never fetched and never counts against the
+    // window, exactly as the sequential walk skipped it with `continue`
+    // before ever calling `client.transaction`.
+    let candidates: Vec<&SignatureInfo> = ordered.into_iter().filter(|s| s.err.is_none()).collect();
+    // A shrinking slice, not a hand-kept `idx`/`take` pair: every iteration
+    // either takes a non-empty chunk off `rest` or the `room == 0` check
+    // below stops the loop, so there is no index arithmetic left that a
+    // mutation could strand without terminating (cargo-mutants TIMEOUT on
+    // this loop, 2026-09-26).
+    let mut rest: &[&SignatureInfo] = &candidates;
+    while !rest.is_empty() {
+        // Sized to the window's own remaining room, not just `BATCH_SIZE`:
+        // the cap counts *fetched* transactions, so a chunk must never ask
+        // for more than the window could still use even if every one of
+        // them succeeds.
+        let room = SOLANA_WINDOW_TRANSACTIONS.saturating_sub(window_read);
+        if room == 0 {
             break;
         }
-        if sig.err.is_some() {
-            continue;
-        }
-        match client.transaction(budget, &sig.signature) {
-            Ok(Some(tx)) => {
-                window_read += 1;
-                for buyer in buyers_in(&tx, &mint_key, curve.as_deref()) {
-                    if seen.insert(buyer.clone()) {
-                        window_buyers.push(EarlyBuyer {
-                            address: buyer,
-                            first_purchase_slot: sig.slot,
-                            first_purchase_signature: sig.signature.clone(),
-                        });
+        let take = room.min(crate::rpc::BATCH_SIZE).min(rest.len());
+        let (chunk, tail) = rest.split_at(take);
+        rest = tail;
+        let sigs: Vec<&str> = chunk.iter().map(|s| s.signature.as_str()).collect();
+        let results = client.transactions(budget, &sigs);
+        for (sig, result) in chunk.iter().zip(results) {
+            match result {
+                Ok(Some(tx)) => {
+                    window_read += 1;
+                    for buyer in buyers_in(&tx, &mint_key, curve.as_deref()) {
+                        if seen.insert(buyer.clone()) {
+                            window_buyers.push(EarlyBuyer {
+                                address: buyer,
+                                first_purchase_slot: sig.slot,
+                                first_purchase_signature: sig.signature.clone(),
+                            });
+                        }
                     }
                 }
+                Ok(None) => gaps.push(format!(
+                    "transaction {} could not be fetched",
+                    sig.signature
+                )),
+                Err(why) => gaps.push(format!("transaction {}: {why}", sig.signature)),
             }
-            Ok(None) => gaps.push(format!(
-                "transaction {} could not be fetched",
-                sig.signature
-            )),
-            Err(why) => gaps.push(format!("transaction {}: {why}", sig.signature)),
         }
     }
 
@@ -2038,6 +2057,14 @@ fn funding_search(
                 return (false, None, None);
             }
             fetched += 1;
+            // Sequential, deliberately: this walk stops on its first funder
+            // hit (the `return` a few lines below), so it usually needs far
+            // fewer than `MAX_FUNDING_TRANSACTIONS` fetches. Batching would
+            // charge and send a whole `BATCH_SIZE` chunk up front even when
+            // the funder sits in the chunk's first signature, overspending
+            // the per-candidate funding call floor for no benefit -- the
+            // fixed cost this walk was sized against is calls, not round
+            // trips (packet 9-25-0019 §3).
             match client.transaction(budget, &sig.signature) {
                 Ok(Some(tx)) => {
                     let read = funder_of(&tx, address_key);
@@ -2541,76 +2568,90 @@ fn read_creator_trades(
     let mut transfers_out = 0u32;
     let mut gaps = Vec::new();
     let mut complete = true;
-    for sig in signatures.iter().rev() {
-        if sig.err.is_some() {
-            continue;
-        }
-        match client.transaction(budget, &sig.signature) {
-            Ok(Some(tx)) => {
-                if tx.failed {
-                    continue;
+    // A failed signature is never fetched, exactly as the sequential walk
+    // skipped it with `continue` before ever calling `client.transaction`.
+    let candidates: Vec<&crate::rpc::SignatureInfo> = signatures
+        .iter()
+        .rev()
+        .filter(|s| s.err.is_none())
+        .collect();
+    // `chunks` rather than a hand-kept `idx`/`take` pair: a fixed-size
+    // chunking iterator cannot be mutated into one that never advances, so
+    // there is no index arithmetic left for a mutation to strand the loop on
+    // (cargo-mutants TIMEOUT here, 2026-09-26).
+    'outer: for chunk in candidates.chunks(crate::rpc::BATCH_SIZE) {
+        let sigs: Vec<&str> = chunk.iter().map(|s| s.signature.as_str()).collect();
+        let results = client.transactions(budget, &sigs);
+        for (sig, result) in chunk.iter().zip(results) {
+            match result {
+                Ok(Some(tx)) => {
+                    if tx.failed {
+                        continue;
+                    }
+                    if !has_readable_creator_balances(&tx, creator_key, mint_key) {
+                        // The node answered but left `meta` off (or, on this
+                        // shape, an empty balance side that never even names
+                        // this mint): there is no lamport or token move to
+                        // read for the creator at all, which is a different
+                        // fact from "nothing happened" -- rule 9 forbids
+                        // reading it as a quiet no-op.
+                        complete = false;
+                        gaps.push(format!(
+                            "transaction {} did not report balances for the creator or the mint",
+                            sig.signature
+                        ));
+                        continue;
+                    }
+                    match classify_creator_transaction(&tx, creator_key, mint_key) {
+                        SolanaCashFlowEvent::Buy { quote, tokens } => trades.push(CreatorTrade {
+                            role: CreatorRole::Deployer,
+                            side: Side::Buy,
+                            quote,
+                            tokens,
+                            block: tx.slot.0,
+                            transaction: sig.signature.clone(),
+                            unique_id: sig.signature.clone(),
+                        }),
+                        SolanaCashFlowEvent::Sell { quote, tokens } => trades.push(CreatorTrade {
+                            role: CreatorRole::Deployer,
+                            side: Side::Sell,
+                            quote,
+                            tokens,
+                            block: tx.slot.0,
+                            transaction: sig.signature.clone(),
+                            unique_id: sig.signature.clone(),
+                        }),
+                        SolanaCashFlowEvent::TransferOut => transfers_out += 1,
+                        SolanaCashFlowEvent::Ignored => {}
+                    }
                 }
-                if !has_readable_creator_balances(&tx, creator_key, mint_key) {
-                    // The node answered but left `meta` off (or, on this
-                    // shape, an empty balance side that never even names
-                    // this mint): there is no lamport or token move to read
-                    // for the creator at all, which is a different fact
-                    // from "nothing happened" -- rule 9 forbids reading it
-                    // as a quiet no-op.
+                Ok(None) => {
                     complete = false;
                     gaps.push(format!(
-                        "transaction {} did not report balances for the creator or the mint",
+                        "transaction {} could not be fetched",
                         sig.signature
                     ));
-                    continue;
                 }
-                match classify_creator_transaction(&tx, creator_key, mint_key) {
-                    SolanaCashFlowEvent::Buy { quote, tokens } => trades.push(CreatorTrade {
-                        role: CreatorRole::Deployer,
-                        side: Side::Buy,
-                        quote,
-                        tokens,
-                        block: tx.slot.0,
-                        transaction: sig.signature.clone(),
-                        unique_id: sig.signature.clone(),
-                    }),
-                    SolanaCashFlowEvent::Sell { quote, tokens } => trades.push(CreatorTrade {
-                        role: CreatorRole::Deployer,
-                        side: Side::Sell,
-                        quote,
-                        tokens,
-                        block: tx.slot.0,
-                        transaction: sig.signature.clone(),
-                        unique_id: sig.signature.clone(),
-                    }),
-                    SolanaCashFlowEvent::TransferOut => transfers_out += 1,
-                    SolanaCashFlowEvent::Ignored => {}
+                Err(crate::rpc::RpcError::Stopped(_)) => {
+                    // The shared budget or deadline ran out mid-walk. Every
+                    // signature still left would fail the exact same way, so
+                    // one gap naming the stop is the honest report -- a gap
+                    // per remaining signature would just be the same fact
+                    // repeated under a growing number. Any further `Stopped`
+                    // results still in this same chunk are discarded, not
+                    // reported again, for the same reason.
+                    complete = false;
+                    gaps.push(
+                        "the call budget ran out before every transaction in the creator's \
+                         ATA history could be read; the remaining ones were not fetched"
+                            .to_owned(),
+                    );
+                    break 'outer;
                 }
-            }
-            Ok(None) => {
-                complete = false;
-                gaps.push(format!(
-                    "transaction {} could not be fetched",
-                    sig.signature
-                ));
-            }
-            Err(crate::rpc::RpcError::Stopped(_)) => {
-                // The shared budget or deadline ran out mid-walk. Every
-                // signature still left would fail the exact same way, so
-                // one gap naming the stop is the honest report -- a gap per
-                // remaining signature would just be the same fact repeated
-                // under a growing number.
-                complete = false;
-                gaps.push(
-                    "the call budget ran out before every transaction in the creator's ATA \
-                     history could be read; the remaining ones were not fetched"
-                        .to_owned(),
-                );
-                break;
-            }
-            Err(why) => {
-                complete = false;
-                gaps.push(format!("transaction {}: {why}", sig.signature));
+                Err(why) => {
+                    complete = false;
+                    gaps.push(format!("transaction {}: {why}", sig.signature));
+                }
             }
         }
     }
@@ -3512,10 +3553,36 @@ mod tests {
                 )
             })
             .collect();
+        // A single-item JSON-RPC batch array, `id: 0` -- every consumer of
+        // this fixture (the window loop, `read_creator_trades`) now reads
+        // through `RpcClient::transactions`, which sends one POST per chunk
+        // and expects an array reply even for a chunk of one signature.
         format!(
-            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[],"postBalances":[],"preTokenBalances":[],"postTokenBalances":[{}]}},"transaction":{{"message":{{"accountKeys":[],"instructions":[]}}}}}},"error":null}}"#,
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":1,"meta":{{"err":null,"preBalances":[],"postBalances":[],"preTokenBalances":[],"postTokenBalances":[{}]}},"transaction":{{"message":{{"accountKeys":[],"instructions":[]}}}}}}}}]"#,
             entries.join(",")
         )
+    }
+
+    /// Combines several one-signature `buy_tx` replies (each a one-item
+    /// batch array) into a single multi-item batch array, re-numbering `id`
+    /// by position -- for the window loop's multi-signature chunks, which
+    /// send one POST per chunk rather than one per signature.
+    fn batch_of(single_replies: &[String]) -> String {
+        let items: Vec<String> = single_replies
+            .iter()
+            .enumerate()
+            .map(|(id, reply)| {
+                let value: serde_json::Value =
+                    serde_json::from_str(reply).expect("valid single-reply batch array");
+                let result = value
+                    .get(0)
+                    .and_then(|item| item.get("result"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{result}}}"#)
+            })
+            .collect();
+        format!("[{}]", items.join(","))
     }
 
     fn solana_budget() -> Budget {
@@ -5413,9 +5480,18 @@ mod tests {
             r#"{{"result":[{}],"error":null}}"#,
             entries.join(",")
         )];
-        let owners: Vec<String> = (0..total).map(|i| format!("buyer{i}")).collect();
-        for owner in &owners {
-            responses.push(buy_tx(&mint_key, &[(owner.as_str(), 500)]));
+        // Only the window's own 25 are ever fetched, batched in chunks of
+        // `BATCH_SIZE` (10, 10, 5): the 26th signature is never asked for, so
+        // it gets no canned reply at all.
+        let owners: Vec<String> = (0..SOLANA_WINDOW_TRANSACTIONS)
+            .map(|i| format!("buyer{i}"))
+            .collect();
+        let single_replies: Vec<String> = owners
+            .iter()
+            .map(|owner| buy_tx(&mint_key, &[(owner.as_str(), 500)]))
+            .collect();
+        for chunk in single_replies.chunks(crate::rpc::BATCH_SIZE) {
+            responses.push(batch_of(chunk));
         }
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
@@ -5426,6 +5502,134 @@ mod tests {
             funding.buyers,
             u32::try_from(SOLANA_WINDOW_TRANSACTIONS).unwrap()
         );
+    }
+
+    #[test]
+    fn the_window_loop_never_charges_more_calls_than_its_own_cap() {
+        // Pins `window_read += 1` and `room =
+        // SOLANA_WINDOW_TRANSACTIONS.saturating_sub(window_read)`: mutating
+        // either (`+=` to `*=`, or `-` to `+`) leaves `window_read` stuck at
+        // 0 or lets `room` grow without bound, so the loop keeps charging
+        // calls past the window instead of stopping at it. With far more
+        // successful candidates than the window holds,
+        // `the_launch_window_stops_after_its_transactions_are_read` above
+        // cannot tell the difference (its one extra signature still lands in
+        // the same last chunk either way) -- `calls_made` here does, because
+        // a broken cap charges every one of the 35 candidates, not 25.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let total = SOLANA_WINDOW_TRANSACTIONS + 10;
+        let entries: Vec<String> = (0..total)
+            .map(|i| format!(r#"{{"signature":"w{i}","slot":1}}"#))
+            .collect();
+        let mut responses = vec![format!(
+            r#"{{"result":[{}],"error":null}}"#,
+            entries.join(",")
+        )];
+        // Only the window's own 25 ever get a canned reply: correct code
+        // never asks for a fourth chunk, so a fourth POST here would panic
+        // the test with "the client asked for more than the test supplied".
+        let owners: Vec<String> = (0..SOLANA_WINDOW_TRANSACTIONS)
+            .map(|i| format!("buyer{i}"))
+            .collect();
+        let single_replies: Vec<String> = owners
+            .iter()
+            .map(|owner| buy_tx(&mint_key, &[(owner.as_str(), 500)]))
+            .collect();
+        for chunk in single_replies.chunks(crate::rpc::BATCH_SIZE) {
+            responses.push(batch_of(chunk));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(200, 200, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(
+            funding.buyers,
+            u32::try_from(SOLANA_WINDOW_TRANSACTIONS).unwrap()
+        );
+        assert_eq!(
+            budget.calls_made(),
+            // +1: the one `getSignaturesForAddress` page fetched before the
+            // window loop starts.
+            u32::try_from(SOLANA_WINDOW_TRANSACTIONS).unwrap() + 1,
+            "the window cap, not the candidate list, decides how many calls this charges"
+        );
+    }
+
+    #[test]
+    fn the_window_loops_last_chunk_never_asks_for_more_than_is_left() {
+        // Pins `.min(rest.len())`: deleting that term, or the `room.min(...)`
+        // chain being mutated to drop it, lets `take` exceed what is left in
+        // `rest` and `split_at` panics. With fewer total candidates than the
+        // window (so the window's own remaining room is never the tightest
+        // bound), the last chunk needs the real candidate count to avoid
+        // slicing past the end of the list.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let total = SOLANA_WINDOW_TRANSACTIONS - 3; // 22: fewer than the window
+        let entries: Vec<String> = (0..total)
+            .map(|i| format!(r#"{{"signature":"w{i}","slot":1}}"#))
+            .collect();
+        let mut responses = vec![format!(
+            r#"{{"result":[{}],"error":null}}"#,
+            entries.join(",")
+        )];
+        let owners: Vec<String> = (0..total).map(|i| format!("buyer{i}")).collect();
+        let single_replies: Vec<String> = owners
+            .iter()
+            .map(|owner| buy_tx(&mint_key, &[(owner.as_str(), 500)]))
+            .collect();
+        for chunk in single_replies.chunks(crate::rpc::BATCH_SIZE) {
+            responses.push(batch_of(chunk));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(200, 200, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        // Never reaches the window (22 < 25): every candidate is charged and
+        // read, and the last chunk (size 2) must not have panicked slicing
+        // past a 22-long candidate list.
+        assert_eq!(funding.buyers, u32::try_from(total).unwrap());
+        assert_eq!(
+            budget.calls_made(),
+            // +1: the one `getSignaturesForAddress` page fetched before the
+            // window loop starts.
+            u32::try_from(total).unwrap() + 1
+        );
+    }
+
+    #[test]
+    // Packet 9-25-0019 test (f): the window loop, fed several signatures
+    // that now share one batch chunk, still finds every buyer and stops at
+    // the window -- the same result the old one-POST-per-signature walk
+    // gave for this exact fixture shape (reusing `buy_tx`/`solana_addr`).
+    fn the_window_loop_reads_every_buyer_out_of_one_batched_chunk() {
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyers: Vec<String> = (1..=4).map(|i| solana_addr(i).to_string()).collect();
+        let entries: Vec<String> = (0..4)
+            .map(|i| format!(r#"{{"signature":"w{i}","slot":1}}"#))
+            .collect();
+        let single_replies: Vec<String> = buyers
+            .iter()
+            .map(|owner| buy_tx(&mint_key, &[(owner.as_str(), 500)]))
+            .collect();
+        let responses = [
+            format!(r#"{{"result":[{}],"error":null}}"#, entries.join(",")),
+            batch_of(&single_replies),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        // The window read itself is what this test is about; the funder
+        // walk after it is starved of its own fixtures on purpose, so it is
+        // a gap, not a panic.
+        assert_eq!(funding.buyers, 4);
+        assert_eq!(funding.checked.len(), 4);
     }
 
     #[test]
@@ -5947,8 +6151,10 @@ mod tests {
         lamports_before: u64,
         lamports_after: u64,
     ) -> String {
+        // A single-item JSON-RPC batch array, `id: 0` -- `read_creator_trades`
+        // now reads through `RpcClient::transactions`, one POST per chunk.
         format!(
-            r#"{{"result":{{"slot":7,"meta":{{"err":null,"preBalances":[{lamports_before}],"postBalances":[{lamports_after}],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_before}"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_after}"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[{{"programId":"{trading_program}"}}]}}}}}},"error":null}}"#,
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":7,"meta":{{"err":null,"preBalances":[{lamports_before}],"postBalances":[{lamports_after}],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_before}"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_after}"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[{{"programId":"{trading_program}"}}]}}}}}}}}]"#,
             trading_program = KNOWN_TRADING_PROGRAMS[0],
         )
     }
@@ -5957,7 +6163,7 @@ mod tests {
     /// moved counts.
     fn failed_tx(creator: &str, mint: &str) -> String {
         format!(
-            r#"{{"result":{{"slot":7,"meta":{{"err":{{"InstructionError":[0,"Custom"]}},"preBalances":[10000],"postBalances":[9000],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[]}}}}}},"error":null}}"#,
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":7,"meta":{{"err":{{"InstructionError":[0,"Custom"]}},"preBalances":[10000],"postBalances":[9000],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[]}}}}}}}}]"#,
         )
         .replace("{mint}", mint)
     }
@@ -6042,6 +6248,48 @@ mod tests {
         assert!(flow.trades_complete);
         assert!(flow.trades.is_empty());
         assert_eq!(flow.transfers_out, 0);
+    }
+
+    #[test]
+    fn read_creator_trades_last_chunk_never_asks_for_more_than_is_left() {
+        // `read_creator_trades` chunks its candidates with
+        // `candidates.chunks(BATCH_SIZE)`, whose last chunk is whatever is
+        // left over rather than a fixed size -- thirteen signatures (10 + 3,
+        // not a multiple of BATCH_SIZE) exercises that trailing short chunk.
+        // Every signature must still be read and every trade recorded, with
+        // no gap and no truncation from the uneven split.
+        const TOTAL: usize = 13; // 10 + 3: not a multiple of BATCH_SIZE (10)
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let mint_key = mint.to_string();
+        let creator_key = creator.to_string();
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        let sig_strings: Vec<String> = (0..TOTAL).map(|i| format!("sig{i}")).collect();
+        let sig_entries: Vec<(&str, u64)> = sig_strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_str(), i as u64 + 1))
+            .collect();
+        let single_replies: Vec<String> = (0..TOTAL)
+            .map(|_| creator_cash_flow_tx(&creator_key, &mint_key, 0, 1_000, 10_000, 9_000))
+            .collect();
+        let mut responses = vec![
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            signatures_page_many(&sig_entries),
+        ];
+        for chunk in single_replies.chunks(crate::rpc::BATCH_SIZE) {
+            responses.push(batch_of(chunk));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(200, 200, std::time::Duration::from_secs(30));
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(flow.trades_complete);
+        assert_eq!(flow.trades.len(), TOTAL);
     }
 
     #[test]
@@ -6140,7 +6388,7 @@ mod tests {
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
         let ata = spl_ata(creator, mint);
         let no_meta_tx = format!(
-            r#"{{"result":{{"slot":7,"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":7,"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}}}}]"#
         );
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
@@ -6269,7 +6517,7 @@ mod tests {
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
             token_accounts_response(&[&ata]),
             signatures_page("missing-sig"),
-            r#"{"result":null,"error":null}"#.to_owned(),
+            r#"[{"jsonrpc":"2.0","id":0,"result":null}]"#.to_owned(),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
@@ -6300,7 +6548,7 @@ mod tests {
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
             token_accounts_response(&[&ata]),
             signatures_page("error-sig"),
-            r#"{"result":null,"error":{"message":"rate limited"}}"#.to_owned(),
+            r#"[{"jsonrpc":"2.0","id":0,"error":{"message":"rate limited"}}]"#.to_owned(),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
@@ -6391,7 +6639,10 @@ mod tests {
         // `read_creator_trades`' `transfers_out += 1` must accumulate: two
         // unpriced transfer-outs in the history must read as 2, not 0 (a
         // `*=` swap would leave the counter at its zero start forever) or
-        // some other wrong value (a `-=` swap).
+        // some other wrong value (a `-=` swap). Also packet 9-25-0019 test
+        // (f)'s cash-flow half: two signatures share one batch chunk, and
+        // the trades/gap read is unchanged from the one-POST-per-signature
+        // walk this fixture was built for.
         let mint = solana_addr(9);
         let creator = solana_addr(1);
         let mint_key = mint.to_string();
@@ -6404,17 +6655,20 @@ mod tests {
         // No trading instruction on either transaction: a token fall with
         // no matching SOL rise is an unpriced transfer out.
         let tx1 = format!(
-            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[10000],"postBalances":[9995],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"500"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":1,"meta":{{"err":null,"preBalances":[10000],"postBalances":[9995],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"500"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}}}}]"#
         );
         let tx2 = format!(
-            r#"{{"result":{{"slot":2,"meta":{{"err":null,"preBalances":[9995],"postBalances":[9990],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"300"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":2,"meta":{{"err":null,"preBalances":[9995],"postBalances":[9990],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"300"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}}}}]"#
         );
+        // Both signatures fit in one `BATCH_SIZE`-10 chunk, so
+        // `read_creator_trades` sends one POST for both, not two: combine
+        // the two canned single-transaction replies into the one batch
+        // array reply that single POST actually gets back.
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
             token_accounts_response(&[&ata]),
             sigs,
-            tx1,
-            tx2,
+            batch_of(&[tx1, tx2]),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));

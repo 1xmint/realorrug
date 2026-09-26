@@ -60,6 +60,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
         Err(dispatch::Error::Unreadable(why)) => return Err(why),
     };
     print_gaps(&dossier);
+    eprintln!(
+        "read: {} calls, {} ms, {} retries ({} ms paused)",
+        dossier.calls, dossier.elapsed_ms, dossier.retries, dossier.paused_ms
+    );
 
     let rates_path = flag(args, "--rates")
         .unwrap_or_else(|| realorrug_roast::baserates::DEFAULT_PATH.to_owned());

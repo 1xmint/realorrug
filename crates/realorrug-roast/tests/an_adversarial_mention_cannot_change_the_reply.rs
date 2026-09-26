@@ -81,6 +81,9 @@ fn dossier_named(name: &str, symbol: &str) -> Dossier {
         unavailable: Vec::new(),
         calls: 6,
         elapsed_ms: 1600,
+
+        retries: 0,
+        paused_ms: 0,
     }
 }
 
@@ -401,6 +404,9 @@ fn a_fact_sheet_with_nothing_in_it_still_produces_a_reply() {
         unavailable: Vec::new(),
         calls: 2,
         elapsed_ms: 300,
+
+        retries: 0,
+        paused_ms: 0,
     };
     let sheet = FactSheet::build(&empty, Some(&rates()), None, None, None);
     let reply = voice::write(&sheet, None);
@@ -458,6 +464,9 @@ fn dossier_that_could_not_be_read() -> Dossier {
         ],
         calls: 4,
         elapsed_ms: 2_700,
+
+        retries: 0,
+        paused_ms: 0,
     }
 }
 
