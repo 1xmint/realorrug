@@ -249,6 +249,3 @@ them) mapped onto design 0028's build steps G4–G8:
 | 4-5: immutable forecasts on the daily five (five launches, six-hour window, fourteen-day horizon, hidden until close, explicit unresolved outcome) | G4 (the call itself) and G5 (settling it on the observation jobs) | design 0028's daily five already existing (G1–G3, done — design 0028 §10 "as built"); PR #141's install, for G5 (§7) |
 | 4-6: separate contribution and forecasting reputation, no value | G6 (board endpoints beside `/v1/public/hunters`) | 4-5's settled forecasts, since a reputation figure needs settled rows to compute a sample size from |
 | 4-7: server-side authenticated submission and public round/outcome/profile reads, every record carrying chain, token address, timestamps, evidence references and rule versions | G4 (writes) and G6 (public reads) together | 4-2 through 4-6, since this unit is the store's shape (§2, §3) applied across every record kind above |
-
-`docs/design/README.md` and `docs/adr/README.md` do not exist in this
-repository today, so no index entry was added for either document.
