@@ -18,16 +18,24 @@ the same day on the same code, so the fault is in the read path under a slow
 endpoint, not the constant), so engineering fixes the read path and
 recaptures a fair replay set at the live budget before Josh reviews real
 replies. What remains
-before launch is Josh's: accepting replies, counsel, X's written approval, the
-treasury form, the dev buy size, and the launch signature. Per Josh's decision
-of 2026-09-25, phase 4 (research, forecasts, reputation; see plan 0002) is
-being built before launch and switched on after, stopping only at the gates
-this document lists below — deploying to the live server, X credentials in
-production, posting from the X account, and any spend; everything up to a
-build that runs on a private box with test config is engineering's, starting
-with a design document and an ADR (AGENTS.md §2). The Robinhood launch, the
-weekly prize and the payout signer are retired; the daily five stays as a free
-game with nothing to win.
+before launch is Josh's: accepting replies, Claude's legal and tax review
+(ADR 0042), X's written approval, the treasury form, the dev buy size, and
+the launch signature — and now also phase 4's build. Per Josh's decision of
+2026-09-26, the token launch waits for phase 4 (research store, forecasts,
+reputation; plan 0002 phase 4; design 0032; ADR 0041) to be finished and
+tested on a private box with test config, replacing the 2026-09-25 "built
+before launch, switched on after" framing; engineering's scope up to that
+build is otherwise unchanged, starting with a design document and an ADR
+(AGENTS.md §2). Switching phase 4 on in production stays a deploy gate,
+Josh's, among the gates this document lists below — deploying to the live
+server, X credentials in production, posting from the X account, and any
+spend. Per Josh's decision of 2026-09-26, no outside counsel or accountant is
+retained: Claude performs the legal and tax review of the review packet
+(design 0030) against the launch copy (research 0063) instead, recorded in
+[ADR 0042](docs/adr/0042-claudes-review-replaces-counsel-at-gate-two.md),
+amending ADR 0039 gate 2. The Robinhood launch, the weekly prize and the
+payout signer are retired; the daily five stays as a free game with nothing
+to win.
 
 ## Vision
 

@@ -6,10 +6,13 @@
 [plan 0001](0001-after-the-split.md). Reasoning in
 [design 0029](../design/0029-bot-quality-then-a-solana-launch.md); decisions in
 ADRs 0037, 0038 and 0039. Phase 1 and phase 2's engineering are done (main at
-`ba6b8f8`, 2026-09-24). The current milestone is **phase 2b**: find why the
-live 20-second read (`crates/realorrug-onchain/src/budget.rs`) ran out on
+`ba6b8f8`, 2026-09-24). The current milestone is still **phase 2b**: find why
+the live 20-second read (`crates/realorrug-onchain/src/budget.rs`) ran out on
 6 of 10 replay cases and fix the read path rather than the clock, recapture
 a fair replay set at the live budget, then Josh reviews (see Decision log).
+Per Josh's decision of 2026-09-26, the launch now also waits for phase 4
+(research, forecasts, reputation) to be built and tested on a private box
+with test config, not merely started (see Decision log).
 
 Kept as they are: the Rust engine, the website, fact sheets, the checks after
 generation, the journals and the Solana readers.
@@ -45,7 +48,11 @@ on them. Models are compared only after documented failures.
 ## Phase 3 — the launch (Josh's gates)
 
 1. Josh accepts the replies (phase 2).
-2. Counsel reviews design 0030; material objections are resolved.
+2. Claude's legal and tax review (research 0065, not yet written) checks
+   design 0030's review packet against research 0063's launch copy; every
+   finding is fixed or ruled on by Josh ([ADR
+   0042](../adr/0042-claudes-review-replaces-counsel-at-gate-two.md), amending
+   ADR 0039 gate 2 — no outside counsel is retained).
 3. A pump.fun launch check: fee recipient, mint and freeze authorities,
    terms read on the day, a readback of the launch transaction. Fee
    accounting reads the treasury's receipts on Solana.
@@ -121,3 +128,21 @@ Josh's autonomous decisions and reversals, dated.
   2026-09-25 entry above required before any code. Both are marked
   recommending until Josh reads and rules on them; no phase 4 code has
   landed.
+- **2026-09-26 — the token launch waits for phase 4 to be built.** Josh's
+  decision, replacing the 2026-09-25 "built before launch, switched on after"
+  framing above: phase 4 (research store, forecasts, reputation — plan 0002
+  phase 4; design 0032; ADR 0041) must be finished and tested on a private
+  box with test config before the token launches, not merely started.
+  Switching it on in production stays a deploy gate, Josh's, exactly as
+  INTENT.md already lists — this decision moves when the build must be done,
+  not who flips it on.
+- **2026-09-26 — Claude's review replaces counsel at gate two.** Josh's
+  decision: no outside counsel or accountant is retained for this launch.
+  Claude performs the legal and tax review of the review packet (design
+  0030) against the launch copy (research 0063) instead, written down as
+  research 0065 (not yet written), answering every packet question with
+  dated sources and stating plainly that it is not from a licensed lawyer or
+  accountant (AGENTS.md §1). Each finding is fixed or ruled on by Josh. This
+  replaces ADR 0039 gate 2 ("counsel reviews design 0030; material objections
+  resolved") and is recorded in [ADR
+  0042](../adr/0042-claudes-review-replaces-counsel-at-gate-two.md).

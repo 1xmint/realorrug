@@ -7,6 +7,11 @@
 
 ## Note to counsel
 
+The reader of this section is now Claude's review, per [ADR
+0042](../adr/0042-claudes-review-replaces-counsel-at-gate-two.md)
+(2026-09-26); no outside counsel is retained, and the "counsel" heading and
+copy below are otherwise unchanged.
+
 [Design 0030](../design/0030-launch-review-packet.md) §4 asks for five texts
 attached to the review packet "exactly as they will be published," so the
 question there — "is any sentence a promise of profit, a reward for holding,
