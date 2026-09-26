@@ -3547,10 +3547,36 @@ mod tests {
                 )
             })
             .collect();
+        // A single-item JSON-RPC batch array, `id: 0` -- every consumer of
+        // this fixture (the window loop, `read_creator_trades`) now reads
+        // through `RpcClient::transactions`, which sends one POST per chunk
+        // and expects an array reply even for a chunk of one signature.
         format!(
-            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[],"postBalances":[],"preTokenBalances":[],"postTokenBalances":[{}]}},"transaction":{{"message":{{"accountKeys":[],"instructions":[]}}}}}},"error":null}}"#,
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":1,"meta":{{"err":null,"preBalances":[],"postBalances":[],"preTokenBalances":[],"postTokenBalances":[{}]}},"transaction":{{"message":{{"accountKeys":[],"instructions":[]}}}}}}}}]"#,
             entries.join(",")
         )
+    }
+
+    /// Combines several one-signature `buy_tx` replies (each a one-item
+    /// batch array) into a single multi-item batch array, re-numbering `id`
+    /// by position -- for the window loop's multi-signature chunks, which
+    /// send one POST per chunk rather than one per signature.
+    fn batch_of(single_replies: &[String]) -> String {
+        let items: Vec<String> = single_replies
+            .iter()
+            .enumerate()
+            .map(|(id, reply)| {
+                let value: serde_json::Value =
+                    serde_json::from_str(reply).expect("valid single-reply batch array");
+                let result = value
+                    .get(0)
+                    .and_then(|item| item.get("result"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{result}}}"#)
+            })
+            .collect();
+        format!("[{}]", items.join(","))
     }
 
     fn solana_budget() -> Budget {
@@ -5448,9 +5474,18 @@ mod tests {
             r#"{{"result":[{}],"error":null}}"#,
             entries.join(",")
         )];
-        let owners: Vec<String> = (0..total).map(|i| format!("buyer{i}")).collect();
-        for owner in &owners {
-            responses.push(buy_tx(&mint_key, &[(owner.as_str(), 500)]));
+        // Only the window's own 25 are ever fetched, batched in chunks of
+        // `BATCH_SIZE` (10, 10, 5): the 26th signature is never asked for, so
+        // it gets no canned reply at all.
+        let owners: Vec<String> = (0..SOLANA_WINDOW_TRANSACTIONS)
+            .map(|i| format!("buyer{i}"))
+            .collect();
+        let single_replies: Vec<String> = owners
+            .iter()
+            .map(|owner| buy_tx(&mint_key, &[(owner.as_str(), 500)]))
+            .collect();
+        for chunk in single_replies.chunks(crate::rpc::BATCH_SIZE) {
+            responses.push(batch_of(chunk));
         }
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
@@ -5461,6 +5496,38 @@ mod tests {
             funding.buyers,
             u32::try_from(SOLANA_WINDOW_TRANSACTIONS).unwrap()
         );
+    }
+
+    #[test]
+    // Packet 9-25-0019 test (f): the window loop, fed several signatures
+    // that now share one batch chunk, still finds every buyer and stops at
+    // the window -- the same result the old one-POST-per-signature walk
+    // gave for this exact fixture shape (reusing `buy_tx`/`solana_addr`).
+    fn the_window_loop_reads_every_buyer_out_of_one_batched_chunk() {
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let buyers: Vec<String> = (1..=4).map(|i| solana_addr(i).to_string()).collect();
+        let entries: Vec<String> = (0..4)
+            .map(|i| format!(r#"{{"signature":"w{i}","slot":1}}"#))
+            .collect();
+        let single_replies: Vec<String> = buyers
+            .iter()
+            .map(|owner| buy_tx(&mint_key, &[(owner.as_str(), 500)]))
+            .collect();
+        let responses = [
+            format!(r#"{{"result":[{}],"error":null}}"#, entries.join(",")),
+            batch_of(&single_replies),
+        ];
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = solana_budget();
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        // The window read itself is what this test is about; the funder
+        // walk after it is starved of its own fixtures on purpose, so it is
+        // a gap, not a panic.
+        assert_eq!(funding.buyers, 4);
+        assert_eq!(funding.checked.len(), 4);
     }
 
     #[test]
@@ -5982,8 +6049,10 @@ mod tests {
         lamports_before: u64,
         lamports_after: u64,
     ) -> String {
+        // A single-item JSON-RPC batch array, `id: 0` -- `read_creator_trades`
+        // now reads through `RpcClient::transactions`, one POST per chunk.
         format!(
-            r#"{{"result":{{"slot":7,"meta":{{"err":null,"preBalances":[{lamports_before}],"postBalances":[{lamports_after}],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_before}"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_after}"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[{{"programId":"{trading_program}"}}]}}}}}},"error":null}}"#,
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":7,"meta":{{"err":null,"preBalances":[{lamports_before}],"postBalances":[{lamports_after}],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_before}"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint}","owner":"{creator}","uiTokenAmount":{{"amount":"{token_after}"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[{{"programId":"{trading_program}"}}]}}}}}}}}]"#,
             trading_program = KNOWN_TRADING_PROGRAMS[0],
         )
     }
@@ -5992,7 +6061,7 @@ mod tests {
     /// moved counts.
     fn failed_tx(creator: &str, mint: &str) -> String {
         format!(
-            r#"{{"result":{{"slot":7,"meta":{{"err":{{"InstructionError":[0,"Custom"]}},"preBalances":[10000],"postBalances":[9000],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[]}}}}}},"error":null}}"#,
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":7,"meta":{{"err":{{"InstructionError":[0,"Custom"]}},"preBalances":[10000],"postBalances":[9000],"preTokenBalances":[],"postTokenBalances":[]}},"transaction":{{"message":{{"accountKeys":["{creator}"],"instructions":[]}}}}}}}}]"#,
         )
         .replace("{mint}", mint)
     }
@@ -6175,7 +6244,7 @@ mod tests {
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
         let ata = spl_ata(creator, mint);
         let no_meta_tx = format!(
-            r#"{{"result":{{"slot":7,"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":7,"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}}}}]"#
         );
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
@@ -6304,7 +6373,7 @@ mod tests {
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
             token_accounts_response(&[&ata]),
             signatures_page("missing-sig"),
-            r#"{"result":null,"error":null}"#.to_owned(),
+            r#"[{"jsonrpc":"2.0","id":0,"result":null}]"#.to_owned(),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
@@ -6335,7 +6404,7 @@ mod tests {
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
             token_accounts_response(&[&ata]),
             signatures_page("error-sig"),
-            r#"{"result":null,"error":{"message":"rate limited"}}"#.to_owned(),
+            r#"[{"jsonrpc":"2.0","id":0,"error":{"message":"rate limited"}}]"#.to_owned(),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
@@ -6426,7 +6495,10 @@ mod tests {
         // `read_creator_trades`' `transfers_out += 1` must accumulate: two
         // unpriced transfer-outs in the history must read as 2, not 0 (a
         // `*=` swap would leave the counter at its zero start forever) or
-        // some other wrong value (a `-=` swap).
+        // some other wrong value (a `-=` swap). Also packet 9-25-0019 test
+        // (f)'s cash-flow half: two signatures share one batch chunk, and
+        // the trades/gap read is unchanged from the one-POST-per-signature
+        // walk this fixture was built for.
         let mint = solana_addr(9);
         let creator = solana_addr(1);
         let mint_key = mint.to_string();
@@ -6439,17 +6511,20 @@ mod tests {
         // No trading instruction on either transaction: a token fall with
         // no matching SOL rise is an unpriced transfer out.
         let tx1 = format!(
-            r#"{{"result":{{"slot":1,"meta":{{"err":null,"preBalances":[10000],"postBalances":[9995],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"500"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":1,"meta":{{"err":null,"preBalances":[10000],"postBalances":[9995],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"500"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}}}}]"#
         );
         let tx2 = format!(
-            r#"{{"result":{{"slot":2,"meta":{{"err":null,"preBalances":[9995],"postBalances":[9990],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"300"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}},"error":null}}"#
+            r#"[{{"jsonrpc":"2.0","id":0,"result":{{"slot":2,"meta":{{"err":null,"preBalances":[9995],"postBalances":[9990],"preTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"300"}}}}],"postTokenBalances":[{{"accountIndex":0,"mint":"{mint_key}","owner":"{creator_key}","uiTokenAmount":{{"amount":"0"}}}}]}},"transaction":{{"message":{{"accountKeys":["{creator_key}"],"instructions":[]}}}}}}}}]"#
         );
+        // Both signatures fit in one `BATCH_SIZE`-10 chunk, so
+        // `read_creator_trades` sends one POST for both, not two: combine
+        // the two canned single-transaction replies into the one batch
+        // array reply that single POST actually gets back.
         let responses = [
             format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
             token_accounts_response(&[&ata]),
             sigs,
-            tx1,
-            tx2,
+            batch_of(&[tx1, tx2]),
         ];
         let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
         let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));

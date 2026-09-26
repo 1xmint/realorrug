@@ -1251,54 +1251,49 @@ fn parse_batch_reply(text: &str, n: usize) -> Vec<Result<Option<Transaction>, Rp
         Ok(v) => v,
         Err(e) => return vec![Err(RpcError::Malformed(e.to_string())); n],
     };
-    match value {
-        serde_json::Value::Array(items) => {
-            let mut by_id: std::collections::HashMap<u64, Result<Option<Transaction>, RpcError>> =
-                std::collections::HashMap::new();
-            for item in items {
-                let Some(id) = item.get("id").and_then(serde_json::Value::as_u64) else {
-                    continue;
-                };
-                let result = if let Some(err) = item.get("error") {
-                    let message = err
-                        .get("message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("node error")
-                        .to_owned();
-                    Err(RpcError::Node(message))
-                } else if let Some(res) = item.get("result") {
-                    if res.is_null() {
-                        Err(RpcError::Malformed(
-                            "getTransaction returned no result".to_owned(),
-                        ))
-                    } else {
-                        Ok(parse_transaction(res))
-                    }
-                } else {
-                    Err(RpcError::Malformed(
-                        "getTransaction returned no result".to_owned(),
-                    ))
-                };
-                by_id.insert(id, result);
-            }
-            (0..n as u64)
-                .map(|id| {
-                    by_id.remove(&id).unwrap_or_else(|| {
-                        Err(RpcError::Malformed(format!("batch reply missing id {id}")))
-                    })
-                })
-                .collect()
-        }
-        _ => {
-            let message = value
-                .get("error")
-                .and_then(|e| e.get("message"))
+    let serde_json::Value::Array(items) = value else {
+        let message = value
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .map_or_else(|| "batch reply was not an array".to_owned(), str::to_owned);
+        return vec![Err(RpcError::Node(message)); n];
+    };
+    let mut by_id: std::collections::HashMap<u64, Result<Option<Transaction>, RpcError>> =
+        std::collections::HashMap::new();
+    for item in items {
+        let Some(id) = item.get("id").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        let result = if let Some(err) = item.get("error") {
+            let message = err
+                .get("message")
                 .and_then(|m| m.as_str())
-                .map(str::to_owned)
-                .unwrap_or_else(|| "batch reply was not an array".to_owned());
-            vec![Err(RpcError::Node(message)); n]
-        }
+                .unwrap_or("node error")
+                .to_owned();
+            Err(RpcError::Node(message))
+        } else if let Some(res) = item.get("result") {
+            if res.is_null() {
+                Err(RpcError::Malformed(
+                    "getTransaction returned no result".to_owned(),
+                ))
+            } else {
+                Ok(parse_transaction(res))
+            }
+        } else {
+            Err(RpcError::Malformed(
+                "getTransaction returned no result".to_owned(),
+            ))
+        };
+        by_id.insert(id, result);
     }
+    (0..n as u64)
+        .map(|id| {
+            by_id.remove(&id).unwrap_or_else(|| {
+                Err(RpcError::Malformed(format!("batch reply missing id {id}")))
+            })
+        })
+        .collect()
 }
 
 /// How many signatures one page asks for.
