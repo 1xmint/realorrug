@@ -855,3 +855,145 @@ fix lands, and its review file says so.
   (<https://www.helius.dev/docs/rpc/gettransactionsforaddress>), read
   2026-09-23, for the 10-credit signatures-only rate and the 1,000-per-call
   limit.
+
+## Addendum, 2026-09-26: a real creator-sale candidate for the missing kind
+
+Task 9-25-0004 (task 9-23-0003's carryover, plan 0002 phase 2 row "creator
+sale"). The goal: name a real pump.fun mint whose creator sold out of their
+holding soon after launch, so a capture of it exercises
+`Signal::CreatorSoldOut` (`crates/realorrug-roast/src/sheet.rs` ~line 224;
+scored `crates/realorrug-roast/src/assessment.rs` ~line 306; the fields it
+needs, `dossier.creator_cash_flow` and `Memory::has_prior_balance`, already
+exist -- `crates/realorrug-onchain/src/wallets.rs::creator_cash_flow_solana`,
+`crates/realorrug-onchain/src/memory.rs::has_prior_balance`).
+
+### What was already in the repo's own captures
+
+`docs/research/data/replay-2026-09-24b/` (captured 2026-09-24, build
+`3218dac` per the run log) already has four sheets carrying a
+`creator_cash_flow` fact -- this read is live on Solana captures today, not
+a gap. Of those, one stands out:
+
+| mint | label in that capture | creator's own launch-block buy | creator_cash_flow: net SOL across decoded sales | creator_cash_flow: net cash flow (sale proceeds minus buy-in) |
+|---|---|---|---|---|
+| `2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump` | `incomplete-read-funding` | not found (absent, not zero) | **+20.2339 SOL** | **+20.2231 SOL** |
+| `Axo9EE6yU5B3HJpyT6i32fGgV9P13z4eSUzEy9gGpump` | `suspicious-launch-creator-buy` | 1.0000 SOL | 0.0000 SOL (no decoded sale) | -1.0121 SOL (still holding, spent not recovered) |
+| `JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump` | (incomplete-read case) | not found | +1.5459 SOL | +0.0366 SOL |
+| `EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump` | `incomplete-read-versioned-tx` | not found | +0.9431 SOL | +0.3336 SOL |
+
+`2XHGAAvk...` ("Pump Printer", `PRINTER`) is the strongest of the four: the
+creator's net cash flow from decoded sales is an order of magnitude larger
+than the other three, and no launch-block buy was found for it at all --
+read straight from `docs/research/data/replay-2026-09-24b/2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump.sheet.json`
+(`captured_at: "2026-09-24T21:23:20Z"`, read point `Solana` slot
+`450149123`, age ~0.8 hours at that read). That sheet is `CantTell` today
+(`critical_gaps: ["where 1 of the 4 checked early buyers got their money
+could not be read"]`) -- unrelated to the creator-sale fact, which read
+clean.
+
+### Cross-check against a public explorer, 2026-09-26
+
+Read via Solscan (`solscan.io`), browsed live, 2026-09-26:
+
+- **Creator address**: `CNLKcMA83EHdQNdiZL49mYUdXK4ztYbDkXJcX5v42ci9` --
+  `solscan.io/token/2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump`'s "Profile
+  Summary" panel names this address as `Creator`, tagged `Token Creator` /
+  `Pump.fun` on its own account page. The token has only 2 holders left at
+  read time.
+- **The launch was a direct PumpSwap pool, not a bonding-curve dev-buy**:
+  one signature, `23tP2x7qabkYoHnaPMyNSUfYN8JZLMNSchXzRmCtcxy4uLFiCs6LGT4YjDahQE8yXi9ymw68dyNfCUCeB2fpR2Pz`,
+  carries both a `CREATE TOKEN` and a `CREATE POOL` (`PRINTER | SOL`)
+  action by `CNLKcMA83EHdQNdiZL49mYUdXK4ztYbDkXJcX5v42ci9` -- `solscan.io`'s
+  filtered DeFi-activity view for that account, token filter set to
+  `2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump`. This is consistent with
+  the sheet's own "no creator buy found in launch block" (there was no
+  bonding-curve dev-buy instruction to find -- the pool was created
+  directly).
+- **Same account, same filtered view, four swaps ~1d 19h before the
+  2026-09-26 read** (i.e. clustered close to the create/pool signature
+  above, all same-day): three sells of `PRINTER` for `PUMP` (pump.fun's own
+  token, mint `pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn` -- not SOL) --
+  signatures `2XpHL7w2SGsUnfgyuen56gGZkZ6S9eTVSW5VGkDUYcZo6NmQe6QZ9HHgjGVWPmJVzk82XMC34EJ9HeAaYkYvfoS9`
+  (96,366,996.13 PRINTER for 136,060.68 PUM, ~$524.95),
+  `61tR34MR46ytMNTAop6AN5dd4Hn8bYk5r5mJe3aPyqJ2Fp3XvUdpYUkUsdcbHfq2fG4QYYphZQspWGnyqfnSwZyx`
+  (96,366,996.12 PRINTER for 126,827.64 PUM, ~$489.26), and
+  `2U7A1aASLTFhthT33gbMJUGWQWwXhoTmC1tzbgsdhMu4RsKTjDJ1hHj4YBiLqGBso33HCL4NsnCfEeFFSU3KdDvT`
+  (192,733,992.24 PRINTER for 360,315.02 PUM, ~$1,390.24) -- then one buy
+  reversing almost the exact same PRINTER amount,
+  `23tP2x7qabkYoHnaPMyNSUfYN8JZLMNSchXzRmCtcxy4uLFiCs6LGT4YjDahQE8yXi9ymw68dyNfCUCeB2fpR2Pz`
+  (639,813.93 PUM for 385,467,984.49 PRINTER, ~$2,469.06 -- 96,366,996.13 +
+  96,366,996.12 + 192,733,992.24 = 385,467,984.49, the exact sum of the
+  three sells).
+
+### This does not fully reconcile, and that is worth saying plainly
+
+The repo's own capture reports the creator's decoded-sale cash flow **in
+SOL** (+20.23 SOL, from `creator_cash_flow_solana`'s read of the pump.fun
+bonding-curve/AMM SOL-quoted trades). The Solscan cross-check's DeFi-activity
+panel, filtered to the same account and the same token, shows only
+PRINTER-for-PUM swaps -- a different quote asset, netting close to *zero*
+in dollar terms once the buyback is included ($2,404.45 sold, $2,469.06
+bought back). Neither view shows the other's trades: the SOL-denominated
+sales the sheet counted are not in Solscan's PRINTER/PUM listing, and the
+PUM-denominated round-trip Solscan shows is not broken out in the sheet
+(the sheet's two `creator_cash_flow` figures are both SOL-only by
+definition -- see the fact's own label in the sheet.json, quoted above).
+Both readings agree the creator did trade this specific token, at volume,
+within about a day of creating its pool, and agree the creator no longer
+holds a meaningful balance (2 holders left, neither confirmed as the
+creator on this pass) -- but which of the two readings is "the" creator
+sale, or whether both are real and additive, was not resolved in this
+session. Counterexample actively looked for and found: **do not present
+"+20.23 SOL, cleanly sold" as settled** without a fresh `dossier`/`capture`
+run against this mint (or a full signature-by-signature reconciliation)
+before it is used to prove out `Signal::CreatorSoldOut`.
+
+### Recommendation for the replay-set row
+
+`2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump` is the best-evidenced
+candidate on hand for the "creator sale" replay case: real mint, confirmed
+creator address, a repo capture already showing a strongly positive
+creator cash flow with no offsetting launch-block buy, and independent
+confirmation from a public explorer that the same creator address traded
+this exact token near its own launch at meaningful size. Still on the
+bonding-curve side (no PumpSwap graduation seen in the capture), which
+would make it the "still on the curve" half of the two-candidates ask if a
+second, graduated creator-sale case is captured later. Before accepting it
+as the replay case: re-run `realorrug capture` against it fresh (the
+existing sheet is already three days old relative to this addendum and is
+`CantTell` for an unrelated funding-read gap), and have whoever wires
+`Signal::CreatorSoldOut` confirm which of the two cash-flow readings above
+(SOL-denominated curve sales, or the PUM-denominated round-trip) is the one
+`creator_cash_flow_solana` is meant to catch, so the signal fires on the
+fact that was actually verified, not the larger of two unreconciled
+numbers.
+
+`JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump` and
+`EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump` are weaker fallback
+candidates from the same batch (smaller, but real, positive creator net
+cash flow with no launch-block buy found); neither was cross-checked
+against a public explorer in this session, for lack of remaining budget.
+
+### Sources, this addendum
+
+- `docs/research/data/replay-2026-09-24b/2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump.sheet.json`,
+  `Axo9EE6yU5B3HJpyT6i32fGgV9P13z4eSUzEy9gGpump.sheet.json`,
+  `JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump.sheet.json`,
+  `EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump.sheet.json` -- written by
+  `realorrug capture`, unedited, captured 2026-09-24.
+- `crates/realorrug-onchain/src/wallets.rs::creator_cash_flow_solana` and
+  `crates/realorrug-onchain/src/outcome.rs::creator_sold_out`, read
+  2026-09-26, for what the two `creator_cash_flow` figures mean and how
+  `Signal::CreatorSoldOut`'s twin is worded
+  (`crates/realorrug-roast/src/sheet.rs` ~line 224).
+- Solscan (`solscan.io/token/2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump`
+  and `solscan.io/account/CNLKcMA83EHdQNdiZL49mYUdXK4ztYbDkXJcX5v42ci9`,
+  filtered DeFi-activity view, token filter set to the mint), browsed
+  read-only, 2026-09-26, for the creator address, the create-token/create-pool
+  signature, and the four PRINTER/PUM swap signatures and amounts quoted
+  above.
+- `pump.fun/coin/2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump` was opened
+  but the pane's own tab was redirected off pump.fun by the site's own ad
+  content before any pump.fun-native data could be read from it; abandoned
+  in favor of Solscan rather than retried, and noted here as a finding
+  about that page, not an instruction acted on.
