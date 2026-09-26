@@ -1,11 +1,16 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Design 0030 — the launch review packet
 
-**Status:** draft for counsel. What the operator sends a lawyer and an
-accountant before the pump.fun launch ([ADR 0039](../adr/0039-the-launch-gates-and-the-monthly-ceiling.md)
-gate two). The facts are stated as they stand on 2026-09-21; every blank is
-filled by Josh before sending. This is a list of questions, not legal advice
-and not a finding that anything is lawful.
+**Status:** draft for review. What the review at gate two ([ADR
+0039](../adr/0039-the-launch-gates-and-the-monthly-ceiling.md) gate two, as
+amended by [ADR 0042](../adr/0042-claudes-review-replaces-counsel-at-gate-two.md))
+checks before the pump.fun launch. The facts are stated as they stand on
+2026-09-21; every blank is filled by Josh before sending. This is a list of
+questions, not legal advice and not a finding that anything is lawful.
+
+**[ADR 0042](../adr/0042-claudes-review-replaces-counsel-at-gate-two.md)**
+(2026-09-26) **routes this packet to Claude's own legal and tax review
+instead of outside counsel**; the questions below are unchanged.
 
 ## 1. Who runs it
 

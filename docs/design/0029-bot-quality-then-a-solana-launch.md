@@ -39,13 +39,15 @@ suggest it is.
   can keep improving after launch as long as no probability is published
   before it is earned.
 
-This is a lower-risk structure to put in front of counsel. **It is not a
-determination of legality.** The SEC distinguishes the token itself from the
-transaction and the promises made around its sale
+This is a lower-risk structure for review. **It is not a determination of
+legality.** The SEC distinguishes the token itself from the transaction and
+the promises made around its sale
 ([SEC, 2026](https://www.sec.gov/newsroom/press-releases/2026-30-sec-clarifies-application-federal-securities-laws-crypto-assets)),
 which is why the launch copy and every public statement matter as much as the
-token's mechanics. The questions for counsel are in
-[design 0030](0030-launch-review-packet.md).
+token's mechanics. The questions for that review are in
+[design 0030](0030-launch-review-packet.md), read against
+[research 0063](../research/0063-launch-copy-for-counsel.md) by Claude rather
+than outside counsel ([ADR 0042](../adr/0042-claudes-review-replaces-counsel-at-gate-two.md)).
 
 ## 3. What a report must say
 

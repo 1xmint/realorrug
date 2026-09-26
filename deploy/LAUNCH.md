@@ -16,9 +16,11 @@ Nothing here is automatic. Signing, spending and launching are Josh's.
 
 1. **Josh has accepted the bot's Solana replies** from the replay set, and
    the three checks pass on every accepted case (plan 0002 phase 2).
-2. **Counsel has read the review packet**
-   ([design 0030](../docs/design/0030-launch-review-packet.md)) and material
-   objections are resolved.
+2. **Claude's legal and tax review has checked the review packet**
+   ([design 0030](../docs/design/0030-launch-review-packet.md)) against the
+   launch copy (research 0065, not counsel — [ADR
+   0042](../docs/adr/0042-claudes-review-replaces-counsel-at-gate-two.md))
+   and every finding is fixed or ruled on by Josh.
 3. **X has approved automated replies in writing.** Without it, launch the
    site and keep the bot private; the X launch waits.
 

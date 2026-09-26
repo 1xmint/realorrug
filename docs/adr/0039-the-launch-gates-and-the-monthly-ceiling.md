@@ -12,7 +12,7 @@
 | # | decision |
 |---|---|
 | 1 | **Gate one — reply quality.** The token does not launch until Josh has read representative Solana replies from the replay set and accepted them, and the evidence-fidelity, unsupported-accusation and unknown-data checks pass on every accepted case |
-| 2 | **Gate two — legal.** The review packet ([design 0030](../design/0030-launch-review-packet.md)) goes to counsel first; material objections are resolved before launch |
+| 2 | **Gate two — legal.** The review packet ([design 0030](../design/0030-launch-review-packet.md)) goes to counsel first; material objections are resolved before launch. **Amended by [ADR 0042](0042-claudes-review-replaces-counsel-at-gate-two.md)** (2026-09-26): no counsel is retained; Claude performs the legal and tax review instead, and every finding is fixed or ruled on by Josh |
 | 3 | **Gate three — the launch itself.** A verified pump.fun configuration (fee recipient, authorities, terms read on the day) and an operator-reviewed launch transaction. Josh signs; nothing here signs for him |
 | 4 | **Automated AI replies on X wait on X's written approval.** Without it, the website and the private evaluation carry on and the X launch waits. X's automation rules are read on the day, not from memory |
 | 5 | **Spending stops at $90 a month before there is demand**, counting fixed services and metered use. Fixed costs are taken off first; model, RPC and X budgets share what is left |
