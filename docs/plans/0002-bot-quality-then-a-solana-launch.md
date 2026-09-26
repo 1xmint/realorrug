@@ -5,8 +5,11 @@
 **Status:** open. Replaces the Robinhood launch path of
 [plan 0001](0001-after-the-split.md). Reasoning in
 [design 0029](../design/0029-bot-quality-then-a-solana-launch.md); decisions in
-ADRs 0037, 0038 and 0039. The first milestone is **phase 1 plus the Solana
-reply-review loop**, not a rebuild.
+ADRs 0037, 0038 and 0039. Phase 1 and phase 2's engineering are done (main at
+`ba6b8f8`, 2026-09-24). The current milestone is **phase 2b**: find why the
+live 20-second read (`crates/realorrug-onchain/src/budget.rs`) ran out on
+6 of 10 replay cases and fix the read path rather than the clock, recapture
+a fair replay set at the live budget, then Josh reviews (see Decision log).
 
 Kept as they are: the Rust engine, the website, fact sheets, the checks after
 generation, the journals and the Solana readers.
@@ -82,3 +85,31 @@ partial reads, stale snapshots and unresolved outcomes; duplicate or late
 forecasts, hidden-entry leakage and deterministic replay; wrong fee recipient,
 duplicate fee claims and transaction readback; payment failures, retries and
 budget exhaustion. Suites run in CI.
+
+## Decision log
+
+Josh's autonomous decisions and reversals, dated.
+
+- **2026-09-25 — insert phase 2b before Josh's review.** Josh's decision: 6
+  of the 10 cases in `docs/research/data/replay-2026-09-24b/review.md` came
+  back `CantTell` because the 20-second read deadline in
+  `crates/realorrug-onchain/src/budget.rs:69` cut the read short, not because
+  the token gave no evidence. Reviewing that set would have judged the clock,
+  not the bot. The same mints read with no gaps twenty hours earlier on the
+  same read code, so the deadline is not a wrong constant but a live-path
+  fragility under a slow endpoint; engineering diagnoses the gap reasons at
+  the live budget, fixes the read path (not the clock, and not an offline-only
+  longer clock, which would have Josh accept replies the live bot cannot
+  produce), and recaptures a fair replay set first. Josh's review of real
+  replies (phase 2, last row) waits for it, and a longer live deadline is his
+  product call, not an engineering flag.
+- **2026-09-25 — move phase 4 before launch, switched on after.** Josh's
+  decision: phase 4 (research, forecasts, reputation) was planned for after
+  launch; Josh moved its build earlier so it is ready to switch on once phase
+  3 clears, rather than starting design work only after launch. Engineering
+  may build and run it on a private box with test config up to, but not past,
+  the gates INTENT.md lists: deploying to the live server, X credentials in
+  production, posting from the X account, and any spend. Because phase 4
+  changes realorrug-serve's recorded property that it reads published files
+  and is never a store, it starts with a design document and an ADR
+  (AGENTS.md §2) before any code.
