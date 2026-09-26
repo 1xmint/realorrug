@@ -6253,13 +6253,13 @@ mod tests {
         // trailing chunk ask for 10 when only 3 are left, slicing
         // `candidates[10..20]` out of a 13-long list -- a panic under the
         // mutation, a clean pair of chunks without it.
+        const TOTAL: usize = 13; // 10 + 3: not a multiple of BATCH_SIZE (10)
         let mint = solana_addr(9);
         let creator = solana_addr(1);
         let mint_key = mint.to_string();
         let creator_key = creator.to_string();
         let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
         let ata = spl_ata(creator, mint);
-        const TOTAL: usize = 13; // 10 + 3: not a multiple of BATCH_SIZE (10)
         let sig_strings: Vec<String> = (0..TOTAL).map(|i| format!("sig{i}")).collect();
         let sig_entries: Vec<(&str, u64)> = sig_strings
             .iter()
