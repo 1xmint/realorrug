@@ -5499,6 +5499,102 @@ mod tests {
     }
 
     #[test]
+    fn the_window_loop_never_charges_more_calls_than_its_own_cap() {
+        // Pins `window_read += 1` and `remaining = SOLANA_WINDOW_TRANSACTIONS
+        // - window_read`: mutating either (`+=` to `*=`, or `-` to `+`) leaves
+        // `window_read` stuck at 0 or lets `remaining` grow without bound, so
+        // the loop keeps charging calls past the window instead of stopping
+        // at it. With far more successful candidates than the window holds,
+        // `the_launch_window_stops_after_its_transactions_are_read` above
+        // cannot tell the difference (its one extra signature still lands in
+        // the same last chunk either way) -- `calls_made` here does, because
+        // a broken cap charges every one of the 35 candidates, not 25.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let total = SOLANA_WINDOW_TRANSACTIONS + 10;
+        let entries: Vec<String> = (0..total)
+            .map(|i| format!(r#"{{"signature":"w{i}","slot":1}}"#))
+            .collect();
+        let mut responses = vec![format!(
+            r#"{{"result":[{}],"error":null}}"#,
+            entries.join(",")
+        )];
+        // Only the window's own 25 ever get a canned reply: correct code
+        // never asks for a fourth chunk, so a fourth POST here would panic
+        // the test with "the client asked for more than the test supplied".
+        let owners: Vec<String> = (0..SOLANA_WINDOW_TRANSACTIONS)
+            .map(|i| format!("buyer{i}"))
+            .collect();
+        let single_replies: Vec<String> = owners
+            .iter()
+            .map(|owner| buy_tx(&mint_key, &[(owner.as_str(), 500)]))
+            .collect();
+        for chunk in single_replies.chunks(crate::rpc::BATCH_SIZE) {
+            responses.push(batch_of(chunk));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(200, 200, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        assert_eq!(
+            funding.buyers,
+            u32::try_from(SOLANA_WINDOW_TRANSACTIONS).unwrap()
+        );
+        assert_eq!(
+            budget.calls_made(),
+            // +1: the one `getSignaturesForAddress` page fetched before the
+            // window loop starts.
+            u32::try_from(SOLANA_WINDOW_TRANSACTIONS).unwrap() + 1,
+            "the window cap, not the candidate list, decides how many calls this charges"
+        );
+    }
+
+    #[test]
+    fn the_window_loops_last_chunk_never_asks_for_more_than_is_left() {
+        // Pins `.min(candidates.len() - idx)`: mutating the `-` to `+` makes
+        // that term grow instead of shrink, so it stops bounding anything --
+        // `take` reverts to whichever of the other two terms is smaller,
+        // which can exceed the signatures actually remaining. With fewer
+        // total candidates than the window (so the window's own remaining
+        // count is never the tightest bound), the last chunk needs the real
+        // candidate count to avoid slicing past the end of the list.
+        let mint = solana_addr(9);
+        let mint_key = mint.to_string();
+        let total = SOLANA_WINDOW_TRANSACTIONS - 3; // 22: fewer than the window
+        let entries: Vec<String> = (0..total)
+            .map(|i| format!(r#"{{"signature":"w{i}","slot":1}}"#))
+            .collect();
+        let mut responses = vec![format!(
+            r#"{{"result":[{}],"error":null}}"#,
+            entries.join(",")
+        )];
+        let owners: Vec<String> = (0..total).map(|i| format!("buyer{i}")).collect();
+        let single_replies: Vec<String> = owners
+            .iter()
+            .map(|owner| buy_tx(&mint_key, &[(owner.as_str(), 500)]))
+            .collect();
+        for chunk in single_replies.chunks(crate::rpc::BATCH_SIZE) {
+            responses.push(batch_of(chunk));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(200, 200, std::time::Duration::from_secs(30));
+        let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
+
+        // Never reaches the window (22 < 25): every candidate is charged and
+        // read, and the last chunk (size 2) must not have panicked slicing
+        // past a 22-long candidate list.
+        assert_eq!(funding.buyers, u32::try_from(total).unwrap());
+        assert_eq!(
+            budget.calls_made(),
+            // +1: the one `getSignaturesForAddress` page fetched before the
+            // window loop starts.
+            u32::try_from(total).unwrap() + 1
+        );
+    }
+
+    #[test]
     // Packet 9-25-0019 test (f): the window loop, fed several signatures
     // that now share one batch chunk, still finds every buyer and stops at
     // the window -- the same result the old one-POST-per-signature walk
@@ -6146,6 +6242,49 @@ mod tests {
         assert!(flow.trades_complete);
         assert!(flow.trades.is_empty());
         assert_eq!(flow.transfers_out, 0);
+    }
+
+    #[test]
+    fn read_creator_trades_last_chunk_never_asks_for_more_than_is_left() {
+        // Pins `BATCH_SIZE.min(candidates.len() - idx)` in
+        // `read_creator_trades`: mutating the `-` to `+` makes that term
+        // grow instead of shrink, so `take` reverts to `BATCH_SIZE` even on
+        // the trailing chunk. Thirteen signatures (10 + 3) makes that
+        // trailing chunk ask for 10 when only 3 are left, slicing
+        // `candidates[10..20]` out of a 13-long list -- a panic under the
+        // mutation, a clean pair of chunks without it.
+        let mint = solana_addr(9);
+        let creator = solana_addr(1);
+        let mint_key = mint.to_string();
+        let creator_key = creator.to_string();
+        let ata_owner = realorrug_pumpfun::token::TokenProgram::Spl.id().to_string();
+        let ata = spl_ata(creator, mint);
+        const TOTAL: usize = 13; // 10 + 3: not a multiple of BATCH_SIZE (10)
+        let sig_strings: Vec<String> = (0..TOTAL).map(|i| format!("sig{i}")).collect();
+        let sig_entries: Vec<(&str, u64)> = sig_strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_str(), i as u64 + 1))
+            .collect();
+        let single_replies: Vec<String> = (0..TOTAL)
+            .map(|_| creator_cash_flow_tx(&creator_key, &mint_key, 0, 1_000, 10_000, 9_000))
+            .collect();
+        let mut responses = vec![
+            format!(r#"{{"result":{{"value":{{"data":[],"owner":"{ata_owner}"}}}},"error":null}}"#),
+            token_accounts_response(&[&ata]),
+            signatures_page_many(&sig_entries),
+        ];
+        for chunk in single_replies.chunks(crate::rpc::BATCH_SIZE) {
+            responses.push(batch_of(chunk));
+        }
+        let refs: Vec<&str> = responses.iter().map(String::as_str).collect();
+        let client = RpcClient::with_transport("http://test.invalid", Canned::boxed(&refs));
+        let mut budget = Budget::new(200, 200, std::time::Duration::from_secs(30));
+        let flow =
+            creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
+
+        assert!(flow.trades_complete);
+        assert_eq!(flow.trades.len(), TOTAL);
     }
 
     #[test]

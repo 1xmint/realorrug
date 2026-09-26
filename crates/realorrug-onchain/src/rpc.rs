@@ -1289,9 +1289,9 @@ fn parse_batch_reply(text: &str, n: usize) -> Vec<Result<Option<Transaction>, Rp
     }
     (0..n as u64)
         .map(|id| {
-            by_id.remove(&id).unwrap_or_else(|| {
-                Err(RpcError::Malformed(format!("batch reply missing id {id}")))
-            })
+            by_id
+                .remove(&id)
+                .unwrap_or_else(|| Err(RpcError::Malformed(format!("batch reply missing id {id}"))))
         })
         .collect()
 }
@@ -2435,6 +2435,32 @@ mod tests {
             );
         }
         assert_eq!(sent.lock().expect("the record").len(), 0, "no POST at all");
+    }
+
+    #[test]
+    fn a_non_rate_limit_batch_transport_error_is_not_retried() {
+        // Pins the 429 guard in `post_batch_with_retry`: if it were mutated
+        // to always retry, this would consume the queued success too and
+        // `calls_made()` would read 2 instead of 1 -- and the caller would
+        // get the reply for a chunk that never actually saw an error.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err("connection refused".to_owned()),
+                Ok(batch_reply(&[0, 1])),
+            ]),
+        );
+        let mut b = budget();
+        let results = c.transactions(&mut b, &["sig0", "sig1"]);
+
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(
+                matches!(r, Err(RpcError::Transport(m)) if m == "connection refused"),
+                "{r:?}"
+            );
+        }
+        assert_eq!(b.calls_made(), 2, "one take_call per signature, no retry");
     }
 
     #[test]

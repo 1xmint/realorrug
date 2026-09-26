@@ -460,6 +460,20 @@ mod tests {
     }
 
     #[test]
+    fn retries_reports_the_real_count_not_a_fixed_one() {
+        // `Budget::retries` -> 1 survived: a budget that never retried must
+        // read 0, and one that retried three times must read exactly 3, or a
+        // dossier's "retries" figure would lie whenever it was not exactly
+        // one.
+        let mut budget = Budget::new(60, 3, Duration::from_secs(60));
+        assert_eq!(budget.retries(), 0);
+        budget.note_retry(Duration::from_millis(1));
+        budget.note_retry(Duration::from_millis(1));
+        budget.note_retry(Duration::from_millis(1));
+        assert_eq!(budget.retries(), 3);
+    }
+
+    #[test]
     fn elapsed_reports_real_time_rather_than_zero() {
         // `Budget::elapsed` -> Default::default() survived: nothing asserted the
         // value, and it is reported on every dossier as the cost of an answer.
