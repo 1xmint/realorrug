@@ -113,3 +113,11 @@ Josh's autonomous decisions and reversals, dated.
   changes realorrug-serve's recorded property that it reads published files
   and is never a store, it starts with a design document and an ADR
   (AGENTS.md §2) before any code.
+- **2026-09-26 — phase 4 direction recorded, awaiting Josh's read.**
+  [Design 0032](../design/0032-the-research-store.md) (the research store:
+  forecasts, evidence, reputation) and
+  [ADR 0041](../adr/0041-the-serve-crate-may-hold-one-store.md) (realorrug-serve
+  may hold one store) record the recommended phase 4 direction the
+  2026-09-25 entry above required before any code. Both are marked
+  recommending until Josh reads and rules on them; no phase 4 code has
+  landed.
