@@ -6,10 +6,10 @@
 [plan 0001](0001-after-the-split.md). Reasoning in
 [design 0029](../design/0029-bot-quality-then-a-solana-launch.md); decisions in
 ADRs 0037, 0038 and 0039. Phase 1 and phase 2's engineering are done (main at
-`ba6b8f8`, 2026-09-24). The current milestone is **phase 2b**: fix the
-20-second read-deadline clock in `crates/realorrug-onchain/src/budget.rs`
-that produced `CantTell` verdicts instead of real ones, recapture a fair
-replay set, then Josh reviews (see Decision log).
+`ba6b8f8`, 2026-09-24). The current milestone is **phase 2b**: find why the
+live 20-second read (`crates/realorrug-onchain/src/budget.rs`) ran out on
+6 of 10 replay cases and fix the read path rather than the clock, recapture
+a fair replay set at the live budget, then Josh reviews (see Decision log).
 
 Kept as they are: the Rust engine, the website, fact sheets, the checks after
 generation, the journals and the Solana readers.
@@ -95,8 +95,14 @@ Josh's autonomous decisions and reversals, dated.
   back `CantTell` because the 20-second read deadline in
   `crates/realorrug-onchain/src/budget.rs:69` cut the read short, not because
   the token gave no evidence. Reviewing that set would have judged the clock,
-  not the bot, so engineering fixes the deadline and recaptures a fair replay
-  set first; Josh's review of real replies (phase 2, last row) waits for it.
+  not the bot. The same mints read with no gaps twenty hours earlier on the
+  same read code, so the deadline is not a wrong constant but a live-path
+  fragility under a slow endpoint; engineering diagnoses the gap reasons at
+  the live budget, fixes the read path (not the clock, and not an offline-only
+  longer clock, which would have Josh accept replies the live bot cannot
+  produce), and recaptures a fair replay set first. Josh's review of real
+  replies (phase 2, last row) waits for it, and a longer live deadline is his
+  product call, not an engineering flag.
 - **2026-09-25 — move phase 4 before launch, switched on after.** Josh's
   decision: phase 4 (research, forecasts, reputation) was planned for after
   launch; Josh moved its build earlier so it is ready to switch on once phase

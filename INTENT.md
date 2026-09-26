@@ -13,8 +13,11 @@ research `docs/research/0062-the-launch-check-on-a-real-pump-fun-launch.md`).
 Current milestone: **plan 0002 phase 2b** — the 20-second read deadline
 (`crates/realorrug-onchain/src/budget.rs:69`) cut 6 of the 10 cases in
 `docs/research/data/replay-2026-09-24b/review.md` short and left them
-`CantTell` for the clock, not the token, so engineering fixes that and
-recaptures a fair replay set before Josh reviews real replies. What remains
+`CantTell` for the clock, not the token (the same mints read clean earlier
+the same day on the same code, so the fault is in the read path under a slow
+endpoint, not the constant), so engineering fixes the read path and
+recaptures a fair replay set at the live budget before Josh reviews real
+replies. What remains
 before launch is Josh's: accepting replies, counsel, X's written approval, the
 treasury form, the dev buy size, and the launch signature. Per Josh's decision
 of 2026-09-25, phase 4 (research, forecasts, reputation; see plan 0002) is
