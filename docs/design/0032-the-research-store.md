@@ -49,8 +49,8 @@ needs exactly the thing that promise ruled out: a write path a signed-in
 visitor controls.
 
 **What still protects it.** `realorrug-contest` stays pure — "no clock, no
-network, no key" (this packet's CONTEXT, matching design 0028's "G2" and
-"G3" build notes, §10) — and never becomes the store; it only ever scores
+network, no key" (its Cargo description, and design 0028 §10's G2 and G3
+build notes) — and never becomes the store; it only ever scores
 rows the store hands it. The store holds records of what was said and read,
 never judgement: it cannot compute a verdict, hold a spending key, or attach
 value to a call or a reputation figure (AGENTS §3 rule 1; design 0029 §4,
@@ -208,8 +208,7 @@ either way — `realorrug-serve` depends on `realorrug-store` and calls it,
 which is holding the store, not owning its schema.
 
 `realorrug-contest` stays pure regardless of this choice: it never opens a
-connection, never reads a clock, and never holds a key (this packet's
-CONTEXT). It is handed rows by whichever crate reads the store and returns
+connection, never reads a clock, and never holds a key (its Cargo description). It is handed rows by whichever crate reads the store and returns
 scores and rankings, exactly as design 0028's G2 and G3 already work.
 
 ## 7. What waits on Josh
