@@ -1386,32 +1386,45 @@ pub fn investigate_solana(
     } else {
         signatures.iter().rev().collect()
     };
-    for sig in ordered {
-        if window_read >= SOLANA_WINDOW_TRANSACTIONS {
-            break;
-        }
-        if sig.err.is_some() {
-            continue;
-        }
-        match client.transaction(budget, &sig.signature) {
-            Ok(Some(tx)) => {
-                window_read += 1;
-                for buyer in buyers_in(&tx, &mint_key, curve.as_deref()) {
-                    if seen.insert(buyer.clone()) {
-                        window_buyers.push(EarlyBuyer {
-                            address: buyer,
-                            first_purchase_slot: sig.slot,
-                            first_purchase_signature: sig.signature.clone(),
-                        });
+    // A failed signature is never fetched and never counts against the
+    // window, exactly as the sequential walk skipped it with `continue`
+    // before ever calling `client.transaction`.
+    let candidates: Vec<&SignatureInfo> = ordered.into_iter().filter(|s| s.err.is_none()).collect();
+    let mut idx = 0usize;
+    while window_read < SOLANA_WINDOW_TRANSACTIONS && idx < candidates.len() {
+        // Sized to the window's own remaining room, not just `BATCH_SIZE`:
+        // the cap counts *fetched* transactions, so a chunk must never ask
+        // for more than the window could still use even if every one of
+        // them succeeds.
+        let remaining = SOLANA_WINDOW_TRANSACTIONS - window_read;
+        let take = remaining
+            .min(crate::rpc::BATCH_SIZE)
+            .min(candidates.len() - idx);
+        let chunk = &candidates[idx..idx + take];
+        let sigs: Vec<&str> = chunk.iter().map(|s| s.signature.as_str()).collect();
+        let results = client.transactions(budget, &sigs);
+        for (sig, result) in chunk.iter().zip(results) {
+            match result {
+                Ok(Some(tx)) => {
+                    window_read += 1;
+                    for buyer in buyers_in(&tx, &mint_key, curve.as_deref()) {
+                        if seen.insert(buyer.clone()) {
+                            window_buyers.push(EarlyBuyer {
+                                address: buyer,
+                                first_purchase_slot: sig.slot,
+                                first_purchase_signature: sig.signature.clone(),
+                            });
+                        }
                     }
                 }
+                Ok(None) => gaps.push(format!(
+                    "transaction {} could not be fetched",
+                    sig.signature
+                )),
+                Err(why) => gaps.push(format!("transaction {}: {why}", sig.signature)),
             }
-            Ok(None) => gaps.push(format!(
-                "transaction {} could not be fetched",
-                sig.signature
-            )),
-            Err(why) => gaps.push(format!("transaction {}: {why}", sig.signature)),
         }
+        idx += take;
     }
 
     let buyers = u32::try_from(window_buyers.len()).unwrap_or(u32::MAX);
@@ -2038,6 +2051,14 @@ fn funding_search(
                 return (false, None, None);
             }
             fetched += 1;
+            // Sequential, deliberately: this walk stops on its first funder
+            // hit (the `return` a few lines below), so it usually needs far
+            // fewer than `MAX_FUNDING_TRANSACTIONS` fetches. Batching would
+            // charge and send a whole `BATCH_SIZE` chunk up front even when
+            // the funder sits in the chunk's first signature, overspending
+            // the per-candidate funding call floor for no benefit -- the
+            // fixed cost this walk was sized against is calls, not round
+            // trips (packet 9-25-0019 §3).
             match client.transaction(budget, &sig.signature) {
                 Ok(Some(tx)) => {
                     let read = funder_of(&tx, address_key);
@@ -2541,78 +2562,92 @@ fn read_creator_trades(
     let mut transfers_out = 0u32;
     let mut gaps = Vec::new();
     let mut complete = true;
-    for sig in signatures.iter().rev() {
-        if sig.err.is_some() {
-            continue;
-        }
-        match client.transaction(budget, &sig.signature) {
-            Ok(Some(tx)) => {
-                if tx.failed {
-                    continue;
+    // A failed signature is never fetched, exactly as the sequential walk
+    // skipped it with `continue` before ever calling `client.transaction`.
+    let candidates: Vec<&crate::rpc::SignatureInfo> = signatures
+        .iter()
+        .rev()
+        .filter(|s| s.err.is_none())
+        .collect();
+    let mut idx = 0usize;
+    'outer: while idx < candidates.len() {
+        let take = crate::rpc::BATCH_SIZE.min(candidates.len() - idx);
+        let chunk = &candidates[idx..idx + take];
+        let sigs: Vec<&str> = chunk.iter().map(|s| s.signature.as_str()).collect();
+        let results = client.transactions(budget, &sigs);
+        for (sig, result) in chunk.iter().zip(results) {
+            match result {
+                Ok(Some(tx)) => {
+                    if tx.failed {
+                        continue;
+                    }
+                    if !has_readable_creator_balances(&tx, creator_key, mint_key) {
+                        // The node answered but left `meta` off (or, on this
+                        // shape, an empty balance side that never even names
+                        // this mint): there is no lamport or token move to
+                        // read for the creator at all, which is a different
+                        // fact from "nothing happened" -- rule 9 forbids
+                        // reading it as a quiet no-op.
+                        complete = false;
+                        gaps.push(format!(
+                            "transaction {} did not report balances for the creator or the mint",
+                            sig.signature
+                        ));
+                        continue;
+                    }
+                    match classify_creator_transaction(&tx, creator_key, mint_key) {
+                        SolanaCashFlowEvent::Buy { quote, tokens } => trades.push(CreatorTrade {
+                            role: CreatorRole::Deployer,
+                            side: Side::Buy,
+                            quote,
+                            tokens,
+                            block: tx.slot.0,
+                            transaction: sig.signature.clone(),
+                            unique_id: sig.signature.clone(),
+                        }),
+                        SolanaCashFlowEvent::Sell { quote, tokens } => trades.push(CreatorTrade {
+                            role: CreatorRole::Deployer,
+                            side: Side::Sell,
+                            quote,
+                            tokens,
+                            block: tx.slot.0,
+                            transaction: sig.signature.clone(),
+                            unique_id: sig.signature.clone(),
+                        }),
+                        SolanaCashFlowEvent::TransferOut => transfers_out += 1,
+                        SolanaCashFlowEvent::Ignored => {}
+                    }
                 }
-                if !has_readable_creator_balances(&tx, creator_key, mint_key) {
-                    // The node answered but left `meta` off (or, on this
-                    // shape, an empty balance side that never even names
-                    // this mint): there is no lamport or token move to read
-                    // for the creator at all, which is a different fact
-                    // from "nothing happened" -- rule 9 forbids reading it
-                    // as a quiet no-op.
+                Ok(None) => {
                     complete = false;
                     gaps.push(format!(
-                        "transaction {} did not report balances for the creator or the mint",
+                        "transaction {} could not be fetched",
                         sig.signature
                     ));
-                    continue;
                 }
-                match classify_creator_transaction(&tx, creator_key, mint_key) {
-                    SolanaCashFlowEvent::Buy { quote, tokens } => trades.push(CreatorTrade {
-                        role: CreatorRole::Deployer,
-                        side: Side::Buy,
-                        quote,
-                        tokens,
-                        block: tx.slot.0,
-                        transaction: sig.signature.clone(),
-                        unique_id: sig.signature.clone(),
-                    }),
-                    SolanaCashFlowEvent::Sell { quote, tokens } => trades.push(CreatorTrade {
-                        role: CreatorRole::Deployer,
-                        side: Side::Sell,
-                        quote,
-                        tokens,
-                        block: tx.slot.0,
-                        transaction: sig.signature.clone(),
-                        unique_id: sig.signature.clone(),
-                    }),
-                    SolanaCashFlowEvent::TransferOut => transfers_out += 1,
-                    SolanaCashFlowEvent::Ignored => {}
+                Err(crate::rpc::RpcError::Stopped(_)) => {
+                    // The shared budget or deadline ran out mid-walk. Every
+                    // signature still left would fail the exact same way, so
+                    // one gap naming the stop is the honest report -- a gap
+                    // per remaining signature would just be the same fact
+                    // repeated under a growing number. Any further `Stopped`
+                    // results still in this same chunk are discarded, not
+                    // reported again, for the same reason.
+                    complete = false;
+                    gaps.push(
+                        "the call budget ran out before every transaction in the creator's \
+                         ATA history could be read; the remaining ones were not fetched"
+                            .to_owned(),
+                    );
+                    break 'outer;
                 }
-            }
-            Ok(None) => {
-                complete = false;
-                gaps.push(format!(
-                    "transaction {} could not be fetched",
-                    sig.signature
-                ));
-            }
-            Err(crate::rpc::RpcError::Stopped(_)) => {
-                // The shared budget or deadline ran out mid-walk. Every
-                // signature still left would fail the exact same way, so
-                // one gap naming the stop is the honest report -- a gap per
-                // remaining signature would just be the same fact repeated
-                // under a growing number.
-                complete = false;
-                gaps.push(
-                    "the call budget ran out before every transaction in the creator's ATA \
-                     history could be read; the remaining ones were not fetched"
-                        .to_owned(),
-                );
-                break;
-            }
-            Err(why) => {
-                complete = false;
-                gaps.push(format!("transaction {}: {why}", sig.signature));
+                Err(why) => {
+                    complete = false;
+                    gaps.push(format!("transaction {}: {why}", sig.signature));
+                }
             }
         }
+        idx += take;
     }
     (trades, transfers_out, gaps, complete)
 }

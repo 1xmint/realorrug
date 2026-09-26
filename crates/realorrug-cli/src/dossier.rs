@@ -504,6 +504,9 @@ mod tests {
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
+
+            retries: 0,
+            paused_ms: 0,
         };
         assert!(!render(&d).contains("not available"));
 
@@ -551,6 +554,9 @@ mod tests {
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
+
+            retries: 0,
+            paused_ms: 0,
         };
         let text = render(&d);
         assert!(text.contains("read at       : unknown"));
@@ -581,6 +587,9 @@ mod tests {
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
+
+            retries: 0,
+            paused_ms: 0,
         };
         let text = render(&d);
         assert!(text.contains("read at       : block 100"), "{text}");

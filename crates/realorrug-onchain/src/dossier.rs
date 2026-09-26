@@ -457,6 +457,11 @@ pub struct Dossier {
     pub calls: u32,
     /// How long it took, in milliseconds.
     pub elapsed_ms: u128,
+    /// How many HTTP 429 retries this dossier's reads needed.
+    pub retries: u32,
+    /// How long, in milliseconds, this dossier's reads spent paused on 429
+    /// retries.
+    pub paused_ms: u128,
 }
 
 impl Dossier {
@@ -551,6 +556,8 @@ pub fn build(
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
+        retries: 0,
+        paused_ms: 0,
     };
     // 1. The launch block, from the oldest signature the mint has, or from
     // the read memory ahead of it (packet 0039 §1). `Kind::Forever`: a past
@@ -744,6 +751,8 @@ pub fn build(
 
     dossier.calls = budget.calls_made();
     dossier.elapsed_ms = budget.elapsed().as_millis();
+    dossier.retries = budget.retries();
+    dossier.paused_ms = budget.paused().as_millis();
     Ok(dossier)
 }
 
@@ -1313,6 +1322,8 @@ mod tests {
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
+            retries: 0,
+            paused_ms: 0,
         };
         dossier.miss("curve", "no bonding-curve account");
         assert_eq!(dossier.unavailable.len(), 1);
@@ -1598,6 +1609,8 @@ mod tests {
                 }],
                 calls: 0,
                 elapsed_ms: 0,
+                retries: 0,
+                paused_ms: 0,
             })
         }
     }

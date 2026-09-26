@@ -1687,6 +1687,9 @@ pub(crate) mod tests {
             unavailable: Vec::new(),
             calls: 10,
             elapsed_ms: 7_577,
+
+            retries: 0,
+            paused_ms: 0,
         };
         FactSheet::build(&dossier, None, None, None, None)
     }

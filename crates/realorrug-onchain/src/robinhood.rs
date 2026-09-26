@@ -1176,6 +1176,9 @@ pub fn build_with_memory(
         unavailable: Vec::new(),
         calls: 0,
         elapsed_ms: 0,
+
+        retries: 0,
+        paused_ms: 0,
     };
 
     // 1. The launch record. The one read this dossier cannot exist without --

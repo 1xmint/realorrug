@@ -4372,6 +4372,9 @@ mod tests {
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
+
+            retries: 0,
+            paused_ms: 0,
         }
     }
 
@@ -6888,6 +6891,9 @@ mod tests {
             unavailable: Vec::new(),
             calls: 0,
             elapsed_ms: 0,
+
+            retries: 0,
+            paused_ms: 0,
         }
     }
 

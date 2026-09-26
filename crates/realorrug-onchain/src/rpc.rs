@@ -36,7 +36,7 @@ use crate::budget::{Budget, Exhausted};
 pub const DEFAULT_RPC: &str = "https://api.mainnet-beta.solana.com";
 
 /// Why a read could not be completed.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum RpcError {
     /// The endpoint could not be reached or refused.
     #[error("rpc transport: {0}")]
@@ -544,6 +544,7 @@ impl RpcClient {
                 Ok(text) => return Ok(text),
                 Err(e) if is_rate_limited(&e) => {
                     last_err = e;
+                    budget.note_retry(PAUSE);
                     std::thread::sleep(PAUSE);
                 }
                 Err(e) => return Err(RpcError::Transport(e)),
@@ -1004,6 +1005,100 @@ impl RpcClient {
         Ok(parse_transaction(&raw))
     }
 
+    /// Reads many transactions in [`BATCH_SIZE`]-sized JSON-RPC batches: one
+    /// HTTP POST per chunk instead of one per signature.
+    ///
+    /// Results come back in `signatures`' order, one per input, regardless of
+    /// the order the node's reply lists them in (matched by `id`, not
+    /// position -- see [`parse_batch_reply`]).
+    ///
+    /// `budget.take_call()` is charged once per signature in a chunk before
+    /// that chunk's POST is sent, so the call ceiling and the deadline are
+    /// spent exactly as they would be one call at a time. If the deadline or
+    /// the call ceiling gives out partway through a chunk, the signatures not
+    /// yet charged get [`RpcError::Stopped`] and no POST is sent for them; a
+    /// chunk with nothing charged sends no POST at all.
+    pub fn transactions(
+        &self,
+        budget: &mut Budget,
+        signatures: &[&str],
+    ) -> Vec<Result<Option<Transaction>, RpcError>> {
+        let mut results = Vec::with_capacity(signatures.len());
+        for chunk in signatures.chunks(BATCH_SIZE) {
+            results.extend(self.transaction_chunk(budget, chunk));
+        }
+        results
+    }
+
+    /// One [`BATCH_SIZE`]-or-fewer chunk of [`RpcClient::transactions`].
+    fn transaction_chunk(
+        &self,
+        budget: &mut Budget,
+        chunk: &[&str],
+    ) -> Vec<Result<Option<Transaction>, RpcError>> {
+        if chunk.is_empty() {
+            return Vec::new();
+        }
+        let mut charged = 0usize;
+        let mut stop_err = None;
+        for _ in chunk {
+            match budget.take_call() {
+                Ok(()) => charged += 1,
+                Err(e) => {
+                    stop_err = Some(e);
+                    break;
+                }
+            }
+        }
+
+        let mut out = Vec::with_capacity(chunk.len());
+        if charged > 0 {
+            let charged_sigs = &chunk[..charged];
+            match self.post_batch_with_retry(budget, charged_sigs) {
+                Ok(text) => out.extend(parse_batch_reply(&text, charged)),
+                Err(e) => out.extend(charged_sigs.iter().map(|_| Err(e.clone()))),
+            }
+        }
+        if let Some(err) = stop_err {
+            out.extend(chunk[charged..].iter().map(|_| Err(RpcError::Stopped(err))));
+        }
+        out
+    }
+
+    /// Posts one batch body, retrying the whole chunk while the node refuses
+    /// with HTTP 429 -- same policy as [`RpcClient::post_with_retry`], the
+    /// single-call version this mirrors, including the fixed pause and the
+    /// re-charge of every signature in the chunk on each retry (AGENTS.md
+    /// rule 7: a retry must never outlive the budget).
+    fn post_batch_with_retry(
+        &self,
+        budget: &mut Budget,
+        signatures: &[&str],
+    ) -> Result<String, RpcError> {
+        const RETRIES: u32 = 3;
+        const PAUSE: Duration = Duration::from_secs(1);
+
+        let body = batch_body(signatures);
+        let mut last_err = String::new();
+        for attempt in 0..=RETRIES {
+            if attempt > 0 {
+                for _ in signatures {
+                    budget.take_call()?;
+                }
+            }
+            match self.transport.post(&self.endpoint, body.clone()) {
+                Ok(text) => return Ok(text),
+                Err(e) if is_rate_limited(&e) => {
+                    last_err = e;
+                    budget.note_retry(PAUSE);
+                    std::thread::sleep(PAUSE);
+                }
+                Err(e) => return Err(RpcError::Transport(e)),
+            }
+        }
+        Err(RpcError::Transport(last_err))
+    }
+
     /// The token accounts holding the most of a mint, as the node ranks them.
     ///
     /// Solana caps this at 20 accounts. **This is a sample, not every
@@ -1105,6 +1200,104 @@ impl RpcClient {
             amount,
             decimals: value.decimals,
         })
+    }
+}
+
+/// How many `getTransaction` requests go into one JSON-RPC batch POST
+/// ([`RpcClient::transactions`]).
+///
+/// Measured on the VPS against the production endpoint, 2026-09-26 00:22 UTC
+/// (research 0056 addendum): a batch of three methods in one POST answered
+/// HTTP 200 in 102 ms with three results; twelve parallel requests all
+/// answered 200; twenty-five parallel drew two 429s. Ten stays well clear of
+/// the burst limit that measurement found while still turning what would be
+/// ten round trips into one.
+pub const BATCH_SIZE: usize = 10;
+
+/// The JSON-RPC batch body for [`RpcClient::transactions`]: one
+/// `getTransaction` request per signature, `id` set to its index within the
+/// chunk so [`parse_batch_reply`] can match replies back by id rather than by
+/// position.
+fn batch_body(signatures: &[&str]) -> String {
+    let requests: Vec<serde_json::Value> = signatures
+        .iter()
+        .enumerate()
+        .map(|(id, sig)| {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "getTransaction",
+                "params": [
+                    sig,
+                    { "encoding": "json", "maxSupportedTransactionVersion": 1 }
+                ],
+            })
+        })
+        .collect();
+    serde_json::Value::Array(requests).to_string()
+}
+
+/// Parses a batch reply into `n` results, one per signature the batch asked
+/// for, in the batch's own input order.
+///
+/// Matched by `id`, not by position: a node that answers out of order (or
+/// drops a member) must not shift every result after it onto the wrong
+/// signature. A missing or malformed member yields that signature's
+/// [`RpcError::Malformed`]; the rest still parse. A reply that is not a JSON
+/// array -- a single error envelope for the whole batch -- fails every
+/// signature in the chunk with [`RpcError::Node`].
+fn parse_batch_reply(text: &str, n: usize) -> Vec<Result<Option<Transaction>, RpcError>> {
+    let value: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => return vec![Err(RpcError::Malformed(e.to_string())); n],
+    };
+    match value {
+        serde_json::Value::Array(items) => {
+            let mut by_id: std::collections::HashMap<u64, Result<Option<Transaction>, RpcError>> =
+                std::collections::HashMap::new();
+            for item in items {
+                let Some(id) = item.get("id").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let result = if let Some(err) = item.get("error") {
+                    let message = err
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("node error")
+                        .to_owned();
+                    Err(RpcError::Node(message))
+                } else if let Some(res) = item.get("result") {
+                    if res.is_null() {
+                        Err(RpcError::Malformed(
+                            "getTransaction returned no result".to_owned(),
+                        ))
+                    } else {
+                        Ok(parse_transaction(res))
+                    }
+                } else {
+                    Err(RpcError::Malformed(
+                        "getTransaction returned no result".to_owned(),
+                    ))
+                };
+                by_id.insert(id, result);
+            }
+            (0..n as u64)
+                .map(|id| {
+                    by_id.remove(&id).unwrap_or_else(|| {
+                        Err(RpcError::Malformed(format!("batch reply missing id {id}")))
+                    })
+                })
+                .collect()
+        }
+        _ => {
+            let message = value
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| "batch reply was not an array".to_owned());
+            vec![Err(RpcError::Node(message)); n]
+        }
     }
 }
 
@@ -2080,5 +2273,196 @@ mod tests {
         );
         assert_eq!(tx.instructions[0].program, "LoadedR");
         assert_eq!(tx.instructions[0].accounts, ["Signer", "LoadedW"]);
+    }
+
+    // -- RpcClient::transactions (batching) ---------------------------------
+
+    /// Records every body sent and answers each POST from a queue, in order.
+    /// Unlike [`Recorder`] (one fixed answer for every call), a batching test
+    /// needs a different reply per chunk.
+    struct RecordingCanned {
+        sent: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        answers: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingCanned {
+        fn boxed(
+            answers: &[&str],
+        ) -> (
+            std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+            Box<dyn Transport>,
+        ) {
+            let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let queue = answers.iter().rev().map(|s| (*s).to_owned()).collect();
+            (
+                std::sync::Arc::clone(&sent),
+                Box::new(Self {
+                    sent,
+                    answers: std::sync::Mutex::new(queue),
+                }),
+            )
+        }
+    }
+
+    impl Transport for RecordingCanned {
+        fn post(&self, _: &str, body: String) -> Result<String, String> {
+            self.sent
+                .lock()
+                .map_err(|_| "poisoned".to_owned())?
+                .push(body);
+            self.answers
+                .lock()
+                .map_err(|_| "poisoned".to_owned())?
+                .pop()
+                .ok_or_else(|| "the client asked for more than the test supplied".to_owned())
+        }
+    }
+
+    /// A batch reply where every requested id comes back as a (non-null,
+    /// otherwise-empty) result -- enough for [`parse_transaction`] to answer
+    /// `None` without needing a full transaction fixture per id.
+    fn batch_reply(ids: &[u64]) -> String {
+        let items: Vec<serde_json::Value> = ids
+            .iter()
+            .map(|id| serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": {} }))
+            .collect();
+        serde_json::Value::Array(items).to_string()
+    }
+
+    #[test]
+    fn twelve_signatures_are_sent_as_two_batches_of_ten_and_two() {
+        // (a) Re-applies "one round trip per signature": before batching,
+        // twelve signatures cost twelve POSTs. Fixing that without chunking
+        // by `BATCH_SIZE` either sends one POST with all twelve (busts the
+        // measured 25-parallel burst limit at scale) or keeps twelve POSTs;
+        // both fail the assertions below.
+        let sigs: Vec<String> = (0..12).map(|i| format!("sig{i}")).collect();
+        let sig_refs: Vec<&str> = sigs.iter().map(String::as_str).collect();
+        let (sent, transport) = RecordingCanned::boxed(&[
+            &batch_reply(&(0..10).collect::<Vec<_>>()),
+            &batch_reply(&(0..2).collect::<Vec<_>>()),
+        ]);
+        let c = RpcClient::with_transport("http://test.invalid", transport);
+        let mut b = budget();
+        let results = c.transactions(&mut b, &sig_refs);
+
+        assert_eq!(results.len(), 12, "one result per input signature");
+        for r in &results {
+            assert!(matches!(r, Ok(None)), "every signature is answered");
+        }
+
+        let sent = sent.lock().expect("the record");
+        assert_eq!(sent.len(), 2, "two POSTs, not twelve");
+        for (i, sig) in sigs.iter().take(10).enumerate() {
+            assert!(
+                sent[0].contains(sig),
+                "the first batch carries signature {i} ({sig}): {}",
+                sent[0]
+            );
+        }
+        assert!(!sent[0].contains("sig10"), "the first batch stops at ten");
+        assert!(sent[1].contains("sig10"), "{}", sent[1]);
+        assert!(sent[1].contains("sig11"), "{}", sent[1]);
+    }
+
+    #[test]
+    fn a_batch_reply_out_of_order_still_maps_by_id() {
+        // (b) Re-applies "matched by position": a reply listing id 1 before
+        // id 0 would, matched positionally, hand signature 0's result to
+        // signature 1's slot -- as errors below with different messages that
+        // would show up swapped.
+        let sig0 = "sig-zero";
+        let sig1 = "sig-one";
+        let reply = serde_json::json!([
+            { "jsonrpc": "2.0", "id": 1, "error": { "message": "for one" } },
+            { "jsonrpc": "2.0", "id": 0, "error": { "message": "for zero" } },
+        ])
+        .to_string();
+        let c = client(&[&reply]);
+        let mut b = budget();
+        let results = c.transactions(&mut b, &[sig0, sig1]);
+
+        assert_eq!(results.len(), 2);
+        assert!(
+            matches!(&results[0], Err(RpcError::Node(m)) if m == "for zero"),
+            "{:?}",
+            results[0]
+        );
+        assert!(
+            matches!(&results[1], Err(RpcError::Node(m)) if m == "for one"),
+            "{:?}",
+            results[1]
+        );
+    }
+
+    #[test]
+    fn a_starved_budget_charges_what_it_has_and_stops_the_rest() {
+        // (c) Re-applies charging calls after the ceiling is spent, or
+        // sending a second POST for signatures that were never charged: both
+        // would make `sent.len()` or `b.calls_made()` read wrong below.
+        let sigs: Vec<String> = (0..12).map(|i| format!("sig{i}")).collect();
+        let sig_refs: Vec<&str> = sigs.iter().map(String::as_str).collect();
+        let (sent, transport) =
+            RecordingCanned::boxed(&[&batch_reply(&(0..5).collect::<Vec<_>>())]);
+        let c = RpcClient::with_transport("http://test.invalid", transport);
+        let mut b = Budget::new(5, 3, Duration::from_secs(30));
+        let results = c.transactions(&mut b, &sig_refs);
+
+        assert_eq!(results.len(), 12);
+        for r in &results[..5] {
+            assert!(matches!(r, Ok(None)), "{r:?}");
+        }
+        for r in &results[5..] {
+            assert!(
+                matches!(r, Err(RpcError::Stopped(Exhausted::Calls))),
+                "{r:?}"
+            );
+        }
+        assert_eq!(b.calls_made(), 5);
+        assert_eq!(sent.lock().expect("the record").len(), 1, "no second POST");
+    }
+
+    #[test]
+    fn a_spent_deadline_sends_no_batch_post_at_all() {
+        // (d) Re-applies charging a call, or sending a POST, after the clock
+        // has already run out.
+        let (sent, transport) = RecordingCanned::boxed(&[&batch_reply(&[0])]);
+        let c = RpcClient::with_transport("http://test.invalid", transport);
+        let mut b = Budget::new(60, 3, Duration::from_secs(0));
+        std::thread::sleep(Duration::from_millis(5));
+        let results = c.transactions(&mut b, &["sig0", "sig1"]);
+
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(
+                matches!(r, Err(RpcError::Stopped(Exhausted::Deadline))),
+                "{r:?}"
+            );
+        }
+        assert_eq!(sent.lock().expect("the record").len(), 0, "no POST at all");
+    }
+
+    #[test]
+    fn a_429_on_a_batch_retries_the_whole_chunk_and_the_budget_reports_it() {
+        // (e) Re-applies a retry that succeeds leaving no trace: before
+        // `note_retry`, `b.retries()`/`b.paused()` would read 0 even though a
+        // retry and a full pause happened.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![rate_limited(), Ok(batch_reply(&[0, 1]))]),
+        );
+        let mut b = budget();
+        let results = c.transactions(&mut b, &["sig0", "sig1"]);
+
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(matches!(r, Ok(None)), "{r:?}");
+        }
+        assert_eq!(b.retries(), 1);
+        assert!(
+            b.paused() >= Duration::from_secs(1),
+            "at least one full pause: {:?}",
+            b.paused()
+        );
     }
 }

@@ -103,6 +103,8 @@ pub struct Budget {
     calls_made: u32,
     cu_left: u32,
     cu_spent: u32,
+    retries: u32,
+    paused: Duration,
 }
 
 impl Default for Budget {
@@ -130,6 +132,8 @@ impl Budget {
             calls_made: 0,
             cu_left: cu,
             cu_spent: 0,
+            retries: 0,
+            paused: Duration::ZERO,
         }
     }
 
@@ -294,6 +298,25 @@ impl Budget {
     #[must_use]
     pub fn elapsed(&self) -> Duration {
         self.started.elapsed()
+    }
+
+    /// Records one HTTP 429 retry and the time slept waiting for it, so a
+    /// retry that succeeds is no longer invisible on the dossier it paid for.
+    pub fn note_retry(&mut self, paused: Duration) {
+        self.retries += 1;
+        self.paused += paused;
+    }
+
+    /// How many HTTP 429 retries this budget's reads have needed.
+    #[must_use]
+    pub const fn retries(&self) -> u32 {
+        self.retries
+    }
+
+    /// How long this budget's reads have spent paused on 429 retries.
+    #[must_use]
+    pub const fn paused(&self) -> Duration {
+        self.paused
     }
 }
 
