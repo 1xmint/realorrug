@@ -765,6 +765,83 @@ What this settles and what it does not:
   shape". The sheet now withholds the comparison when any checked spend was
   not read, so the next replay drops the fact on Solana until spends are read.
 
+## Addendum, 2026-09-25: the six `CantTell`s were the clock, and the clock was the endpoint's evening
+
+The 2026-09-24b set (`docs/research/data/replay-2026-09-24b/`, build
+`3eca025`) came back 6 of 10 `CantTell`. The read code was `bba06c2`'s: no
+commit between the two touches `crates/realorrug-onchain` (`git log
+bba06c2..3eca025 -- crates/realorrug-onchain` is empty; #177–#181 touch
+`realorrug-roast` only). Yet the same mints read with zero gaps at 01:00 UTC
+on 2026-09-24 (the addendum above) and, captured again at 21:17–21:22 UTC
+that evening, every gap line was `read stopped: Deadline`: 920 of them on
+`graduated-pumpswap`, 726 on `creator-sale-catwif`, 4 on
+`creator-sale-hbull`, one on `creator-sale-jimothy` ("creator cash flow:
+reading the mint's owner") and two on `misleading-concentration-pool` (one
+buyer's funding, then creator cash flow). The proposal that followed, an
+operator-set longer deadline for captures, was checked and dropped: it would
+have hidden a live-path fault from the review (the bot answers in 20 s,
+`budget.rs`'s `DEFAULT_DEADLINE`).
+
+**The diagnosis run.** Build `ba6b8f8` on the VPS, the live
+`Budget::default()`, no flags, the ten 24b mints plus `suspicious-launch-
+snappad`, two passes eight minutes apart (2026-09-26 00:16–00:23 UTC; logs in
+`~/replay-2026-09-24/mba6b8f8/<label>.<pass>.log`):
+
+| case | pass 1 | pass 2 | gaps | level |
+|---|---|---|---|---|
+| ordinary-launch | 10 s | 11 s | 0 | NothingUglyYet |
+| graduated-pumpswap | 13 s | 18 s | 0 | NothingUglyYet |
+| misleading-concentration-pool | 13 s | 13 s | 0 | NothingUglyYet |
+| incomplete-read-versioned-tx | 13 s | 12 s | 0 | NothingUglyYet |
+| incomplete-read-funding | 17 s | 17 s | 1 | CantTell |
+| suspicious-launch-pay | 15 s | 13 s | 0 | NothingUglyYet |
+| suspicious-launch-creator-buy | 11 s | 13 s | 0 | Sketchy |
+| suspicious-launch-snappad | 14 s | 15 s | 0 | NothingUglyYet |
+| creator-sale-jimothy | 15 s | 14 s | 0 | NothingUglyYet |
+| creator-sale-hbull | 14 s | 14 s | 0 | Sketchy |
+| creator-sale-catwif | 11 s | 10 s | 0 | Sketchy |
+
+Seconds are wall time per `realorrug capture`, process start included. The
+verdicts and gap counts were identical across the two passes. The one
+`CantTell` is the designed funding gap ("funding of 98waU3…: more than 3
+signature pages walked without reaching its first purchase or the end of its
+history; the start of its history was also read and held no funder"), a
+`funding` sort, not a clock one. `graduated-pumpswap` read the creator's
+trades in full, so the earlier reading of its "creator's own buys and sells
+were not checked" gap as structural (a graduated token has no curve to trade
+on) was wrong: that gap was the clock too. Sort of the six 24b `CantTell`s:
+clock 6, structural 0, funding 0; of this run's one: funding 1.
+
+**Where the 20 seconds go.** Measured from the same VPS with the same key at
+00:22 UTC: one `getSlot` answers in 99–115 ms; a JSON-RPC batch of three
+methods in one HTTP request answers in 102 ms with HTTP 200 and three
+results; twelve requests at once all answer 200 within 441 ms; twenty-five
+at once draw two 429s within 961 ms. A read is one round trip after another
+(`dossier::build` steps 1–6, `RpcClient::call` in `rpc.rs`), on the order of
+a hundred to two hundred of them, so at ~100 ms each it fills 10–18 s of the
+20 s clock. An evening where the endpoint answers ~30% slower, or a 429
+burst (each retry sleeps a fixed second, `post_with_retry`'s `PAUSE`, and a
+retried call leaves no line in the log, so the pauses are invisible after
+the fact), pushes the last two steps past the deadline: buyer funding (step
+5) and creator cash flow (step 6), both facts the verdict requires
+(`verdict.rs`), so the case is `CantTell`. Pages and calls are floored per
+walk (`PAGES_PER_WALK`, `FUNDING_CALL_FLOOR`); time cannot be floored, only
+spent more cheaply.
+
+**Fix chosen: fewer round trips, and a read that says what it spent.** The
+transaction fetches that dominate steps 5 and 6 (`wallets.rs` around 1396 and
+2590, one `getTransaction` per signature) go out as JSON-RPC batches, which
+this endpoint accepts at the price of one round trip and one request against
+its burst limit; the budget still counts one call per transaction read. The
+dossier records its calls, elapsed time and retry pauses, and `capture`
+prints them, so the next slow evening is diagnosable from its log rather
+than from a replay a day later. Not chosen: parallel requests (twenty-five
+at once already drew 429s, and every 429 costs a second), and a longer
+deadline, offline or live (it moves the bar, not the cause; a longer live
+deadline is the owner's product call, raised with the next review file).
+The review set the owner reads is recaptured at the live budget after the
+fix lands, and its review file says so.
+
 ## Sources
 
 - DexScreener's public pair-search API (`api.dexscreener.com/latest/dex/search`),
