@@ -18,8 +18,10 @@ what must happen first. The order of work is
 [plan 0002](docs/plans/0002-bot-quality-then-a-solana-launch.md).
 
 **Nothing is launched.** The token does not exist yet. It launches after the
-bot's Solana replies pass the owner's review and counsel has read
-[the review packet](docs/design/0030-launch-review-packet.md).
+bot's Solana replies pass the owner's review, the research features of
+plan 0002 phase 4 are built, and every finding of Claude's legal and tax
+review of [the review packet](docs/design/0030-launch-review-packet.md) is
+fixed or ruled on by the owner ([ADR 0042](docs/adr/0042-claudes-review-replaces-counsel-at-gate-two.md)).
 
 ## What is here
 
