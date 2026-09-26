@@ -53,7 +53,10 @@ and not a finding that anything is lawful.
 Attached before sending: the token page, the terms, the README, the X bio and
 the launch post, exactly as they will be published. They must match ADRs
 0037–0039. _Question: is any sentence a promise of profit, a reward for
-holding, or an implied endorsement?_
+holding, or an implied endorsement?_ The attachment is
+[research 0063](../research/0063-launch-copy-for-counsel.md), which quotes
+all five texts verbatim and tables every sentence naming money against the
+ADR decision it matches.
 
 ## 5. The analyst and the paid API
 
