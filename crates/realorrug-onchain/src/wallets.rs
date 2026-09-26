@@ -1390,17 +1390,24 @@ pub fn investigate_solana(
     // window, exactly as the sequential walk skipped it with `continue`
     // before ever calling `client.transaction`.
     let candidates: Vec<&SignatureInfo> = ordered.into_iter().filter(|s| s.err.is_none()).collect();
-    let mut idx = 0usize;
-    while window_read < SOLANA_WINDOW_TRANSACTIONS && idx < candidates.len() {
+    // A shrinking slice, not a hand-kept `idx`/`take` pair: every iteration
+    // either takes a non-empty chunk off `rest` or the `room == 0` check
+    // below stops the loop, so there is no index arithmetic left that a
+    // mutation could strand without terminating (cargo-mutants TIMEOUT on
+    // this loop, 2026-09-26).
+    let mut rest: &[&SignatureInfo] = &candidates;
+    while !rest.is_empty() {
         // Sized to the window's own remaining room, not just `BATCH_SIZE`:
         // the cap counts *fetched* transactions, so a chunk must never ask
         // for more than the window could still use even if every one of
         // them succeeds.
-        let remaining = SOLANA_WINDOW_TRANSACTIONS - window_read;
-        let take = remaining
-            .min(crate::rpc::BATCH_SIZE)
-            .min(candidates.len() - idx);
-        let chunk = &candidates[idx..idx + take];
+        let room = SOLANA_WINDOW_TRANSACTIONS.saturating_sub(window_read);
+        if room == 0 {
+            break;
+        }
+        let take = room.min(crate::rpc::BATCH_SIZE).min(rest.len());
+        let (chunk, tail) = rest.split_at(take);
+        rest = tail;
         let sigs: Vec<&str> = chunk.iter().map(|s| s.signature.as_str()).collect();
         let results = client.transactions(budget, &sigs);
         for (sig, result) in chunk.iter().zip(results) {
@@ -1424,7 +1431,6 @@ pub fn investigate_solana(
                 Err(why) => gaps.push(format!("transaction {}: {why}", sig.signature)),
             }
         }
-        idx += take;
     }
 
     let buyers = u32::try_from(window_buyers.len()).unwrap_or(u32::MAX);
@@ -2569,10 +2575,11 @@ fn read_creator_trades(
         .rev()
         .filter(|s| s.err.is_none())
         .collect();
-    let mut idx = 0usize;
-    'outer: while idx < candidates.len() {
-        let take = crate::rpc::BATCH_SIZE.min(candidates.len() - idx);
-        let chunk = &candidates[idx..idx + take];
+    // `chunks` rather than a hand-kept `idx`/`take` pair: a fixed-size
+    // chunking iterator cannot be mutated into one that never advances, so
+    // there is no index arithmetic left for a mutation to strand the loop on
+    // (cargo-mutants TIMEOUT here, 2026-09-26).
+    'outer: for chunk in candidates.chunks(crate::rpc::BATCH_SIZE) {
         let sigs: Vec<&str> = chunk.iter().map(|s| s.signature.as_str()).collect();
         let results = client.transactions(budget, &sigs);
         for (sig, result) in chunk.iter().zip(results) {
@@ -2647,7 +2654,6 @@ fn read_creator_trades(
                 }
             }
         }
-        idx += take;
     }
     (trades, transfers_out, gaps, complete)
 }
@@ -5500,11 +5506,12 @@ mod tests {
 
     #[test]
     fn the_window_loop_never_charges_more_calls_than_its_own_cap() {
-        // Pins `window_read += 1` and `remaining = SOLANA_WINDOW_TRANSACTIONS
-        // - window_read`: mutating either (`+=` to `*=`, or `-` to `+`) leaves
-        // `window_read` stuck at 0 or lets `remaining` grow without bound, so
-        // the loop keeps charging calls past the window instead of stopping
-        // at it. With far more successful candidates than the window holds,
+        // Pins `window_read += 1` and `room =
+        // SOLANA_WINDOW_TRANSACTIONS.saturating_sub(window_read)`: mutating
+        // either (`+=` to `*=`, or `-` to `+`) leaves `window_read` stuck at
+        // 0 or lets `room` grow without bound, so the loop keeps charging
+        // calls past the window instead of stopping at it. With far more
+        // successful candidates than the window holds,
         // `the_launch_window_stops_after_its_transactions_are_read` above
         // cannot tell the difference (its one extra signature still lands in
         // the same last chunk either way) -- `calls_made` here does, because
@@ -5552,13 +5559,12 @@ mod tests {
 
     #[test]
     fn the_window_loops_last_chunk_never_asks_for_more_than_is_left() {
-        // Pins `.min(candidates.len() - idx)`: mutating the `-` to `+` makes
-        // that term grow instead of shrink, so it stops bounding anything --
-        // `take` reverts to whichever of the other two terms is smaller,
-        // which can exceed the signatures actually remaining. With fewer
-        // total candidates than the window (so the window's own remaining
-        // count is never the tightest bound), the last chunk needs the real
-        // candidate count to avoid slicing past the end of the list.
+        // Pins `.min(rest.len())`: deleting that term, or the `room.min(...)`
+        // chain being mutated to drop it, lets `take` exceed what is left in
+        // `rest` and `split_at` panics. With fewer total candidates than the
+        // window (so the window's own remaining room is never the tightest
+        // bound), the last chunk needs the real candidate count to avoid
+        // slicing past the end of the list.
         let mint = solana_addr(9);
         let mint_key = mint.to_string();
         let total = SOLANA_WINDOW_TRANSACTIONS - 3; // 22: fewer than the window
@@ -6246,13 +6252,12 @@ mod tests {
 
     #[test]
     fn read_creator_trades_last_chunk_never_asks_for_more_than_is_left() {
-        // Pins `BATCH_SIZE.min(candidates.len() - idx)` in
-        // `read_creator_trades`: mutating the `-` to `+` makes that term
-        // grow instead of shrink, so `take` reverts to `BATCH_SIZE` even on
-        // the trailing chunk. Thirteen signatures (10 + 3) makes that
-        // trailing chunk ask for 10 when only 3 are left, slicing
-        // `candidates[10..20]` out of a 13-long list -- a panic under the
-        // mutation, a clean pair of chunks without it.
+        // `read_creator_trades` chunks its candidates with
+        // `candidates.chunks(BATCH_SIZE)`, whose last chunk is whatever is
+        // left over rather than a fixed size -- thirteen signatures (10 + 3,
+        // not a multiple of BATCH_SIZE) exercises that trailing short chunk.
+        // Every signature must still be read and every trade recorded, with
+        // no gap and no truncation from the uneven split.
         const TOTAL: usize = 13; // 10 + 3: not a multiple of BATCH_SIZE (10)
         let mint = solana_addr(9);
         let creator = solana_addr(1);
