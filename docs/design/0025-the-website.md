@@ -667,6 +667,14 @@ renderer choice there, per the packet's instruction:
   screenshot of the image alone is still attributable to the site.
   Must **not** render a price or market cap figure (§6) even if the
   renderer has access to one from a source outside the fact sheet.
+- Must render how old the underlying read is (ADR 0039 decision 6: a cached
+  read is never shown as current) — the one deliberate exception to "no
+  digits" is this age line, worded in minutes/hours ("read 7 min ago"),
+  never a raw second count and never omitted once the cache entry is old
+  enough that showing nothing would itself read as "just now."
+  `crates/realorrug-serve/src/card.rs`'s `format_age` implements this from
+  the cache entry's own write time, not the moment the image happens to be
+  requested.
 - Must be servable as the `og:image` for `/check/:address` specifically —
   the X unfurl card is the entire point of a "shareable" page; a generic
   site-wide `og:image` on this route defeats §4b's reason for existing.
