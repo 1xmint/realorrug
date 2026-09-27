@@ -1850,6 +1850,31 @@ mod tests {
     }
 
     #[test]
+    fn each_transient_wording_is_retried_on_its_own_and_nothing_else_is() {
+        // One wording per arm, each alone: a test that only ever sends a
+        // reset or a 429 cannot tell an arm that matches from one that was
+        // dropped, which is what the mutation run found for 503 and 504.
+        for transient in [
+            "rpc transport: http status: 429",
+            "rpc transport: http status: 502",
+            "rpc transport: http status: 503",
+            "rpc transport: http status: 504",
+            "rpc transport: io: Connection reset by peer",
+            "rpc transport: timeout: global",
+        ] {
+            assert!(is_transient(transient), "{transient}");
+        }
+        for fatal in [
+            "rpc transport: http status: 401",
+            "rpc transport: http status: 500",
+            "rpc transport: io: connection refused",
+            "rpc transport: unexpected end of body",
+        ] {
+            assert!(!is_transient(fatal), "{fatal}");
+        }
+    }
+
+    #[test]
     fn a_dropped_connection_is_retried_and_the_retry_can_succeed() {
         // (a) Re-applies the defect the phase-2 run ledger recorded
         // (`.orchestrator/runs/20260923-plan-0002-phase2/RUN.md` line 71):
