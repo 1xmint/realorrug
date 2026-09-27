@@ -737,6 +737,26 @@ mod tests {
     }
 
     #[test]
+    fn the_read_moment_sits_under_the_chain_label_inside_the_card() {
+        // Same ink rule as the flag test below: the moment's capitals must
+        // clear the chain label's descenders, and its own descenders must
+        // stay on the image. `CHAIN_LABEL_Y - 34` would print it over the
+        // chain label; `* 34` would put it thousands of pixels off the card.
+        let label_ink_bottom = CHAIN_LABEL_Y + CHAIN_LABEL_FONT * 22 / 100;
+        let moment_ink_top = AGE_LABEL_Y - AGE_LABEL_FONT * 72 / 100;
+        let moment_ink_bottom = AGE_LABEL_Y + AGE_LABEL_FONT * 22 / 100;
+        assert!(
+            moment_ink_top > label_ink_bottom,
+            "the read moment starts at y={moment_ink_top}, into the chain \
+             label's descenders at y={label_ink_bottom}"
+        );
+        assert!(
+            moment_ink_bottom < HEIGHT as usize,
+            "the read moment ends at y={moment_ink_bottom}, off the {HEIGHT}px card"
+        );
+    }
+
+    #[test]
     fn a_full_three_flag_card_leaves_the_chain_label_its_own_space() {
         // The first version of this feature drew flags at 400, 456 and 512
         // while the chain label sat at 490, so a three-flag card -- the loud
