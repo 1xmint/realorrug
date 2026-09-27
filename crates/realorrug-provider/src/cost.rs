@@ -270,7 +270,8 @@ impl Meter {
 /// has to reach into the other to find it.
 ///
 /// `None` -- and so a closed budget at the call site -- when either variable
-/// is unset or will not parse, or when the fixed figure is not strictly less
+/// is unset, will not parse, or is negative, NaN or infinite, or when the
+/// fixed figure is not strictly less
 /// than the whole ceiling: a fixed cost at or above the ceiling leaves
 /// nothing for a metered call to spend, ever, and that is indistinguishable
 /// from "not configured" rather than "configured to spend nothing", so it is
@@ -282,16 +283,20 @@ impl Meter {
 /// rename of anything that existed before it.
 #[must_use]
 pub fn monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> Option<MicroUsd> {
-    let monthly = get("REALORRUG_MONTHLY_USD")?
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .map(MicroUsd::from_dollars)?;
-    let fixed = get("REALORRUG_FIXED_MONTHLY_USD")?
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .map(MicroUsd::from_dollars)?;
+    let dollars = |name: &str| {
+        get(name)?
+            .trim()
+            .parse::<f64>()
+            .ok()
+            // Checked before conversion: `from_dollars` turns a negative, NaN
+            // or infinite figure into zero. That is safe for a ceiling but
+            // fails open for the fixed cost subtracted from one: a mistyped
+            // "-60" would hand the whole ceiling to metered spend.
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .map(MicroUsd::from_dollars)
+    };
+    let monthly = dollars("REALORRUG_MONTHLY_USD")?;
+    let fixed = dollars("REALORRUG_FIXED_MONTHLY_USD")?;
     if fixed >= monthly {
         return None;
     }
@@ -397,8 +402,9 @@ impl Meter {
     /// inside the same month resets `settled_today` but must carry
     /// `spent_month` forward -- the month has no less claim on the ledger's
     /// figure just because the process happened to restart. Only a genuine
-    /// month mismatch (or a ledger written before the monthly stop existed,
-    /// which deserialises with `month: 0`) resets the monthly figure.
+    /// month mismatch resets the monthly figure. A ledger written before the
+    /// monthly stop existed deserialises with `month: 0`; if it is from today,
+    /// its daily spend seeds the month, and otherwise the month starts clean.
     #[must_use]
     pub const fn restore(budget: Budget, ledger: &Ledger, day: u64) -> Self {
         let month = month_of(day);
@@ -409,6 +415,12 @@ impl Meter {
         };
         let settled_month = if ledger.month == month {
             MicroUsd(ledger.spent_month)
+        } else if ledger.day == day {
+            // Same day, different month: only a ledger written before the
+            // monthly stop (`month: 0`) can get here. Today's spend is this
+            // month's spend too; dropping it would let the first restart after
+            // the deploy spend up to a day's cap twice against the month.
+            MicroUsd(ledger.spent)
         } else {
             MicroUsd::ZERO
         };
@@ -708,6 +720,43 @@ mod tests {
         assert_eq!(monthly_allowance_from(&get), None);
     }
 
+    #[test]
+    fn a_zero_fixed_cost_leaves_the_whole_ceiling() {
+        // Zero is a real figure (no flat bills), not a missing one: it must
+        // pass the finite-and-not-negative check and leave all of the ceiling.
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "0"),
+        ]);
+        assert_eq!(
+            monthly_allowance_from(&get),
+            Some(MicroUsd::from_dollars(90.0))
+        );
+    }
+
+    #[test]
+    fn a_negative_or_non_finite_figure_closes_the_budget() {
+        // `from_dollars` maps these to zero. For the fixed cost that would fail
+        // open: "-60" read as $0 fixed hands the whole $90 to metered spend, on
+        // top of the $60 of bills it was meant to hold back.
+        for bad in ["-60", "NaN", "inf", "-inf"] {
+            let pairs = [
+                ("REALORRUG_MONTHLY_USD", "90.00"),
+                ("REALORRUG_FIXED_MONTHLY_USD", bad),
+            ];
+            let get = only(&pairs);
+            assert_eq!(monthly_allowance_from(&get), None, "fixed = {bad}");
+        }
+        for bad in ["-90", "NaN", "inf"] {
+            let pairs = [
+                ("REALORRUG_MONTHLY_USD", bad),
+                ("REALORRUG_FIXED_MONTHLY_USD", "0"),
+            ];
+            let get = only(&pairs);
+            assert_eq!(monthly_allowance_from(&get), None, "monthly = {bad}");
+        }
+    }
+
     fn monthly_budget() -> Budget {
         Budget {
             per_call_max: MicroUsd::from_dollars(100.0),
@@ -750,7 +799,8 @@ mod tests {
     #[test]
     fn fixed_costs_leave_only_what_remains_for_metered_spend() {
         // This crate does not know about "fixed" vs "metered" -- that split is
-        // the caller's arithmetic (daemon::monthly_allowance_from). What this
+        // arithmetic done before the meter is built (`monthly_allowance_from`,
+        // above, which the daemon and the model both call). What this
         // crate must get right is that whatever allowance the caller computes
         // is the whole of `monthly_max`, with no separate fixed-cost tracking
         // inside the meter itself.
@@ -825,10 +875,16 @@ mod tests {
         assert_eq!(ledger.month, 0, "absent, defaults to zero");
         assert_eq!(ledger.spent_month, 0, "absent, defaults to zero");
 
-        // Restoring from it must not hand the new month a claim it never
-        // earned: month 0 is 0000-01, so any real day mismatches it and the
-        // monthly figure starts clean rather than erroring.
+        // Restored on the same day, today's spend is this month's too:
+        // dropping it would let the first restart after the deploy spend a
+        // second day's worth against the month.
         let restored = Meter::restore(monthly_budget(), &ledger, 20_727);
+        assert_eq!(restored.spent_month(), MicroUsd(4_500_000));
+
+        // Restored on a later day, the old figure has no claim on the month:
+        // month 0 is 0000-01, so any real day mismatches it and the monthly
+        // figure starts clean rather than erroring.
+        let restored = Meter::restore(monthly_budget(), &ledger, 20_728);
         assert_eq!(restored.spent_month(), MicroUsd::ZERO);
     }
 
@@ -871,12 +927,9 @@ mod tests {
         assert_eq!(month_of(21_184), 2_028 * 12); // 2028-01-01
         assert_eq!(month_of(21_243), 2_028 * 12 + 1); // 2028-02-29: leap day
         assert_eq!(month_of(21_244), 2_028 * 12 + 2); // 2028-03-01: still rolls over on time
-        assert_eq!(month_of(20_788), 2_026 * 12 + 11); // 2026-12-01: mp == 9, the
-        // December branch of `mp < 10`. Pins the `==` and `>` mutants of that
-        // comparison: both take the wrong (`mp - 9`) branch at mp == 9 and
-        // produce month 0 instead of December. The `<=` mutant is not pinned
-        // here or anywhere else, because it is a genuine equivalent mutant —
-        // see the note in `.cargo/mutants.toml`.
+        assert_eq!(month_of(20_788), 2_026 * 12 + 11); // 2026-12-01: mp == 9,
+        // the last month before a March-based year crosses into the next
+        // civil year.
         assert_eq!(month_of(47_541), 2_100 * 12 + 2); // 2100-03-01: 2100 is not
         // a leap year (divisible by 100, not 400), so this is the one date in
         // range where `doe / 36_524` is exactly 1 while `doe / 146_096` is

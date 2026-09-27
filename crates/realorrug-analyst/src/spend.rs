@@ -214,7 +214,8 @@ impl Spend {
 /// Absent, unreadable and unparseable are all `None`, and that is the safe
 /// direction here only because [`Meter::restore`] treats a missing ledger as a
 /// **fresh day at the full budget**. That is a real cost — a corrupt ledger buys
-/// a second day's allowance — and it is the lesser of the two: refusing to start
+/// a second day's allowance, and resets the month's total too, so up to a
+/// second month's metered allowance — and it is the lesser of the two: refusing to start
 /// turns one bad byte into an outage, and a bot that will not start is a bot
 /// nobody notices is gone.
 fn read_ledger(path: &str) -> Option<Ledger> {
@@ -385,7 +386,8 @@ mod tests {
 
     #[test]
     fn a_corrupt_ledger_starts_a_fresh_day_rather_than_refusing_to_start() {
-        // The lesser of two evils, and it costs a second day's allowance. A bot
+        // The lesser of two evils, and it costs a second day's allowance (and
+        // resets the month's total with it). A bot
         // that will not start is a bot nobody notices is gone.
         let path = temp("corrupt");
         std::fs::write(&path, "{not json").expect("written");
