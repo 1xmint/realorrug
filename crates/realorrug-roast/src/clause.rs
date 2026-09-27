@@ -234,11 +234,11 @@ pub enum Kind {
     /// because the sample identifies an *address*, which the circulating
     /// count alone does not.
     TokenOwnership,
-    /// The creator's observed on-chain cash flow on Pons v2 -- sale
+    /// The creator's observed on-chain cash flow (Pons v2 or pump.fun) -- sale
     /// proceeds, net (proceeds minus buys), or a count of outgoing token
     /// transfers that were never decoded as a sale
     /// (`realorrug_onchain::wallets::CreatorCashFlow`, design 0027 slice 5,
-    /// Robinhood only). One kind covers all three renderings: each is a
+    /// both chains). One kind covers all three renderings: each is a
     /// different reading of the same measured cash flow, not a different
     /// subject, and `fidelity::Subject::of` tags all three the same way
     /// `Kind::DevBuy` tags the creator's launch-time spend -- about the

@@ -3751,18 +3751,21 @@ fn push_creator_cash_flow(
     // actually measured instead.
     let (label, plain, blunt) = if symbol == "SOL" {
         (
-            "SOL the creator's balance changed by across sale transactions -- their net SOL \
-             change per sale, summed across every decoded sale by the deployer or fee \
-             recipient; fees and any rent refund or rent payment are included, since Solana \
-             has no separate swap amount to isolate them from"
+            // One total, and the wording leads with that. "per sale, summed"
+            // put "per sale" first, and a model reply on 2026-09-27 quoted
+            // this total as a per-sale figure
+            // (`docs/research/data/replay-2026-09-27/review.md`).
+            "total SOL the creator's balance changed by, added up over every decoded sale \
+             transaction by the deployer or fee recipient -- one total for all sales, not a \
+             figure for each; fees and any rent refund or rent payment are included, since \
+             Solana has no separate swap amount to isolate them from"
                 .to_owned(),
             format!(
-                "The creator's net SOL change across every decoded sale of this token is \
-                 {rendered_proceeds} -- their balance change per sale transaction, fees and \
-                 rent included, summed across every decoded sale by the deployer or fee \
-                 recipient."
+                "Added up over every decoded sale of this token by the deployer or fee \
+                 recipient, the creator's SOL balance changed by {rendered_proceeds} in total, \
+                 fees and rent included."
             ),
-            format!("Creator net SOL change across sales: {rendered_proceeds}."),
+            format!("Creator's total SOL change over all sales: {rendered_proceeds}."),
         )
     } else {
         (
@@ -3803,17 +3806,21 @@ fn push_creator_cash_flow(
         facts.push(
             Fact::exact(
                 Kind::CreatorCashFlow,
-                "observed net cash flow on Pons v2 -- sale proceeds minus quote spent buying \
-                 in, across every decoded trade by the deployer or fee recipient; excludes \
-                 gas, fees and anything still held but not sold",
+                // No venue named: this writer serves both chains, and "on Pons
+                // v2" (Robinhood Chain's) was printed on pump.fun sheets and
+                // repeated by a model reply (replay 2026-09-27,
+                // clean-read-versioned-tx).
+                "observed net cash flow -- sale proceeds minus quote spent buying in, across \
+                 every decoded trade by the deployer or fee recipient; excludes gas, fees and \
+                 anything still held but not sold",
                 value,
                 rendered.clone(),
             )
             .saying(
                 Voice::Plain,
                 format!(
-                    "The creator's observed net cash flow on Pons v2 is {rendered} -- sale \
-                     proceeds minus what they spent buying in, nothing else."
+                    "The creator's observed net cash flow is {rendered} -- sale proceeds minus \
+                     what they spent buying in, nothing else."
                 ),
             )
             .saying(Voice::Blunt, format!("Observed net cash flow: {rendered}.")),
@@ -6405,8 +6412,9 @@ mod tests {
         let fact = fact_of(&sheet, Kind::CreatorCashFlow).expect("a proceeds fact");
         assert_eq!(fact.rendered, "0.2000 SOL");
         assert!(
-            fact.label.contains("net SOL change"),
-            "a SOL cash flow must use the net-change wording: {}",
+            fact.label
+                .contains("total SOL the creator's balance changed by"),
+            "a SOL cash flow must use the summed balance-change wording: {}",
             fact.label
         );
         assert!(
@@ -6441,7 +6449,7 @@ mod tests {
             fact.label
         );
         assert!(
-            !fact.label.contains("net SOL change"),
+            !fact.label.contains("SOL the creator's balance changed by"),
             "an EVM cash flow must not use the SOL branch's wording: {}",
             fact.label
         );

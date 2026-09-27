@@ -832,6 +832,15 @@ with a named gap, since Solana has no `wallets::creator_cash_flow` equivalent
 yet. No `salience.rs` candidate yet either -- this PR wires the fact onto the
 sheet and no further.
 
+#### Salience candidate added (2026-09-27)
+
+`salience.rs`'s `creator_sold_out` now reads this kind once `Signal::CreatorSoldOut`
+has fired: without it, `signal_kinds` mapped the signal to `Kind::CreatorCashFlow`
+but no candidate existed for that kind, so the fired signal backed nothing and
+the report's "Strongest concern" fell back to an unrelated, unfired holder
+share on every replayed sheet where the signal fired
+(`docs/research/data/replay-2026-09-27/review.md`).
+
 #### Solana reader added (2026-09-22)
 
 `crate::wallets::creator_cash_flow_solana` fills in the gap above: it reads

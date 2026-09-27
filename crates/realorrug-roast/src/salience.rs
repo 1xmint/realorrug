@@ -463,6 +463,65 @@ fn dev_buy(sheet: &FactSheet) -> Option<Candidate> {
     })
 }
 
+/// The creator-sold-out bundle: the creator's decoded sells cover its
+/// decoded buys, once [`Signal::CreatorSoldOut`] has actually fired.
+///
+/// Gated on the signal, the same reason [`dev_buy`] and [`curve_liquidity`]
+/// are: `Kind::CreatorCashFlow`'s mere presence is not a concern by itself,
+/// and [`signal_kinds`] already maps `CreatorSoldOut` to this kind, but
+/// (before this candidate existed) nothing here built one from it, so the
+/// fired signal backed nothing and the report's "Strongest concern" fell
+/// back to an unrelated, unfired holder share -- a 0.1% or 0.0% unidentified
+/// address -- on all three replayed sheets where `CreatorSoldOut` fired
+/// (`docs/research/data/replay-2026-09-27/review.md`, "Lead's second read").
+/// The same missing-candidate shape [`dev_buy`]'s own doc comment describes
+/// for `CreatorBoughtOwnLaunch`.
+///
+/// The sentence says only what [`creator_sold_out`](crate::sheet)'s three
+/// rules actually established: decoded sells cover decoded buys, and the
+/// creator is absent from the sampled largest token accounts. It does not
+/// say "holds none" or "empty" -- rule (3) only checked the sampled largest
+/// accounts, not every address the tokens could be sitting in, and the
+/// review above flagged exactly that overreach in a model reply. It does not
+/// name or accuse the creator (AGENTS.md §3 rule 4): "the creator's decoded
+/// sells cover its decoded buys" is a flow fact, not an identity claim.
+///
+/// Carries no figure. `Kind::CreatorCashFlow` holds up to three facts: a
+/// summed balance change, a net cash flow and a transfer count. Only their
+/// labels tell them apart, and this module picks by kind, never by label
+/// (AGENTS.md §4). Choosing "the net one" by its label would let a label
+/// rename change the lead, which was this candidate's first draft. The
+/// figures stay on the sheet, where the template and the model read each one
+/// with its own label; this sentence states only what the signal
+/// established, which is what earned the level.
+///
+/// Ranked at 91, between [`curve_liquidity`] (92) and [`concentration`] (90):
+/// a creator that is proven to have sold out entirely and is no longer among
+/// the largest holders is a more specific, more person-linked finding than
+/// an anonymous concentration share at an address nobody has identified, so
+/// it should win a tie between the two if a sheet ever backs both signals at
+/// once. It stays below `curve_liquidity`: a drained curve is the fact that
+/// actually earns `Rugged` when paired with `HolderConcentration`
+/// (`curve_liquidity`'s own doc), and this candidate's own finding is
+/// `Sketchy`-level on its own (design 0020 §3) whether or not the curve's
+/// reserves are also gone.
+fn creator_sold_out(sheet: &FactSheet) -> Option<Candidate> {
+    if !sheet.signals.contains(&Signal::CreatorSoldOut) {
+        return None;
+    }
+    // Still requires a measured cash flow: the signal is read from it, and a
+    // sheet carrying the signal without the fact would be describing a
+    // measurement it does not show.
+    fact(sheet, Kind::CreatorCashFlow)?;
+    Some(Candidate {
+        id: CandidateId(vec![Kind::CreatorCashFlow]),
+        priority: 91,
+        sentence: "The creator's decoded sells cover its decoded buys, and it is not among the \
+                   largest sampled token accounts."
+            .to_owned(),
+    })
+}
+
 /// Every candidate this sheet supports, ranked highest priority first.
 ///
 /// **The one ranking every caller shares.** [`crate::verdict::headline`],
@@ -496,6 +555,7 @@ pub fn rank(sheet: &FactSheet) -> Vec<Candidate> {
         concentration(sheet),
         token_ownership(sheet),
         dev_buy(sheet),
+        creator_sold_out(sheet),
         launch_recipients(sheet),
         market(sheet),
     ]
@@ -1019,6 +1079,132 @@ mod tests {
             leads,
             vec![Kind::CreatorLaunches, Kind::Holders, Kind::TokenOwnership]
         );
+    }
+
+    /// Two `Kind::CreatorCashFlow` facts, the shape `push_creator_cash_flow`
+    /// always writes together: the per-sale sum first, the observed net cash
+    /// flow second, taken from the replayed EYPSU1oh sheet
+    /// (`docs/research/data/replay-2026-09-27/out/EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump.sheet.json`).
+    /// The labels are that capture's, from before `sheet.rs` reworded them;
+    /// they are kept as captured because nothing here may read a label.
+    fn creator_cash_flow_facts() -> Vec<Fact> {
+        vec![
+            Fact::exact(
+                Kind::CreatorCashFlow,
+                "SOL the creator's balance changed by across sale transactions -- their net \
+                 SOL change per sale, summed across every decoded sale by the deployer or fee \
+                 recipient; fees and any rent refund or rent payment are included, since \
+                 Solana has no separate swap amount to isolate them from",
+                0.9431,
+                "0.9431 SOL",
+            ),
+            Fact::exact(
+                Kind::CreatorCashFlow,
+                "observed net cash flow on Pons v2 -- sale proceeds minus quote spent buying \
+                 in, across every decoded trade by the deployer or fee recipient; excludes \
+                 gas, fees and anything still held but not sold",
+                0.3336,
+                "0.3336 SOL",
+            ),
+        ]
+    }
+
+    /// The replayed shape (`review.md`'s "Lead's second read", cases
+    /// clean-read-versioned-tx/EYPSU1oh and clean-read-pay/JB2rSPb4): the only
+    /// fired signal is `CreatorSoldOut`, backed by the creator's cash flow,
+    /// and the sheet also carries an unrelated, unfired 0.1% `TokenOwnership`
+    /// share -- the fact the report's "Strongest concern" led with before
+    /// this candidate existed. Re-applying the bug (delete the
+    /// `creator_sold_out` call from [`rank`]'s candidate list) makes this
+    /// fail: `lead` would return the 0.1% share instead.
+    #[test]
+    fn a_fired_creator_sold_out_leads_over_an_unrelated_unfired_token_ownership_share() {
+        let mut sheet = sheet_with(creator_cash_flow_facts());
+        sheet.facts.push(token_ownership_fact(0.001, "0.1%"));
+        sheet.signals = vec![Signal::CreatorSoldOut];
+        let top = lead(&sheet).expect("a candidate exists");
+        assert_eq!(top.id, CandidateId(vec![Kind::CreatorCashFlow]));
+        assert!(
+            top.sentence
+                .contains("decoded sells cover its decoded buys"),
+            "{}",
+            top.sentence
+        );
+
+        let report = crate::report::build(&sheet);
+        let concern = report
+            .strongest_concern
+            .expect("a fired signal has a strongest concern");
+        assert!(
+            concern
+                .evidence
+                .contains("decoded sells cover its decoded buys"),
+            "{}",
+            concern.evidence
+        );
+    }
+
+    /// The same two `Kind::CreatorCashFlow` facts with no `CreatorSoldOut`
+    /// signal on the sheet are a measured cash flow that never crossed the
+    /// signal's own three rules (`creator_sold_out` in `sheet.rs`) -- not a
+    /// concern, the same "absent is not zero" gate [`dev_buy`] holds itself
+    /// to. Re-applying the bug (drop the `sheet.signals.contains` gate in
+    /// [`creator_sold_out`]) makes this fail: an unfired cash flow would rank
+    /// and `lead` would return it.
+    #[test]
+    fn creator_cash_flow_facts_without_the_signal_do_not_rank() {
+        let sheet = sheet_with(creator_cash_flow_facts());
+        assert!(lead(&sheet).is_none());
+        assert!(rank(&sheet).is_empty());
+    }
+
+    /// The sentence never says "holds none" or "empty" -- rule (3) of
+    /// [`crate::sheet`]'s own `creator_sold_out` only checked the sampled
+    /// largest accounts, not every address the tokens could sit in -- and
+    /// never "scam", "rug" or "extract", which would accuse the creator
+    /// rather than describe the flow (AGENTS.md §3 rule 4).
+    #[test]
+    fn the_sentence_avoids_forbidden_wording() {
+        let mut sheet = sheet_with(creator_cash_flow_facts());
+        sheet.signals = vec![Signal::CreatorSoldOut];
+        let top = lead(&sheet).expect("a candidate exists");
+        for banned in ["holds none", "empty", "scam", "rug", "extract"] {
+            assert!(
+                !top.sentence.to_lowercase().contains(banned),
+                "sentence said {banned:?}: {}",
+                top.sentence
+            );
+        }
+    }
+
+    /// Both signals fired: the drained curve leads, the creator's sold-out
+    /// cash flow follows -- `curve_liquidity` (92) outranks `creator_sold_out`
+    /// (91). Re-applying a mutant that raises `creator_sold_out`'s priority to
+    /// 92 or above makes this fail: the cash flow would lead instead.
+    #[test]
+    fn a_fired_curve_liquidity_outranks_a_fired_creator_sold_out() {
+        let mut sheet = sheet_with(creator_cash_flow_facts());
+        sheet.facts.push(curve_liquidity_fact());
+        sheet.signals = vec![Signal::CreatorSoldOut, Signal::LiquidityGone];
+        let ranked = rank(&sheet);
+        assert_eq!(ranked[0].id, CandidateId(vec![Kind::CurveLiquidity]));
+        assert_eq!(ranked[1].id, CandidateId(vec![Kind::CreatorCashFlow]));
+    }
+
+    /// Both signals fired: the creator's sold-out cash flow leads, the
+    /// holder-concentration share follows -- `creator_sold_out` (91) outranks
+    /// `token_ownership` (85). Re-applying a mutant that lowers
+    /// `creator_sold_out`'s priority to 85 or below makes this fail: the
+    /// share would lead instead (a tie keeps `rank`'s own candidate order,
+    /// which still places the share first).
+    #[test]
+    fn a_fired_creator_sold_out_outranks_a_fired_holder_concentration_share() {
+        let mut sheet = sheet_with(creator_cash_flow_facts());
+        sheet.facts.push(token_ownership_fact(0.276, "27.6%"));
+        sheet.signals = vec![Signal::CreatorSoldOut, Signal::HolderConcentration];
+        let ranked = rank(&sheet);
+        assert_eq!(ranked[0].id, CandidateId(vec![Kind::CreatorCashFlow]));
+        assert_eq!(ranked[1].id, CandidateId(vec![Kind::TokenOwnership]));
     }
 
     /// Silences an unused-import warning for `About`/`Voice` if a future edit
