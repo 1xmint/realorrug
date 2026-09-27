@@ -6957,12 +6957,18 @@ mod creator_cash_flow_tests {
         assert_eq!(complete.proceeds_wei(), Some(100));
         assert_eq!(complete.cost_basis_wei(), Some(30));
         assert_eq!(complete.net_wei(), Some(70), "net is proceeds minus cost");
+        // The token side, which `Signal::CreatorSoldOut` reads: each sums its
+        // own side only (40 sold, 50 bought), so swapping sides shows.
+        assert_eq!(complete.tokens_sold(), Some(40));
+        assert_eq!(complete.tokens_bought(), Some(50));
 
         let mut incomplete = complete.clone();
         incomplete.trades_complete = false;
         assert_eq!(incomplete.proceeds_wei(), None);
         assert_eq!(incomplete.cost_basis_wei(), None);
         assert_eq!(incomplete.net_wei(), None);
+        assert_eq!(incomplete.tokens_sold(), None);
+        assert_eq!(incomplete.tokens_bought(), None);
     }
 
     /// Rule (c) needs *both* reads: when the trade read succeeds but the
