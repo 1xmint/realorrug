@@ -649,7 +649,61 @@ mod tests {
         assert_eq!(m.refusals(), 3);
     }
 
+    #[test]
+    fn a_monthly_cap_refusal_is_counted_from_zero() {
+        // `self.refusals += 1` on the OverMonthlyCap arm: a `*=` mutant of that
+        // line is invisible against a fresh meter, whose count starts at zero
+        // and stays zero under either operator. Settling a call first, so the
+        // meter's refusal count is genuinely incremented rather than merely
+        // initialised, is what tells `+=` and `*=` apart.
+        let mut m = Meter::new(monthly_budget(), 0);
+        let c = m
+            .authorize(MicroUsd::from_dollars(30.0), 0)
+            .expect("exactly the cap");
+        m.settle(c, MicroUsd::from_dollars(30.0));
+        assert!(m.authorize(MicroUsd::from_dollars(0.01), 0).is_err());
+        assert_eq!(m.refusals(), 1);
+    }
+
     // -- ADR 0039 decision 5: the monthly stop ------------------------------
+
+    fn only<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| (*v).to_string())
+        }
+    }
+
+    #[test]
+    fn monthly_allowance_from_subtracts_fixed_from_the_whole_ceiling() {
+        // Pins the exact arithmetic, not just "some smaller number": a `-` to
+        // `+` mutant would answer $150, a `-` to `/` mutant would answer $1.
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+        ]);
+        assert_eq!(
+            monthly_allowance_from(&get),
+            Some(MicroUsd::from_dollars(30.0))
+        );
+    }
+
+    #[test]
+    fn monthly_allowance_from_closes_when_fixed_equals_the_whole_ceiling() {
+        // The boundary itself: `fixed >= monthly` must close here, not only
+        // when fixed is strictly greater. A `>=` to `<` mutant passes this
+        // exact-equal case straight through to `monthly.get() - fixed.get()`,
+        // which is `Some(MicroUsd::ZERO)` rather than the `None` a spent-out
+        // fixed budget must produce (rule 8: a zero allowance is not the same
+        // fact as "not configured", and is refused the same way).
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "60.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+        ]);
+        assert_eq!(monthly_allowance_from(&get), None);
+    }
 
     fn monthly_budget() -> Budget {
         Budget {
@@ -814,5 +868,18 @@ mod tests {
         assert_eq!(month_of(21_184), 2_028 * 12); // 2028-01-01
         assert_eq!(month_of(21_243), 2_028 * 12 + 1); // 2028-02-29: leap day
         assert_eq!(month_of(21_244), 2_028 * 12 + 2); // 2028-03-01: still rolls over on time
+        assert_eq!(month_of(20_788), 2_026 * 12 + 11); // 2026-12-01: mp == 9, the
+        // December branch of `mp < 10`. Pins the `==` and `>` mutants of that
+        // comparison: both take the wrong (`mp - 9`) branch at mp == 9 and
+        // produce month 0 instead of December. The `<=` mutant is not pinned
+        // here or anywhere else, because it is a genuine equivalent mutant —
+        // see the note in `.cargo/mutants.toml`.
+        assert_eq!(month_of(47_541), 2_100 * 12 + 2); // 2100-03-01: 2100 is not
+        // a leap year (divisible by 100, not 400), so this is the one date in
+        // range where `doe / 36_524` is exactly 1 while `doe / 146_096` is
+        // still 0 — the century correction the `+ doe / 36_524` term exists
+        // for. Pins both the `+` -> `-` and the second `-` -> `/` mutants on
+        // that line: each gives yoe one short (99 instead of 100) and the
+        // wrong month (2100-02, not 2100-03).
     }
 }
