@@ -486,13 +486,14 @@ fn dev_buy(sheet: &FactSheet) -> Option<Candidate> {
 /// name or accuse the creator (AGENTS.md §3 rule 4): "the creator's decoded
 /// sells cover its decoded buys" is a flow fact, not an identity claim.
 ///
-/// Carries the observed net cash flow figure from `Kind::CreatorCashFlow`'s
-/// own `"observed net cash flow"`-labelled fact (`push_creator_cash_flow`'s
-/// second fact) rather than the sibling per-sale-sum fact on the same kind:
-/// the net figure is proceeds minus cost, the one number that answers "did
-/// the creator come out ahead", while the summed figure is one decoded sale's
-/// gross change added to another's and is easy to misread as a single sale's
-/// size (the same review found a model reply doing exactly that).
+/// Carries no figure. `Kind::CreatorCashFlow` holds up to three facts: a
+/// summed balance change, a net cash flow and a transfer count. Only their
+/// labels tell them apart, and this module picks by kind, never by label
+/// (AGENTS.md §4). Choosing "the net one" by its label would let a label
+/// rename change the lead, which was this candidate's first draft. The
+/// figures stay on the sheet, where the template and the model read each one
+/// with its own label; this sentence states only what the signal
+/// established, which is what earned the level.
 ///
 /// Ranked at 91, between [`curve_liquidity`] (92) and [`concentration`] (90):
 /// a creator that is proven to have sold out entirely and is no longer among
@@ -508,19 +509,16 @@ fn creator_sold_out(sheet: &FactSheet) -> Option<Candidate> {
     if !sheet.signals.contains(&Signal::CreatorSoldOut) {
         return None;
     }
-    let net = sheet.facts.iter().find(|f| {
-        f.kind == Kind::CreatorCashFlow
-            && f.label.starts_with("observed net")
-            && !f.rendered.is_empty()
-    })?;
+    // Still requires a measured cash flow: the signal is read from it, and a
+    // sheet carrying the signal without the fact would be describing a
+    // measurement it does not show.
+    fact(sheet, Kind::CreatorCashFlow)?;
     Some(Candidate {
         id: CandidateId(vec![Kind::CreatorCashFlow]),
         priority: 91,
-        sentence: format!(
-            "The creator's decoded sells cover its decoded buys, for a net {} -- and it is not \
-             among the largest sampled token accounts.",
-            net.rendered
-        ),
+        sentence: "The creator's decoded sells cover its decoded buys, and it is not among the \
+                   largest sampled token accounts."
+            .to_owned(),
     })
 }
 
@@ -1087,6 +1085,8 @@ mod tests {
     /// always writes together: the per-sale sum first, the observed net cash
     /// flow second, taken from the replayed EYPSU1oh sheet
     /// (`docs/research/data/replay-2026-09-27/out/EYPSU1oha6ELaZ4wN1crMcdnXDb21S6LWkJXohs7pump.sheet.json`).
+    /// The labels are that capture's, from before `sheet.rs` reworded them;
+    /// they are kept as captured because nothing here may read a label.
     fn creator_cash_flow_facts() -> Vec<Fact> {
         vec![
             Fact::exact(
@@ -1124,17 +1124,21 @@ mod tests {
         sheet.signals = vec![Signal::CreatorSoldOut];
         let top = lead(&sheet).expect("a candidate exists");
         assert_eq!(top.id, CandidateId(vec![Kind::CreatorCashFlow]));
-        // Carries the *net* figure, never the per-sale sum sitting on the
-        // same kind.
-        assert!(top.sentence.contains("0.3336 SOL"), "{}", top.sentence);
-        assert!(!top.sentence.contains("0.9431"), "{}", top.sentence);
+        assert!(
+            top.sentence
+                .contains("decoded sells cover its decoded buys"),
+            "{}",
+            top.sentence
+        );
 
         let report = crate::report::build(&sheet);
         let concern = report
             .strongest_concern
             .expect("a fired signal has a strongest concern");
         assert!(
-            concern.evidence.contains("0.3336 SOL"),
+            concern
+                .evidence
+                .contains("decoded sells cover its decoded buys"),
             "{}",
             concern.evidence
         );
