@@ -523,9 +523,10 @@ fn check_dev_buy(tx: &Transaction, dev_wallet: &Address, expected: u64) -> Check
 /// predates Anchor). Confirmed against Solana's `SystemInstruction` enum
 /// (`solana-program`/agave `system_instruction.rs`, cited by the packet this
 /// check implements): `Transfer` is variant 2, `TransferWithSeed` is variant
-/// 11 -- the only two variants that move lamports to an account named in the
-/// instruction, which is why they are the only two this check has to tell
-/// from every other top-level System Program instruction.
+/// 11 -- the only two a stated transfer may match. Other variants also move
+/// lamports (`CreateAccount`, `CreateAccountWithSeed`,
+/// `WithdrawNonceAccount`), but at the top level they are refused outright,
+/// so this check never has to read their amounts.
 const SYSTEM_TRANSFER: u32 = 2;
 const SYSTEM_TRANSFER_WITH_SEED: u32 = 11;
 
@@ -1828,6 +1829,53 @@ mod tests {
             panic!("expected a refusal, got {outcome:?}");
         };
         assert!(why.contains("(instruction 6)"), "{why}");
+    }
+
+    /// Research 0062's launch, instruction 2, as its data came off the chain
+    /// (`getTransaction`, json encoding, base58 "3Bxs4Bc3VYuGVB19"). Every
+    /// other fixture builds its bytes from `SYSTEM_TRANSFER`, so a wrong
+    /// discriminant constant would leave them green while refusing every
+    /// real tip; these literal bytes do not move with the constant.
+    fn the_real_tip() -> (RawInstruction, Address) {
+        let to: Address = "AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum"
+            .parse()
+            .expect("the tip destination is a valid address");
+        let ix = RawInstruction {
+            program: SYSTEM_PROGRAM.to_owned(),
+            data: vec![2, 0, 0, 0, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0],
+            accounts: vec![addr(2).to_string(), to.to_string()],
+            top_level: true,
+        };
+        (ix, to)
+    }
+
+    #[test]
+    fn the_real_tips_bytes_pass_stated_and_refuse_unstated() {
+        let (tip, to) = the_real_tip();
+        let (mut t, dev_wallet) = real_launch_shape(addr(9), 1);
+        t.instructions[2] = tip;
+
+        let stated = [StatedTransfer {
+            to,
+            lamports: 1_000_000,
+        }];
+        assert_eq!(
+            check_allowlist(&t, &dev_wallet, &stated),
+            CheckOutcome::Pass(
+                "only allowed programs, no other buy, 1 stated transfer \
+                 (1000000 lamports to AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum)"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            check_allowlist(&t, &dev_wallet, &[]),
+            CheckOutcome::Refuse(
+                "top-level System Program transfer of 1000000 lamports to \
+                 AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum (instruction 2): \
+                 a launch that also pays someone is not a clean launch"
+                    .to_owned()
+            )
+        );
     }
 
     #[test]

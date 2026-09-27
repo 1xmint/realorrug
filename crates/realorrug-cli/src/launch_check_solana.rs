@@ -117,6 +117,8 @@ fn run_with(
     // No default endpoint (rule 7): `from_vars` would fall back to the public
     // one, which is rate-limited, and a refusal caused by that would read as a
     // finding about the launch.
+    // Parsed before the first chain read, so a mistyped flag costs nothing.
+    let transfers = stated_transfers(args)?;
     let endpoint = crate::rpc_arg::required_endpoint(args, env)?;
     let client = RpcClient::new(endpoint.clone());
     let hide = |e: &dyn std::fmt::Display| crate::rpc_arg::redact(&e.to_string(), &endpoint);
@@ -153,7 +155,6 @@ fn run_with(
         "bonding curve",
     );
     let mint_read = read(mint, "mint");
-    let transfers = stated_transfers(args)?;
 
     let result = check_launch(
         &tx,
