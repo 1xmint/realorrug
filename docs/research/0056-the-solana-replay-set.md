@@ -1032,3 +1032,15 @@ and the replay's own output, unedited).
   supports. The fix is a creator-cash-flow candidate, plus a label that cannot
   be read as per-sale. After the fix the two replies are regenerated from the
   same sheets, with no recapture needed.
+
+## Addendum, 2026-09-27b: the lead fix, replayed
+
+PR #198 makes `CreatorSoldOut` lead, choosing its candidate by kind only. It also rewords the
+SOL total so it cannot be read as per-sale, and drops the "on Pons v2" venue from both chains.
+On build `21efc31` the 11 frozen 2026-09-27 sheets were replayed with the model, and the three
+mints where the signal fired were captured fresh
+([data](data/replay-2026-09-27b/review.md)). The signal now leads every case it fires on. Both
+2026-09-27 problems are gone in the fresh captures. 13 of 14 replies read as acceptable to the
+lead. One frozen draw of `clean-read-pay` gave an unidentified holder's 0.1% to the creator;
+the fresh draw of the same mint did not. It is noted to watch and not fixed yet. Josh's
+judgement of the replies is still open.
