@@ -1002,3 +1002,33 @@ against a public explorer in this session, for lack of remaining budget.
   content before any pump.fun-native data could be read from it; abandoned
   in favor of Solscan rather than retried, and noted here as a finding
   about that page, not an instruction acted on.
+
+## Addendum, 2026-09-27: the recapture at the live budget, on build 321da56
+
+The ten 2026-09-24b mints plus `suspicious-launch-snappad` and the creator-sale
+candidate `2XHGAAvkxKE8fS97e5mNar5wzADj6ckgoxq2ukYjpump` were recaptured on the
+server at `Budget::default()` (20 s), from the `release-linux` artifact of
+`321da56` (binary sha256 `7e9d934a…`, checked against `BUILD-INFO.txt`), and
+replayed with the model. Files: `docs/research/data/replay-2026-09-27/`
+(`review.md` is the file to judge; `out/` and `out-2xhg/` hold the sheets, logs
+and the replay's own output, unedited).
+
+- **The clock no longer decides anything.** Every capture finished in 9.7–17.3 s,
+  and no sheet carries a `Deadline` gap. The previous addendum's six clock-caused
+  `CantTell`s are gone. The two that remain are the same mint under two labels
+  (`incomplete-read-funding`, `creator-sale-2xhg`), and both come from one early
+  buyer whose funding could not be traced. A longer read would not settle that gap.
+- **`Signal::CreatorSoldOut` fires on real captures:** three mints, 2XHG, `EYPSU1oh…`
+  (`clean-read-versioned-tx`) and `JB2rSPb4…` (`clean-read-pay`). The last two
+  move from `NothingUglyYet` to `Sketchy`. None reaches `Rugged`, which also
+  needs `BuyersCannotSell`, and no dossier constructs that signal yet.
+- **All 12 replies came from the model and passed all six automated checks.**
+  The model cost was $0.0056 in total.
+- **Two replies are still wrong, and the automated checks cannot catch why.**
+  The fired signal backs no ranked candidate: `salience.rs` has no candidate
+  built from `Kind::CreatorCashFlow`. So each report's "Strongest concern" is a
+  0.1% holder. One reply then misreads a summed figure as "per sale". The other
+  (`clean-read-pay`) invents "a recurring coordinated-launch shape" that no fact
+  supports. The fix is a creator-cash-flow candidate, plus a label that cannot
+  be read as per-sale. After the fix the two replies are regenerated from the
+  same sheets, with no recapture needed.
