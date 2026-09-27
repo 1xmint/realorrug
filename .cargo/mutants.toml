@@ -353,26 +353,6 @@ exclude_re = [
     # covers the branch itself, and the `==` mutant on this line is caught, so
     # the guard is not merely untested.
     'replace < with <= in Gate::refill_to',
-
-    # `month_of`'s `if mp < 10 { mp + 3 } else { mp - 9 }`, widened to `<=`.
-    #
-    # `mp` is [0, 11] counting March as 0, so this chooses between the two
-    # branches Howard Hinnant's algorithm uses to fold January and February
-    # into the *previous* civil year's day count. They differ only at
-    # `mp == 10` (January): the then-branch computes `m = 13` and leaves `y`
-    # unchanged; the else-branch computes `m = 1` and increments `y` two lines
-    # down. But `month_of`'s only output is the flattened `y * 12 + (m - 1)`,
-    # and `y * 12 + (13 - 1) == (y + 1) * 12 + (1 - 1)` always -- the branch
-    # and the year increment cancel exactly, for every `y`. No input to this
-    # function can tell the two branches apart.
-    #
-    # Verified by hand on 2026-09-27: applying `<=` alone leaves
-    # `month_of_matches_known_calendar_dates` passing, including its
-    # 2026-01-01 case where `mp == 10`. The `==` and `>` mutants of the same
-    # comparison are not equivalent -- at `mp == 9` (December) they take the
-    # wrong branch and land on month 0 instead of 12 -- and are caught by the
-    # 2026-12-01 case in the same test.
-    'replace < with <= in month_of',
 ]
 
 # A note on what does NOT belong here, learned on 2026-09-03 and worth the four

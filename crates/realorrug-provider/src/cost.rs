@@ -312,7 +312,7 @@ pub fn monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> Option<M
 #[expect(
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    reason = "civil_from_days is Hinnant's algorithm verbatim; day as i64 only \
+    reason = "civil_from_days is Hinnant's algorithm; day as i64 only \
               wraps past ~292 billion years since the epoch, and the result is \
               always non-negative for any day on or after it, which is every \
               value a caller-supplied u64 day can represent"
@@ -325,9 +325,12 @@ pub const fn month_of(day: u64) -> u64 {
     let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
     let mp = (5 * doy + 2) / 153; // [0, 11], counting March as month 0
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12], January/February roll into the next civil year
-    let y = if m <= 2 { y + 1 } else { y };
-    (y * 12 + (m - 1)) as u64
+    // `y` is a year that starts in March, so March is index 2 of it and
+    // January (mp 10) is index 12: January of the next civil year. The
+    // flattened index needs no branch. Hinnant's last step (`m`, then `y + 1`
+    // for January and February) exists to produce a (year, month) pair, and
+    // every CI mutant of that branch was equivalent here, so it is not kept.
+    (y * 12 + mp + 2) as u64
 }
 
 /// What a meter has to remember across a restart.
