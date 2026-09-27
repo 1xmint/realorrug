@@ -505,42 +505,13 @@ fn creator_transaction_count(sigs: &[crate::rpc::SignatureInfo], truncated: bool
     }
 }
 
-/// Builds a dossier for one mint.
-///
-/// `memory` is the read memory (design 0021; packet 0039 §1) placed in front
-/// of the launch-block read only — the one read of the three below that is
-/// [`crate::memory::Kind::Forever`] and cannot make the sheet's single read
-/// point lie (see the comment on the launch-block step). The curve read and
-/// the creator-activity read are **never** served from memory, even when a
-/// row for them happens to exist: deferred, not rejected, until the fact
-/// sheet (design 0020) can carry a read point per fact instead of one for
-/// the whole sheet (design 0021 §1, packet 0039).
-///
-/// `None` is not the deny-by-default case AGENTS.md rule 7 governs: a missing
-/// memory makes this function slower and more expensive, never wrong, because
-/// the chain is still read and is still the authority. A caller with no
-/// memory gets exactly today's answers, at today's cost — see
-/// [`crate::memory`]'s own module doc and design 0021 §3 for the boundary
-/// this rests on: a row in the memory is a receipt of a past chain read, not
-/// a substitute for one.
-///
-/// Never returns `Err` for a fact it could not read — a partial dossier is the
-/// product, and the missing halves are named in [`Dossier::unavailable`].
-/// That now includes the first signature walk itself (packet 9-25-0002; the
-/// phase-2 run ledger `.orchestrator/runs/20260923-plan-0002-phase2/RUN.md`
-/// line 71 recorded a transport error there ending the whole capture with
-/// nothing written): a transport, node or shape failure reading the launch
-/// block's history becomes a miss on "launch block" and `build` carries on
-/// to every step after it, the same as any other missing fact.
-///
-/// `Result` stays the return type -- [`ChainReader::read`] is shared with a
-/// second chain whose reads can genuinely fail to resolve a mint -- but
-/// nothing inside this function's own body produces `Err` any more; every
-/// read failure it makes is caught and turned into a
-/// [`Dossier::miss`]. Kept infallible in practice rather than in its type so
-/// every existing caller and test that matches on `Result<Dossier, RpcError>`
-/// keeps working unchanged.
-///
+/// What [`first_signature_walk`] hands back: the launch-block result, and the
+/// mint's signatures with their `truncated` flag when the walk completed.
+type SignatureWalk = (
+    Result<LaunchBlock, String>,
+    Option<(Vec<crate::rpc::SignatureInfo>, bool)>,
+);
+
 /// Step 1 of `build`: the mint's own signature history, walked back to the
 /// oldest signature, and the launch block read from it.
 ///
@@ -555,11 +526,6 @@ fn creator_transaction_count(sigs: &[crate::rpc::SignatureInfo], truncated: bool
 /// because `build`'s caller never asked (a memory hit skips this function
 /// entirely). Step 5 (funding) pages the mint's history itself whenever this
 /// is `None`, rather than trusting a walk that never finished.
-type SignatureWalk = (
-    Result<LaunchBlock, String>,
-    Option<(Vec<crate::rpc::SignatureInfo>, bool)>,
-);
-
 fn first_signature_walk(
     client: &RpcClient,
     budget: &mut Budget,
@@ -615,6 +581,42 @@ fn first_signature_walk(
     (result, Some((signatures, truncated)))
 }
 
+/// Builds a dossier for one mint.
+///
+/// `memory` is the read memory (design 0021; packet 0039 §1) placed in front
+/// of the launch-block read only — the one read of the three below that is
+/// [`crate::memory::Kind::Forever`] and cannot make the sheet's single read
+/// point lie (see the comment on the launch-block step). The curve read and
+/// the creator-activity read are **never** served from memory, even when a
+/// row for them happens to exist: deferred, not rejected, until the fact
+/// sheet (design 0020) can carry a read point per fact instead of one for
+/// the whole sheet (design 0021 §1, packet 0039).
+///
+/// `None` is not the deny-by-default case AGENTS.md rule 7 governs: a missing
+/// memory makes this function slower and more expensive, never wrong, because
+/// the chain is still read and is still the authority. A caller with no
+/// memory gets exactly today's answers, at today's cost — see
+/// [`crate::memory`]'s own module doc and design 0021 §3 for the boundary
+/// this rests on: a row in the memory is a receipt of a past chain read, not
+/// a substitute for one.
+///
+/// Never returns `Err` for a fact it could not read — a partial dossier is the
+/// product, and the missing halves are named in [`Dossier::unavailable`].
+/// That now includes the first signature walk itself (packet 9-25-0002; the
+/// phase-2 run ledger `.orchestrator/runs/20260923-plan-0002-phase2/RUN.md`
+/// line 71 recorded a transport error there ending the whole capture with
+/// nothing written): a transport, node or shape failure reading the launch
+/// block's history becomes a miss on "launch block" and `build` carries on
+/// to every step after it, the same as any other missing fact.
+///
+/// `Result` stays the return type -- [`ChainReader::read`] is shared with a
+/// second chain whose reads can genuinely fail to resolve a mint -- but
+/// nothing inside this function's own body produces `Err` any more; every
+/// read failure it makes is caught and turned into a
+/// [`Dossier::miss`]. Kept infallible in practice rather than in its type so
+/// every existing caller and test that matches on `Result<Dossier, RpcError>`
+/// keeps working unchanged.
+///
 /// # Errors
 ///
 /// Never, as of the above; the signature is `Result` only for the trait it
