@@ -45,19 +45,23 @@
 //! ladder itself: unknown is never rendered as a fourth colour, and never as
 //! green.
 //!
-//! # No price, ever
+//! # No price, ever — except the read moment
 //!
-//! [`build_svg`] takes exactly four strings and one string slice — verdict
-//! word, chain, name, symbol, and up to three signal-phrase flags — and
-//! never a number. There is no code path from a price or market-cap field to
-//! this function's parameters. The token's own name and symbol are drawn as
+//! [`build_svg`] takes four strings, one string slice and one more string —
+//! verdict word, chain, name, symbol, up to three signal-phrase flags, and
+//! the moment of the read they were drawn from — and never a price or
+//! market-cap number. There is no code path from either field to this
+//! function's parameters. The token's own name and symbol are drawn as
 //! written, digits included: "Pepe2024" is a name, and scrubbing digits from
 //! it would misquote the token. The flags are [`realorrug_roast::sheet::Signal::plain`]'s
 //! own fixed, digit-free phrases, never a fact with a number in it — that is
-//! why this route draws *signals*, not the fact sheet's measured values. A
-//! test below pins that with every text input free of digits, the only
-//! digits in the SVG are the template's own layout numbers, so nothing
-//! numeric enters by any other road.
+//! why this route draws *signals*, not the fact sheet's measured values. The
+//! read-moment line (built by [`read_moment`]) is the one deliberate
+//! exception, required by ADR 0039 decision 6: this image is kept by browsers
+//! and by X's unfurl cache long after it was drawn, so without it a stored
+//! card reads as current. A test below pins
+//! that every *other* text input stays free of digits, so nothing numeric
+//! enters by any road but the one this section names.
 //!
 //! # Font
 //!
@@ -78,6 +82,8 @@ use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use realorrug_types::civil::timestamp_from_seconds;
+use serde_json::Value;
 
 use crate::check::{CheckState, cache_key, check, client_ip, fresh_cached_raw, now_secs};
 
@@ -134,10 +140,11 @@ async fn handle(
     let level = doc["level"].as_str().map(str::to_owned);
     let raw_address = doc["address"].as_str().unwrap_or(&address).to_owned();
 
-    let (name, symbol, signals) = if level.is_some() {
+    let (name, symbol, signals, age) = if level.is_some() {
         let key = format!("{chain}:{raw_address}");
         let cache_path = state.cache_dir.join(format!("{}.json", cache_key(&key)));
-        fresh_cached_raw(&cache_path, now_secs()).map_or((None, None, Vec::new()), |raw| {
+        let now = now_secs();
+        fresh_cached_raw(&cache_path, now).map_or((None, None, Vec::new(), None), |raw| {
             let signals = raw["_signals"]
                 .as_array()
                 .map(|arr| {
@@ -146,18 +153,29 @@ async fn handle(
                         .collect()
                 })
                 .unwrap_or_default();
+            // `_written_at` is `check.rs`'s own moment of the chain read (see
+            // its `write_cache`), never this request's clock.
+            let age = read_moment(&raw);
             (
                 raw["_name"].as_str().map(str::to_owned),
                 raw["_symbol"].as_str().map(str::to_owned),
                 signals,
+                age,
             )
         })
     } else {
-        (None, None, Vec::new())
+        (None, None, Vec::new(), None)
     };
 
     let word = stamp_word(level.as_deref());
-    let svg = build_svg(word, &chain, name.as_deref(), symbol.as_deref(), &signals);
+    let svg = build_svg(
+        word,
+        &chain,
+        name.as_deref(),
+        symbol.as_deref(),
+        &signals,
+        age.as_deref(),
+    );
 
     match render_png(&svg) {
         Ok(png) => (
@@ -257,6 +275,29 @@ const CHAIN_LABEL_Y: usize = HEIGHT as usize - 140;
 /// Its font size, used with [`CHAIN_LABEL_Y`] to find where its tallest
 /// glyph starts. Cap height is about 0.72 em in the fonts this draws with.
 const CHAIN_LABEL_FONT: usize = 30;
+/// Baseline of the read-age line, directly under the chain label -- both sit
+/// at x=100 (design 0025 §7's own left margin), well clear of the
+/// bottom-right `REALORRUG` mark drawn at [`HEIGHT`]`- 100`.
+const AGE_LABEL_Y: usize = CHAIN_LABEL_Y + 34;
+const AGE_LABEL_FONT: usize = 24;
+
+/// The card's read-moment line, from the `_written_at` second that
+/// [`crate::check`] stamped on the cache entry this card is drawn from, e.g.
+/// "read 2026-09-27 14:02 UTC". `None` when the entry carries no such stamp.
+///
+/// ADR 0039 decision 6. A printed moment, not a relative age ("read 7 min
+/// ago"), because the PNG itself is kept by others: browsers for the
+/// `max-age=600` this route sends, and X's unfurl cache for far longer. A
+/// relative age is true only at the second it was drawn, so a copy shown a
+/// day later would still say "read just now"; a moment stays true however
+/// long a copy lives.
+fn read_moment(raw: &Value) -> Option<String> {
+    let stamp = timestamp_from_seconds(raw["_written_at"].as_u64()?);
+    // "YYYY-MM-DDTHH:MM:SSZ" -> date and "HH:MM"; split rather than slice at
+    // fixed offsets so a five-digit year cannot panic the route.
+    let (date, time) = stamp.split_once('T')?;
+    Some(format!("read {date} {} UTC", time.get(..5)?))
+}
 
 pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -310,12 +351,20 @@ const FONT_MONO: &str =
 /// `verdict::level` used to choose `word`, so these lines can never
 /// contradict it (see this module's doc comment). An empty slice draws
 /// [`no_signal_line`]'s single true statement instead of nothing.
+///
+/// `age`, from [`read_moment`], is the one exception to "No price, ever"
+/// below: it is the moment of a read, never a fact about the token, and
+/// ADR 0039 decision 6 requires it on every surface that can serve a stale
+/// read. `None` draws no line at all rather than a guessed "just now" — the
+/// grey "Can't tell" card and any refusal never reach this far (`handle`
+/// only looks the cache up when a `level` exists).
 fn build_svg(
     word: &str,
     chain: &str,
     name: Option<&str>,
     symbol: Option<&str>,
     flags: &[String],
+    age: Option<&str>,
 ) -> String {
     let color = stamp_color(word);
     let name_text = name.map(|n| escape_xml(&truncate(n, MAX_NAME_CHARS)));
@@ -366,6 +415,13 @@ fn build_svg(
         body,
         r#"<text x="100" y="{CHAIN_LABEL_Y}" font-family="{FONT_MONO}" font-size="{CHAIN_LABEL_FONT}" fill="{COLOR_PAPER_INK}">{chain_label}</text>"#,
     );
+    if let Some(age) = age {
+        let age_text = escape_xml(age);
+        let _ = write!(
+            body,
+            r#"<text x="100" y="{AGE_LABEL_Y}" font-family="{FONT_MONO}" font-size="{AGE_LABEL_FONT}" fill="{COLOR_PAPER_INK}">{age_text}</text>"#,
+        );
+    }
     let _ = write!(
         body,
         r#"<text x="{x}" y="{y}" font-family="{FONT_SANS}" font-size="26" font-weight="700" fill="{COLOR_GOLD}" text-anchor="end">REALORRUG</text>"#,
@@ -415,6 +471,7 @@ mod tests {
             Some("<script>alert(1)</script> & Friends"),
             Some("EVIL"),
             &[],
+            None,
         );
         assert!(
             !svg.contains("<script>"),
@@ -434,7 +491,7 @@ mod tests {
         assert_eq!(word, "Can't tell");
         assert_eq!(stamp_color(word), COLOR_UNKNOWN);
 
-        let svg = build_svg(word, "solana", None, None, &[]);
+        let svg = build_svg(word, "solana", None, None, &[], None);
         assert!(svg.contains("Can&apos;t tell") || svg.contains("Can't tell"));
         assert!(svg.contains(COLOR_UNKNOWN));
         assert!(!svg.contains(COLOR_RUG));
@@ -467,7 +524,7 @@ mod tests {
     #[test]
     fn a_long_name_is_truncated() {
         let long = "A".repeat(200);
-        let svg = build_svg("Sketchy", "solana", Some(&long), Some("SYM"), &[]);
+        let svg = build_svg("Sketchy", "solana", Some(&long), Some("SYM"), &[], None);
         assert!(
             !svg.contains(&long),
             "the full 200-char name must not appear verbatim"
@@ -495,6 +552,7 @@ mod tests {
             Some("Pepe Coin"),
             Some("PEPE"),
             &flags,
+            None,
         );
         let visible: String = svg
             .split('>')
@@ -506,6 +564,45 @@ mod tests {
         );
     }
 
+    /// [`read_moment`] prints the cache entry's own `_written_at`, to the
+    /// minute, in UTC. 1_790_517_720 is 2026-09-27T14:02:00Z; the extra 59 s
+    /// shows seconds are dropped, not rounded up.
+    #[test]
+    fn the_read_moment_is_the_caches_written_at() {
+        let raw = serde_json::json!({ "_written_at": 1_790_517_779_u64 });
+        assert_eq!(
+            read_moment(&raw).as_deref(),
+            Some("read 2026-09-27 14:02 UTC")
+        );
+    }
+
+    /// No stamp, no line: a guessed moment would be a stale read shown as
+    /// current, which is what ADR 0039 decision 6 forbids.
+    #[test]
+    fn a_cache_entry_without_a_stamp_draws_no_moment() {
+        assert_eq!(read_moment(&serde_json::json!({})), None);
+        assert_eq!(
+            read_moment(&serde_json::json!({ "_written_at": "soon" })),
+            None
+        );
+    }
+
+    /// A card built with a moment draws it; a card built without one draws
+    /// nothing extra -- pinning `build_svg`'s own contract for the parameter
+    /// `handle` feeds it from [`read_moment`].
+    #[test]
+    fn an_age_is_drawn_only_when_one_is_given() {
+        let moment = "read 2026-09-27 14:02 UTC";
+        let with_age = build_svg("Sketchy", "solana", None, None, &[], Some(moment));
+        assert!(with_age.contains(moment), "{with_age}");
+
+        let without_age = build_svg("Sketchy", "solana", None, None, &[], None);
+        assert!(
+            !without_age.contains(&format!("y=\"{AGE_LABEL_Y}\"")),
+            "no age line's coordinate should appear with no age given: {without_age}"
+        );
+    }
+
     /// Two fired signals both land on the card as their `plain()` text.
     #[test]
     fn two_flags_both_appear_on_the_card() {
@@ -513,7 +610,7 @@ mod tests {
             "one address holds most of the supply".to_owned(),
             "a test sell into this token failed".to_owned(),
         ];
-        let svg = build_svg("Sketchy", "solana", None, None, &flags);
+        let svg = build_svg("Sketchy", "solana", None, None, &flags, None);
         assert!(
             svg.contains("one address holds most of the supply"),
             "{svg}"
@@ -531,7 +628,7 @@ mod tests {
             "flag three is drawn".to_owned(),
             "flag four is dropped".to_owned(),
         ];
-        let svg = build_svg("Sketchy", "solana", None, None, &flags);
+        let svg = build_svg("Sketchy", "solana", None, None, &flags, None);
         assert!(svg.contains("flag one is drawn"));
         assert!(svg.contains("flag two is drawn"));
         assert!(svg.contains("flag three is drawn"));
@@ -565,7 +662,7 @@ mod tests {
                 line,
                 "the no-signal line for {word} is wrong"
             );
-            let svg = build_svg(word, "solana", None, None, &[]);
+            let svg = build_svg(word, "solana", None, None, &[], None);
             assert!(
                 svg.contains(line),
                 "the no-signal fallback line for {word} must be drawn: {svg}"
@@ -605,7 +702,7 @@ mod tests {
             "second line".to_owned(),
             "third line".to_owned(),
         ];
-        let svg = build_svg("Sketchy", "solana", None, None, &flags);
+        let svg = build_svg("Sketchy", "solana", None, None, &flags, None);
         for i in 0..MAX_FLAG_LINES {
             let y = FLAG_FIRST_Y + i * FLAG_STEP_Y;
             assert_eq!(
@@ -632,10 +729,30 @@ mod tests {
             "the chain label at y={CHAIN_LABEL_Y} must fall between the last flag \
              line at y={last_flag} and the card's bottom edge at y={card_bottom}"
         );
-        let svg = build_svg("Sketchy", "robinhood", None, None, &[]);
+        let svg = build_svg("Sketchy", "robinhood", None, None, &[], None);
         assert!(
             svg.contains(&format!(r#"y="{CHAIN_LABEL_Y}""#)),
             "the chain label should be drawn at y={CHAIN_LABEL_Y}: {svg}"
+        );
+    }
+
+    #[test]
+    fn the_read_moment_sits_under_the_chain_label_inside_the_card() {
+        // Same ink rule as the flag test below: the moment's capitals must
+        // clear the chain label's descenders, and its own descenders must
+        // stay on the image. `CHAIN_LABEL_Y - 34` would print it over the
+        // chain label; `* 34` would put it thousands of pixels off the card.
+        let label_ink_bottom = CHAIN_LABEL_Y + CHAIN_LABEL_FONT * 22 / 100;
+        let moment_ink_top = AGE_LABEL_Y - AGE_LABEL_FONT * 72 / 100;
+        let moment_ink_bottom = AGE_LABEL_Y + AGE_LABEL_FONT * 22 / 100;
+        assert!(
+            moment_ink_top > label_ink_bottom,
+            "the read moment starts at y={moment_ink_top}, into the chain \
+             label's descenders at y={label_ink_bottom}"
+        );
+        assert!(
+            moment_ink_bottom < HEIGHT as usize,
+            "the read moment ends at y={moment_ink_bottom}, off the {HEIGHT}px card"
         );
     }
 
@@ -699,14 +816,23 @@ mod tests {
         if db.is_empty() {
             return;
         }
-        let a = render_png(&build_svg("Sketchy", "robinhood", None, None, &[])).expect("render");
-        let b = render_png(&build_svg("Rugged", "robinhood", None, None, &[])).expect("render");
+        let a =
+            render_png(&build_svg("Sketchy", "robinhood", None, None, &[], None)).expect("render");
+        let b =
+            render_png(&build_svg("Rugged", "robinhood", None, None, &[], None)).expect("render");
         assert_ne!(a, b, "the stamp word left no mark on the image");
     }
 
     #[test]
     fn the_rendered_card_is_under_the_size_budget_and_the_right_dimensions() {
-        let svg = build_svg("Sketchy", "solana", Some("Example Token"), Some("EX"), &[]);
+        let svg = build_svg(
+            "Sketchy",
+            "solana",
+            Some("Example Token"),
+            Some("EX"),
+            &[],
+            None,
+        );
         let png = render_png(&svg).expect("renders");
         assert!(
             png.len() <= MAX_BYTES,

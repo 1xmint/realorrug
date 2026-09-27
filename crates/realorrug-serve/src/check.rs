@@ -1085,6 +1085,28 @@ mod tests {
         assert_eq!(raw["_name"], "Pepe");
     }
 
+    /// ADR 0039 decision 6: a cached read must carry the moment it was
+    /// actually read at, never the moment it happened to be served.
+    /// `verdict_doc` (see `check`, above) puts that moment on `measured_at`
+    /// *before* the document is written to the cache, so `fresh_cached` --
+    /// which never touches that field, only strips `_`-prefixed ones -- must
+    /// hand it back unchanged no matter how long after the write it is
+    /// served, right up to the last second inside the TTL. Re-apply the bug
+    /// by having `fresh_cached` overwrite `measured_at` with its own `now`
+    /// argument to see this fail.
+    #[test]
+    fn a_served_cache_hit_still_carries_its_original_measured_at() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let path = dir.path().join("entry.json");
+        let doc = json!({"state": "verdict", "measured_at": "2026-09-20T00:00:00Z"});
+        write_cache(&path, &doc, 1_000).expect("write");
+        let served = fresh_cached(&path, 1_000 + CACHE_TTL_SECS - 1).expect("still inside the TTL");
+        assert_eq!(
+            served["measured_at"], "2026-09-20T00:00:00Z",
+            "a cache hit must carry the read's own moment, not the serve time"
+        );
+    }
+
     #[test]
     fn a_stale_cache_entry_is_a_miss() {
         let dir = tempfile::tempdir().expect("a temp dir");
