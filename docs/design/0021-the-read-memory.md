@@ -34,11 +34,14 @@ incomplete-configuration reason, without configuration values, before any
 configuration path can idle the daemon.
 
 The dossier also carries `retries` and `paused_ms` (packet 9-25-0019): how
-many HTTP 429s the read's calls needed and how long it slept waiting on them,
-filled from the same `Budget` that fills `calls` and `elapsed_ms`. A capture
-run prints them on its own line, `read: <calls> calls, <elapsed_ms> ms,
-<retries> retries (<paused_ms> ms paused)`, so a slow capture shows whether
-the RPC endpoint was rate-limiting it before the 20-second clock ran out.
+many retries the read's calls needed and how long it slept waiting on them,
+filled from the same `Budget` that fills `calls` and `elapsed_ms`. A retry
+fires for an HTTP 429 or, since packet 9-25-0002, for a dropped connection or
+a timeout too (`realorrug-onchain/src/rpc.rs`'s `is_transient`) — the same
+fixed pause and budget charge either way. A capture run prints them on its
+own line, `read: <calls> calls, <elapsed_ms> ms, <retries> retries
+(<paused_ms> ms paused)`, so a slow capture shows whether the RPC endpoint
+was rate-limiting or dropping it before the 20-second clock ran out.
 
 **Restart investigation, source inspection only:**
 [`daemon.rs`](../../crates/realorrug-analyst/src/daemon.rs) previously exited
