@@ -82,13 +82,19 @@ commands:
                                  no extra snipe-tax exemption. Read-only
   launch-check solana --signature <sig> --treasury <addr> --dev-wallet <addr>
                 --dev-buy-lamports <n> --rpc URL [--seconds N]
+                [--allow-transfer <address>:<lamports> ...]
                                  whether a pump.fun launch (ADR 0037 decision
                                  6) is clean: exactly one create/create_v2,
                                  fees to the treasury, mint and freeze
                                  authorities both revoked, the dev wallet's
                                  buy matches exactly, nothing else bundled.
-                                 Refuses rather than guessing on any
-                                 unreadable account. Read-only
+                                 A top-level System Program transfer (e.g. a
+                                 launch tool's own tip) refuses unless its
+                                 exact destination and lamports were stated
+                                 in advance with --allow-transfer, repeatable
+                                 for more than one. Refuses rather than
+                                 guessing on any unreadable account.
+                                 Read-only
   treasury solana --treasury <addr> [--mint <addr>] --rpc URL [--seconds N]
                                  what the treasury has received on Solana and
                                  what is still unclaimed: one receipt per

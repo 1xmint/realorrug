@@ -1603,7 +1603,8 @@ mod tests {
     #[test]
     fn an_unstated_top_level_transfer_refuses_the_launch() {
         let (mut t, treasury, dev_wallet, _mint) = passing_tx();
-        t.instructions.push(system_transfer_ix(addr(7), 1_000_000, true));
+        t.instructions
+            .push(system_transfer_ix(addr(7), 1_000_000, true));
         let curve = curve_bytes(treasury);
         let mint_account = mint_bytes(None, None);
         let result = check_launch(
@@ -1814,11 +1815,7 @@ mod tests {
     fn the_real_launchs_shape_refuses_with_the_wrong_lamports_stated() {
         let to = addr(9);
         let (t, dev_wallet) = real_launch_shape(to, 1_000_000);
-        let outcome = check_allowlist(
-            &t,
-            &dev_wallet,
-            &[StatedTransfer { to, lamports: 999 }],
-        );
+        let outcome = check_allowlist(&t, &dev_wallet, &[StatedTransfer { to, lamports: 999 }]);
         assert!(!outcome.ok(), "{outcome:?}");
     }
 

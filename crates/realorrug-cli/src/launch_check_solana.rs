@@ -18,9 +18,59 @@ use std::time::Duration;
 use realorrug_onchain::budget::{DEFAULT_MAX_CALLS, DEFAULT_MAX_PAGES};
 use realorrug_onchain::pumpfun_launch_check::AccountState;
 use realorrug_onchain::{
-    AccountRead, Budget, CheckOutcome, LaunchCheck, RpcClient, candidate_mint, check_launch,
+    AccountRead, Budget, CheckOutcome, LaunchCheck, RpcClient, StatedTransfer, candidate_mint,
+    check_launch,
 };
 use realorrug_types::Address;
+
+/// The value following every occurrence of `name`, in order.
+///
+/// Mirrors `bio.rs`'s own copy: [`crate::flag`] reads only the first, and
+/// `--allow-transfer` is repeatable (a launch can state more than one
+/// transfer), so this is the same walk done without stopping at the first
+/// match.
+fn values(args: &[String], name: &str) -> Vec<String> {
+    args.iter()
+        .zip(args.iter().skip(1))
+        .filter(|(a, _)| a.as_str() == name)
+        .map(|(_, v)| v.clone())
+        .collect()
+}
+
+/// Parses one `--allow-transfer <address>:<lamports>` value.
+///
+/// Strict, not best-effort (rule 8: unknown is not safe): a missing colon,
+/// an address that does not parse, a lamports field that is not a plain
+/// number, or 0 lamports (not a transfer at all) is an error the operator
+/// sees before the check runs -- never a value silently dropped, which
+/// would let a launch tool's tip through unchecked exactly because the
+/// operator mistyped the flag that was supposed to state it.
+fn parse_stated_transfer(value: &str) -> Result<StatedTransfer, String> {
+    let (addr, lamports) = value
+        .split_once(':')
+        .ok_or_else(|| format!("--allow-transfer {value}: expected <address>:<lamports>"))?;
+    let to: Address = addr
+        .parse()
+        .map_err(|e| format!("--allow-transfer {value}: {e}"))?;
+    let lamports: u64 = lamports
+        .parse()
+        .map_err(|_| format!("--allow-transfer {value}: {lamports} is not a lamport amount"))?;
+    if lamports == 0 {
+        return Err(format!(
+            "--allow-transfer {value}: 0 lamports is not a transfer"
+        ));
+    }
+    Ok(StatedTransfer { to, lamports })
+}
+
+/// Every `--allow-transfer` value, parsed -- the first one that does not
+/// parse stops the command rather than running the check on a partial list.
+fn stated_transfers(args: &[String]) -> Result<Vec<StatedTransfer>, String> {
+    values(args, "--allow-transfer")
+        .iter()
+        .map(|v| parse_stated_transfer(v))
+        .collect()
+}
 
 /// Runs the command.
 ///
@@ -103,6 +153,7 @@ fn run_with(
         "bonding curve",
     );
     let mint_read = read(mint, "mint");
+    let transfers = stated_transfers(args)?;
 
     let result = check_launch(
         &tx,
@@ -111,6 +162,7 @@ fn run_with(
         treasury,
         dev_wallet,
         dev_buy_lamports,
+        &transfers,
     );
 
     let text = report(signature, &result);
@@ -252,6 +304,61 @@ mod tests {
         let err = run_with(&args, "sig", &treasury, &dev, 1, &|_| None)
             .expect_err("a scheme-less endpoint cannot be read");
         assert!(!err.contains("SENTINEL-4412"), "{err}");
+    }
+
+    /// Each failure mode is its own assertion so a mutant that weakens any
+    /// one check (e.g. `lamports == 0` to `lamports < 0`, which is always
+    /// false for a `u64` and would let a stray `--allow-transfer x:0` pass
+    /// silently) fails a specific case rather than the whole thing reading
+    /// green by accident.
+    #[test]
+    fn allow_transfer_parsing_is_strict() {
+        let addr = Address::new([7; 32]).to_string();
+        let good = format!("{addr}:1000");
+
+        // Success: the one shape that must still work.
+        assert_eq!(
+            parse_stated_transfer(&good),
+            Ok(StatedTransfer {
+                to: Address::new([7; 32]),
+                lamports: 1000
+            })
+        );
+
+        // Missing colon.
+        assert_eq!(
+            parse_stated_transfer(&addr),
+            Err(format!(
+                "--allow-transfer {addr}: expected <address>:<lamports>"
+            ))
+        );
+
+        // Address does not parse (not valid base58 -- '0', 'O', 'I', 'l' are
+        // excluded from the alphabet).
+        assert_eq!(
+            parse_stated_transfer("not-0-a-valid-address:1000"),
+            Err(
+                "--allow-transfer not-0-a-valid-address:1000: not valid base58: \
+                 not-0-a-valid-address"
+                    .to_owned()
+            )
+        );
+
+        // Lamports is not a plain number.
+        assert_eq!(
+            parse_stated_transfer(&format!("{addr}:abc")),
+            Err(format!(
+                "--allow-transfer {addr}:abc: abc is not a lamport amount"
+            ))
+        );
+
+        // 0 lamports is not a transfer (a mutant that drops this arm, or
+        // that flips `== 0` to `< 0` which a u64 never satisfies, lets this
+        // through).
+        assert_eq!(
+            parse_stated_transfer(&format!("{addr}:0")),
+            Err(format!("--allow-transfer {addr}:0: 0 lamports is not a transfer"))
+        );
     }
 
     #[test]

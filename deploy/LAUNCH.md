@@ -34,13 +34,19 @@ Nothing here is automatic. Signing, spending and launching are Josh's.
    changed.
 6. **Build and run the pump.fun launch check** (built:
    `realorrug launch-check solana --signature <sig> --treasury <addr>
-   --dev-wallet <addr> --dev-buy-lamports <n> --rpc URL`). Against the launch
-   transaction it confirms: the fee recipient is the treasury, mint and
-   freeze authorities are both revoked, the dev buy matches what will be
-   published, and nothing else was bundled in. `<n>` is the **total** the dev
-   wallet paid -- the SOL that reached the curve plus pump.fun's protocol fee
-   plus the creator fee, read from the buy's own pump.fun `TradeEvent`, not
-   just the amount the curve received. The endpoint is required
+   --dev-wallet <addr> --dev-buy-lamports <n> --rpc URL [--allow-transfer
+   <address>:<lamports> ...]`). Against the launch transaction it confirms:
+   the fee recipient is the treasury, mint and freeze authorities are both
+   revoked, the dev buy matches what will be published, and nothing else was
+   bundled in. `<n>` is the **total** the dev wallet paid -- the SOL that
+   reached the curve plus pump.fun's protocol fee plus the creator fee, read
+   from the buy's own pump.fun `TradeEvent`, not just the amount the curve
+   received. If the launch tool adds its own top-level SOL transfer (a tip,
+   for instance) alongside the launch, state it in advance with
+   `--allow-transfer <address>:<lamports>` (its exact destination and
+   lamports, repeatable if there is more than one) -- any such transfer that
+   was not stated exactly refuses the check, since a launch that quietly
+   pays someone else is not a clean launch. The endpoint is required
    (`--rpc`, or `REALORRUG_RPC` in the environment): with neither it refuses
    rather than falling back to the rate-limited public one, and it never
    prints the endpoint, since a Helius URL carries its key.
@@ -55,8 +61,10 @@ Nothing here is automatic. Signing, spending and launching are Josh's.
 
 9. **Run the launch check** from step 6 against the signature:
    `realorrug launch-check solana --signature <sig> --treasury <treasury>
-   --dev-wallet <dev-wallet> --dev-buy-lamports <n> --rpc URL`. Do not announce a
-   launch it refuses.
+   --dev-wallet <dev-wallet> --dev-buy-lamports <n> --rpc URL [--allow-transfer
+   <address>:<lamports> ...]`. State any tip or other SOL transfer the launch
+   tool added, with its exact destination and amount, via `--allow-transfer`
+   -- anything unstated refuses. Do not announce a launch it refuses.
 10. **Tell the analyst which token is its own:** set `REALORRUG_SELF_MINT` in
     `/etc/realorrug/analyst.env` and restart it. Its start-up log names the
     token.
