@@ -505,82 +505,6 @@ fn creator_transaction_count(sigs: &[crate::rpc::SignatureInfo], truncated: bool
     }
 }
 
-/// What [`first_signature_walk`] hands back: the launch-block result, and the
-/// mint's signatures with their `truncated` flag when the walk completed.
-type SignatureWalk = (
-    Result<LaunchBlock, String>,
-    Option<(Vec<crate::rpc::SignatureInfo>, bool)>,
-);
-
-/// Step 1 of `build`: the mint's own signature history, walked back to the
-/// oldest signature, and the launch block read from it.
-///
-/// Split out of `build` so a transport error here (a dropped connection, a
-/// timeout that `post_with_retry` could not clear, an endpoint down) is a
-/// miss on the launch block rather than a `?` that ends the whole capture --
-/// the defect this step fixes (packet 9-25-0002; phase-2 run ledger
-/// `.orchestrator/runs/20260923-plan-0002-phase2/RUN.md` line 71).
-///
-/// Returns the mint's signatures alongside the launch result, or `None` when
-/// the walk itself never completed -- either because it failed outright or
-/// because `build`'s caller never asked (a memory hit skips this function
-/// entirely). Step 5 (funding) pages the mint's history itself whenever this
-/// is `None`, rather than trusting a walk that never finished.
-fn first_signature_walk(
-    client: &RpcClient,
-    budget: &mut Budget,
-    mint: &Address,
-    mint_key: &str,
-    memory: Option<&Memory>,
-) -> SignatureWalk {
-    let (mut signatures, mut truncated) = match client.signatures_back_to_oldest(budget, mint) {
-        Ok(pair) => pair,
-        Err(e) => return (Err(e.to_string()), None),
-    };
-    // A newest-first walk that ran out of page budget before reaching the
-    // beginning gets one shot at an ascending-order read instead (research
-    // 0056 addendum, 2026-09-23: 7 of 9 real pump.fun mints hit this in
-    // production). `signatures_oldest_first`'s own doc explains why its list
-    // is complete from the start even though the backward walk was not.
-    // Read here rather than inside `oldest_launch` so step 5 below (funding)
-    // is handed the same list through the returned tuple and does not ask
-    // the node the same question a second time. Any failure -- method-not-
-    // found on a non-Helius endpoint, a node error, the budget spent --
-    // leaves `truncated` set, and `oldest_launch` still refuses to guess
-    // (AGENTS.md rule 8).
-    if truncated {
-        // The walk above can spend the whole shared page pool getting to
-        // `truncated`, the same starvation `Budget::grant_pages`'s own doc
-        // describes for the other named walks.
-        budget.grant_pages(1);
-        if let Some(ascending) = client
-            .signatures_oldest_first(budget, mint, crate::rpc::PAGE_SIZE)
-            .ok()
-            .flatten()
-            .filter(|sigs| !sigs.is_empty())
-        {
-            // Reversed into the newest-first shape every reader here expects
-            // (`oldest_launch` takes the LAST entry as oldest).
-            signatures = ascending.into_iter().rev().collect();
-            truncated = false;
-        }
-    }
-    let result =
-        oldest_launch(client, budget, &signatures, truncated, mint_key).and_then(|block| {
-            if let Some(mem) = memory {
-                // `record` refuses to overwrite a `(what, subject, block)`
-                // key with a different value rather than replacing it
-                // (packet 0039 §1, `Memory::record`'s own doc) -- a launch
-                // record that came back different from a fresh read is a
-                // bug (AGENTS.md rule 1) and is surfaced here with its error
-                // text intact, never silently resolved either way.
-                store_launch(mem, mint_key, &block).map_err(|e| e.to_string())?;
-            }
-            Ok(block)
-        });
-    (result, Some((signatures, truncated)))
-}
-
 /// Builds a dossier for one mint.
 ///
 /// `memory` is the read memory (design 0021; packet 0039 §1) placed in front
@@ -601,26 +525,14 @@ fn first_signature_walk(
 /// a substitute for one.
 ///
 /// Never returns `Err` for a fact it could not read — a partial dossier is the
-/// product, and the missing halves are named in [`Dossier::unavailable`].
-/// That now includes the first signature walk itself (packet 9-25-0002; the
-/// phase-2 run ledger `.orchestrator/runs/20260923-plan-0002-phase2/RUN.md`
-/// line 71 recorded a transport error there ending the whole capture with
-/// nothing written): a transport, node or shape failure reading the launch
-/// block's history becomes a miss on "launch block" and `build` carries on
-/// to every step after it, the same as any other missing fact.
-///
-/// `Result` stays the return type -- [`ChainReader::read`] is shared with a
-/// second chain whose reads can genuinely fail to resolve a mint -- but
-/// nothing inside this function's own body produces `Err` any more; every
-/// read failure it makes is caught and turned into a
-/// [`Dossier::miss`]. Kept infallible in practice rather than in its type so
-/// every existing caller and test that matches on `Result<Dossier, RpcError>`
-/// keeps working unchanged.
+/// product, and the missing halves are named in
+/// [`Dossier::unavailable`]. It returns `Err` only when the mint itself cannot
+/// be resolved, because a dossier about a token that does not exist is not a
+/// partial answer, it is a wrong one.
 ///
 /// # Errors
 ///
-/// Never, as of the above; the signature is `Result` only for the trait it
-/// implements.
+/// [`RpcError`] when the token's own signature history cannot be read at all.
 pub fn build(
     client: &RpcClient,
     budget: &mut Budget,
@@ -659,14 +571,55 @@ pub fn build(
     // history too: `None` only when a memory hit skipped this walk, in which
     // case step 5 pages it itself rather than trusting a history it never
     // read.
-    // Kept for step 5 (funding) below (comment on
-    // `first_signature_walk`'s `None` case explains the exact condition).
-    let (launch_result, mint_signatures) =
-        if let Some(block) = memory.and_then(|mem| cached_launch(mem, &mint_key)) {
-            (Ok(block), None)
-        } else {
-            first_signature_walk(client, budget, mint, &mint_key, memory)
-        };
+    let mut mint_signatures: Option<(Vec<crate::rpc::SignatureInfo>, bool)> = None;
+    let launch_result = if let Some(block) = memory.and_then(|mem| cached_launch(mem, &mint_key)) {
+        Ok(block)
+    } else {
+        let (mut signatures, mut truncated) = client.signatures_back_to_oldest(budget, mint)?;
+        // A newest-first walk that ran out of page budget before reaching the
+        // beginning gets one shot at an ascending-order read instead (research
+        // 0056 addendum, 2026-09-23: 7 of 9 real pump.fun mints hit this in
+        // production). `signatures_oldest_first`'s own doc explains why its
+        // list is complete from the start even though the backward walk was
+        // not. Read here rather than inside `oldest_launch` so step 5 below
+        // (funding) is handed the same list through `mint_signatures` and
+        // does not ask the node the same question a second time. Any failure
+        // -- method-not-found on a non-Helius endpoint, a node error, the
+        // budget spent -- leaves `truncated` set, and `oldest_launch` still
+        // refuses to guess (AGENTS.md rule 8).
+        if truncated {
+            // The walk above can spend the whole shared page pool getting to
+            // `truncated`, the same starvation `Budget::grant_pages`'s own doc
+            // describes for the other named walks.
+            budget.grant_pages(1);
+            if let Some(ascending) = client
+                .signatures_oldest_first(budget, mint, crate::rpc::PAGE_SIZE)
+                .ok()
+                .flatten()
+                .filter(|sigs| !sigs.is_empty())
+            {
+                // Reversed into the newest-first shape every reader here
+                // expects (`oldest_launch` takes the LAST entry as oldest).
+                signatures = ascending.into_iter().rev().collect();
+                truncated = false;
+            }
+        }
+        let result =
+            oldest_launch(client, budget, &signatures, truncated, &mint_key).and_then(|block| {
+                if let Some(mem) = memory {
+                    // `record` refuses to overwrite a `(what, subject, block)`
+                    // key with a different value rather than replacing it
+                    // (packet 0039 §1, `Memory::record`'s own doc) -- a launch
+                    // record that came back different from a fresh read is a
+                    // bug (AGENTS.md rule 1) and is surfaced here with its
+                    // error text intact, never silently resolved either way.
+                    store_launch(mem, &mint_key, &block).map_err(|e| e.to_string())?;
+                }
+                Ok(block)
+            });
+        mint_signatures = Some((signatures, truncated));
+        result
+    };
     match launch_result {
         Ok(block) => dossier.launch = Some(block),
         Err(why) => dossier.miss("launch block", why),
@@ -1488,15 +1441,6 @@ mod tests {
     impl crate::rpc::Transport for Always {
         fn post(&self, _: &str, _: String) -> Result<String, String> {
             Ok(self.0.clone())
-        }
-    }
-
-    /// A transport that answers every call with the same transport error.
-    struct AlwaysErr(String);
-
-    impl crate::rpc::Transport for AlwaysErr {
-        fn post(&self, _: &str, _: String) -> Result<String, String> {
-            Err(self.0.clone())
         }
     }
 
@@ -2515,34 +2459,6 @@ mod tests {
                 .unavailable
                 .iter()
                 .any(|u| u.fact == "token ownership")
-        );
-    }
-
-    #[test]
-    fn a_persistent_dropped_connection_on_the_launch_walk_is_a_gap_not_an_abort() {
-        // (c) Re-applies the defect packet 9-25-0002 fixes: before this,
-        // `build` used `?` on the first signature walk
-        // (`client.signatures_back_to_oldest`), so a transport error there
-        // ended the whole capture with nothing written -- exactly the
-        // 2026-09-24 VPS recapture failure (phase-2 run ledger
-        // `.orchestrator/runs/20260923-plan-0002-phase2/RUN.md` line 71).
-        // With the `?` still in place this test would panic on `expect`
-        // with `RpcError::Transport` instead of returning a dossier.
-        let mint = Address::new([50u8; 32]);
-        let client = RpcClient::with_transport(
-            "http://test.invalid",
-            Box::new(AlwaysErr(
-                "rpc transport: io: Connection reset by peer".to_owned(),
-            )),
-        );
-        let mut budget = Budget::new(60, 10, std::time::Duration::from_secs(30));
-        let dossier = build(&client, &mut budget, &mint, None)
-            .expect("a partial dossier, not Err -- every retry failed the same way");
-        assert!(dossier.launch.is_none());
-        assert!(
-            dossier.unavailable.iter().any(|u| u.fact == "launch block"),
-            "{:?}",
-            dossier.unavailable
         );
     }
 
