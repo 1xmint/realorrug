@@ -1214,6 +1214,25 @@ impl FactSheet {
             push_creator_cash_flow(&mut facts, cash_flow);
         }
 
+        // Design 0020 §3's `CreatorSoldOut` row, wired from a single
+        // capture -- see `creator_sold_out`'s own doc for why
+        // `Memory::has_prior_balance` is not the source instead. Needs all
+        // three of `dossier.launch` (the creator's own address, which
+        // `TokenOwner::owner` can be compared against with no conversion:
+        // both are the same Solana `Address` type), `dossier.creator_cash_flow`
+        // (the creator's decoded trade history) and `dossier.token_ownership`
+        // (the sampled largest holders); any one of the three absent is
+        // silence here, the same as everywhere else on this sheet an
+        // optional read is missing rather than a guess.
+        if let (Some(launch), Some(cash_flow), Some(ownership)) = (
+            &dossier.launch,
+            &dossier.creator_cash_flow,
+            &dossier.token_ownership,
+        ) && creator_sold_out(cash_flow, ownership, launch.creator)
+        {
+            signals.push(Signal::CreatorSoldOut);
+        }
+
         // S13 "owner powers live" (research 0052 §3.1, ADR 0035).
         // `dossier.powers` is `None` when the launch transaction itself
         // could not be read (`robinhood.rs` names "powers" on
@@ -3829,6 +3848,83 @@ fn push_creator_cash_flow(
             ),
         );
     }
+}
+
+/// [`Signal::CreatorSoldOut`]'s firing rule (design 0020 §3), read entirely
+/// from one capture: `dossier.creator_cash_flow` and `dossier.token_ownership`
+/// together, never [`crate::memory::has_prior_balance`].
+///
+/// **Why not the memory path.** `has_prior_balance` needs two reads minutes
+/// apart -- nothing writes it today, and even once something does, a signal
+/// gated on it could never fire against a replayed capture, which is how
+/// this bot's replies are judged (`tests/replay/`, research 0056 addendum
+/// 2026-09-25: all three `creator-sale-*` cases were `CantTell` for the
+/// clock, not for lack of a rule). Everything below is instead read once,
+/// so the signal can fire on a token's very first read. The balance-memory
+/// kind (design 0021 §7) is still unwritten and stays a later, independent
+/// corroboration -- this function does not wait on it.
+///
+/// Fires only when all three hold, any one unreadable is silence:
+/// 1. `cash_flow.trades_complete` is `true` and `cash_flow.gaps` is empty --
+///    an incomplete trade or transfer read never gets to a total-sale
+///    conclusion, complete or not.
+/// 2. tokens given up in decoded sells is more than zero, and either covers
+///    every token received in decoded buys on its own, or is topped up by at
+///    least one outgoing transfer of unknown size
+///    (`cash_flow.transfers_out > 0`) to close the remainder. A creator with
+///    no decoded sell at all never satisfies this no matter how large
+///    `transfers_out` is -- an unpriced transfer is not a sale on its own
+///    (`report.rs`'s own caveat for this signal already covers "moved to a
+///    wallet still under the same control"); it can only ever close a
+///    *remainder* behind at least one real, decoded sell.
+/// 3. `creator` is absent from `ownership.owners`, the sampled largest
+///    holders.
+///
+/// **The launch-block buy is never added to "tokens received in decoded
+/// buys" here.** `LaunchBlock::dev_buy_lamports` records only what the
+/// creator paid for that buy, not how many tokens it bought -- there is no
+/// token amount on the launch block to add without inventing one. Nothing
+/// is lost on Solana by leaving it out: `creator_cash_flow_solana` walks the
+/// creator's own associated-token-account history back to its earliest
+/// signature, which already includes the launch transaction's buy as a
+/// decoded [`realorrug_robinhood::pons::Side::Buy`] trade whenever the
+/// creator bought in their own launch block, so that buy is already inside
+/// `cash_flow.trades` before this function ever runs.
+///
+/// **`creator` and `ownership.owners[_].owner` need no conversion to
+/// compare.** [`TokenOwnership`] is a Solana-only read (`getTokenLargestAccounts`),
+/// and the caller passes `dossier.launch.creator`, which is `LaunchBlock`'s
+/// own Solana `Address` (pump.fun launch-block reconstruction is Solana-only
+/// too) -- both sides are the same 32-byte type, never a `ChainAddress` that
+/// would need unwrapping and could mismatch a chain tag.
+fn creator_sold_out(
+    cash_flow: &realorrug_onchain::wallets::CreatorCashFlow,
+    ownership: &realorrug_onchain::TokenOwnership,
+    creator: realorrug_types::Address,
+) -> bool {
+    if !cash_flow.gaps.is_empty() {
+        return false;
+    }
+    // Rule (1): `tokens_sold`/`tokens_bought` are `None` exactly when
+    // `trades_complete` is `false` (their own doc, mirroring
+    // `proceeds_wei`/`cost_basis_wei`) -- an incomplete read never reaches
+    // rule (2) at all.
+    let Some(sold) = cash_flow.tokens_sold() else {
+        return false;
+    };
+    let Some(bought) = cash_flow.tokens_bought() else {
+        return false;
+    };
+    // Rule (2): at least one decoded sell, and either it alone covers every
+    // bought token or an unpriced transfer tops up the remainder. `sold > 0`
+    // gates both branches so `transfers_out` alone -- no sell at all -- can
+    // never satisfy this.
+    let total_sale = sold > 0 && (sold >= bought || cash_flow.transfers_out > 0);
+    if !total_sale {
+        return false;
+    }
+    // Rule (3): the creator holds none of the sampled largest accounts.
+    !ownership.owners.iter().any(|owner| owner.owner == creator)
 }
 
 /// The venue's own fee, which is not the cost of trading and says so.
@@ -8617,5 +8713,262 @@ mod tests {
         assert!(fact_of(&sheet, Kind::AllWindowBuyersDeclaredExempt).is_none());
         assert!(fact_of(&sheet, Kind::FreshWindowBuyers).is_none());
         assert!(fact_of(&sheet, Kind::WindowBuySizesWithinTenPercent).is_none());
+    }
+
+    /// A dossier with the creator's own launch-block buy, a complete decoded
+    /// trade history and a sampled largest-holders read -- the shared
+    /// fixture the `creator_sold_out` tests below each mutate one condition
+    /// of. `owners` starts with the creator absent, so the base fixture on
+    /// its own already satisfies all three of [`creator_sold_out`]'s rules;
+    /// each test flips exactly one back off.
+    fn creator_sold_out_dossier() -> Dossier {
+        let creator = [9u8; 32];
+        let mut dossier = dossier_for([3u8; 32]);
+        dossier.launch = Some(launch(
+            realorrug_onchain::budget::Count::Exactly(4),
+            Some(1),
+        ));
+        dossier.creator_cash_flow = Some(realorrug_onchain::wallets::CreatorCashFlow {
+            trades: vec![
+                creator_trade(
+                    realorrug_robinhood::pons::CreatorRole::Deployer,
+                    realorrug_robinhood::pons::Side::Buy,
+                    1,
+                ),
+                creator_trade(
+                    realorrug_robinhood::pons::CreatorRole::Deployer,
+                    realorrug_robinhood::pons::Side::Sell,
+                    1,
+                ),
+            ],
+            transfers_out: 0,
+            quote_asset: realorrug_onchain::QuoteAsset::sol(),
+            trades_complete: true,
+            gaps: Vec::new(),
+        });
+        dossier.token_ownership = Some(realorrug_onchain::TokenOwnership {
+            owners: vec![token_owner(
+                [40u8; 32],
+                6_000,
+                Some(6_000),
+                realorrug_onchain::OwnerRole::Unresolved,
+            )],
+            supply: 10_000,
+            decimals: 6,
+            mint_authority: None,
+            freeze_authority: None,
+        });
+        assert_eq!(
+            dossier.launch.as_ref().unwrap().creator,
+            realorrug_types::Address::new(creator)
+        );
+        dossier
+    }
+
+    /// The two decoded trades in [`creator_sold_out_dossier`] each carry the
+    /// same `tokens: 1` placeholder `creator_trade` always uses; a real bug
+    /// this re-applies would be losing track of *which* trade is the buy and
+    /// which is the sell, not the token count, so every test below that
+    /// needs a specific token amount rebuilds its own trade list rather than
+    /// relying on `creator_trade`'s fixed `tokens: 1`.
+    fn trade(
+        side: realorrug_robinhood::pons::Side,
+        tokens: u128,
+    ) -> realorrug_onchain::wallets::CreatorTrade {
+        realorrug_onchain::wallets::CreatorTrade {
+            role: realorrug_robinhood::pons::CreatorRole::Deployer,
+            side,
+            quote: 1,
+            tokens,
+            block: 1,
+            transaction: realorrug_robinhood::Hash32([1; 32]).to_string(),
+            unique_id: format!("0x01-0-{tokens}"),
+        }
+    }
+
+    /// (a) full done criterion: the creator bought in the launch block
+    /// (already inside `trades` for Solana, per `creator_sold_out`'s own
+    /// doc), sold every one of those tokens across two decoded sells, and
+    /// is absent from the sampled largest holders -- the signal fires, and
+    /// the episode it is evidence of is `Episode::Exit` (assessment.rs
+    /// 96-135), never a launch-structure or creator-history episode.
+    #[test]
+    fn creator_sold_out_fires_on_a_total_two_sell_exit() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 600),
+            trade(realorrug_robinhood::pons::Side::Sell, 400),
+        ];
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(sheet.signals.contains(&Signal::CreatorSoldOut));
+        assert_eq!(
+            crate::assessment::episode(Signal::CreatorSoldOut),
+            crate::assessment::Episode::Exit
+        );
+    }
+
+    /// (b) one of the two sells removed: 400 of the 1,000 bought tokens are
+    /// unaccounted for and no transfer covers them, so this is a partial
+    /// exit, not a total one, and must not fire.
+    #[test]
+    fn creator_sold_out_is_absent_on_a_partial_sale() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 600),
+        ];
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    /// Arithmetic boundary: tokens sold exactly equal to tokens bought
+    /// fires; one token short of that, with nothing else to cover the gap,
+    /// does not. The two tests below are the same fixture with only the
+    /// second sell's size changed by one token, so only rule (2)'s
+    /// `sold >= bought` comparison can be what tells them apart.
+    #[test]
+    fn creator_sold_out_fires_when_sold_exactly_equals_bought() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 1_000),
+        ];
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    #[test]
+    fn creator_sold_out_is_absent_when_sold_is_one_token_short() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 999),
+        ];
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    /// (c) `trades_complete = false`: a total sale by every other measure
+    /// must still not fire, because rule (1) reads the trade history itself
+    /// as unread past this point (`tokens_sold`/`tokens_bought` return
+    /// `None`, mirroring `proceeds_wei`/`cost_basis_wei`).
+    #[test]
+    fn creator_sold_out_is_absent_when_trades_incomplete() {
+        let mut dossier = creator_sold_out_dossier();
+        let flow = dossier.creator_cash_flow.as_mut().unwrap();
+        flow.trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 1_000),
+        ];
+        flow.trades_complete = false;
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    /// The same fixture again, this time with a non-empty gap and
+    /// `trades_complete` left `true` -- rule (1) reads `gaps` too, not only
+    /// `trades_complete`, so a gap alone must be enough to withhold the
+    /// signal.
+    #[test]
+    fn creator_sold_out_is_absent_when_a_gap_is_recorded() {
+        let mut dossier = creator_sold_out_dossier();
+        let flow = dossier.creator_cash_flow.as_mut().unwrap();
+        flow.trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 1_000),
+        ];
+        flow.gaps
+            .push("creator trade history: truncated".to_owned());
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    /// (d) the creator is still among the sampled largest holders: even a
+    /// total decoded sale must not fire, since rule (3) alone already fails
+    /// -- the tokens the read decoded as sold were not all of what the
+    /// creator holds, whatever the trade history separately shows.
+    #[test]
+    fn creator_sold_out_is_absent_when_creator_still_among_largest_holders() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 1_000),
+        ];
+        dossier
+            .token_ownership
+            .as_mut()
+            .unwrap()
+            .owners
+            .push(token_owner(
+                [9u8; 32],
+                500,
+                Some(500),
+                realorrug_onchain::OwnerRole::Unresolved,
+            ));
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    /// (e) `transfers_out` only, no decoded sell at all: an unpriced
+    /// transfer is never a sale on its own (the same rule
+    /// `count_transfers_out`'s own doc states), so this must not fire no
+    /// matter how large `transfers_out` is or how absent the creator is
+    /// from the largest holders.
+    #[test]
+    fn creator_sold_out_is_absent_on_transfers_out_alone() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades =
+            vec![trade(realorrug_robinhood::pons::Side::Buy, 1_000)];
+        dossier.creator_cash_flow.as_mut().unwrap().transfers_out = 5;
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    /// A partial decoded sale topped up by an outgoing transfer of unknown
+    /// size *does* satisfy rule (2) -- this is the one place the rule is
+    /// looser than a pure token-arithmetic total, because `transfers_out` is
+    /// a count with no token amount to check against (`CreatorCashFlow::
+    /// transfers_out`'s own doc). At least one decoded sell must still be
+    /// present, which the previous test already covers on its own.
+    #[test]
+    fn creator_sold_out_fires_when_a_transfer_tops_up_a_partial_sale() {
+        let mut dossier = creator_sold_out_dossier();
+        let flow = dossier.creator_cash_flow.as_mut().unwrap();
+        flow.trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 600),
+        ];
+        flow.transfers_out = 1;
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    /// Missing reads: `dossier.launch`, `dossier.creator_cash_flow` and
+    /// `dossier.token_ownership` are each independently required (rule "any
+    /// of the three unreadable: no signal") -- dropping any single one from
+    /// an otherwise-firing fixture must withhold the signal.
+    #[test]
+    fn creator_sold_out_is_absent_without_a_launch_block() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 1_000),
+        ];
+        dossier.launch = None;
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    #[test]
+    fn creator_sold_out_is_absent_without_a_token_ownership_read() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades = vec![
+            trade(realorrug_robinhood::pons::Side::Buy, 1_000),
+            trade(realorrug_robinhood::pons::Side::Sell, 1_000),
+        ];
+        dossier.token_ownership = None;
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
     }
 }

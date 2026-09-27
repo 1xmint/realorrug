@@ -962,6 +962,43 @@ impl CreatorCashFlow {
         let cost = i128::try_from(self.cost_basis_wei()?).unwrap_or(i128::MAX);
         Some(proceeds - cost)
     }
+
+    /// Total tokens given up across every decoded sell, or `None` when the
+    /// trade history is incomplete.
+    ///
+    /// Added for `realorrug-roast`'s `Signal::CreatorSoldOut` rule (packet
+    /// 9-25-0003): that reader needs the *token* side of a decoded sell, not
+    /// [`Self::proceeds_wei`]'s quote side, and `Side` itself is not
+    /// re-exported publicly here, so it could not compute this sum without
+    /// naming a type its `Cargo.toml` only carries as a dev-dependency.
+    #[must_use]
+    pub fn tokens_sold(&self) -> Option<u128> {
+        if !self.trades_complete {
+            return None;
+        }
+        Some(
+            self.trades
+                .iter()
+                .filter(|t| t.side == Side::Sell)
+                .fold(0u128, |sum, t| sum.saturating_add(t.tokens)),
+        )
+    }
+
+    /// Total tokens received across every decoded buy, or `None` when the
+    /// trade history is incomplete. See [`Self::tokens_sold`]'s doc for why
+    /// this exists alongside [`Self::cost_basis_wei`].
+    #[must_use]
+    pub fn tokens_bought(&self) -> Option<u128> {
+        if !self.trades_complete {
+            return None;
+        }
+        Some(
+            self.trades
+                .iter()
+                .filter(|t| t.side == Side::Buy)
+                .fold(0u128, |sum, t| sum.saturating_add(t.tokens)),
+        )
+    }
 }
 
 /// Reads the deployer's and fee recipient's on-chain cash flow for one

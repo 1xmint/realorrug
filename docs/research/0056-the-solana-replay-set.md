@@ -755,6 +755,11 @@ What this settles and what it does not:
   review decides which. The `incomplete-read-*` mint now reads completely,
   so the set holds no real incomplete read. No `creator-sale-*` case shows a
   sale: `CreatorSoldOut` is still unwired (blocked on design 0021).
+  **Addendum 2026-09-26 (packet 9-25-0003):** wired now, from a single
+  capture's `creator_cash_flow` and `token_ownership` reads (not the memory
+  path design 0021 describes); none of the nine sheets above were
+  re-captured to check whether any now fires, so this still does not
+  settle whether the set holds a real creator-sale case.
 - **Still missing for the six kinds plan 0002 names:** a launch the rules
   themselves flag as suspicious, a real incomplete read, and a creator sale.
 - **Wrong in this read: "within 10%" on every case.** All nine sheets say
