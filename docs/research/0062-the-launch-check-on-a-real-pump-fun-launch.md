@@ -109,6 +109,42 @@ instruction layout, not a second live capture):
   in this transaction". Stating a transfer is a claim the check verifies,
   not a blanket exemption.
 
+### Run against the real transaction
+
+Debug build of main `a36a32f` (#202), run on the owner's workstation on
+2026-09-27 against the public mainnet RPC with `--treasury` and
+`--dev-wallet` both `FvHDLiUXkBFPernE9fDMcv2PKR6ZMy5z4vn9VZXqW1Hk` and
+`--dev-buy-lamports 979355158`, as in the second run above.
+
+Without `--allow-transfer`, exit 1:
+
+```text
+NOT CLEAN: launch 2xhvyYRjNLMiP8e5p1so7EPDAH21WwpnDeicYjVxAofhf5xBR81dDRacxkNkd25PVhXPjLr94QCdCtKNMexkYLYf (slot 450167660)
+  PASS    transaction: slot 450167660
+  PASS    single launch: mint 5AXeGnseKBZPDC9xJfZPjKy5bnAMYRcMhHFkXrKUzE8m
+  PASS    fee recipient: FvHDLiUXkBFPernE9fDMcv2PKR6ZMy5z4vn9VZXqW1Hk (slot 451137851)
+  PASS    authorities: both revoked (slot 451137851)
+  PASS    dev buy: 979355158 lamports (967264352 to the curve, 9189012 fee, 2901794 creator fee)
+  REFUSE  allowlist: top-level System Program transfer of 1000000 lamports to AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum (instruction 2): a launch that also pays someone is not a clean launch
+```
+
+With `--allow-transfer AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum:1000000`,
+exit 0:
+
+```text
+CLEAN launch 2xhvyYRjNLMiP8e5p1so7EPDAH21WwpnDeicYjVxAofhf5xBR81dDRacxkNkd25PVhXPjLr94QCdCtKNMexkYLYf (slot 450167660)
+  PASS    transaction: slot 450167660
+  PASS    single launch: mint 5AXeGnseKBZPDC9xJfZPjKy5bnAMYRcMhHFkXrKUzE8m
+  PASS    fee recipient: FvHDLiUXkBFPernE9fDMcv2PKR6ZMy5z4vn9VZXqW1Hk (slot 451137864)
+  PASS    authorities: both revoked (slot 451137864)
+  PASS    dev buy: 979355158 lamports (967264352 to the curve, 9189012 fee, 2901794 creator fee)
+  PASS    allowlist: only allowed programs, no other buy, 1 stated transfer (1000000 lamports to AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum)
+```
+
+The two quoted lines above are now observed, not only asserted by unit
+tests: the node's `json` encoding carries the System instruction's raw
+bytes, so the rule reads the real tip.
+
 ## Not checked
 
 - One launch is one sample. A dev buy through a pump.fun instruction other
