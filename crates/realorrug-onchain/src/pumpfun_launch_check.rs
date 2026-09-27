@@ -21,7 +21,27 @@ use realorrug_pumpfun::curve::BondingCurve;
 use realorrug_types::{Address, Slot};
 
 use crate::mint::mint_authorities;
-use crate::rpc::Transaction;
+use crate::rpc::{RawInstruction, Transaction};
+
+/// The System Program's address -- the only program the allowlist treats
+/// differently depending on whether an instruction is top-level or a CPI
+/// (see [`StatedTransfer`] and [`check_allowlist`]).
+const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
+
+/// A SOL transfer the operator stated in advance -- the CLI's
+/// `--allow-transfer <address>:<lamports>` -- so [`check_allowlist`] can tell
+/// it from a top-level System Program transfer nobody asked for.
+///
+/// Matched on both fields exactly: a stated destination with the wrong
+/// amount, or a stated amount to the wrong destination, is not the transfer
+/// that was stated (rule 8: unknown is not safe).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatedTransfer {
+    /// The exact destination.
+    pub to: Address,
+    /// The exact lamport amount.
+    pub lamports: u64,
+}
 
 /// One check's outcome: what passed, or why it refused.
 ///
@@ -104,8 +124,11 @@ impl LaunchCheck {
 /// to check.
 const ALLOWED_PROGRAMS: &[(&str, &str)] = &[
     (
-        "11111111111111111111111111111111",
-        "System Program -- funds the new mint and curve accounts (create.system_program)",
+        SYSTEM_PROGRAM,
+        "System Program -- funds the new mint and curve accounts as a CPI \
+         (create.system_program); a *top-level* transfer is only allowed \
+         when it exactly matches a StatedTransfer the operator gave in \
+         advance (research 0062 addendum, 2026-09-27)",
     ),
     (
         "ComputeBudget111111111111111111111111111111",
@@ -188,6 +211,7 @@ pub fn check_launch(
     treasury: &Address,
     dev_wallet: &Address,
     dev_buy_lamports: u64,
+    stated_transfers: &[StatedTransfer],
 ) -> LaunchCheck {
     // `tx.failed` reads `meta.err`, which is `None` both when the node said
     // the transaction succeeded and when the node's response never carried a
@@ -242,7 +266,7 @@ pub fn check_launch(
     let allowlist = if tx.failed || unreadable {
         refused_outcome()
     } else {
-        check_allowlist(tx, dev_wallet)
+        check_allowlist(tx, dev_wallet, stated_transfers)
     };
 
     LaunchCheck {
@@ -494,11 +518,135 @@ fn check_dev_buy(tx: &Transaction, dev_wallet: &Address, expected: u64) -> Check
     }
 }
 
-/// Check 6: every instruction's program is on the allowlist, and every buy
+/// The System Program's own instruction discriminant (a plain 4-byte
+/// little-endian `u32`, not an Anchor 8-byte sighash -- the System Program
+/// predates Anchor). Confirmed against Solana's `SystemInstruction` enum
+/// (`solana-program`/agave `system_instruction.rs`, cited by the packet this
+/// check implements): `Transfer` is variant 2, `TransferWithSeed` is variant
+/// 11 -- the only two variants that move lamports to an account named in the
+/// instruction, which is why they are the only two this check has to tell
+/// from every other top-level System Program instruction.
+const SYSTEM_TRANSFER: u32 = 2;
+const SYSTEM_TRANSFER_WITH_SEED: u32 = 11;
+
+/// What a top-level System Program instruction turned out to be, for
+/// [`check_allowlist`].
+enum TopLevelSystem {
+    /// A `Transfer` or `TransferWithSeed` that decoded: its destination and
+    /// lamports.
+    Transfer { to: Address, lamports: u64 },
+    /// A System Program instruction other than a transfer (`CreateAccount`,
+    /// `Assign`, ...). Research 0062's real launch has none of these at the
+    /// top level, so this check cannot confirm one is harmless (rule 8) and
+    /// refuses it outright.
+    NotATransfer,
+    /// The discriminant, or the transfer's own payload or accounts, did not
+    /// decode.
+    Undecodable,
+}
+
+/// Reads a top-level System Program instruction as a [`TopLevelSystem`].
+///
+/// The destination is the second account for `Transfer` (`[from, to]`) and
+/// the third for `TransferWithSeed` (`[from, base, to]`, `base` being the
+/// signer) -- both lay lamports out as the first field after the
+/// discriminant, so the amount is read the same way either way.
+fn classify_top_level_system(ix: &RawInstruction) -> TopLevelSystem {
+    let Some(kind) = ix
+        .data
+        .get(0..4)
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .map(u32::from_le_bytes)
+    else {
+        return TopLevelSystem::Undecodable;
+    };
+    let to_index = match kind {
+        SYSTEM_TRANSFER => 1,
+        SYSTEM_TRANSFER_WITH_SEED => 2,
+        _ => return TopLevelSystem::NotATransfer,
+    };
+    let Some(lamports) = ix
+        .data
+        .get(4..12)
+        .and_then(|b| <[u8; 8]>::try_from(b).ok())
+        .map(u64::from_le_bytes)
+    else {
+        return TopLevelSystem::Undecodable;
+    };
+    let Some(to) = ix
+        .accounts
+        .get(to_index)
+        .and_then(|a| a.parse::<Address>().ok())
+    else {
+        return TopLevelSystem::Undecodable;
+    };
+    TopLevelSystem::Transfer { to, lamports }
+}
+
+/// Handles one top-level System Program instruction for [`check_allowlist`]:
+/// `Some(_)` is the refusal to return immediately, `None` means it matched a
+/// stated transfer (and `matched` now records that) and the scan continues.
+///
+/// Split out of `check_allowlist` itself only to keep that function's line
+/// count under clippy's limit -- the behaviour (match a stated transfer
+/// exactly, or refuse) is unchanged from research 0062's addendum.
+fn stated_or_refuse(
+    ix: &RawInstruction,
+    index: usize,
+    stated_transfers: &[StatedTransfer],
+    matched: &mut [bool],
+) -> Option<CheckOutcome> {
+    match classify_top_level_system(ix) {
+        TopLevelSystem::Transfer { to, lamports } => {
+            let found = stated_transfers
+                .iter()
+                .enumerate()
+                .find(|(j, s)| !matched[*j] && s.to == to && s.lamports == lamports);
+            match found {
+                Some((j, _)) => {
+                    matched[j] = true;
+                    None
+                }
+                None => Some(CheckOutcome::Refuse(format!(
+                    "top-level System Program transfer of {lamports} lamports to {to} \
+                     (instruction {index}): a launch that also pays someone is not a clean launch"
+                ))),
+            }
+        }
+        TopLevelSystem::NotATransfer | TopLevelSystem::Undecodable => {
+            Some(CheckOutcome::Refuse(format!(
+                "a top-level System Program instruction other than a stated transfer is not \
+                 allowed (instruction {index})"
+            )))
+        }
+    }
+}
+
+/// Check 6: every instruction's program is on the allowlist, every top-level
+/// System Program transfer matches a `StatedTransfer` exactly, and every buy
 /// in the transaction belongs to the dev wallet.
-fn check_allowlist(tx: &Transaction, dev_wallet: &Address) -> CheckOutcome {
+///
+/// A top-level System Program transfer moves SOL, not the token, so it
+/// cannot be a hidden buy -- but a launch that also pays someone (a
+/// transaction-landing tip, a platform fee) is not a clean launch unless the
+/// operator said it would, with the exact destination and amount, before the
+/// check ran (research 0062 addendum, 2026-09-27; Josh's approved plan,
+/// 2026-09-26 step A7). Inner (CPI) System Program calls are unconditionally
+/// allowed -- pump.fun's own `create` funds the new mint and curve accounts
+/// that way on every ordinary launch.
+fn check_allowlist(
+    tx: &Transaction,
+    dev_wallet: &Address,
+    stated_transfers: &[StatedTransfer],
+) -> CheckOutcome {
     let dev_wallet_key = dev_wallet.to_string();
     let pumpfun_program = pumpfun::PROGRAM_ID.to_string();
+    let mut matched = vec![false; stated_transfers.len()];
+    // Counts only top-level instructions, so the index in a refusal matches
+    // the position an explorer or the operator's own launch tool would show
+    // (the lead's finding numbers the real launch's top-level instructions
+    // 0 through 5, inner CPIs are not numbered at all).
+    let mut top_level_index = 0usize;
 
     for ix in &tx.instructions {
         if !ALLOWED_PROGRAMS.iter().any(|(p, _)| *p == ix.program) {
@@ -506,6 +654,24 @@ fn check_allowlist(tx: &Transaction, dev_wallet: &Address) -> CheckOutcome {
                 "an instruction from {} is not allowed",
                 ix.program
             ));
+        }
+
+        if ix.program == SYSTEM_PROGRAM {
+            if !ix.top_level {
+                // pump.fun's own CPI into the System Program to fund the new
+                // mint and curve accounts -- expected on every launch, and
+                // not something the operator states in advance.
+                continue;
+            }
+            let index = top_level_index;
+            top_level_index += 1;
+            if let Some(refusal) = stated_or_refuse(ix, index, stated_transfers, &mut matched) {
+                return refusal;
+            }
+            continue;
+        }
+        if ix.top_level {
+            top_level_index += 1;
         }
         if ix.program != pumpfun_program {
             continue;
@@ -558,7 +724,35 @@ fn check_allowlist(tx: &Transaction, dev_wallet: &Address) -> CheckOutcome {
             instruction.anchor_name()
         ));
     }
-    CheckOutcome::Pass("only allowed programs, no other buy".to_owned())
+
+    // The operator said each of these would be there -- one that never
+    // matched an instruction in the transaction is not a stated transfer,
+    // it is a claim the launch did not keep (rule 8).
+    if let Some((unmatched, _)) = stated_transfers
+        .iter()
+        .zip(&matched)
+        .find(|(_, found)| !**found)
+    {
+        return CheckOutcome::Refuse(format!(
+            "a stated transfer of {} lamports to {} was not found in this transaction",
+            unmatched.lamports, unmatched.to
+        ));
+    }
+
+    if stated_transfers.is_empty() {
+        CheckOutcome::Pass("only allowed programs, no other buy".to_owned())
+    } else {
+        let list = stated_transfers
+            .iter()
+            .map(|s| format!("{} lamports to {}", s.lamports, s.to))
+            .collect::<Vec<_>>()
+            .join(", ");
+        CheckOutcome::Pass(format!(
+            "only allowed programs, no other buy, {} stated transfer{} ({list})",
+            stated_transfers.len(),
+            if stated_transfers.len() == 1 { "" } else { "s" }
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -598,6 +792,7 @@ mod tests {
             program: pumpfun::PROGRAM_ID.to_string(),
             data,
             accounts: vec![mint.to_string()],
+            top_level: true,
         }
     }
 
@@ -612,6 +807,7 @@ mod tests {
             program: pumpfun::PROGRAM_ID.to_string(),
             data,
             accounts: vec![user.to_string()],
+            top_level: true,
         }
     }
 
@@ -641,6 +837,7 @@ mod tests {
             program: pumpfun::PROGRAM_ID.to_string(),
             data,
             accounts: Vec::new(),
+            top_level: false,
         }
     }
 
@@ -694,6 +891,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(result.clean(), "{result:?}");
         assert_eq!(result.slot, Slot(1));
@@ -715,6 +913,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.clean());
         let failed = CheckOutcome::Refuse("the transaction failed".to_owned());
@@ -739,6 +938,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert_eq!(
             result.single_launch,
@@ -759,6 +959,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.single_launch.ok());
         assert_eq!(
@@ -775,6 +976,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.single_launch.ok(), "{:?}", result.single_launch);
         assert!(matches!(&result.single_launch, CheckOutcome::Refuse(r) if r.contains("2 launch")));
@@ -792,6 +994,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.fee_recipient.ok(), "{:?}", result.fee_recipient);
     }
@@ -807,6 +1010,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.fee_recipient.ok());
     }
@@ -823,6 +1027,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.authorities.ok());
         assert!(
@@ -842,6 +1047,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.authorities.ok());
     }
@@ -856,6 +1062,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.authorities.ok());
     }
@@ -872,6 +1079,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             2_000_000,
+            &[],
         );
         assert!(!result.dev_buy.ok(), "{:?}", result.dev_buy);
     }
@@ -894,6 +1102,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.dev_buy.ok());
     }
@@ -914,6 +1123,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             0,
+            &[],
         );
         assert!(result.dev_buy.ok(), "{:?}", result.dev_buy);
     }
@@ -932,6 +1142,7 @@ mod tests {
             program: pumpfun::PROGRAM_ID.to_string(),
             data,
             accounts: vec![user.to_string()],
+            top_level: true,
         }
     }
 
@@ -955,6 +1166,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             979_355_158,
+            &[],
         );
         assert_eq!(
             result.dev_buy,
@@ -987,6 +1199,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1,
+            &[],
         );
         assert!(
             matches!(&result.dev_buy, CheckOutcome::Refuse(r) if r.contains('1') && r.contains("receipt")),
@@ -1005,6 +1218,7 @@ mod tests {
             program: pumpfun::PROGRAM_ID.to_string(),
             data: bad,
             accounts: Vec::new(),
+            top_level: true,
         });
         let curve = curve_bytes(treasury);
         let mint_account = mint_bytes(None, None);
@@ -1015,6 +1229,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(
             matches!(&result.dev_buy, CheckOutcome::Refuse(r) if r.contains("did not decode")),
@@ -1036,6 +1251,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         // Unchanged from `passing_tx`'s own dev-wallet receipt: the extra
         // event for someone else must not be folded into the total.
@@ -1055,6 +1271,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.allowlist.ok(), "{:?}", result.allowlist);
     }
@@ -1069,6 +1286,7 @@ mod tests {
             program: "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ".to_owned(),
             data: vec![0; 8],
             accounts: Vec::new(),
+            top_level: true,
         });
         let curve = curve_bytes(treasury);
         let mint_account = mint_bytes(None, None);
@@ -1079,6 +1297,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(result.allowlist.ok(), "{:?}", result.allowlist);
     }
@@ -1090,6 +1309,7 @@ mod tests {
             program: "SomeOtherProgram".to_owned(),
             data: vec![0; 8],
             accounts: Vec::new(),
+            top_level: true,
         });
         let curve = curve_bytes(treasury);
         let mint_account = mint_bytes(None, None);
@@ -1100,6 +1320,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(
             matches!(&result.allowlist, CheckOutcome::Refuse(r) if r.contains("SomeOtherProgram"))
@@ -1123,6 +1344,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(result.transaction.ok());
         assert!(result.single_launch.ok());
@@ -1155,6 +1377,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(!result.fee_recipient.ok(), "{:?}", result.fee_recipient);
         assert!(
@@ -1175,6 +1398,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         )
     }
 
@@ -1218,6 +1442,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert_eq!(
             result.fee_recipient,
@@ -1232,9 +1457,13 @@ mod tests {
     }
 
     fn allowlist_with(extra: RawInstruction) -> CheckOutcome {
+        allowlist_with_stated(extra, &[])
+    }
+
+    fn allowlist_with_stated(extra: RawInstruction, stated: &[StatedTransfer]) -> CheckOutcome {
         let (mut t, _treasury, dev_wallet, _mint) = passing_tx();
         t.instructions.push(extra);
-        check_allowlist(&t, &dev_wallet)
+        check_allowlist(&t, &dev_wallet, stated)
     }
 
     #[test]
@@ -1243,6 +1472,7 @@ mod tests {
             program: pumpfun::PROGRAM_ID.to_string(),
             data: vec![0xEE; 8],
             accounts: Vec::new(),
+            top_level: true,
         });
         assert!(
             matches!(&outcome, CheckOutcome::Refuse(r) if r.contains("did not decode")),
@@ -1259,6 +1489,7 @@ mod tests {
                 .as_bytes()
                 .to_vec(),
             accounts: Vec::new(),
+            top_level: true,
         });
         assert!(
             matches!(&outcome, CheckOutcome::Refuse(r) if r.contains("is not allowed in a launch")),
@@ -1272,6 +1503,7 @@ mod tests {
             program: crate::rpc::UNRESOLVED_PROGRAM.to_owned(),
             data: Vec::new(),
             accounts: Vec::new(),
+            top_level: true,
         });
         assert!(!outcome.ok(), "{outcome:?}");
     }
@@ -1291,6 +1523,7 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         let unread = CheckOutcome::Refuse("the transaction's outcome could not be read".to_owned());
         assert_eq!(result.transaction, unread);
@@ -1310,6 +1543,7 @@ mod tests {
                 .as_bytes()
                 .to_vec(),
             accounts: Vec::new(),
+            top_level: true,
         });
         let result = check_launch(
             &t,
@@ -1318,11 +1552,315 @@ mod tests {
             &treasury,
             &dev_wallet,
             1_000_000,
+            &[],
         );
         assert!(
             matches!(&result.single_launch, CheckOutcome::Refuse(r) if r.contains("2 launch")),
             "{:?}",
             result.single_launch
+        );
+    }
+
+    // -- top-level System Program transfers (research 0062 addendum) --
+
+    /// A `Transfer` (discriminant 2): `[from, to]`, lamports first after the
+    /// discriminant.
+    fn system_transfer_ix(to: Address, lamports: u64, top_level: bool) -> RawInstruction {
+        let mut data = SYSTEM_TRANSFER.to_le_bytes().to_vec();
+        data.extend_from_slice(&lamports.to_le_bytes());
+        RawInstruction {
+            program: SYSTEM_PROGRAM.to_owned(),
+            data,
+            accounts: vec![addr(9).to_string(), to.to_string()],
+            top_level,
+        }
+    }
+
+    /// A `TransferWithSeed` (discriminant 11): `[from, base, to]` -- the
+    /// destination is the *third* account, not the second.
+    fn system_transfer_with_seed_ix(to: Address, lamports: u64) -> RawInstruction {
+        let mut data = SYSTEM_TRANSFER_WITH_SEED.to_le_bytes().to_vec();
+        data.extend_from_slice(&lamports.to_le_bytes());
+        RawInstruction {
+            program: SYSTEM_PROGRAM.to_owned(),
+            data,
+            accounts: vec![addr(9).to_string(), addr(10).to_string(), to.to_string()],
+            top_level: true,
+        }
+    }
+
+    /// `CreateAccount` (discriminant 0) -- a top-level System Program
+    /// instruction that is not a transfer at all.
+    fn system_create_account_ix(top_level: bool) -> RawInstruction {
+        RawInstruction {
+            program: SYSTEM_PROGRAM.to_owned(),
+            data: 0u32.to_le_bytes().to_vec(),
+            accounts: vec![addr(9).to_string(), addr(10).to_string()],
+            top_level,
+        }
+    }
+
+    #[test]
+    fn an_unstated_top_level_transfer_refuses_the_launch() {
+        let (mut t, treasury, dev_wallet, _mint) = passing_tx();
+        t.instructions.push(system_transfer_ix(addr(7), 1_000_000, true));
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+            &[],
+        );
+        assert!(!result.clean(), "{result:?}");
+        assert!(
+            matches!(
+                &result.allowlist,
+                CheckOutcome::Refuse(r)
+                    if r.contains("1000000") && r.contains(&addr(7).to_string())
+            ),
+            "{:?}",
+            result.allowlist
+        );
+    }
+
+    #[test]
+    fn the_same_launch_with_no_transfer_at_all_passes() {
+        let (t, treasury, dev_wallet, _mint) = passing_tx();
+        let curve = curve_bytes(treasury);
+        let mint_account = mint_bytes(None, None);
+        let result = check_launch(
+            &t,
+            AccountState::present(&curve),
+            AccountState::present(&mint_account),
+            &treasury,
+            &dev_wallet,
+            1_000_000,
+            &[],
+        );
+        assert!(result.clean(), "{result:?}");
+    }
+
+    #[test]
+    fn a_stated_transfer_that_matches_exactly_passes_and_is_reported() {
+        let to = addr(7);
+        let outcome = allowlist_with_stated(
+            system_transfer_ix(to, 1_000_000, true),
+            &[StatedTransfer {
+                to,
+                lamports: 1_000_000,
+            }],
+        );
+        assert!(
+            matches!(
+                &outcome,
+                CheckOutcome::Pass(r) if r.contains("1000000") && r.contains(&to.to_string())
+            ),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn a_stated_transfer_with_the_wrong_lamports_refuses() {
+        let to = addr(7);
+        let outcome = allowlist_with_stated(
+            system_transfer_ix(to, 999_999, true),
+            &[StatedTransfer {
+                to,
+                lamports: 1_000_000,
+            }],
+        );
+        assert!(!outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn a_stated_transfer_to_the_wrong_destination_refuses() {
+        let outcome = allowlist_with_stated(
+            system_transfer_ix(addr(8), 1_000_000, true),
+            &[StatedTransfer {
+                to: addr(7),
+                lamports: 1_000_000,
+            }],
+        );
+        assert!(!outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn a_stated_transfer_that_never_appears_refuses() {
+        let (t, _treasury, dev_wallet, _mint) = passing_tx();
+        let outcome = check_allowlist(
+            &t,
+            &dev_wallet,
+            &[StatedTransfer {
+                to: addr(7),
+                lamports: 1_000_000,
+            }],
+        );
+        assert!(
+            matches!(&outcome, CheckOutcome::Refuse(r) if r.contains("was not found")),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn an_unstated_transfer_with_seed_refuses() {
+        let outcome = allowlist_with(system_transfer_with_seed_ix(addr(7), 500));
+        assert!(!outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn a_stated_transfer_with_seed_that_matches_passes() {
+        let to = addr(7);
+        let outcome = allowlist_with_stated(
+            system_transfer_with_seed_ix(to, 500),
+            &[StatedTransfer { to, lamports: 500 }],
+        );
+        assert!(outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn a_top_level_create_account_refuses_even_though_the_program_is_allowed() {
+        let outcome = allowlist_with(system_create_account_ix(true));
+        assert!(
+            matches!(
+                &outcome,
+                CheckOutcome::Refuse(r) if r.contains("other than a stated transfer")
+            ),
+            "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn an_inner_system_transfer_is_allowed_unstated() {
+        // pump.fun's own `create` CPIs into the System Program to fund the
+        // new mint and curve accounts -- expected on every ordinary launch,
+        // and never something the operator states in advance.
+        let outcome = allowlist_with(system_transfer_ix(addr(7), 1_000_000, false));
+        assert!(outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn an_inner_create_account_is_also_allowed_unstated() {
+        let outcome = allowlist_with(system_create_account_ix(false));
+        assert!(outcome.ok(), "{outcome:?}");
+    }
+
+    // -- the real launch's own top-level shape (research 0062 addendum,
+    // 2xhvyYRjNLMiP8e5p1so7EPDAH21WwpnDeicYjVxAofhf5xBR81dDRacxkNkd25PVhXPjLr94QCdCtKNMexkYLYf):
+    // 0/1 ComputeBudget, 2 a top-level System transfer, 3 pump.fun create,
+    // 4 Associated Token createIdempotent, 5 pump.fun. --
+
+    fn compute_budget_ix() -> RawInstruction {
+        RawInstruction {
+            program: "ComputeBudget111111111111111111111111111111".to_owned(),
+            data: vec![0; 5],
+            accounts: Vec::new(),
+            top_level: true,
+        }
+    }
+
+    fn ata_create_idempotent_ix() -> RawInstruction {
+        RawInstruction {
+            program: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL".to_owned(),
+            data: vec![1],
+            accounts: Vec::new(),
+            top_level: true,
+        }
+    }
+
+    fn real_launch_shape(tip_to: Address, tip_lamports: u64) -> (Transaction, Address) {
+        let dev_wallet = addr(2);
+        let mint = addr(3);
+        let treasury = addr(1);
+        let mut t = tx(&[dev_wallet.to_string().leak()], false);
+        t.instructions = vec![
+            compute_budget_ix(),
+            compute_budget_ix(),
+            system_transfer_ix(tip_to, tip_lamports, true),
+            create_ix(mint, treasury),
+            ata_create_idempotent_ix(),
+            buy_ix(dev_wallet, 1_000_000),
+        ];
+        (t, dev_wallet)
+    }
+
+    #[test]
+    fn the_real_launchs_shape_passes_with_the_transfer_stated() {
+        let to = addr(9);
+        let (t, dev_wallet) = real_launch_shape(to, 1_000_000);
+        let outcome = check_allowlist(
+            &t,
+            &dev_wallet,
+            &[StatedTransfer {
+                to,
+                lamports: 1_000_000,
+            }],
+        );
+        assert!(outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn the_real_launchs_shape_refuses_without_the_transfer_stated() {
+        let to = addr(9);
+        let (t, dev_wallet) = real_launch_shape(to, 1_000_000);
+        let outcome = check_allowlist(&t, &dev_wallet, &[]);
+        assert!(!outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn the_real_launchs_shape_refuses_with_the_wrong_lamports_stated() {
+        let to = addr(9);
+        let (t, dev_wallet) = real_launch_shape(to, 1_000_000);
+        let outcome = check_allowlist(
+            &t,
+            &dev_wallet,
+            &[StatedTransfer { to, lamports: 999 }],
+        );
+        assert!(!outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn the_real_launchs_shape_refuses_with_the_wrong_destination_stated() {
+        let to = addr(9);
+        let (t, dev_wallet) = real_launch_shape(to, 1_000_000);
+        let outcome = check_allowlist(
+            &t,
+            &dev_wallet,
+            &[StatedTransfer {
+                to: addr(10),
+                lamports: 1_000_000,
+            }],
+        );
+        assert!(!outcome.ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn the_real_launchs_shape_refuses_a_second_stated_transfer_that_is_absent() {
+        let to = addr(9);
+        let (t, dev_wallet) = real_launch_shape(to, 1_000_000);
+        let outcome = check_allowlist(
+            &t,
+            &dev_wallet,
+            &[
+                StatedTransfer {
+                    to,
+                    lamports: 1_000_000,
+                },
+                StatedTransfer {
+                    to: addr(11),
+                    lamports: 42,
+                },
+            ],
+        );
+        assert!(
+            matches!(
+                &outcome,
+                CheckOutcome::Refuse(r) if r.contains("was not found") && r.contains("42")
+            ),
+            "{outcome:?}"
         );
     }
 }

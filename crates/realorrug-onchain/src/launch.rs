@@ -361,6 +361,7 @@ mod tests {
             program: "SomeOtherProgram".to_owned(),
             data: vec![0; 8],
             accounts: Vec::new(),
+            top_level: true,
         }];
         assert_eq!(launch_from(&a), Err(NotALaunch::NoLaunchInstruction));
     }
@@ -382,6 +383,7 @@ mod tests {
             program: pumpfun_program(),
             data: launch_data(),
             accounts: Vec::new(),
+            top_level: true,
         }];
         let mut member = tx(&["Payer", "Wallet"]);
         member.post_token_balances = vec![balance(1, "M", 10)];
@@ -421,6 +423,7 @@ mod tests {
             program: pumpfun_program(),
             data: buy_data(lamports),
             accounts: Vec::new(),
+            top_level: true,
         }];
         t
     }
@@ -500,6 +503,7 @@ mod tests {
             program: pumpfun_program(),
             data: launch_data(),
             accounts: Vec::new(),
+            top_level: true,
         }];
         t
     }
@@ -535,6 +539,7 @@ mod tests {
             program: pumpfun_program(),
             data: launch_data(),
             accounts: Vec::new(),
+            top_level: true,
         }];
         let (creator, metadata) = launch_from(&a).expect("a launch");
         assert_eq!(creator, Address::new([9u8; 32]));

@@ -268,6 +268,7 @@ mod tests {
             program: program.to_string(),
             data: discriminator.to_vec(),
             accounts: Vec::new(),
+            top_level: true,
         }
     }
 

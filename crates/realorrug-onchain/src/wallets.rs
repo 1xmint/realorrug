@@ -5960,6 +5960,7 @@ mod tests {
             program: KNOWN_TRADING_PROGRAMS[0].to_owned(),
             data: Vec::new(),
             accounts: Vec::new(),
+            top_level: true,
         }
     }
 
