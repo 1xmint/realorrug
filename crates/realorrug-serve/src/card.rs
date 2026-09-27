@@ -45,21 +45,21 @@
 //! ladder itself: unknown is never rendered as a fourth colour, and never as
 //! green.
 //!
-//! # No price, ever — except the read age
+//! # No price, ever — except the read moment
 //!
 //! [`build_svg`] takes four strings, one string slice and one more string —
 //! verdict word, chain, name, symbol, up to three signal-phrase flags, and
-//! the age of the read they were drawn from — and never a price or
+//! the moment of the read they were drawn from — and never a price or
 //! market-cap number. There is no code path from either field to this
 //! function's parameters. The token's own name and symbol are drawn as
 //! written, digits included: "Pepe2024" is a name, and scrubbing digits from
 //! it would misquote the token. The flags are [`realorrug_roast::sheet::Signal::plain`]'s
 //! own fixed, digit-free phrases, never a fact with a number in it — that is
 //! why this route draws *signals*, not the fact sheet's measured values. The
-//! age line (`handle`'s `age_text`, built by [`format_age`]) is the one
-//! deliberate exception, required by ADR 0039 decision 6: this image itself
-//! is served `Cache-Control: public, max-age=600`, so without it a card a
-//! crawler unfurled nine minutes ago reads as current. A test below pins
+//! read-moment line (built by [`read_moment`]) is the one deliberate
+//! exception, required by ADR 0039 decision 6: this image is kept by browsers
+//! and by X's unfurl cache long after it was drawn, so without it a stored
+//! card reads as current. A test below pins
 //! that every *other* text input stays free of digits, so nothing numeric
 //! enters by any road but the one this section names.
 //!
@@ -82,6 +82,8 @@ use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use realorrug_types::civil::timestamp_from_seconds;
+use serde_json::Value;
 
 use crate::check::{CheckState, cache_key, check, client_ip, fresh_cached_raw, now_secs};
 
@@ -152,12 +154,8 @@ async fn handle(
                 })
                 .unwrap_or_default();
             // `_written_at` is `check.rs`'s own moment of the chain read (see
-            // its `write_cache`), never this request's `now` -- the age
-            // drawn on the card is always the true distance from that read,
-            // not zero, no matter how many times this cache entry is served.
-            let age = raw["_written_at"]
-                .as_u64()
-                .map(|written_at| now.saturating_sub(written_at));
+            // its `write_cache`), never this request's clock.
+            let age = read_moment(&raw);
             (
                 raw["_name"].as_str().map(str::to_owned),
                 raw["_symbol"].as_str().map(str::to_owned),
@@ -170,14 +168,13 @@ async fn handle(
     };
 
     let word = stamp_word(level.as_deref());
-    let age_text = age.map(format_age);
     let svg = build_svg(
         word,
         &chain,
         name.as_deref(),
         symbol.as_deref(),
         &signals,
-        age_text.as_deref(),
+        age.as_deref(),
     );
 
     match render_png(&svg) {
@@ -284,23 +281,22 @@ const CHAIN_LABEL_FONT: usize = 30;
 const AGE_LABEL_Y: usize = CHAIN_LABEL_Y + 34;
 const AGE_LABEL_FONT: usize = 24;
 
-/// Words a card's read-age line, from the seconds since [`crate::check`]
-/// wrote the cache entry this card is drawn from. ADR 0039 decision 6: this
-/// image is served with `Cache-Control: public, max-age=600` (this route's
-/// `handle`), so a viewer's browser or a crawler's unfurl cache may still be
-/// showing it minutes after that -- the age drawn here is the server's own
-/// distance from the read, not from whenever a viewer happens to load it,
-/// which this function cannot know and does not guess.
-fn format_age(secs: u64) -> String {
-    if secs < 90 {
-        return "read just now".to_owned();
-    }
-    let minutes = secs / 60;
-    if minutes < 90 {
-        return format!("read {minutes} min ago");
-    }
-    let hours = minutes / 60;
-    format!("read {hours} hr ago")
+/// The card's read-moment line, from the `_written_at` second that
+/// [`crate::check`] stamped on the cache entry this card is drawn from, e.g.
+/// "read 2026-09-27 14:02 UTC". `None` when the entry carries no such stamp.
+///
+/// ADR 0039 decision 6. A printed moment, not a relative age ("read 7 min
+/// ago"), because the PNG itself is kept by others: browsers for the
+/// `max-age=600` this route sends, and X's unfurl cache for far longer. A
+/// relative age is true only at the second it was drawn, so a copy shown a
+/// day later would still say "read just now"; a moment stays true however
+/// long a copy lives.
+fn read_moment(raw: &Value) -> Option<String> {
+    let stamp = timestamp_from_seconds(raw["_written_at"].as_u64()?);
+    // "YYYY-MM-DDTHH:MM:SSZ" -> date and "HH:MM"; split rather than slice at
+    // fixed offsets so a five-digit year cannot panic the route.
+    let (date, time) = stamp.split_once('T')?;
+    Some(format!("read {date} {} UTC", time.get(..5)?))
 }
 
 pub(crate) fn truncate(s: &str, max: usize) -> String {
@@ -356,8 +352,8 @@ const FONT_MONO: &str =
 /// contradict it (see this module's doc comment). An empty slice draws
 /// [`no_signal_line`]'s single true statement instead of nothing.
 ///
-/// `age`, from [`format_age`], is the one exception to "No price, ever"
-/// below: it is a distance from a read, never a fact about the token, and
+/// `age`, from [`read_moment`], is the one exception to "No price, ever"
+/// below: it is the moment of a read, never a fact about the token, and
 /// ADR 0039 decision 6 requires it on every surface that can serve a stale
 /// read. `None` draws no line at all rather than a guessed "just now" — the
 /// grey "Can't tell" card and any refusal never reach this far (`handle`
@@ -568,52 +564,42 @@ mod tests {
         );
     }
 
-    /// [`format_age`] itself: the three bands `handle` relies on, plus the
-    /// boundaries between them. ADR 0039 decision 6's wording ("7 min ago")
-    /// is a minute count, never a raw second count, so a viewer is never
-    /// shown "412 seconds ago".
+    /// [`read_moment`] prints the cache entry's own `_written_at`, to the
+    /// minute, in UTC. 1_790_517_720 is 2026-09-27T14:02:00Z; the extra 59 s
+    /// shows seconds are dropped, not rounded up.
     #[test]
-    fn format_age_words_the_three_bands() {
-        assert_eq!(format_age(0), "read just now");
-        assert_eq!(format_age(89), "read just now");
-        assert_eq!(format_age(90), "read 1 min ago");
-        assert_eq!(format_age(600), "read 10 min ago");
-        assert_eq!(format_age(89 * 60), "read 89 min ago");
-        assert_eq!(format_age(90 * 60), "read 1 hr ago");
-        assert_eq!(format_age(3 * 3_600), "read 3 hr ago");
+    fn the_read_moment_is_the_caches_written_at() {
+        let raw = serde_json::json!({ "_written_at": 1_790_517_779_u64 });
+        assert_eq!(
+            read_moment(&raw).as_deref(),
+            Some("read 2026-09-27 14:02 UTC")
+        );
     }
 
-    /// A card built with an age draws it; a card built without one draws
+    /// No stamp, no line: a guessed moment would be a stale read shown as
+    /// current, which is what ADR 0039 decision 6 forbids.
+    #[test]
+    fn a_cache_entry_without_a_stamp_draws_no_moment() {
+        assert_eq!(read_moment(&serde_json::json!({})), None);
+        assert_eq!(
+            read_moment(&serde_json::json!({ "_written_at": "soon" })),
+            None
+        );
+    }
+
+    /// A card built with a moment draws it; a card built without one draws
     /// nothing extra -- pinning `build_svg`'s own contract for the parameter
-    /// `handle` feeds it from the cache's `_written_at`.
+    /// `handle` feeds it from [`read_moment`].
     #[test]
     fn an_age_is_drawn_only_when_one_is_given() {
-        let with_age = build_svg("Sketchy", "solana", None, None, &[], Some("read 7 min ago"));
-        assert!(with_age.contains("read 7 min ago"), "{with_age}");
+        let moment = "read 2026-09-27 14:02 UTC";
+        let with_age = build_svg("Sketchy", "solana", None, None, &[], Some(moment));
+        assert!(with_age.contains(moment), "{with_age}");
 
         let without_age = build_svg("Sketchy", "solana", None, None, &[], None);
         assert!(
             !without_age.contains(&format!("y=\"{AGE_LABEL_Y}\"")),
             "no age line's coordinate should appear with no age given: {without_age}"
-        );
-    }
-
-    /// The re-applied bug this pins against: if `handle` ever computed the
-    /// age from its own request time instead of the cache's `_written_at`
-    /// (i.e. always drew "read just now"), a card served long after the
-    /// chain read would still claim to be current. Reverting the
-    /// `saturating_sub(written_at)` in `handle` to `0` reproduces exactly
-    /// that and this assertion catches it.
-    #[test]
-    fn the_age_reflects_the_caches_written_at_not_the_serve_time() {
-        let now = 1_700_000_000_u64;
-        let written_at = now - 420; // seven minutes before this "now"
-        let age = now.saturating_sub(written_at);
-        assert_eq!(format_age(age), "read 7 min ago");
-        assert_ne!(
-            format_age(age),
-            "read just now",
-            "a seven-minute-old read must never be worded as current"
         );
     }
 

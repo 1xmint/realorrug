@@ -20,7 +20,7 @@ actually reaches the viewer.
 | Surface | Verdict | Where |
 |---|---|---|
 | `crates/realorrug-serve/src/check.rs` `fresh_cached`/`fresh_cached_raw` | **Holds** | `verdict_doc` fixes `measured_at` at the moment of the chain read, before the doc is written to disk (`check()`); the cache hit path never recomputes it. Pinned by `a_served_cache_hit_still_carries_its_original_measured_at`. |
-| `crates/realorrug-serve/src/card.rs` (share-card PNG, `Cache-Control: public, max-age=600`) | **Was a gap — fixed** | The rendered card carried no digits at all (by design, "no price, ever"), so a viewer or an X-unfurl cache showing it minutes later saw no read-age either — an omission that reads as current for an image whose whole point is to be reshared. Fixed: `handle` now reads the cache entry's own `_written_at` (already present, written once by `check.rs`), computes `now.saturating_sub(written_at)`, and `build_svg` draws it via the new `format_age`. |
+| `crates/realorrug-serve/src/card.rs` (share-card PNG, `Cache-Control: public, max-age=600`) | **Was a gap — fixed** | The rendered card carried no digits at all (by design, "no price, ever"), so a viewer or an X-unfurl cache showing it minutes later saw no read-age either — an omission that reads as current for an image whose whole point is to be reshared. Fixed: `handle` now reads the cache entry's own `_written_at` (already present, written once by `check.rs`) through the new `read_moment`, and `build_svg` draws it as a UTC moment ("read 2026-09-27 14:02 UTC"). A relative age ("read 7 min ago") was tried first and rejected: the PNG is itself cached by browsers and by X's unfurl cache, so a relative age baked into it goes on claiming "just now" long after. |
 | `crates/realorrug-serve/src/public.rs` (`recent_in`, `stats_in`, `leaderboard_in`, `week_doc`) | **Holds** | Every `measured_at`/`closed_at`/`built_at` field is either a fresh disk read at request time or the event's own recorded timestamp; nothing here re-stamps "now" over an old value. |
 | `crates/realorrug-serve/src/record.rs` | **Not a cache** | Write-only; nothing reads it back yet. |
 | `crates/realorrug-serve/src/facts.rs` | **Not a cache** | Paid x402 endpoint; always reads the chain fresh, no caching layer. |
@@ -33,13 +33,16 @@ actually reaches the viewer.
 
 ## What changed
 
-- `crates/realorrug-serve/src/card.rs`: added `format_age` (words seconds
-  into "read just now" / "read N min ago" / "read N hr ago"), threaded the
-  cache entry's `_written_at` through `handle` into a new `age: Option<&str>`
+- `crates/realorrug-serve/src/card.rs`: added `read_moment` (the cache
+  entry's `_written_at` as "read YYYY-MM-DD HH:MM UTC", or nothing when the
+  entry has no stamp), called from `handle` into a new `age: Option<&str>`
   parameter on `build_svg`, and drew it under the chain label. Three new
-  tests: `format_age_words_the_three_bands`,
-  `an_age_is_drawn_only_when_one_is_given`,
-  `the_age_reflects_the_caches_written_at_not_the_serve_time`.
+  tests: `the_read_moment_is_the_caches_written_at`,
+  `a_cache_entry_without_a_stamp_draws_no_moment`,
+  `an_age_is_drawn_only_when_one_is_given`. Re-applying the bug (stamping
+  the serve clock instead of `_written_at`) fails the first:
+  `left: Some("read 2026-09-27 15:58 UTC")`,
+  `right: Some("read 2026-09-27 14:02 UTC")`.
 - `crates/realorrug-serve/src/check.rs`: one new test,
   `a_served_cache_hit_still_carries_its_original_measured_at`, pinning the
   already-correct behaviour so a future change to `fresh_cached` that
