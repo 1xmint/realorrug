@@ -1803,6 +1803,33 @@ mod tests {
         assert!(outcome.ok(), "{outcome:?}");
     }
 
+    /// The index in a refusal is what the operator looks up in an explorer,
+    /// so it counts top-level instructions of every program (the stated tip
+    /// and the non-System ones alike) and skips inner CPIs. A miscount would
+    /// point the operator at the wrong instruction while still refusing, so
+    /// only the printed number catches it.
+    #[test]
+    fn a_refusal_names_the_top_level_index_an_explorer_shows() {
+        let to = addr(9);
+        let (mut t, dev_wallet) = real_launch_shape(to, 1_000_000);
+        t.instructions
+            .insert(4, system_transfer_ix(addr(12), 5, false));
+        t.instructions
+            .push(system_transfer_ix(addr(7), 2_000, true));
+        let outcome = check_allowlist(
+            &t,
+            &dev_wallet,
+            &[StatedTransfer {
+                to,
+                lamports: 1_000_000,
+            }],
+        );
+        let CheckOutcome::Refuse(why) = &outcome else {
+            panic!("expected a refusal, got {outcome:?}");
+        };
+        assert!(why.contains("(instruction 6)"), "{why}");
+    }
+
     #[test]
     fn the_real_launchs_shape_refuses_without_the_transfer_stated() {
         let to = addr(9);

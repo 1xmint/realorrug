@@ -357,8 +357,30 @@ mod tests {
         // through).
         assert_eq!(
             parse_stated_transfer(&format!("{addr}:0")),
-            Err(format!("--allow-transfer {addr}:0: 0 lamports is not a transfer"))
+            Err(format!(
+                "--allow-transfer {addr}:0: 0 lamports is not a transfer"
+            ))
         );
+    }
+
+    /// Every `--allow-transfer` is read, in order, and no other flag's value
+    /// is taken for one: a transfer the operator never stated would otherwise
+    /// be allowed through.
+    #[test]
+    fn values_reads_every_occurrence_of_one_flag_only() {
+        let args: Vec<String> = [
+            "--mint",
+            "m",
+            "--allow-transfer",
+            "a:1",
+            "--signature",
+            "s",
+            "--allow-transfer",
+            "b:2",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(values(&args, "--allow-transfer"), ["a:1", "b:2"]);
     }
 
     #[test]
