@@ -522,3 +522,19 @@ it rewrites nothing — so every row written before the column existed reads
 back `token_amount = NULL` (unknown), never `0` (AGENTS.md rule 8), which is
 why `BuyerLaunch::token_amount` and `Memory::record_buy`'s parameter are
 both `Option<u128>` rather than `u128`.
+
+## Addendum, 2026-09-26: `CreatorSoldOut` did not need this document's kind
+
+Packet 9-25-0003 wired `Signal::CreatorSoldOut`
+(`crates/realorrug-roast/src/sheet.rs`, `creator_sold_out`) from
+`dossier.creator_cash_flow` and `dossier.token_ownership` alone — both read
+in the same capture the signal fires from — rather than from
+`Memory::has_prior_balance` (§7's original plan for this signal, and
+research 0052's own row for it). Nothing writes `has_prior_balance` today,
+and a comparison against it needs two reads minutes apart, which a replayed
+capture can never produce (`tests/replay/`, research 0056's addendum
+2026-09-25 on why all three `creator-sale-*` cases stayed `CantTell`). The
+ten-minute balance-memory kind this section describes is still unwritten;
+this addendum only records that one signal no longer waits on it, not that
+the kind itself has been built or is no longer wanted for a later,
+independent corroboration.

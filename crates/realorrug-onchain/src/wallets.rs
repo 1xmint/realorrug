@@ -962,6 +962,43 @@ impl CreatorCashFlow {
         let cost = i128::try_from(self.cost_basis_wei()?).unwrap_or(i128::MAX);
         Some(proceeds - cost)
     }
+
+    /// Total tokens given up across every decoded sell, or `None` when the
+    /// trade history is incomplete.
+    ///
+    /// Added for `realorrug-roast`'s `Signal::CreatorSoldOut` rule (packet
+    /// 9-25-0003): that reader needs the *token* side of a decoded sell, not
+    /// [`Self::proceeds_wei`]'s quote side, and `Side` itself is not
+    /// re-exported publicly here, so it could not compute this sum without
+    /// naming a type its `Cargo.toml` only carries as a dev-dependency.
+    #[must_use]
+    pub fn tokens_sold(&self) -> Option<u128> {
+        if !self.trades_complete {
+            return None;
+        }
+        Some(
+            self.trades
+                .iter()
+                .filter(|t| t.side == Side::Sell)
+                .fold(0u128, |sum, t| sum.saturating_add(t.tokens)),
+        )
+    }
+
+    /// Total tokens received across every decoded buy, or `None` when the
+    /// trade history is incomplete. See [`Self::tokens_sold`]'s doc for why
+    /// this exists alongside [`Self::cost_basis_wei`].
+    #[must_use]
+    pub fn tokens_bought(&self) -> Option<u128> {
+        if !self.trades_complete {
+            return None;
+        }
+        Some(
+            self.trades
+                .iter()
+                .filter(|t| t.side == Side::Buy)
+                .fold(0u128, |sum, t| sum.saturating_add(t.tokens)),
+        )
+    }
 }
 
 /// Reads the deployer's and fee recipient's on-chain cash flow for one
@@ -6920,12 +6957,18 @@ mod creator_cash_flow_tests {
         assert_eq!(complete.proceeds_wei(), Some(100));
         assert_eq!(complete.cost_basis_wei(), Some(30));
         assert_eq!(complete.net_wei(), Some(70), "net is proceeds minus cost");
+        // The token side, which `Signal::CreatorSoldOut` reads: each sums its
+        // own side only (40 sold, 50 bought), so swapping sides shows.
+        assert_eq!(complete.tokens_sold(), Some(40));
+        assert_eq!(complete.tokens_bought(), Some(50));
 
         let mut incomplete = complete.clone();
         incomplete.trades_complete = false;
         assert_eq!(incomplete.proceeds_wei(), None);
         assert_eq!(incomplete.cost_basis_wei(), None);
         assert_eq!(incomplete.net_wei(), None);
+        assert_eq!(incomplete.tokens_sold(), None);
+        assert_eq!(incomplete.tokens_bought(), None);
     }
 
     /// Rule (c) needs *both* reads: when the trade read succeeds but the
