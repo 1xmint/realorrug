@@ -241,6 +241,7 @@ mod tests {
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(daily),
+            monthly_max: MicroUsd(u64::MAX),
         }
     }
 

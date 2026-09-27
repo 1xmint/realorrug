@@ -171,10 +171,12 @@ pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
     )
     .and_then(|v| v.trim().parse::<f64>().ok())
     .map(MicroUsd::from_dollars);
-    match (daily, per_call) {
-        (Some(daily_max), Some(per_call_max)) => Budget {
+    let monthly = realorrug_provider::monthly_allowance_from(get);
+    match (daily, per_call, monthly) {
+        (Some(daily_max), Some(per_call_max), Some(monthly_max)) => Budget {
             per_call_max,
             daily_max,
+            monthly_max,
         },
         _ => Budget::CLOSED,
     }
@@ -190,8 +192,10 @@ pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
 #[must_use]
 pub fn unfunded_notice(budget: Budget) -> Option<&'static str> {
     (budget == Budget::CLOSED).then_some(
-        "realorrug-analyst: unfunded -- REALORRUG_ANALYST_DAILY_USD and \
-         REALORRUG_ANALYST_PER_CALL_USD are not both set, so every call is refused.",
+        "realorrug-analyst: unfunded -- REALORRUG_ANALYST_DAILY_USD, \
+         REALORRUG_ANALYST_PER_CALL_USD, REALORRUG_MONTHLY_USD and \
+         REALORRUG_FIXED_MONTHLY_USD are not all set to a valid amount with fixed below the \
+         monthly ceiling, so every call is refused.",
     )
 }
 
@@ -2098,6 +2102,7 @@ mod tests {
             Budget {
                 per_call_max: MicroUsd(50_000),
                 daily_max: MicroUsd(1_000_000),
+                monthly_max: MicroUsd(u64::MAX),
             },
             prices,
             ledger,
@@ -2153,29 +2158,42 @@ mod tests {
         assert_eq!(day_of(1_788_000_000), 20_694);
     }
 
-    #[test]
-    fn a_budget_needs_both_halves_or_it_is_closed() {
-        // Deny by default: a per-call ceiling with no daily cap is not a
-        // budget, it is a ceiling on how fast an unbounded bill accumulates.
-        let both = from(&[
+    /// The four vars `a_budget_needs_both_halves_or_it_is_closed` and the
+    /// monthly tests below build on, funded at the packet's own worked example:
+    /// a $90 ceiling with $60 of fixed services, leaving $30 for metered spend.
+    fn funded_pairs() -> Vec<(&'static str, &'static str)> {
+        vec![
             ("REALORRUG_ANALYST_DAILY_USD", "5.00"),
             ("REALORRUG_ANALYST_PER_CALL_USD", "0.25"),
-        ]);
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+        ]
+    }
+
+    #[test]
+    fn a_budget_needs_all_four_or_it_is_closed() {
+        // Deny by default: a per-call ceiling with no daily cap is not a
+        // budget, it is a ceiling on how fast an unbounded bill accumulates --
+        // and the same is now true of the monthly pair.
+        let pairs = funded_pairs();
+        let both = from(&pairs);
         let budget = budget_from(&both);
         assert_eq!(budget.daily_max, MicroUsd(5_000_000));
         assert_eq!(budget.per_call_max, MicroUsd(250_000));
+        assert_eq!(budget.monthly_max, MicroUsd::from_dollars(30.00));
 
-        for partial in [
-            vec![("REALORRUG_ANALYST_DAILY_USD", "5.00")],
-            vec![("REALORRUG_ANALYST_PER_CALL_USD", "0.25")],
-            vec![],
-        ] {
+        let all = funded_pairs();
+        for i in 0..all.len() {
+            let mut partial = all.clone();
+            partial.remove(i);
             assert_eq!(
                 budget_from(&from(&partial)),
                 Budget::CLOSED,
-                "{partial:?} must not be a budget"
+                "missing {:?} must not be a budget",
+                all[i]
             );
         }
+        assert_eq!(budget_from(&from(&Vec::new())), Budget::CLOSED);
     }
 
     #[test]
@@ -2184,8 +2202,42 @@ mod tests {
         let typo = from(&[
             ("REALORRUG_ANALYST_DAILY_USD", "five dollars"),
             ("REALORRUG_ANALYST_PER_CALL_USD", "0.25"),
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
         ]);
         assert_eq!(budget_from(&typo), Budget::CLOSED);
+    }
+
+    #[test]
+    fn fixed_costs_come_off_the_monthly_ceiling_first() {
+        // The packet's own worked example: $90 whole ceiling, $60 fixed,
+        // leaves $30 for metered spend -- a 31-dollar month of calls must be
+        // refused at 30.
+        let pairs = funded_pairs();
+        let both = from(&pairs);
+        let budget = budget_from(&both);
+        assert_eq!(budget.monthly_max, MicroUsd::from_dollars(30.00));
+    }
+
+    #[test]
+    fn a_monthly_ceiling_at_or_under_its_fixed_costs_is_closed() {
+        // Fixed costs at or above the whole ceiling leave nothing a metered
+        // call could ever spend, which is indistinguishable from "not
+        // configured" and refused the same way (rule 7, rule 8).
+        for fixed in ["90.00", "90.01"] {
+            let entries = [
+                ("REALORRUG_ANALYST_DAILY_USD", "5.00"),
+                ("REALORRUG_ANALYST_PER_CALL_USD", "0.25"),
+                ("REALORRUG_MONTHLY_USD", "90.00"),
+                ("REALORRUG_FIXED_MONTHLY_USD", fixed),
+            ];
+            let vars = from(&entries);
+            assert_eq!(
+                budget_from(&vars),
+                Budget::CLOSED,
+                "fixed={fixed} must close the budget"
+            );
+        }
     }
 
     #[test]
@@ -2202,6 +2254,7 @@ mod tests {
             unfunded_notice(Budget {
                 per_call_max: MicroUsd(250_000),
                 daily_max: MicroUsd(5_000_000),
+                monthly_max: MicroUsd(5_000_000),
             }),
             None
         );

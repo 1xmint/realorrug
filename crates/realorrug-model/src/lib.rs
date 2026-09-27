@@ -286,9 +286,16 @@ pub fn budget_from_vars(get: &impl Fn(&str) -> Option<String>) -> Option<realorr
     .filter(|c| *c > MicroUsd::ZERO)
     .unwrap_or(daily);
 
+    // This budget's Meter spends real money the same as the analyst's does,
+    // so it needs the same monthly stop, not a separate unbounded one: rule 7
+    // is "no budget refuses spending," not "no budget refuses spending, except
+    // here."
+    let monthly_max = realorrug_agent::monthly_allowance_from(get)?;
+
     Some(realorrug_agent::Budget {
         per_call_max: per_call.min(daily),
         daily_max: daily,
+        monthly_max,
     })
 }
 
@@ -447,20 +454,34 @@ mod tests {
         }
     }
 
+    /// The two vars `monthly_allowance_from` needs, appended to every pair list
+    /// below that expects a funded budget back. $90 whole ceiling, $60 fixed,
+    /// the same worked example the monthly stop's own tests use.
+    fn with_monthly(
+        mut pairs: Vec<(&'static str, &'static str)>,
+    ) -> Vec<(&'static str, &'static str)> {
+        pairs.push(("REALORRUG_MONTHLY_USD", "90.00"));
+        pairs.push(("REALORRUG_FIXED_MONTHLY_USD", "60.00"));
+        pairs
+    }
+
     #[test]
     fn a_per_call_ceiling_defaults_to_the_day_and_never_exceeds_it() {
         // Inert rather than wrong: the day is still bounded. The clamp is the
         // part worth testing -- a per-call ceiling above the daily one reads as
         // a limit and is not one.
-        let only_daily = budget_from_vars(&vars(&[("REALORRUG_MODEL_DAILY_USD", "2.00")]))
-            .expect("a daily budget is the whole requirement");
+        let only_daily = budget_from_vars(&vars(&with_monthly(vec![(
+            "REALORRUG_MODEL_DAILY_USD",
+            "2.00",
+        )])))
+        .expect("a daily budget is the whole requirement");
         assert_eq!(only_daily.daily_max, MicroUsd(2_000_000));
         assert_eq!(only_daily.per_call_max, MicroUsd(2_000_000));
 
-        let absurd = budget_from_vars(&vars(&[
+        let absurd = budget_from_vars(&vars(&with_monthly(vec![
             ("REALORRUG_MODEL_DAILY_USD", "2.00"),
             ("REALORRUG_MODEL_PER_CALL_USD", "50.00"),
-        ]))
+        ])))
         .expect("configured");
         assert_eq!(
             absurd.per_call_max,
@@ -468,10 +489,10 @@ mod tests {
             "clamped to the day, which is the real ceiling"
         );
 
-        let tighter = budget_from_vars(&vars(&[
+        let tighter = budget_from_vars(&vars(&with_monthly(vec![
             ("REALORRUG_MODEL_DAILY_USD", "2.00"),
             ("REALORRUG_MODEL_PER_CALL_USD", "0.25"),
-        ]))
+        ])))
         .expect("configured");
         assert_eq!(tighter.per_call_max, MicroUsd(250_000));
 
@@ -481,10 +502,10 @@ mod tests {
         // absent, it falls back to the day, which is the same behaviour as not
         // setting it and is what an operator who typed it meant.
         for typo in ["0", "0.00", "-1", "cheap"] {
-            let budget = budget_from_vars(&vars(&[
+            let budget = budget_from_vars(&vars(&with_monthly(vec![
                 ("REALORRUG_MODEL_DAILY_USD", "2.00"),
                 ("REALORRUG_MODEL_PER_CALL_USD", typo),
-            ]))
+            ])))
             .expect("the day is still configured");
             assert_eq!(
                 budget.per_call_max,
@@ -492,6 +513,22 @@ mod tests {
                 "{typo:?} should fall back to the day rather than refuse everything"
             );
         }
+    }
+
+    #[test]
+    fn a_missing_monthly_pair_is_no_budget_either() {
+        // The daily/per-call pair being fine does not make this a budget: ADR
+        // 0039 decision 5 applies to this Meter exactly as it does to the
+        // analyst's, and rule 7 does not have an exception for a component
+        // that happens to have no live caller yet.
+        assert_eq!(
+            budget_from_vars(&vars(&[
+                ("REALORRUG_MODEL_DAILY_USD", "2.00"),
+                ("REALORRUG_MODEL_PER_CALL_USD", "0.25"),
+            ])),
+            None,
+            "a daily budget with no monthly stop must still be refused"
+        );
     }
 
     #[test]
