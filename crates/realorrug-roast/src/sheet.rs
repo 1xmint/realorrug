@@ -3868,15 +3868,14 @@ fn push_creator_cash_flow(
 /// 1. `cash_flow.trades_complete` is `true` and `cash_flow.gaps` is empty --
 ///    an incomplete trade or transfer read never gets to a total-sale
 ///    conclusion, complete or not.
-/// 2. tokens given up in decoded sells is more than zero, and either covers
-///    every token received in decoded buys on its own, or is topped up by at
-///    least one outgoing transfer of unknown size
-///    (`cash_flow.transfers_out > 0`) to close the remainder. A creator with
-///    no decoded sell at all never satisfies this no matter how large
-///    `transfers_out` is -- an unpriced transfer is not a sale on its own
-///    (`report.rs`'s own caveat for this signal already covers "moved to a
-///    wallet still under the same control"); it can only ever close a
-///    *remainder* behind at least one real, decoded sell.
+/// 2. at least one decoded buy, and tokens given up in decoded sells cover
+///    every token received in decoded buys. `cash_flow.transfers_out` never
+///    counts toward this: it is a count of transfers with no token amount,
+///    so letting any transfer "close the remainder" would call a creator who
+///    sold 1% and sent a few tokens elsewhere sold out -- a claim about a
+///    person's launch the sheet did not read. With no decoded buy there is
+///    nothing to be total against (the tokens came some other way), so that
+///    is silence too.
 /// 3. `creator` is absent from `ownership.owners`, the sampled largest
 ///    holders.
 ///
@@ -3915,12 +3914,10 @@ fn creator_sold_out(
     let Some(bought) = cash_flow.tokens_bought() else {
         return false;
     };
-    // Rule (2): at least one decoded sell, and either it alone covers every
-    // bought token or an unpriced transfer tops up the remainder. `sold > 0`
-    // gates both branches so `transfers_out` alone -- no sell at all -- can
-    // never satisfy this.
-    let total_sale = sold > 0 && (sold >= bought || cash_flow.transfers_out > 0);
-    if !total_sale {
+    // Rule (2): decoded sells cover decoded buys, and there was a buy to
+    // cover. `bought > 0` also makes `sold > 0` follow, so no sell at all
+    // never passes.
+    if bought == 0 || sold < bought {
         return false;
     }
     // Rule (3): the creator holds none of the sampled largest accounts.
@@ -8925,14 +8922,11 @@ mod tests {
         assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
     }
 
-    /// A partial decoded sale topped up by an outgoing transfer of unknown
-    /// size *does* satisfy rule (2) -- this is the one place the rule is
-    /// looser than a pure token-arithmetic total, because `transfers_out` is
-    /// a count with no token amount to check against (`CreatorCashFlow::
-    /// transfers_out`'s own doc). At least one decoded sell must still be
-    /// present, which the previous test already covers on its own.
+    /// A partial decoded sale plus an outgoing transfer is still partial:
+    /// `transfers_out` is a count with no token amount, so it cannot show the
+    /// remainder left. Re-applies the looser first draft, which fired here.
     #[test]
-    fn creator_sold_out_fires_when_a_transfer_tops_up_a_partial_sale() {
+    fn creator_sold_out_is_absent_when_a_transfer_follows_a_partial_sale() {
         let mut dossier = creator_sold_out_dossier();
         let flow = dossier.creator_cash_flow.as_mut().unwrap();
         flow.trades = vec![
@@ -8941,7 +8935,18 @@ mod tests {
         ];
         flow.transfers_out = 1;
         let sheet = FactSheet::build(&dossier, None, None, None, None);
-        assert!(sheet.signals.contains(&Signal::CreatorSoldOut));
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
+    }
+
+    /// Sells with no decoded buy: the creator's tokens came some other way,
+    /// so there is no total to measure the sale against.
+    #[test]
+    fn creator_sold_out_is_absent_when_no_buy_was_decoded() {
+        let mut dossier = creator_sold_out_dossier();
+        dossier.creator_cash_flow.as_mut().unwrap().trades =
+            vec![trade(realorrug_robinhood::pons::Side::Sell, 1_000)];
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(!sheet.signals.contains(&Signal::CreatorSoldOut));
     }
 
     /// Missing reads: `dossier.launch`, `dossier.creator_cash_flow` and
