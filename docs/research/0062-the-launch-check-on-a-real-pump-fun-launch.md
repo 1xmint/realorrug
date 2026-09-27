@@ -70,12 +70,47 @@ NOT CLEAN: launch 2xhvyYRjNLMiP8e5p1so7EPDAH21WwpnDeicYjVxAofhf5xBR81dDRacxkNkd2
 (the other five lines PASS as above). `deploy/LAUNCH.md` step 6 says to
 state the total paid, fees included.
 
+## Addendum, 2026-09-27: the same launch's top-level transfer
+
+The capture above named only the two pump.fun instructions; the same
+transaction's full top-level instruction list is six entries: `0`
+ComputeBudget, `1` ComputeBudget, `2` System Program `Transfer` of 1,000,000
+lamports from the creator to `AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum`,
+`3` pump.fun, `4` Associated Token `createIdempotent`, `5` pump.fun. Instruction
+`2` is exactly the case the "Not checked" bullet below used to describe: a
+top-level System Program transfer riding along with the launch, moving SOL
+the check could not yet see was there.
+
+`check_allowlist` now refuses any top-level System Program instruction that
+is not `Transfer` or `TransferWithSeed`, and refuses a `Transfer` or
+`TransferWithSeed` unless its destination and lamports exactly match a
+`StatedTransfer` the caller gave in advance (`--allow-transfer
+<address>:<lamports>`, repeatable). An inner (CPI) System Program call --
+pump.fun's own `create`/`create_v2` funding the new mint and curve accounts
+-- is unconditionally allowed regardless, since `RawInstruction.top_level`
+now distinguishes the two rather than treating every System Program call
+alike.
+
+Run against this launch's own shape (unit tests built from this capture's
+instruction layout, not a second live capture):
+
+- `--allow-transfer AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum:1000000`
+  (the tip stated exactly): passes, and the allowlist line now reads `only
+  allowed programs, no other buy, 1 stated transfer (1000000 lamports to
+  AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum)`.
+- No `--allow-transfer` at all: refuses -- "top-level System Program
+  transfer of 1000000 lamports to AStRAnpi6kFrKypragExgeRoJ1QnKH7pbSjLAKQVWUum
+  (instruction 2): a launch that also pays someone is not a clean launch".
+- `--allow-transfer` with the right address but the wrong lamports, or the
+  right lamports but the wrong address: refuses the same way -- the stated
+  value has to match exactly, not just be present.
+- A second `--allow-transfer` naming a transfer this launch does not make:
+  refuses -- "a stated transfer of `<n>` lamports to `<addr>` was not found
+  in this transaction". Stating a transfer is a claim the check verifies,
+  not a blanket exemption.
+
 ## Not checked
 
-- A top-level System Program transfer in the launch transaction is allowed
-  by the allowlist today. It moves SOL, not the token, so it cannot be a
-  hidden buy, but a launch that also pays someone would pass. Whether that
-  should refuse is open.
 - One launch is one sample. A dev buy through a pump.fun instruction other
   than `buy_v2` is covered only by unit tests built from this capture's
   receipt layout, not by a second real transaction.

@@ -80,7 +80,9 @@ pub use exchange_wallets::{ExchangeWallet, exchange_withdrawal_wallet};
 pub use launch::{LaunchBlock, Metadata, NotALaunch};
 pub use memory::{Error as MemoryError, Fact, Kind, Memory, PaidRequest, Recorded};
 pub use mint::mint_authorities;
-pub use pumpfun_launch_check::{CheckOutcome, LaunchCheck, candidate_mint, check_launch};
+pub use pumpfun_launch_check::{
+    CheckOutcome, LaunchCheck, StatedTransfer, candidate_mint, check_launch,
+};
 pub use reserves::{PoolReserves, Role, Unreadable};
 pub use robinhood::{Error as RobinhoodError, RobinhoodReader};
 pub use rpc::{AccountRead, MultiAccountRead, OwnedAccount, RpcClient, RpcError};

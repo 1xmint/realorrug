@@ -58,6 +58,7 @@ fn launch_tx(name: &str, symbol: &str, uri: &str) -> Transaction {
         program: realorrug_decode::pumpfun::PROGRAM_ID.to_string(),
         data: launch_data(name, symbol, uri),
         accounts: Vec::new(),
+        top_level: true,
     }];
     t
 }

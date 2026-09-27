@@ -175,6 +175,16 @@ pub struct RawInstruction {
     pub data: Vec<u8>,
     /// The account addresses it names, in order.
     pub accounts: Vec<String>,
+    /// Whether this is one of the message's own top-level instructions, as
+    /// opposed to a CPI carried in `meta.innerInstructions`.
+    ///
+    /// The launch check's allowlist (`crate::pumpfun_launch_check`) treats
+    /// the System Program differently by this alone: pump.fun's own `create`
+    /// CPIs into it to fund the new mint and curve accounts, which is
+    /// expected on every launch, but a top-level System Program transfer is
+    /// something the *caller* asked for, alongside the launch, and has to be
+    /// stated in advance or the check refuses it (research 0062 addendum).
+    pub top_level: bool,
 }
 
 /// One token balance entry.
@@ -1417,7 +1427,7 @@ pub fn parse_transaction(raw: &serde_json::Value) -> Option<Transaction> {
 
     let mut instructions = Vec::new();
     if let Some(list) = message.get("instructions").and_then(|i| i.as_array()) {
-        collect_instructions(list, &accounts, &mut instructions);
+        collect_instructions(list, &accounts, true, &mut instructions);
     }
     // Inner instructions carry the CPIs, which is where a dev buy usually lives.
     if let Some(inner) = meta
@@ -1426,7 +1436,7 @@ pub fn parse_transaction(raw: &serde_json::Value) -> Option<Transaction> {
     {
         for group in inner {
             if let Some(list) = group.get("instructions").and_then(|i| i.as_array()) {
-                collect_instructions(list, &accounts, &mut instructions);
+                collect_instructions(list, &accounts, false, &mut instructions);
             }
         }
     }
@@ -1469,6 +1479,7 @@ pub(crate) const UNRESOLVED_PROGRAM: &str = "<program index did not resolve>";
 fn collect_instructions(
     list: &[serde_json::Value],
     accounts: &[String],
+    top_level: bool,
     out: &mut Vec<RawInstruction>,
 ) {
     for ix in list {
@@ -1491,6 +1502,7 @@ fn collect_instructions(
             program,
             data,
             accounts: named,
+            top_level,
         });
     }
 }
@@ -2374,7 +2386,9 @@ mod tests {
         assert_eq!(tx.instructions[0].program, "ProgramTwo");
         assert_eq!(tx.instructions[0].data, vec![2]);
         assert_eq!(tx.instructions[0].accounts, vec!["AccountOne".to_owned()]);
+        assert!(tx.instructions[0].top_level, "the outer instruction");
         assert_eq!(tx.instructions[1].data, vec![1]);
+        assert!(!tx.instructions[1].top_level, "the inner (CPI) instruction");
         assert_eq!(tx.post_token_balances[0].amount, 42);
         assert_eq!(tx.post_token_balances[0].owner.as_deref(), Some("Owner"));
     }
