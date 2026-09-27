@@ -57,7 +57,7 @@ use serde::{Deserialize, Serialize};
 pub use investigate::{
     Abstained, Action, Adapter, Availability, Bounds, Fact, Recommendation, Rejected, Step, Wanted,
 };
-pub use realorrug_provider::{Budget, Ledger};
+pub use realorrug_provider::{Budget, Ledger, monthly_allowance_from};
 pub use tools::{Allowlist, Refused};
 pub use untrusted::{Provenance, fence};
 
@@ -137,6 +137,7 @@ impl Agent {
                 Budget {
                     per_call_max: MicroUsd::ZERO,
                     daily_max: MicroUsd::ZERO,
+                    monthly_max: MicroUsd::ZERO,
                 },
                 day,
             ),
@@ -144,6 +145,7 @@ impl Agent {
             budget: Budget {
                 per_call_max: MicroUsd::ZERO,
                 daily_max: MicroUsd::ZERO,
+                monthly_max: MicroUsd::ZERO,
             },
             configured: false,
         }
@@ -281,6 +283,7 @@ mod tests {
             budget: Budget {
                 per_call_max: MicroUsd::from_dollars(0.20),
                 daily_max: MicroUsd::from_dollars(2.00),
+                monthly_max: MicroUsd::from_dollars(60.00),
             },
             allowlist,
         }

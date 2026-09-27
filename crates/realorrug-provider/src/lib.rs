@@ -43,4 +43,4 @@
 
 mod cost;
 
-pub use cost::{Budget, Commitment, Ledger, Meter, Refusal};
+pub use cost::{Budget, Commitment, Ledger, Meter, Refusal, monthly_allowance_from};

@@ -211,6 +211,7 @@ fn funded(paths: &Paths) -> Spend {
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(1_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -269,6 +270,7 @@ fn one_poll_reads_answers_and_advances_the_cursor() {
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(1_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -385,6 +387,7 @@ fn a_published_reply_is_counted_charged_and_remembered() {
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(1_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -454,6 +457,7 @@ fn a_lane2_reply_is_counted_the_same_way_a_lane1_reply_is() {
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(1_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -517,6 +521,7 @@ fn an_unmatched_followup_in_an_answered_thread_gets_the_fixed_refusal_with_no_ch
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(1_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -610,6 +615,7 @@ fn the_same_question_in_a_never_answered_thread_is_not_a_followup() {
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(1_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -657,6 +663,7 @@ fn a_platform_that_refuses_costs_nothing_and_does_not_move_the_cursor() {
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(1_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -742,6 +749,7 @@ fn with_no_credential_the_loop_does_nothing_at_all() {
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(1_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -792,6 +800,7 @@ fn tick_against_empty_chain(
         Budget {
             per_call_max: MicroUsd(50_000),
             daily_max: MicroUsd(10_000_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),
@@ -1594,6 +1603,7 @@ fn a_week_that_can_afford_the_metrics_but_not_the_accounts_still_does_not_close(
         Budget {
             per_call_max: MicroUsd(20_000),
             daily_max: MicroUsd(10_000),
+            monthly_max: MicroUsd(u64::MAX),
         },
         prices(),
         paths.ledger.clone(),

@@ -22,7 +22,19 @@
 
 - The existing spend meter (`crates/realorrug-provider`) and the analyst's
   budget config carry decision 5; with no budget configured nothing spends
-  (AGENTS §3 rule 7).
+  (AGENTS §3 rule 7). Concretely: `Meter`/`Ledger` in
+  `crates/realorrug-provider/src/cost.rs` add a monthly ceiling alongside the
+  existing daily and per-call ones, and
+  `crates/realorrug-analyst/src/daemon.rs` reads it from
+  `REALORRUG_MONTHLY_USD` and `REALORRUG_FIXED_MONTHLY_USD`
+  (`deploy/analyst.env.example`), with fixed costs taken off first as decision
+  5 requires. One shared `Spend`/`Meter`/`Ledger` already covers both the X
+  lane and the Telegram lane, so no separate wiring was needed for them to
+  share the one monthly total. Both variables must be set on the live server
+  before a build with this stop is deployed, or the bot refuses every paid
+  call. RPC is counted as a fixed cost, which holds only while the RPC plan
+  is a flat fee with no per-request overage; the meter does not count RPC
+  calls.
 - Statistical proof of forecasting skill is **not** a launch gate. Calibration
   continues after launch (plan 0002 phase 5), and no probability is published
   before calibration supports it.

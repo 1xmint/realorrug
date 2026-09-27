@@ -2378,6 +2378,7 @@ mod tests {
             realorrug_provider::Budget {
                 per_call_max: realorrug_types::MicroUsd(20_000),
                 daily_max: realorrug_types::MicroUsd(20_000_000),
+                monthly_max: realorrug_types::MicroUsd(u64::MAX),
             },
             crate::spend::Prices {
                 mention_read: realorrug_types::MicroUsd(1_000),
