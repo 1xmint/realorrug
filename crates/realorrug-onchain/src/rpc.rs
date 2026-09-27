@@ -70,8 +70,41 @@ impl From<Exhausted> for RpcError {
 /// code. A dropped connection or a malformed body is a different failure and
 /// must not be retried the same way: retrying a down endpoint just spends the
 /// budget faster, and retrying a malformed body cannot change its shape.
+///
+/// Kept for anything that still wants the narrower 429-only check; the retry
+/// decision itself now goes through [`is_transient`].
 fn is_rate_limited(message: &str) -> bool {
     message.contains("http status: 429")
+}
+
+/// Whether a transport error is worth one bounded retry rather than an
+/// immediate failure.
+///
+/// Matches exactly:
+/// - `http status: 429` -- a burst limit, not an exhausted account (see
+///   [`is_rate_limited`]'s doc for the evidence).
+/// - `http status: 502`, `http status: 503`, `http status: 504` -- the
+///   node's own upstream/gateway failures, the same "ask again in a moment"
+///   shape as a 429, just reported at the proxy rather than the node.
+/// - `Connection reset` -- the exact wording of the 2026-09-24 VPS recapture
+///   failure (`.orchestrator/runs/20260923-plan-0002-phase2/RUN.md` line
+///   71): `rpc transport: io: Connection reset by peer`. A dropped TCP
+///   connection to an endpoint that answered a minute later is a one-off,
+///   not a down endpoint.
+/// - `timeout` -- the other recorded failure, `rpc transport: timeout:
+///   global`. Matched lower-case since that is the transport's own wording.
+///
+/// Everything else -- `401`, `403`, `404`, `500`, a malformed body, an
+/// unknown error -- is not transient: retrying an authorisation failure or a
+/// malformed body cannot change its shape, and retrying an endpoint that is
+/// actually down just spends the budget faster.
+fn is_transient(message: &str) -> bool {
+    is_rate_limited(message)
+        || message.contains("http status: 502")
+        || message.contains("http status: 503")
+        || message.contains("http status: 504")
+        || message.contains("Connection reset")
+        || message.contains("timeout")
 }
 
 /// One confirmed signature, as `getSignaturesForAddress` returns it.
@@ -500,16 +533,25 @@ impl RpcClient {
             .ok_or_else(|| RpcError::Malformed(format!("{method} returned no result")))
     }
 
-    /// Posts `body`, retrying while the node refuses with HTTP 429.
+    /// Posts `body`, retrying while [`is_transient`] says the failure is
+    /// worth it.
     ///
-    /// Evidence (VPS recapture of the 9-token replay set against main
-    /// 17d6c5f, 2026-09-23): 6 of 9 cases hit `rpc transport: http status:
-    /// 429` (5, 7, 11, 23 and 18 occurrences in four of them, one case with
-    /// 5), each recorded as a gap and pushing the case to `CantTell`. The
-    /// other three cases, and a `getSlot` sent a minute after one of the
-    /// failures, answered 200 -- this is a burst/per-second limit, not an
-    /// exhausted account, and a request refused for that reason is worth
-    /// sending again rather than turning into a gap.
+    /// Evidence for the 429 case (VPS recapture of the 9-token replay set
+    /// against main 17d6c5f, 2026-09-23): 6 of 9 cases hit `rpc transport:
+    /// http status: 429` (5, 7, 11, 23 and 18 occurrences in four of them, one
+    /// case with 5), each recorded as a gap and pushing the case to
+    /// `CantTell`. The other three cases, and a `getSlot` sent a minute after
+    /// one of the failures, answered 200 -- this is a burst/per-second
+    /// limit, not an exhausted account, and a request refused for that
+    /// reason is worth sending again rather than turning into a gap.
+    ///
+    /// Evidence for the dropped-connection and timeout cases (phase-2 run
+    /// ledger `.orchestrator/runs/20260923-plan-0002-phase2/RUN.md` line 71,
+    /// 2026-09-24 recapture on the VPS): `rpc transport: io: Connection reset
+    /// by peer` and, separately, `rpc transport: timeout: global`, each
+    /// aborting the whole capture with nothing written even though the same
+    /// mint read fine minutes later -- a one-off worth retrying, not a down
+    /// endpoint.
     ///
     /// The pause is a fixed constant, not a doubling backoff: an exponential
     /// schedule is arithmetic a mutation test cannot pin down (halving the
@@ -519,8 +561,8 @@ impl RpcClient {
     /// fact.
     ///
     /// `budget.take_call()` runs before every attempt, including retries, so
-    /// a rate-limited read cannot spend more calls or more wall clock than
-    /// the budget allows -- AGENTS.md rule 7 (a retry must never outlive the
+    /// a transient read cannot spend more calls or more wall clock than the
+    /// budget allows -- AGENTS.md rule 7 (a retry must never outlive the
     /// budget).
     fn post_with_retry(&self, budget: &mut Budget, body: &str) -> Result<String, RpcError> {
         /// Retries after the first attempt. Three extra tries turns a
@@ -542,7 +584,7 @@ impl RpcClient {
             budget.take_call()?;
             match self.transport.post(&self.endpoint, body.to_owned()) {
                 Ok(text) => return Ok(text),
-                Err(e) if is_rate_limited(&e) => {
+                Err(e) if is_transient(&e) => {
                     last_err = e;
                     budget.note_retry(PAUSE);
                     std::thread::sleep(PAUSE);
@@ -550,8 +592,8 @@ impl RpcClient {
                 Err(e) => return Err(RpcError::Transport(e)),
             }
         }
-        // Every retry was also rate-limited. Return the 429 unchanged so the
-        // gap wording stays what it is today.
+        // Every retry was also transient. Return the original wording
+        // unchanged so the gap text stays what it is today.
         Err(RpcError::Transport(last_err))
     }
 
@@ -1065,11 +1107,12 @@ impl RpcClient {
         out
     }
 
-    /// Posts one batch body, retrying the whole chunk while the node refuses
-    /// with HTTP 429 -- same policy as [`RpcClient::post_with_retry`], the
-    /// single-call version this mirrors, including the fixed pause and the
-    /// re-charge of every signature in the chunk on each retry (AGENTS.md
-    /// rule 7: a retry must never outlive the budget).
+    /// Posts one batch body, retrying the whole chunk while [`is_transient`]
+    /// says the failure is worth it -- same policy as
+    /// [`RpcClient::post_with_retry`], the single-call version this mirrors,
+    /// including the fixed pause and the re-charge of every signature in the
+    /// chunk on each retry (AGENTS.md rule 7: a retry must never outlive the
+    /// budget).
     fn post_batch_with_retry(
         &self,
         budget: &mut Budget,
@@ -1088,7 +1131,7 @@ impl RpcClient {
             }
             match self.transport.post(&self.endpoint, body.clone()) {
                 Ok(text) => return Ok(text),
-                Err(e) if is_rate_limited(&e) => {
+                Err(e) if is_transient(&e) => {
                     last_err = e;
                     budget.note_retry(PAUSE);
                     std::thread::sleep(PAUSE);
@@ -1807,6 +1850,138 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_connection_is_retried_and_the_retry_can_succeed() {
+        // (a) Re-applies the defect the phase-2 run ledger recorded
+        // (`.orchestrator/runs/20260923-plan-0002-phase2/RUN.md` line 71):
+        // `rpc transport: io: Connection reset by peer` used to end the
+        // whole capture with nothing written. Without `is_transient`
+        // matching this wording, the first `expect` below would fail
+        // instead of the queued success being read.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err("rpc transport: io: Connection reset by peer".to_owned()),
+                Ok(PONG.to_owned()),
+            ]),
+        );
+        let mut b = budget();
+        let started = std::time::Instant::now();
+        read_through(&c, &mut b).expect("the retry succeeds");
+        assert!(
+            started.elapsed() >= Duration::from_secs(1),
+            "the retry waits for the fixed pause: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(b.calls_made(), 2, "the retry spends a second call");
+        assert_eq!(b.retries(), 1);
+        assert!(b.paused() >= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_global_timeout_is_retried_and_the_retry_can_succeed() {
+        // (b) The other wording the same ledger line recorded: `rpc
+        // transport: timeout: global`.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err("rpc transport: timeout: global".to_owned()),
+                Ok(PONG.to_owned()),
+            ]),
+        );
+        let mut b = budget();
+        read_through(&c, &mut b).expect("the retry succeeds");
+        assert_eq!(b.calls_made(), 2);
+        assert_eq!(b.retries(), 1);
+    }
+
+    #[test]
+    fn a_dropped_connection_that_never_clears_keeps_its_own_wording() {
+        // (c) After every retry is also a dropped connection, the error
+        // returned is `Transport` with the transport's original wording
+        // unchanged -- the same guarantee the 429 case already had.
+        const RETRIES: u32 = 3;
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err(
+                    "rpc transport: io: Connection reset by peer".to_owned()
+                );
+                (RETRIES + 1) as usize
+            ]),
+        );
+        let mut b = budget();
+        let err = read_through(&c, &mut b).expect_err("still refused after every retry");
+        assert!(
+            matches!(&err, RpcError::Transport(m) if m == "rpc transport: io: Connection reset by peer"),
+            "{err}"
+        );
+        assert_eq!(b.calls_made(), 1 + RETRIES);
+    }
+
+    #[test]
+    fn an_http_401_makes_exactly_one_post() {
+        // (d) An authorisation failure cannot change on retry -- matches
+        // `a_non_rate_limit_transport_error_is_not_retried` above but pins
+        // the exact wording this crate's other callers actually see.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err("rpc transport: http status: 401".to_owned()),
+                Ok(PONG.to_owned()),
+            ]),
+        );
+        let mut b = budget();
+        let err = read_through(&c, &mut b).expect_err("a 401 is not retried");
+        assert!(
+            matches!(&err, RpcError::Transport(m) if m == "rpc transport: http status: 401"),
+            "{err}"
+        );
+        assert_eq!(b.calls_made(), 1);
+    }
+
+    #[test]
+    fn a_malformed_body_makes_exactly_one_post() {
+        // (d) A malformed reply cannot change shape on retry. `is_transient`
+        // only ever sees the transport's error string -- this is a
+        // transport-level failure the transport itself reports that way
+        // (the shape-level `Malformed` case is decoded after a successful
+        // POST and never reaches `is_transient` at all).
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err("rpc transport: unexpected end of body".to_owned()),
+                Ok(PONG.to_owned()),
+            ]),
+        );
+        let mut b = budget();
+        let err = read_through(&c, &mut b).expect_err("a malformed body is not retried");
+        assert!(
+            matches!(&err, RpcError::Transport(m) if m == "rpc transport: unexpected end of body"),
+            "{err}"
+        );
+        assert_eq!(b.calls_made(), 1);
+    }
+
+    #[test]
+    fn a_spent_deadline_makes_no_attempt_at_all() {
+        // (e) A retry must never outlive the budget (AGENTS.md rule 7): a
+        // deadline that has already passed refuses the very first
+        // `take_call`, so no POST is sent at all.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![Ok(PONG.to_owned())]),
+        );
+        let mut b = Budget::new(60, 3, Duration::from_secs(0));
+        std::thread::sleep(Duration::from_millis(5));
+        let err = read_through(&c, &mut b).expect_err("the deadline has already passed");
+        assert!(
+            matches!(&err, RpcError::Stopped(Exhausted::Deadline)),
+            "{err}"
+        );
+        assert_eq!(b.calls_made(), 0);
+    }
+
+    #[test]
     fn the_http_transport_sends_the_body_and_returns_what_came_back() {
         // The one genuinely impure line in the crate, tested against a
         // listener on loopback rather than excluded. No external network: the
@@ -2485,5 +2660,55 @@ mod tests {
             "at least one full pause: {:?}",
             b.paused()
         );
+    }
+
+    #[test]
+    fn a_dropped_connection_on_a_batch_is_retried_and_the_budget_reports_it() {
+        // (a) batch variant: proves `post_batch_with_retry` goes through
+        // the same `is_transient` predicate as the single-call path, not a
+        // second copy of the 429-only guard.
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err("rpc transport: io: Connection reset by peer".to_owned()),
+                Ok(batch_reply(&[0, 1])),
+            ]),
+        );
+        let mut b = budget();
+        let results = c.transactions(&mut b, &["sig0", "sig1"]);
+
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(matches!(r, Ok(None)), "{r:?}");
+        }
+        assert_eq!(b.retries(), 1);
+        assert!(b.paused() >= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_dropped_connection_on_a_batch_that_never_clears_keeps_its_own_wording() {
+        // (c) batch variant: after every retry is also a dropped
+        // connection, the chunk's error is `Transport` with the original
+        // wording, same as the single-call path.
+        const RETRIES: u32 = 3;
+        let c = RpcClient::with_transport(
+            "http://test.invalid",
+            Scripted::boxed(vec![
+                Err(
+                    "rpc transport: io: Connection reset by peer".to_owned()
+                );
+                (RETRIES + 1) as usize
+            ]),
+        );
+        let mut b = budget();
+        let results = c.transactions(&mut b, &["sig0", "sig1"]);
+
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(
+                matches!(r, Err(RpcError::Transport(m)) if m == "rpc transport: io: Connection reset by peer"),
+                "{r:?}"
+            );
+        }
     }
 }
