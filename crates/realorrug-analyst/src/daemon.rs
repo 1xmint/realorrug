@@ -804,6 +804,43 @@ fn settle_if_sent(spend: &mut Spend, reservation: realorrug_provider::Commitment
     }
 }
 
+/// Reserves one model call and decides whether `provider` may be asked at
+/// all this mention.
+///
+/// A refusal here does not refuse the mention. The day's or month's model
+/// budget being spent means this one reply is the deterministic template --
+/// which is exactly what the account ships with no provider configured at
+/// all, so it is rule 8 rather than an outage.
+///
+/// Pulled out of `tick`'s own inline reservation so the property a daemon-
+/// level test needs -- once the meter is at its cap, `answer` never sees a
+/// provider it could call -- is reachable without standing up an `X`
+/// credential, an RPC client or a mentions file to reach it.
+fn gate_model_call<'p>(
+    spend: &mut Spend,
+    provider: Option<&'p dyn realorrug_model::Provider>,
+    today: u64,
+    mention_id: &str,
+) -> (
+    Option<&'p dyn realorrug_model::Provider>,
+    Option<realorrug_provider::Commitment>,
+) {
+    let reserved = provider.and_then(|_| {
+        spend
+            .authorize(Cost::ModelCall, today)
+            .inspect_err(|_| {
+                eprintln!(
+                    "realorrug-analyst: model budget spent; {mention_id} answered by the template"
+                );
+            })
+            .ok()
+    });
+    // Gated on the reservation, so a refused meter means no call was made
+    // rather than one that was made unmetered.
+    let gated = if reserved.is_some() { provider } else { None };
+    (gated, reserved)
+}
+
 /// Posts today's "seven days later" if it is due, metering the X post.
 fn announce_day(
     publisher: &dyn Publisher,
@@ -1288,31 +1325,14 @@ pub fn tick(
         // `answer`, because `answer` makes the call internally: by the time a
         // reply comes back the money is gone, and a ceiling checked after that
         // is not a ceiling.
-        //
-        // A refusal here does not refuse the mention. The day's model budget
-        // being spent means this one reply is the deterministic template --
-        // which is exactly what the account ships with no provider configured
-        // at all, so it is rule 8 rather than an outage.
-        let reserved = provider.and_then(|_| {
-            spend
-                .authorize(Cost::ModelCall, today)
-                .inspect_err(|_| {
-                    eprintln!(
-                        "realorrug-analyst: model budget spent; {} answered by the template",
-                        mention.id
-                    );
-                })
-                .ok()
-        });
+        let (gated_provider, reserved) = gate_model_call(spend, provider, today, &mention.id);
         let ctx = Answering {
             client,
             memory: memory.as_ref(),
             robinhood,
             rates,
             creators,
-            // Gated on the reservation, so a refused meter means no call was
-            // made rather than one that was made unmetered.
-            provider: if reserved.is_some() { provider } else { None },
+            provider: gated_provider,
             self_mint,
             now: at,
         };
@@ -2123,6 +2143,86 @@ mod tests {
             MicroUsd(15_000),
             "a thread that left is one post's price"
         );
+    }
+
+    #[test]
+    fn a_tick_at_the_monthly_cap_makes_no_model_call() {
+        // The daemon-level property packet 9-27-0026 asks for: once the
+        // month's ledger is already at its cap, the model call `tick` would
+        // have reserved for this mention must be refused, and the provider
+        // handed to `answer` must be `None` -- never a provider `answer`
+        // could go on to call unmetered.
+        //
+        // `PanicsIfAsked::ask` is the check that matters: if `gate_model_call`
+        // ever handed the provider through anyway, calling it here would
+        // panic instead of quietly costing money, which is the whole point
+        // of proving "no model call is made" rather than just "the meter
+        // refused a reservation" (already pinned in `realorrug-provider`'s
+        // own tests).
+        #[derive(Debug)]
+        struct PanicsIfAsked;
+        impl realorrug_model::Provider for PanicsIfAsked {
+            fn name(&self) -> &'static str {
+                "panics-if-asked"
+            }
+            fn estimate(&self) -> MicroUsd {
+                MicroUsd::from_dollars(0.01)
+            }
+            fn ask(
+                &self,
+                _request: &realorrug_model::Request,
+            ) -> Result<realorrug_model::Answer, realorrug_model::Unreachable> {
+                panic!("no model call may be made once the month's ledger is at its cap");
+            }
+        }
+
+        let dir =
+            std::env::temp_dir().join(format!("radar-daemon-monthly-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let ledger = dir.join("ledger.json").to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&ledger);
+
+        let prices = Prices {
+            mention_read: MicroUsd(1_000),
+            post_read: MicroUsd(5_000),
+            reply: MicroUsd(10_000),
+            post: MicroUsd(15_000),
+            model_call: MicroUsd::from_dollars(1.0),
+            user_read: MicroUsd(20_000),
+        };
+        let budget = Budget {
+            per_call_max: MicroUsd::from_dollars(1.0),
+            daily_max: MicroUsd::from_dollars(1.0),
+            monthly_max: MicroUsd::from_dollars(1.0),
+        };
+        let mut spend = Spend::open(budget, prices, ledger, 1);
+        // Spend the whole month on something other than a model call, the
+        // same way a busy day of mentions and replies would in practice.
+        let c = spend.authorize(Cost::Reply, 1).expect("exactly the cap");
+        spend.settle(c, MicroUsd::from_dollars(1.0));
+
+        let provider = PanicsIfAsked;
+        let (gated, reserved) = gate_model_call(
+            &mut spend,
+            Some(&provider as &dyn realorrug_model::Provider),
+            1,
+            "1",
+        );
+
+        assert!(
+            reserved.is_none(),
+            "the month is already at its cap; there is nothing left to reserve"
+        );
+        assert!(
+            gated.is_none(),
+            "a refused reservation must not hand the provider through"
+        );
+        // The property under test: nothing here may call `.ask()`. `answer`
+        // only ever does that through `ctx.provider`, and `gated` is exactly
+        // what `tick` would put there.
+        if let Some(p) = gated {
+            let _ = p.ask(&realorrug_model::Request::new("", ""));
+        }
     }
 
     #[test]
