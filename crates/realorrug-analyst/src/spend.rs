@@ -154,26 +154,61 @@ impl Spend {
 
     /// Reserves the cost of one action **before** it happens.
     ///
+    /// Saved to disk immediately, not left for the caller's own end-of-tick
+    /// `save`. A reservation is real money about to be owed, and a process
+    /// under `Restart=always` that dies between this call and the tick's own
+    /// `save()` used to forget it happened at all -- the crash test below
+    /// (`spend.rs`) is what that gap looked like, and pins that a restart
+    /// still counts the call.
+    ///
     /// # Errors
     ///
     /// [`Refusal`] when the call would breach the per-call ceiling or the day's
     /// cap. A refusal is not an error to work around: it is the answer.
     pub fn authorize(&mut self, cost: Cost, day: u64) -> Result<Commitment, Refusal> {
-        self.meter.authorize(self.prices.of(cost), day)
+        let commitment = self.meter.authorize(self.prices.of(cost), day)?;
+        self.persist();
+        Ok(commitment)
     }
 
     /// Records what an authorised action actually cost.
+    ///
+    /// Saved immediately, for the same reason `authorize` is: the settled
+    /// figure is the real charge, and a crash right after this must not roll
+    /// back to the reservation it replaces.
     pub fn settle(&mut self, commitment: Commitment, actual: MicroUsd) {
         self.meter.settle(commitment, actual);
+        self.persist();
     }
 
     /// Gives back a reservation for something that did not happen.
     ///
     /// The call that matters after a failed request: a reply that was refused by
     /// the platform costs nothing, and leaving it reserved would spend the day's
-    /// budget on replies nobody received.
+    /// budget on replies nobody received. Saved immediately so a crash right
+    /// after does not leave the released amount charged against a restart's
+    /// restored ledger.
     pub fn release(&mut self, commitment: Commitment) {
         self.meter.release(commitment);
+        self.persist();
+    }
+
+    /// Writes the ledger now, logging rather than failing the caller on an
+    /// I/O error.
+    ///
+    /// `authorize`/`settle`/`release` cannot return an I/O error without
+    /// changing what every caller of the money-moving path has to handle for
+    /// a case none of them can act on differently -- the same shape the old
+    /// end-of-tick `save()` already had (see its own doc comment). A save
+    /// that fails here is loud on stderr and tried again at the next spend
+    /// or at the tick's own final `save()`, not silently dropped.
+    fn persist(&self) {
+        if let Err(e) = self.save() {
+            eprintln!(
+                "realorrug-analyst: cannot save the ledger at {}: {e}",
+                self.path
+            );
+        }
     }
 
     /// What has been committed or settled today.
@@ -253,6 +288,33 @@ mod tests {
         let p = p.to_str().expect("a path").to_owned();
         let _ = std::fs::remove_file(&p);
         p
+    }
+
+    #[test]
+    fn a_crash_right_after_authorize_is_still_counted_at_restart() {
+        // The gap packet 9-27-0026 closes: a process that dies between
+        // `authorize` and a tick's own end-of-loop `save()` used to forget the
+        // call ever happened, because nothing durable existed until the tick
+        // finished. `authorize` now saves itself, so a fresh `Spend::open`
+        // against the same path sees the reservation even with no `save()`
+        // call anywhere in this test.
+        //
+        // Re-apply the old behaviour -- delete the `self.persist();` this test
+        // exists to pin inside `authorize` -- and this fails with
+        // `left: MicroUsd(0), right: MicroUsd(2000)`: a restart handed back an
+        // allowance that was never really free.
+        let path = temp("crash-mid-tick");
+        let mut before = Spend::open(budget(1_000_000), prices(), path.clone(), 1);
+        let _never_settled = before
+            .authorize(Cost::ModelCall, 1)
+            .expect("affordable, and never released or settled before the crash");
+
+        let after = Spend::open(budget(1_000_000), prices(), path, 1);
+        assert_eq!(
+            after.spent_today(),
+            MicroUsd(2_000),
+            "the crashed call must still count against a fresh process's budget"
+        );
     }
 
     #[test]
