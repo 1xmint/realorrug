@@ -1504,6 +1504,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "realorrug-store"
+version = "0.0.1"
+dependencies = [
+ "blake3",
+ "realorrug-contest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "realorrug-types"
 version = "0.0.1"
 dependencies = [

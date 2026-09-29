@@ -34,6 +34,7 @@ fixed or ruled on by the owner ([ADR 0042](docs/adr/0042-claudes-review-replaces
 | `crates/realorrug-payout` | retired (ADR 0037): the old Robinhood prize payout, kept for history; its binary refuses to run |
 | `crates/realorrug-robinhood` | Robinhood Chain, read (the bot still answers about tokens there): receipts, and Pons v2 launches, trades and fee sweeps; the launch check behind `realorrug launch-check`; the fee escrow's credits, claims and claimable balance |
 | `crates/realorrug-serve` | the public site's documents |
+| `crates/realorrug-store` | the research store (design 0032): hash-chained forecast rows and a separate identity table |
 | `crates/realorrug-cli` | `realorrug dossier`, `roast`, `analyst`, `contest`, `launch-check`, `label-outcomes`, `narratives`, `audit`, `model-prices` |
 | `crates/realorrug-agent`, `crates/realorrug-model`, `crates/realorrug-provider` | the boundary a model sits behind, the model client, the spend meter |
 | `crates/realorrug-types`, `crates/realorrug-decode`, `crates/realorrug-pumpfun`, `crates/realorrug-journal` | shared vocabulary, Solana decoding, pump.fun, the hash-chained journal |
