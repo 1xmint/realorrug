@@ -21,6 +21,7 @@ mod record_launches;
 mod replay;
 mod roast;
 mod rpc_arg;
+mod spend;
 mod treasury_solana;
 
 use std::process::ExitCode;

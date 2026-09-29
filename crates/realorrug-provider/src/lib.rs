@@ -43,4 +43,7 @@
 
 mod cost;
 
-pub use cost::{Budget, Commitment, Ledger, Meter, Refusal, monthly_allowance_from};
+pub use cost::{
+    Budget, Commitment, Ledger, Meter, Refusal, cli_monthly_allowance_from,
+    daemon_monthly_allowance_from, monthly_allowance_from,
+};

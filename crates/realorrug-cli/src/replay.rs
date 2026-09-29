@@ -95,6 +95,35 @@ pub fn run(args: &[String]) -> Result<(), String> {
         return Err(format!("no *.sheet.json capture found in {dir_arg}"));
     }
 
+    // Gated per capture, against this process's own ledger (`crate::spend`,
+    // 9-27-0026b defect 3): before this, `--model` called the provider with
+    // no reservation at all, so a replay run spent money the $90/month stop
+    // never saw and never counted. `spend` is `None` when no prices are
+    // configured, in which case `provider` above is never handed through
+    // below either -- same "no prices -> nothing paid" rule the daemon and
+    // `roast`/`analyst` already follow.
+    //
+    // Called only when `--model` was given (9-27-0026c finding 5, cli/spend.rs's
+    // own module doc): plain `replay` makes no paid call at all and needs no
+    // budget, so it must open no ledger and print no unfunded notice either --
+    // before this, `open()` ran unconditionally, so a plain replay with no
+    // prices configured printed the same "budget closed" notice a `--model`
+    // run would, about a call this run was never going to make.
+    let (mut spend, today) = if wants_model(args) {
+        (crate::spend::open(), crate::spend::today())
+    } else {
+        (None, 0)
+    };
+    // 9-27-0026c finding 11: `--model` was asked for, but no `Spend` came
+    // back -- prices are not configured at all (rule 8), so every case below
+    // silently falls back to the template with nothing said about why. A
+    // reviewer diffing this run's tally against an earlier one would have no
+    // way to tell "the model refused every draft" apart from "there was never
+    // a model to ask".
+    if let Some(notice) = model_unavailable_notice(wants_model(args), spend.is_some()) {
+        eprintln!("{notice}");
+    }
+
     // Every reply is computed up front, before anything is written, so the
     // summary line at the top of `review.md` can count them -- the tally a
     // reviewer of a `--model` run reads first, and reading it after the
@@ -105,7 +134,29 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let capture: Capture = serde_json::from_str(&text)
             .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
-        let reply = realorrug_roast::voice::write(&capture.sheet, provider.as_deref());
+        let (gated_provider, reservation) = match spend.as_mut() {
+            Some(s) => realorrug_analyst::daemon::gate_model_call(
+                s,
+                provider.as_deref(),
+                today,
+                &capture.mint,
+            ),
+            None => (None, None),
+        };
+        let reply = realorrug_roast::voice::write(&capture.sheet, gated_provider);
+        // Settled at what the call actually reported, or given back if the
+        // reservation was never spent -- the same rule `roast` and `analyst`
+        // apply to `reply.billed`.
+        if let (Some(s), Some(commitment)) = (spend.as_mut(), reservation) {
+            match reply.billed {
+                realorrug_roast::Billed::NoCall => s.release(commitment),
+                realorrug_roast::Billed::Reported(actual) => s.settle(commitment, actual),
+                realorrug_roast::Billed::Unreported => {
+                    let charged = commitment.reserved();
+                    s.settle(commitment, charged);
+                }
+            }
+        }
         cases.push((capture, reply));
     }
 
@@ -364,10 +415,32 @@ fn wants_model(args: &[String]) -> bool {
     args.iter().any(|a| a == "--model")
 }
 
+/// The line a `--model` run prints when no `Spend` opened, and only then --
+/// a plain replay never asked for a model, so telling it none is available
+/// would be noise. Split out of `run` so both halves of that condition are
+/// tested rather than only readable.
+fn model_unavailable_notice(wants_model: bool, has_spend: bool) -> Option<&'static str> {
+    (wants_model && !has_spend).then_some(
+        "--model was given but no Spend could be opened (see the line above: prices or \
+         the monthly slice unset, or the ledger locked or unwritable); \
+         every case below falls back to the template",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use realorrug_model::{Answer, Request, Unreachable};
+
+    #[test]
+    fn only_a_model_run_with_no_spend_says_the_model_is_unavailable() {
+        // `||` in place of `&&` would print the notice on every plain replay
+        // and on a funded `--model` run -- the mutant CI reported MISSED.
+        assert!(model_unavailable_notice(true, false).is_some());
+        assert!(model_unavailable_notice(false, false).is_none());
+        assert!(model_unavailable_notice(true, true).is_none());
+        assert!(model_unavailable_notice(false, true).is_none());
+    }
     use realorrug_roast::{Assessment, FactSheet};
     use realorrug_types::MicroUsd;
 

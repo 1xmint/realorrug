@@ -157,6 +157,25 @@ fn env_legacy(new: &str, old: &str) -> Option<String> {
 /// **closed**, not ignored: a typo in a spending ceiling must not read as
 /// permission.
 pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
+    budget_with_monthly(get, realorrug_provider::daemon_monthly_allowance_from(get))
+}
+
+/// The CLI's own budget (9-27-0026b defect 2): the same per-call and daily
+/// ceilings [`budget_from`] reads (`REALORRUG_ANALYST_*`) -- a call made by
+/// hand from a terminal costs the same as one the daemon makes -- but its own
+/// monthly slice, `REALORRUG_CLI_MONTHLY_USD`
+/// ([`realorrug_provider::cli_monthly_allowance_from`]), never the daemon's
+/// or serve's share. Unset or invalid closes it the same way an unset daemon
+/// ceiling does.
+#[must_use]
+pub fn cli_budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
+    budget_with_monthly(get, realorrug_provider::cli_monthly_allowance_from(get))
+}
+
+/// The daily and per-call ceilings both [`budget_from`] and [`cli_budget_from`]
+/// share, paired with whichever monthly figure the caller has already worked
+/// out for itself -- the only ceiling of the three that differs between them.
+fn budget_with_monthly(get: &impl Fn(&str) -> Option<String>, monthly: Option<MicroUsd>) -> Budget {
     let daily = env_or_legacy(
         "REALORRUG_ANALYST_DAILY_USD",
         "RADAR_ANALYST_DAILY_USD",
@@ -171,7 +190,6 @@ pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
     )
     .and_then(|v| v.trim().parse::<f64>().ok())
     .map(MicroUsd::from_dollars);
-    let monthly = realorrug_provider::monthly_allowance_from(get);
     match (daily, per_call, monthly) {
         (Some(daily_max), Some(per_call_max), Some(monthly_max)) => Budget {
             per_call_max,
@@ -191,11 +209,26 @@ pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
 /// that and a mystery.
 #[must_use]
 pub fn unfunded_notice(budget: Budget) -> Option<&'static str> {
+    // Named here, not only in `daemon_monthly_allowance_from`/
+    // `cli_monthly_allowance_from` themselves (9-27-0026c finding 5): the
+    // caller reading a closed budget from a printed notice, not the source,
+    // needs the actual variables that can close it named on the line, or
+    // debugging a closed budget means re-deriving which of six variables did
+    // it from the allowance functions' own source. This one static message
+    // covers both callers -- the daemon (whose own budget closes when
+    // `REALORRUG_CLI_MONTHLY_USD` and `REALORRUG_SERVE_MONTHLY_USD` sum to
+    // more than `REALORRUG_MONTHLY_USD` leaves after
+    // `REALORRUG_FIXED_MONTHLY_USD`) and `realorrug-cli`'s own `crate::spend`
+    // (whose budget closes the same way, or when its own
+    // `REALORRUG_CLI_MONTHLY_USD` alone is unset or will not parse) -- rather
+    // than a second, near-duplicate string for each.
     (budget == Budget::CLOSED).then_some(
         "realorrug-analyst: unfunded -- REALORRUG_ANALYST_DAILY_USD, \
          REALORRUG_ANALYST_PER_CALL_USD, REALORRUG_MONTHLY_USD and \
          REALORRUG_FIXED_MONTHLY_USD are not all set to a valid amount with fixed below the \
-         monthly ceiling, so every call is refused.",
+         monthly ceiling, or REALORRUG_CLI_MONTHLY_USD and REALORRUG_SERVE_MONTHLY_USD (each \
+         unset closes its own slice, rule 7) leave nothing after fixed costs, so every call is \
+         refused.",
     )
 }
 
@@ -804,6 +837,49 @@ fn settle_if_sent(spend: &mut Spend, reservation: realorrug_provider::Commitment
     }
 }
 
+/// Reserves one model call and decides whether `provider` may be asked at
+/// all this mention.
+///
+/// A refusal here does not refuse the mention. The day's or month's model
+/// budget being spent means this one reply is the deterministic template --
+/// which is exactly what the account ships with no provider configured at
+/// all, so it is rule 8 rather than an outage.
+///
+/// Pulled out of `tick`'s own inline reservation so the property a daemon-
+/// level test needs -- once the meter is at its cap, `answer` never sees a
+/// provider it could call -- is reachable without standing up an `X`
+/// credential, an RPC client or a mentions file to reach it.
+///
+/// Public so `realorrug-cli`'s hand-run commands (`analyst`, `roast`,
+/// `replay --model`) gate a paid call the same way, against each one's own
+/// ledger beside the daemon's (`crate::spend` in `realorrug-cli`, ADR 0039's
+/// 2026-09-28 amendment) -- the same rule, applied to a different `Spend`,
+/// rather than each command inventing its own version of it.
+pub fn gate_model_call<'p>(
+    spend: &mut Spend,
+    provider: Option<&'p dyn realorrug_model::Provider>,
+    today: u64,
+    mention_id: &str,
+) -> (
+    Option<&'p dyn realorrug_model::Provider>,
+    Option<realorrug_provider::Commitment>,
+) {
+    let reserved = provider.and_then(|_| {
+        spend
+            .authorize(Cost::ModelCall, today)
+            .inspect_err(|_| {
+                eprintln!(
+                    "realorrug-analyst: model budget spent; {mention_id} answered by the template"
+                );
+            })
+            .ok()
+    });
+    // Gated on the reservation, so a refused meter means no call was made
+    // rather than one that was made unmetered.
+    let gated = if reserved.is_some() { provider } else { None };
+    (gated, reserved)
+}
+
 /// Posts today's "seven days later" if it is due, metering the X post.
 fn announce_day(
     publisher: &dyn Publisher,
@@ -1288,31 +1364,14 @@ pub fn tick(
         // `answer`, because `answer` makes the call internally: by the time a
         // reply comes back the money is gone, and a ceiling checked after that
         // is not a ceiling.
-        //
-        // A refusal here does not refuse the mention. The day's model budget
-        // being spent means this one reply is the deterministic template --
-        // which is exactly what the account ships with no provider configured
-        // at all, so it is rule 8 rather than an outage.
-        let reserved = provider.and_then(|_| {
-            spend
-                .authorize(Cost::ModelCall, today)
-                .inspect_err(|_| {
-                    eprintln!(
-                        "realorrug-analyst: model budget spent; {} answered by the template",
-                        mention.id
-                    );
-                })
-                .ok()
-        });
+        let (gated_provider, reserved) = gate_model_call(spend, provider, today, &mention.id);
         let ctx = Answering {
             client,
             memory: memory.as_ref(),
             robinhood,
             rates,
             creators,
-            // Gated on the reservation, so a refused meter means no call was
-            // made rather than one that was made unmetered.
-            provider: if reserved.is_some() { provider } else { None },
+            provider: gated_provider,
             self_mint,
             now: at,
         };
@@ -2126,6 +2185,100 @@ mod tests {
     }
 
     #[test]
+    fn a_tick_at_the_monthly_cap_makes_no_model_call() {
+        // The daemon-level property packet 9-27-0026 asks for: once the
+        // month's ledger is already at its cap, the model call `tick` would
+        // have reserved for this mention must be refused, and the provider
+        // handed to `answer` must be `None` -- never a provider `answer`
+        // could go on to call unmetered.
+        //
+        // `PanicsIfAsked::ask` is the check that matters: if `gate_model_call`
+        // ever handed the provider through anyway, calling it here would
+        // panic instead of quietly costing money, which is the whole point
+        // of proving "no model call is made" rather than just "the meter
+        // refused a reservation" (already pinned in `realorrug-provider`'s
+        // own tests).
+        #[derive(Debug)]
+        struct PanicsIfAsked;
+        impl realorrug_model::Provider for PanicsIfAsked {
+            fn name(&self) -> &'static str {
+                "panics-if-asked"
+            }
+            fn estimate(&self) -> MicroUsd {
+                MicroUsd::from_dollars(0.01)
+            }
+            fn ask(
+                &self,
+                _request: &realorrug_model::Request,
+            ) -> Result<realorrug_model::Answer, realorrug_model::Unreachable> {
+                panic!("no model call may be made once the month's ledger is at its cap");
+            }
+        }
+
+        let dir =
+            std::env::temp_dir().join(format!("radar-daemon-monthly-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let ledger = dir.join("ledger.json").to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&ledger);
+
+        let prices = Prices {
+            mention_read: MicroUsd(1_000),
+            post_read: MicroUsd(5_000),
+            reply: MicroUsd(10_000),
+            post: MicroUsd(15_000),
+            model_call: MicroUsd::from_dollars(1.0),
+            user_read: MicroUsd(20_000),
+        };
+        // 9-27-0026c finding 7: `daily_max` must sit well above `monthly_max`
+        // so the refusal below is provably the monthly check firing, not the
+        // daily one masking it. With both at $1 (the previous value), the
+        // reply that fills the month also fills the day at the same instant,
+        // so a `Meter::authorize` that dropped its monthly branch entirely
+        // would still refuse here on the daily check alone -- a bug the test
+        // could never see. Re-apply that bug locally (bypass the monthly
+        // branch in `Meter::authorize`) and this test still fails, because
+        // $1 of $10 daily is nowhere near the daily cap.
+        let budget = Budget {
+            per_call_max: MicroUsd::from_dollars(1.0),
+            daily_max: MicroUsd::from_dollars(10.0),
+            monthly_max: MicroUsd::from_dollars(1.0),
+        };
+        let mut spend = Spend::open(budget, prices, ledger, 1);
+        // Spend the whole month on something other than a model call, the
+        // same way a busy day of mentions and replies would in practice.
+        let c = spend.authorize(Cost::Reply, 1).expect("exactly the cap");
+        spend.settle(c, MicroUsd::from_dollars(1.0));
+
+        let provider = PanicsIfAsked;
+        let (gated, reserved) = gate_model_call(
+            &mut spend,
+            Some(&provider as &dyn realorrug_model::Provider),
+            1,
+            "1",
+        );
+
+        assert!(
+            reserved.is_none(),
+            "the month is already at its cap; there is nothing left to reserve"
+        );
+        assert!(
+            gated.is_none(),
+            "a refused reservation must not hand the provider through"
+        );
+        assert_eq!(
+            spend.refusals(),
+            1,
+            "exactly one reservation was attempted and refused -- the monthly cap, not the daily one"
+        );
+        // The property under test: nothing here may call `.ask()`. `answer`
+        // only ever does that through `ctx.provider`, and `gated` is exactly
+        // what `tick` would put there.
+        if let Some(p) = gated {
+            let _ = p.ask(&realorrug_model::Request::new("", ""));
+        }
+    }
+
+    #[test]
     fn either_lane_finding_something_keeps_the_loop_busy() {
         // Re-applied as CI did: `+` to `*` makes (0, 1) idle and the second
         // assertion fails; `+` to `-` panics on (0, 1) and the test fails there.
@@ -2247,6 +2400,14 @@ mod tests {
         let notice = unfunded_notice(Budget::CLOSED).expect("a closed budget says so");
         assert!(notice.contains("unfunded"), "{notice}");
         assert!(notice.contains("REALORRUG_ANALYST_DAILY_USD"), "{notice}");
+        // 9-27-0026c finding 5: a budget closed by the monthly slices
+        // (`REALORRUG_CLI_MONTHLY_USD`/`REALORRUG_SERVE_MONTHLY_USD`) is the
+        // same `Budget::CLOSED` this notice already covers -- naming both
+        // slice variables here too, not only the four original ones, is what
+        // makes the printed notice actually name the cause rather than
+        // sending whoever reads it to the allowance functions' own source.
+        assert!(notice.contains("REALORRUG_CLI_MONTHLY_USD"), "{notice}");
+        assert!(notice.contains("REALORRUG_SERVE_MONTHLY_USD"), "{notice}");
 
         // A funded one says nothing: a warning that fires when everything is
         // fine is a warning nobody reads.

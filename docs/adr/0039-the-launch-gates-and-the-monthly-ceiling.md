@@ -35,6 +35,40 @@
   call. RPC is counted as a fixed cost, which holds only while the RPC plan
   is a flat fee with no per-request overage; the meter does not count RPC
   calls.
+- **Amended 2026-09-28 (orchestrator decision, 9-27-0026b defect 2):** the
+  daemon's `Spend`/`Meter`/`Ledger` is shared by the X and Telegram lanes
+  because both run inside that one process, but `realorrug analyst`,
+  `realorrug roast` and `realorrug replay --model` are separate processes run
+  by hand, and were found opening the daemon's own ledger file rather than
+  sharing its in-memory total -- a hand-run charge and the daemon's next save
+  erased each other, uncounted against the cap either way. Each process now
+  meters its own ledger file beside the daemon's (`crate::spend` in
+  `realorrug-cli`, `cli-ledger.json`), and the $90 ceiling is split into
+  slices that cannot sum past it: `REALORRUG_CLI_MONTHLY_USD` for the CLI
+  (unset closes it, rule 7) and `REALORRUG_SERVE_MONTHLY_USD` (design 0032's
+  name) for `realorrug-serve`, both taken off what
+  `REALORRUG_MONTHLY_USD − REALORRUG_FIXED_MONTHLY_USD` leaves before the
+  daemon's own allowance is computed; if the slices leave nothing, the
+  daemon's budget is `Budget::CLOSED` too, never negative. Enforced two ways,
+  not only described here: `cli_monthly_allowance_from` itself refuses a CLI
+  slice that, added to the serve slice, exceeds what is left (a review
+  finding on PR #205, 2026-09-28 -- the function used to hand back its own
+  env var unbounded), and `daemon_monthly_allowance_from` closes the daemon
+  the same way a slice's own caller closes itself when that slice is set but
+  will not parse, rather than reading an invalid slice as zero. See
+  `crates/realorrug-provider/src/cost.rs`
+  (`daemon_monthly_allowance_from`/`cli_monthly_allowance_from`) and
+  `deploy/analyst.env.example`.
+- **Amended 2026-09-28, same review:** because the CLI's ledger is a plain
+  file beside the daemon's, two hand-run paid commands started at once would
+  each load the same starting total, spend independently, and overwrite each
+  other's save -- exactly the cross-process race decision 5 exists to close,
+  now one file over instead of one process over. `realorrug-cli`'s
+  `crate::spend::open()` holds an exclusive OS lock on `cli-ledger.lock` for
+  the life of the run (`std::fs::File::try_lock`, released automatically on
+  exit or crash); a second `open()` while the first is still running is
+  refused, naming the lock path, rather than racing it. One hand-run paid
+  command at a time on a given box.
 - Statistical proof of forecasting skill is **not** a launch gate. Calibration
   continues after launch (plan 0002 phase 5), and no probability is published
   before calibration supports it.

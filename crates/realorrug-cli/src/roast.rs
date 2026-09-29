@@ -18,7 +18,7 @@
 //! than argued about.
 
 use realorrug_onchain::{RpcClient, dispatch};
-use realorrug_roast::{BaseRates, Fellback};
+use realorrug_roast::{BaseRates, Billed, Fellback};
 
 use crate::dossier::safe;
 use crate::flag;
@@ -122,13 +122,47 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // looks right.
     let self_mint = realorrug_analyst::daemon::self_mint_from(&|k| std::env::var(k).ok())?;
 
+    // Gated against this process's own ledger (`crate::spend`, ADR 0039
+    // decision 5 as amended 2026-09-28): a call made by hand from this
+    // terminal is not a call the $90/month stop should be blind to. `spend`
+    // is `None` when no prices are configured at all, in which case no
+    // provider is ever handed through below, same as the daemon's own "no
+    // prices -> nothing answered by a paid provider" rule.
+    //
+    // Opened only after every `?` above (9-27-0026c finding 8): a reservation
+    // made before `self_mint_from`'s `?` would be left neither settled nor
+    // released whenever that line returned early, so it must run last, right
+    // before the reservation it guards is actually spent.
+    let mut spend = crate::spend::open();
+    let today = crate::spend::today();
+    let (gated_provider, reservation) = match spend.as_mut() {
+        Some(s) => {
+            realorrug_analyst::daemon::gate_model_call(s, provider.as_deref(), today, &mint_arg)
+        }
+        None => (None, None),
+    };
+
     let (sheet, reply) = realorrug_roast::roast(
         &dossier,
         rates.as_ref(),
         creators.as_ref(),
-        provider.as_deref(),
+        gated_provider,
         self_mint.as_ref(),
     );
+    // Settled at what the call actually reported, or given back if the
+    // reservation was never spent -- same rule the daemon's `tick` applies
+    // to `outcome.billed()`, because holding the reservation open either way
+    // would double-count the next call or hide a real one.
+    if let (Some(s), Some(commitment)) = (spend.as_mut(), reservation) {
+        match reply.billed {
+            Billed::NoCall => s.release(commitment),
+            Billed::Reported(actual) => s.settle(commitment, actual),
+            Billed::Unreported => {
+                let charged = commitment.reserved();
+                s.settle(commitment, charged);
+            }
+        }
+    }
 
     if wants_sheet(args) {
         println!("--- fact sheet ---");
