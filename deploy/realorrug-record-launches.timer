@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Install to /etc/systemd/system/realorrug-record-launches.timer, then:
+#   sudo systemctl enable --now realorrug-record-launches.timer
+#
+# Hourly. The walk resumes from a saved cursor, so the interval sets only how
+# stale the counts can be, not what is recorded: a missed hour is caught up by
+# the next run, up to `--max` (2000) launches a run. Every run is one log walk
+# plus two reads per new launch, on the RPC the analyst already uses.
+[Unit]
+Description=Record every Pons launch's name, hourly
+Documentation=https://github.com/1xmint/realorrug
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5min
+Unit=realorrug-record-launches.service
+
+[Install]
+WantedBy=timers.target

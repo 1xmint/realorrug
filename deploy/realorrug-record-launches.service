@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Install to /etc/systemd/system/realorrug-record-launches.service beside its
+# timer. Run once by hand first:
+#   sudo systemctl start realorrug-record-launches && journalctl -u realorrug-record-launches -n 20
+#
+# Writes every Pons launch's name and symbol into the analyst's memory, so the
+# narrative counts (research 0055) stop measuring only what people asked
+# about. It uses the RPC the analyst already polls with, read from the same
+# env file; the first endpoint only, because `record-launches` takes one URL
+# and a cursor makes a failed run cost nothing but a retry an hour later.
+[Unit]
+Description=Record the name of every Pons launch since the last run
+Documentation=https://github.com/1xmint/realorrug
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=guardian
+Group=guardian
+WorkingDirectory=/home/guardian/realorrug
+EnvironmentFile=/etc/realorrug/analyst.env
+# `set +x` and no echo: the endpoint URL can carry a provider key. systemd
+# turns `$$` into `$` and `%%` into `%`, so bash sees `${rpc%%,*}`: the first
+# endpoint.
+ExecStart=/bin/bash -c 'set +x; rpc=$${REALORRUG_ROBINHOOD_RPC:-$${RADAR_ROBINHOOD_RPC:-}}; : "$${rpc:?Robinhood RPC is required}"; exec /home/guardian/realorrug/bin/realorrug record-launches --rpc "$${rpc%%%%,*}" --memory /home/guardian/realorrug/data/analyst/memory.sqlite3'
+# Lowest priority: the analyst answering people comes first on a small box.
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/guardian/realorrug/data/analyst
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=64
