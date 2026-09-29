@@ -22,7 +22,7 @@
 
 use realorrug_analyst::{Answered, Answering, Gate, Limits, Mention};
 use realorrug_onchain::RpcClient;
-use realorrug_roast::BaseRates;
+use realorrug_roast::{BaseRates, Billed};
 
 use crate::dossier::safe;
 use crate::flag;
@@ -151,6 +151,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
         eprintln!("no base rates; replies will carry no population context");
     }
     let provider = realorrug_model::from_vars(&|k| std::env::var(k).ok()).ok();
+    // Gated per mention, against the daemon's own shared ledger
+    // (`crate::spend`, ADR 0039 decision 5): a fixture run at a terminal
+    // spends the same $90/month a live poll would, and each mention is its
+    // own reservation for the same reason `tick` reserves per mention rather
+    // than once for the whole poll -- one caller answering nothing must not
+    // spend a call it never made.
+    let mut spend = crate::spend::open();
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -166,24 +173,21 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // from the ones the daemon posts, on the one rule that is about the token.
     let self_mint = realorrug_analyst::daemon::self_mint_from(&|k| std::env::var(k).ok())?;
 
-    let ctx = Answering {
-        client: &client,
-        memory: None,
-        robinhood: robinhood.as_ref(),
-        rates: rates.as_ref(),
-        creators: creators.as_ref(),
-        provider: provider.as_deref(),
-        self_mint: self_mint.as_ref(),
-        now,
-    };
     let mut threads = realorrug_analyst::followup::ThreadMemory::new();
     for mention in &mentions {
-        answer(
+        answer_metered(
             mention,
             &mut gate,
             &mut threads,
             &mut lane2,
-            &ctx,
+            &client,
+            robinhood.as_ref(),
+            rates.as_ref(),
+            creators.as_ref(),
+            provider.as_deref(),
+            self_mint.as_ref(),
+            now,
+            spend.as_mut(),
             &log_path,
         )?;
     }
@@ -194,6 +198,59 @@ pub fn run(args: &[String]) -> Result<(), String> {
         gate.sent_today()
     );
     println!("(dry run: this command holds no credential and posted nothing)");
+    Ok(())
+}
+
+/// Reserves one mention's model call against the shared ledger, answers it,
+/// and settles or releases the reservation from what actually happened --
+/// pulled out of `run` only to keep that function under clippy's line cap;
+/// the reservation-then-settle shape is exactly `daemon::tick`'s.
+#[allow(clippy::too_many_arguments)]
+fn answer_metered(
+    mention: &Mention,
+    gate: &mut Gate,
+    threads: &mut realorrug_analyst::followup::ThreadMemory,
+    lane2: &mut realorrug_analyst::lane2::Gate,
+    client: &RpcClient,
+    robinhood: Option<&realorrug_robinhood::Rpc>,
+    rates: Option<&BaseRates>,
+    creators: Option<&realorrug_roast::CreatorIndex>,
+    provider: Option<&dyn realorrug_model::Provider>,
+    self_mint: Option<&realorrug_types::Address>,
+    now: u64,
+    mut spend: Option<&mut realorrug_analyst::Spend>,
+    log_path: &str,
+) -> Result<(), String> {
+    let (gated_provider, reservation) = match spend.as_mut() {
+        Some(s) => realorrug_analyst::daemon::gate_model_call(
+            s,
+            provider,
+            crate::spend::today(),
+            &mention.id,
+        ),
+        None => (None, None),
+    };
+    let ctx = Answering {
+        client,
+        memory: None,
+        robinhood,
+        rates,
+        creators,
+        provider: gated_provider,
+        self_mint,
+        now,
+    };
+    let billed = answer(mention, gate, threads, lane2, &ctx, log_path)?;
+    if let (Some(s), Some(commitment)) = (spend, reservation) {
+        match billed {
+            Billed::NoCall => s.release(commitment),
+            Billed::Reported(actual) => s.settle(commitment, actual),
+            Billed::Unreported => {
+                let charged = commitment.reserved();
+                s.settle(commitment, charged);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -210,6 +267,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
 /// Only when the reply log cannot be written. That stops the whole run rather
 /// than skipping the mention, and deliberately: an account that cannot record
 /// what it says must not carry on saying things.
+///
+/// Returns what the model call cost, or [`Billed::NoCall`] when nothing was
+/// asked -- read before the match below moves the outcome apart, so the
+/// caller can settle or release the reservation it made against `ctx`'s
+/// provider before this call, the same way the daemon's `tick` settles
+/// against `outcome.billed()`.
 fn answer(
     mention: &Mention,
     gate: &mut Gate,
@@ -217,7 +280,7 @@ fn answer(
     lane2: &mut realorrug_analyst::lane2::Gate,
     ctx: &Answering<'_>,
     log_path: &str,
-) -> Result<(), String> {
+) -> Result<realorrug_roast::Billed, String> {
     println!(
         "
 === {} from @{}",
@@ -229,29 +292,31 @@ fn answer(
     // mint or a symbol.
     println!("    {}", safe(&mention.text, 120));
 
-    let entry = match realorrug_analyst::answer(mention, gate, threads, lane2, ctx) {
+    let outcome = realorrug_analyst::answer(mention, gate, threads, lane2, ctx);
+    let billed = outcome.billed();
+    let entry = match outcome {
         Answered::Reply { entry, .. } => *entry,
         Answered::Ticker { text: reply, .. }
         | Answered::Followup { text: reply, .. }
         | Answered::Lane2 { text: reply, .. } => {
             println!("--> {reply}");
-            return Ok(());
+            return Ok(billed);
         }
         Answered::Nothing => {
             println!("--> (no mint or ticker found; nothing to answer)");
-            return Ok(());
+            return Ok(billed);
         }
         Answered::Refused(why) => {
             println!("--> refused: {}", realorrug_analyst::describe(&why));
-            return Ok(());
+            return Ok(billed);
         }
         Answered::NotAnAddress => {
             println!("--> (not a valid address)");
-            return Ok(());
+            return Ok(billed);
         }
         Answered::Unreadable(e) => {
             println!("--> (could not read the chain: {e})");
-            return Ok(());
+            return Ok(billed);
         }
     };
 
@@ -290,7 +355,7 @@ fn answer(
         // halves of the gate's memory are deliberately left empty here.
         gate.record(&mention.author, &mint_text, id, None, None, ctx.now);
     }
-    Ok(())
+    Ok(billed)
 }
 
 #[cfg(test)]

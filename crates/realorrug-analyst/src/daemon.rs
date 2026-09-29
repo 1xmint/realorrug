@@ -816,7 +816,11 @@ fn settle_if_sent(spend: &mut Spend, reservation: realorrug_provider::Commitment
 /// level test needs -- once the meter is at its cap, `answer` never sees a
 /// provider it could call -- is reachable without standing up an `X`
 /// credential, an RPC client or a mentions file to reach it.
-fn gate_model_call<'p>(
+///
+/// Public so `realorrug-cli`'s hand-run commands (`analyst`, `roast`,
+/// `replay --model`) gate a paid call the same way against the same shared
+/// ledger, rather than each inventing its own version of this rule.
+pub fn gate_model_call<'p>(
     spend: &mut Spend,
     provider: Option<&'p dyn realorrug_model::Provider>,
     today: u64,
