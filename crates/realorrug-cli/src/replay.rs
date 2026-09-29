@@ -95,6 +95,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
         return Err(format!("no *.sheet.json capture found in {dir_arg}"));
     }
 
+    // Gated per capture, against this process's own ledger (`crate::spend`,
+    // 9-27-0026b defect 3): before this, `--model` called the provider with
+    // no reservation at all, so a replay run spent money the $90/month stop
+    // never saw and never counted. `spend` is `None` only when no prices are
+    // configured, in which case `provider` above is never handed through
+    // below either -- same "no prices -> nothing paid" rule the daemon and
+    // `roast`/`analyst` already follow. Plain `replay` with no `--model`
+    // opens no provider, so `gate_model_call` never reserves anything for it.
+    let mut spend = crate::spend::open();
+    let today = crate::spend::today();
+
     // Every reply is computed up front, before anything is written, so the
     // summary line at the top of `review.md` can count them -- the tally a
     // reviewer of a `--model` run reads first, and reading it after the
@@ -105,7 +116,29 @@ pub fn run(args: &[String]) -> Result<(), String> {
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let capture: Capture = serde_json::from_str(&text)
             .map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
-        let reply = realorrug_roast::voice::write(&capture.sheet, provider.as_deref());
+        let (gated_provider, reservation) = match spend.as_mut() {
+            Some(s) => realorrug_analyst::daemon::gate_model_call(
+                s,
+                provider.as_deref(),
+                today,
+                &capture.mint,
+            ),
+            None => (None, None),
+        };
+        let reply = realorrug_roast::voice::write(&capture.sheet, gated_provider);
+        // Settled at what the call actually reported, or given back if the
+        // reservation was never spent -- the same rule `roast` and `analyst`
+        // apply to `reply.billed`.
+        if let (Some(s), Some(commitment)) = (spend.as_mut(), reservation) {
+            match reply.billed {
+                realorrug_roast::Billed::NoCall => s.release(commitment),
+                realorrug_roast::Billed::Reported(actual) => s.settle(commitment, actual),
+                realorrug_roast::Billed::Unreported => {
+                    let charged = commitment.reserved();
+                    s.settle(commitment, charged);
+                }
+            }
+        }
         cases.push((capture, reply));
     }
 
