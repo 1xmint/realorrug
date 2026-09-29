@@ -86,10 +86,19 @@ committed. Use the test X app, not a live one.
 | `REALORRUG_X_CLIENT_ID` | the X app's OAuth2 client id | sign-in refuses |
 | `REALORRUG_X_REDIRECT_URI` | the callback the X app lists | sign-in refuses |
 | `REALORRUG_X_CLIENT_SECRET` | optional, for a confidential app | public-client PKCE only |
-| `REALORRUG_SERVE_MONTHLY_USD` | serve's own monthly spending stop (X reads) | spending refused |
+| `REALORRUG_MONTHLY_USD` | the whole monthly ceiling ($90); serve's slice must fit under it | sign-in and the assistant refuse spending |
+| `REALORRUG_FIXED_MONTHLY_USD` | the fixed part of that ceiling; the slice must fit in ceiling minus this | spending refused |
+| `REALORRUG_SERVE_MONTHLY_USD` | serve's own monthly spending stop (X reads), at most ceiling minus fixed | spending refused |
 | `REALORRUG_APP_ORIGINS` | exact origins granted credentialed CORS | no CORS header |
-| `REALORRUG_ROUNDS_FILE` | the round record: id, close, coins | every round route answers 503 |
+| `REALORRUG_ROUNDS_FILE` | the round record: id, close, and per coin chain, token and `q_basis_points` (required for every coin) | every round route answers 503, and so does a coin with no odds |
 | `REALORRUG_TRUST_CLOUDFLARE` | key the rate limit on `CF-Connecting-IP` | the socket address is used |
+
+The API must be served from the site's own registrable domain (for
+`cabalhunter.org`, `api.cabalhunter.org`): the session cookie is
+`SameSite=Lax`, so a different site such as `radar.heyvera.org` never receives
+it on the site's fetches. Set `REALORRUG_APP_ORIGINS` to the site's origin and
+`REALORRUG_X_REDIRECT_URI` to the same API host. Do not loosen the cookie to
+`SameSite=None`.
 
 The store directory must be writable by the unit (the system unit lists it in
 `ReadWritePaths`), and the database stays in SQLite's default journal mode:

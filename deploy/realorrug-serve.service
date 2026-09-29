@@ -28,9 +28,11 @@ EnvironmentFile=-/etc/realorrug/serve.env
 #   REALORRUG_X_CLIENT_ID         the test X app's OAuth2 client id
 #   REALORRUG_X_REDIRECT_URI      the callback the X app lists
 #   REALORRUG_X_CLIENT_SECRET     optional; only for a confidential X app
-#   REALORRUG_SERVE_MONTHLY_USD   the serve-owned monthly spending stop; unset = closed
+#   REALORRUG_MONTHLY_USD         the whole monthly ceiling; unset = closed
+#   REALORRUG_FIXED_MONTHLY_USD   the fixed part of it; unset = closed
+#   REALORRUG_SERVE_MONTHLY_USD   serve's slice, at most ceiling minus fixed; unset or over = closed
 #   REALORRUG_APP_ORIGINS         exact origins allowed credentialed CORS; unset = no header
-#   REALORRUG_ROUNDS_FILE         the round record (id, close, coins); unset = 503
+#   REALORRUG_ROUNDS_FILE         the round record (id, close, coins with q_basis_points); unset or a coin without odds = 503
 #   REALORRUG_TRUST_CLOUDFLARE    1 to key the rate limit on CF-Connecting-IP
 Restart=always
 RestartSec=10
