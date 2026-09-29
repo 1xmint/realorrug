@@ -83,6 +83,19 @@ pub enum StoreError {
     /// `409 Conflict`.
     #[error("a forecast for this round, coin and player already stands")]
     Duplicate,
+    /// A forecast named a close that differs from the one the round's first
+    /// forecast row already carries. A round has one close; moving it after
+    /// rows exist would reopen a round whose calls were already shown, or
+    /// leave two closes in one round. It is the operator's configuration that
+    /// changed, not the player's doing, so `realorrug-serve` maps this to
+    /// `503`, never to `409` (which tells a player they repeated themselves).
+    #[error("this round already holds forecasts with a window close of {existing}, not {given}")]
+    WindowMoved {
+        /// The close the round's first stored forecast carries.
+        existing: i64,
+        /// The close this submission named.
+        given: i64,
+    },
     /// A second identity for an X account that already has one. One X id has
     /// one player key (design 0032 §4); look it up with
     /// [`Store::player_for_x_id`] instead of minting another.
@@ -417,6 +430,35 @@ impl Store {
             )?;
             if exists {
                 return Err(StoreError::Duplicate);
+            }
+            // A round has one close. The round's first forecast row fixed it,
+            // and every later one must agree: by induction that one row speaks
+            // for all of them, so this reads one row, not the round.
+            let first: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT payload FROM rows WHERE kind = 'forecast' AND round = ?1 \
+                     ORDER BY seq ASC LIMIT 1",
+                    params![round],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(json) = first {
+                let RowPayload::Forecast {
+                    window_close: existing,
+                    ..
+                } = serde_json::from_str(&json)?
+                else {
+                    return Err(StoreError::Corrupt(format!(
+                        "a row of kind 'forecast' holds another kind's payload (round {round})"
+                    )));
+                };
+                if existing != window_close {
+                    return Err(StoreError::WindowMoved {
+                        existing,
+                        given: window_close,
+                    });
+                }
             }
             self.append_in_write(
                 "forecast",
@@ -947,6 +989,49 @@ mod tests {
             "the first call stands, not the second"
         );
         assert_eq!(view.submitted_at, 10);
+    }
+
+    /// A round has one close: once a forecast row exists, a submission that
+    /// names another close is refused, later or earlier, and writes nothing.
+    #[test]
+    fn a_round_whose_close_moved_after_the_first_forecast_is_refused() {
+        let store = store();
+        let (p, q) = (key(&store), key(&store));
+        forecast_on(&store, &p, "coin-a", 10, 100).expect("first forecast");
+        for moved in [101, 99] {
+            let err = forecast_on(&store, &q, "coin-b", 20, moved).expect_err("moved close");
+            assert!(
+                matches!(
+                    err,
+                    StoreError::WindowMoved {
+                        existing: 100,
+                        given
+                    } if given == moved
+                ),
+                "{err:?}"
+            );
+        }
+        assert!(
+            store
+                .forecast("r1", "solana", "coin-b", q.as_str(), q.as_str(), 20)
+                .expect("read")
+                .is_none(),
+            "a refused forecast must not have been written"
+        );
+        // The same close is still accepted, and another round is its own.
+        forecast_on(&store, &q, "coin-b", 21, 100).expect("the round's own close");
+        store
+            .submit_forecast(
+                "r2",
+                "solana",
+                "coin-a",
+                &p,
+                Side::Rug,
+                odds(6_000),
+                22,
+                500,
+            )
+            .expect("another round has its own close");
     }
 
     /// A constraint other than the one-forecast rule is not a duplicate: a
