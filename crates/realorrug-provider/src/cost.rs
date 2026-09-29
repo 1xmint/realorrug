@@ -892,6 +892,29 @@ mod tests {
     }
 
     #[test]
+    fn a_cli_cap_that_exactly_uses_up_what_is_left_is_still_granted() {
+        // CI's mutation run on 9-27-0026c batch 1 (PR #205) caught this: no
+        // test told `> ` apart from `>=` at the boundary, so a mutant that
+        // closed the CLI when its slice plus serve's lands on exactly zero
+        // left -- rather than only when it overshoots -- survived. $30 is
+        // left after fixed costs; CLI claims $20 and serve claims $10, so the
+        // two exactly exhaust it. That is still a valid split (the daemon's
+        // own share closing to zero is its own function's job, tested above,
+        // not a reason to also refuse the CLI its full slice), so the CLI
+        // must get back its whole $20, not close.
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+            ("REALORRUG_CLI_MONTHLY_USD", "20.00"),
+            ("REALORRUG_SERVE_MONTHLY_USD", "10.00"),
+        ]);
+        assert_eq!(
+            cli_monthly_allowance_from(&get),
+            Some(MicroUsd::from_dollars(20.0))
+        );
+    }
+
+    #[test]
     fn a_cli_cap_with_no_monthly_ceiling_at_all_closes_the_cli() {
         // 9-27-0026c finding 1: `REALORRUG_MONTHLY_USD` is never set (a
         // misconfigured box, or one where only the CLI slice was set up), so

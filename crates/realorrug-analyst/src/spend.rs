@@ -318,6 +318,55 @@ mod tests {
     }
 
     #[test]
+    fn a_crash_right_after_settle_is_still_counted_at_restart() {
+        // 9-27-0026c finding 9: `authorize`'s own persistence is pinned above,
+        // but `settle` calls `self.persist()` too, and nothing proved that one
+        // actually reaches disk on its own. Re-apply the bug locally by
+        // deleting `self.persist();` from `settle` and this fails with
+        // `left: MicroUsd(2_000), right: MicroUsd(750)`: a restart would see
+        // the *reservation* (never written past `authorize`'s own save) as
+        // untouched, rather than the smaller, real settled figure.
+        let path = temp("crash-after-settle");
+        let mut before = Spend::open(budget(1_000_000), prices(), path.clone(), 1);
+        let c = before
+            .authorize(Cost::ModelCall, 1)
+            .expect("affordable, and settled to a different figure than reserved");
+        before.settle(c, MicroUsd(750));
+
+        let after = Spend::open(budget(1_000_000), prices(), path, 1);
+        assert_eq!(
+            after.spent_today(),
+            MicroUsd(750),
+            "a crash right after settle must leave the settled figure, not the reservation, on \
+             a fresh process's ledger"
+        );
+    }
+
+    #[test]
+    fn a_crash_right_after_release_is_still_counted_at_restart() {
+        // 9-27-0026c finding 9, `release`'s half: it also calls
+        // `self.persist()`. Re-apply the bug locally by deleting
+        // `self.persist();` from `release` and this fails with
+        // `left: MicroUsd(2_000), right: MicroUsd(0)`: a restart would still
+        // see the released reservation charged, spending the day's budget on
+        // a call that never happened.
+        let path = temp("crash-after-release");
+        let mut before = Spend::open(budget(1_000_000), prices(), path.clone(), 1);
+        let c = before
+            .authorize(Cost::ModelCall, 1)
+            .expect("affordable, and released rather than settled");
+        before.release(c);
+
+        let after = Spend::open(budget(1_000_000), prices(), path, 1);
+        assert_eq!(
+            after.spent_today(),
+            MicroUsd(0),
+            "a crash right after release must not leave the released reservation charged on a \
+             fresh process's ledger"
+        );
+    }
+
+    #[test]
     fn an_unfunded_account_answers_nothing() {
         // Rule 8, and the shape it takes here: the loop still starts, and every
         // single call is refused. A bot that exits looks like a broken deploy.

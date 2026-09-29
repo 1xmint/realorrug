@@ -151,10 +151,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
         eprintln!("no base rates; replies will carry no population context");
     }
     let provider = realorrug_model::from_vars(&|k| std::env::var(k).ok()).ok();
-    // Gated per mention, against the daemon's own shared ledger
-    // (`crate::spend`, ADR 0039 decision 5): a fixture run at a terminal
-    // spends the same $90/month a live poll would, and each mention is its
-    // own reservation for the same reason `tick` reserves per mention rather
+    // Gated per mention, against this process's own ledger beside the
+    // daemon's (`crate::spend`, ADR 0039 decision 5 as amended 2026-09-28): a
+    // fixture run at a terminal spends the same $90/month a live poll would,
+    // out of this command's own slice, and each mention is its own
+    // reservation for the same reason `tick` reserves per mention rather
     // than once for the whole poll -- one caller answering nothing must not
     // spend a call it never made.
     let mut spend = crate::spend::open();
@@ -187,7 +188,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
             provider.as_deref(),
             self_mint.as_ref(),
             now,
-            spend.as_mut(),
+            // `Handle: DerefMut<Target = Spend>` (`crate::spend::Handle`), but
+            // that coercion does not reach inside `Option<_>` -- `as_mut()`
+            // would hand back `Option<&mut Handle>`, not the `Option<&mut
+            // Spend>` this function takes. `as_deref_mut()` applies the
+            // `DerefMut` itself and returns the right type.
+            spend.as_deref_mut(),
             &log_path,
         )?;
     }
@@ -201,7 +207,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Reserves one mention's model call against the shared ledger, answers it,
+/// Reserves one mention's model call against this process's own ledger, answers it,
 /// and settles or releases the reservation from what actually happened --
 /// pulled out of `run` only to keep that function under clippy's line cap;
 /// the reservation-then-settle shape is exactly `daemon::tick`'s.

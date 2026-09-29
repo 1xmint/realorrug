@@ -98,13 +98,34 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // Gated per capture, against this process's own ledger (`crate::spend`,
     // 9-27-0026b defect 3): before this, `--model` called the provider with
     // no reservation at all, so a replay run spent money the $90/month stop
-    // never saw and never counted. `spend` is `None` only when no prices are
+    // never saw and never counted. `spend` is `None` when no prices are
     // configured, in which case `provider` above is never handed through
     // below either -- same "no prices -> nothing paid" rule the daemon and
-    // `roast`/`analyst` already follow. Plain `replay` with no `--model`
-    // opens no provider, so `gate_model_call` never reserves anything for it.
-    let mut spend = crate::spend::open();
-    let today = crate::spend::today();
+    // `roast`/`analyst` already follow.
+    //
+    // Called only when `--model` was given (9-27-0026c finding 5, cli/spend.rs's
+    // own module doc): plain `replay` makes no paid call at all and needs no
+    // budget, so it must open no ledger and print no unfunded notice either --
+    // before this, `open()` ran unconditionally, so a plain replay with no
+    // prices configured printed the same "budget closed" notice a `--model`
+    // run would, about a call this run was never going to make.
+    let (mut spend, today) = if wants_model(args) {
+        (crate::spend::open(), crate::spend::today())
+    } else {
+        (None, 0)
+    };
+    // 9-27-0026c finding 11: `--model` was asked for, but no `Spend` came
+    // back -- prices are not configured at all (rule 8), so every case below
+    // silently falls back to the template with nothing said about why. A
+    // reviewer diffing this run's tally against an earlier one would have no
+    // way to tell "the model refused every draft" apart from "there was never
+    // a model to ask".
+    if wants_model(args) && spend.is_none() {
+        eprintln!(
+            "--model was given but no Spend could be opened (prices are not fully configured); \
+             every case below falls back to the template"
+        );
+    }
 
     // Every reply is computed up front, before anything is written, so the
     // summary line at the top of `review.md` can count them -- the tally a

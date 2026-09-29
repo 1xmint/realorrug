@@ -103,21 +103,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // environment, not to this file.
     let provider = realorrug_model::from_vars(&|k| std::env::var(k).ok()).ok();
 
-    // Gated against the same monthly ledger the daemon spends from
-    // (`crate::spend`, ADR 0039 decision 5): a call made by hand from this
-    // terminal is not a call the shared $90/month stop should be blind to.
-    // `spend` is `None` when no prices are configured at all, in which case
-    // no provider is ever handed through below, same as the daemon's own
-    // "no prices -> nothing answered by a paid provider" rule.
-    let mut spend = crate::spend::open();
-    let today = crate::spend::today();
-    let (gated_provider, reservation) = match spend.as_mut() {
-        Some(s) => {
-            realorrug_analyst::daemon::gate_model_call(s, provider.as_deref(), today, &mint_arg)
-        }
-        None => (None, None),
-    };
-
     // The creator's record, and its absence is worth saying out loud: without
     // it every reply about a fresh launch says the same thing, because the cost
     // line is a constant and most launches sit in the same recipient band.
@@ -136,6 +121,26 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // the real token, so the command stops rather than printing a reply that
     // looks right.
     let self_mint = realorrug_analyst::daemon::self_mint_from(&|k| std::env::var(k).ok())?;
+
+    // Gated against this process's own ledger (`crate::spend`, ADR 0039
+    // decision 5 as amended 2026-09-28): a call made by hand from this
+    // terminal is not a call the $90/month stop should be blind to. `spend`
+    // is `None` when no prices are configured at all, in which case no
+    // provider is ever handed through below, same as the daemon's own "no
+    // prices -> nothing answered by a paid provider" rule.
+    //
+    // Opened only after every `?` above (9-27-0026c finding 8): a reservation
+    // made before `self_mint_from`'s `?` would be left neither settled nor
+    // released whenever that line returned early, so it must run last, right
+    // before the reservation it guards is actually spent.
+    let mut spend = crate::spend::open();
+    let today = crate::spend::today();
+    let (gated_provider, reservation) = match spend.as_mut() {
+        Some(s) => {
+            realorrug_analyst::daemon::gate_model_call(s, provider.as_deref(), today, &mint_arg)
+        }
+        None => (None, None),
+    };
 
     let (sheet, reply) = realorrug_roast::roast(
         &dossier,

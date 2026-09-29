@@ -209,11 +209,26 @@ fn budget_with_monthly(get: &impl Fn(&str) -> Option<String>, monthly: Option<Mi
 /// that and a mystery.
 #[must_use]
 pub fn unfunded_notice(budget: Budget) -> Option<&'static str> {
+    // Named here, not only in `daemon_monthly_allowance_from`/
+    // `cli_monthly_allowance_from` themselves (9-27-0026c finding 5): the
+    // caller reading a closed budget from a printed notice, not the source,
+    // needs the actual variables that can close it named on the line, or
+    // debugging a closed budget means re-deriving which of six variables did
+    // it from the allowance functions' own source. This one static message
+    // covers both callers -- the daemon (whose own budget closes when
+    // `REALORRUG_CLI_MONTHLY_USD` and `REALORRUG_SERVE_MONTHLY_USD` sum to
+    // more than `REALORRUG_MONTHLY_USD` leaves after
+    // `REALORRUG_FIXED_MONTHLY_USD`) and `realorrug-cli`'s own `crate::spend`
+    // (whose budget closes the same way, or when its own
+    // `REALORRUG_CLI_MONTHLY_USD` alone is unset or will not parse) -- rather
+    // than a second, near-duplicate string for each.
     (budget == Budget::CLOSED).then_some(
         "realorrug-analyst: unfunded -- REALORRUG_ANALYST_DAILY_USD, \
          REALORRUG_ANALYST_PER_CALL_USD, REALORRUG_MONTHLY_USD and \
          REALORRUG_FIXED_MONTHLY_USD are not all set to a valid amount with fixed below the \
-         monthly ceiling, so every call is refused.",
+         monthly ceiling, or REALORRUG_CLI_MONTHLY_USD and REALORRUG_SERVE_MONTHLY_USD (each \
+         unset closes its own slice, rule 7) leave nothing after fixed costs, so every call is \
+         refused.",
     )
 }
 
@@ -836,8 +851,10 @@ fn settle_if_sent(spend: &mut Spend, reservation: realorrug_provider::Commitment
 /// credential, an RPC client or a mentions file to reach it.
 ///
 /// Public so `realorrug-cli`'s hand-run commands (`analyst`, `roast`,
-/// `replay --model`) gate a paid call the same way against the same shared
-/// ledger, rather than each inventing its own version of this rule.
+/// `replay --model`) gate a paid call the same way, against each one's own
+/// ledger beside the daemon's (`crate::spend` in `realorrug-cli`, ADR 0039's
+/// 2026-09-28 amendment) -- the same rule, applied to a different `Spend`,
+/// rather than each command inventing its own version of it.
 pub fn gate_model_call<'p>(
     spend: &mut Spend,
     provider: Option<&'p dyn realorrug_model::Provider>,
@@ -2383,6 +2400,14 @@ mod tests {
         let notice = unfunded_notice(Budget::CLOSED).expect("a closed budget says so");
         assert!(notice.contains("unfunded"), "{notice}");
         assert!(notice.contains("REALORRUG_ANALYST_DAILY_USD"), "{notice}");
+        // 9-27-0026c finding 5: a budget closed by the monthly slices
+        // (`REALORRUG_CLI_MONTHLY_USD`/`REALORRUG_SERVE_MONTHLY_USD`) is the
+        // same `Budget::CLOSED` this notice already covers -- naming both
+        // slice variables here too, not only the four original ones, is what
+        // makes the printed notice actually name the cause rather than
+        // sending whoever reads it to the allowance functions' own source.
+        assert!(notice.contains("REALORRUG_CLI_MONTHLY_USD"), "{notice}");
+        assert!(notice.contains("REALORRUG_SERVE_MONTHLY_USD"), "{notice}");
 
         // A funded one says nothing: a warning that fires when everything is
         // fine is a warning nobody reads.
