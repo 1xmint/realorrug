@@ -408,6 +408,13 @@ mod tests {
         assert_eq!(derive(CLOSE, &confirmed_rug(), CLOSE - 1), None);
         assert_eq!(derive(CLOSE, &full(), CLOSE - 1), None);
         assert_eq!(derive(CLOSE, &[], CLOSE - 1), None);
+        // The close instant itself is the first at which the rule applies. (The
+        // caller never hands it a read from after `now`; the rule is a function
+        // of the reads it is given, so the boundary is tested with them.)
+        assert_eq!(
+            derive(CLOSE, &confirmed_rug(), CLOSE),
+            Some(Outcome::Rugged)
+        );
     }
 
     /// A rug is a rug on the day it is confirmed; the round does not wait for
@@ -482,6 +489,20 @@ mod tests {
         assert_eq!(derive(CLOSE, &late, end + 2), None);
         assert_eq!(
             derive(CLOSE, &late, final_read_by(CLOSE)),
+            Some(Outcome::Unresolved)
+        );
+    }
+
+    /// A rug read at the horizon instant belongs to the read that closes the
+    /// last day, not to the window: a rug seen once inside it and once at the
+    /// horizon is one rug in the window, which is not confirmed.
+    #[test]
+    fn the_window_ends_before_the_read_at_the_horizon() {
+        let end = horizon(CLOSE);
+        let reads = [calm(CLOSE + 10), rug(end - 1), rug(end)];
+        assert_eq!(derive(CLOSE, &reads, end), None);
+        assert_eq!(
+            derive(CLOSE, &reads, final_read_by(CLOSE)),
             Some(Outcome::Unresolved)
         );
     }
@@ -569,6 +590,16 @@ mod tests {
         crowded.push(horizon_read);
         assert_eq!(
             derive(CLOSE, &crowded, final_read_by(CLOSE)),
+            Some(Outcome::Unresolved)
+        );
+        // A read on the instant a span ends belongs to the next span, not to
+        // both: day 3's read is missing and day 4's sits on the seam.
+        let mut seam = daily();
+        seam.remove(3);
+        seam[3] = calm(CLOSE + 4 * SPAN_SECS);
+        seam.push(horizon_read);
+        assert_eq!(
+            derive(CLOSE, &seam, final_read_by(CLOSE)),
             Some(Outcome::Unresolved)
         );
         // A calm read on the horizon instant belongs to no span: it does not

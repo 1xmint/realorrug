@@ -1556,6 +1556,32 @@ mod tests {
         assert!(!is_file(observations.to_str().expect("p")));
     }
 
+    /// A build that cannot detect a rug reads nothing even with an RPC set, and
+    /// takes no lock: a calm read from it would be no evidence. The rounds file
+    /// is absent, so anything past the gate would fail on it, and the lock file
+    /// would exist.
+    #[test]
+    fn a_build_that_cannot_see_a_rug_reads_nothing_even_with_an_rpc() {
+        let dir = temp_dir("blind-build");
+        let observations = dir.join("observations.jsonl");
+        let args = args_of(&[
+            "settle",
+            "observe",
+            "--rounds",
+            dir.join("no-rounds.json").to_str().expect("p"),
+            "--observations",
+            observations.to_str().expect("p"),
+            "--rpc",
+            "http://127.0.0.1:9/never-called",
+        ]);
+        observe_command(&args, &|_| None).expect("refuses quietly");
+        assert!(!is_file(observations.to_str().expect("p")));
+        assert!(!is_file(&format!(
+            "{}.lock",
+            observations.to_str().expect("p")
+        )));
+    }
+
     #[test]
     fn observe_needs_its_paths() {
         let none = args_of(&["settle", "observe"]);
