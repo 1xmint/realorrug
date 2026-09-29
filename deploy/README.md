@@ -304,10 +304,15 @@ Three steps, and the job never opens the store:
   code-computed level, whether the read was complete, the rule version and a
   hash of the sheet. No model call. **With no RPC configured
   (`REALORRUG_RPC`) it reads nothing and says so.** The URL is never printed.
+  **Nor does it read while the roast crate cannot detect a rug** (true today):
+  a calm read from an instrument that cannot see a rug would let a drained
+  coin stand, so nothing is read and every coin settles `Unresolved` after its
+  grace. Do not install the timer expecting `Stood` or `Rugged` until Josh has
+  decided what a rug is (design 0032 section 12).
 - `settle publish` derives outcomes from those lines and writes the outcomes
-  file. `Rugged` is written the day a read sees the rug; `Stood` only after the
-  horizon has ended and every 24-hour span holds a complete read; `Unresolved`
-  only after the horizon has ended without either. Nothing is written for an
+  file. `Rugged` is written when two adjacent reads see a rug that the first read after the close did not; `Stood` only after
+  the horizon has ended, with a complete read in every 24-hour span and one at
+  the horizon; `Unresolved` only once a day past the horizon, without either Nothing is written for an
   open coin that has not been seen rugged. `--dry-run` writes nothing.
 - `realorrug-serve` ingests the outcomes file through its own single store
   write path, at start and every ten minutes, when `REALORRUG_OUTCOMES_FILE` is
@@ -325,11 +330,11 @@ only, and none to the store's. Serve needs read access to the outcomes file.
 
 ```bash
 # 1. First by hand: read once, then look at what would be published.
-sudo -u guardian /usr/local/bin/realorrug settle observe
-sudo -u guardian /usr/local/bin/realorrug settle publish --dry-run
+sudo -u guardian /home/guardian/realorrug/bin/realorrug settle observe
+sudo -u guardian /home/guardian/realorrug/bin/realorrug settle publish --dry-run
 # 2. Then for real, and check every published row re-derives from its evidence
-sudo -u guardian /usr/local/bin/realorrug settle publish
-sudo -u guardian /usr/local/bin/realorrug settle verify
+sudo -u guardian /home/guardian/realorrug/bin/realorrug settle publish
+sudo -u guardian /home/guardian/realorrug/bin/realorrug settle verify
 # 3. Only then add REALORRUG_OUTCOMES_FILE to serve's environment, restart
 #    serve, and install the units and start the timer
 sudo install -m 0644 deploy/realorrug-settle.service deploy/realorrug-settle.timer /etc/systemd/system/
@@ -342,7 +347,13 @@ span is not read again, so the cost is about one read per coin per day; the
 second slot is there so one missed run cannot lose a span (a lost span makes a
 coin that stood `Unresolved`). Nothing else feeds the job, so it is not ordered
 after any other unit. A run reads at most 150 coins and says so when it stops
-early.
+early. That is at most 50 minutes of reads, so the unit allows 75; a second
+run started while one is running exits at once (a lock beside the observations
+file), and a half line left by a killed run is cut off before the next append.
+Serve refuses a row dated more than five minutes past its own clock, and a
+`Stood` or `Unresolved` row before the horizon by its own clock; a second,
+different outcome for a coin it already holds is kept out, counted as
+conflicting and logged.
 
 To stop it: `sudo systemctl disable --now realorrug-settle.timer`. Rows already
 in the store stay, because it is append-only, and a written `Unresolved` is

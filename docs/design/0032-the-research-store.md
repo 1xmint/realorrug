@@ -660,7 +660,7 @@ and its timer are written and **not installed**; installing them is Josh's gate
 **Three steps, three owners.**
 
 1. `settle observe` (reads the chain, appends to a file). For every round coin
-   whose horizon has not ended and that is owed a read, it reads the coin with
+   that `due` says is owed a read (from the close to a day past the horizon), it reads the coin with
    the analyst's own readers under the normal per-read budget
    (`Budget::default()`, plus the compute-unit meter on Robinhood reads), builds
    the fact sheet, and appends one observation: read time, the level the code
@@ -680,19 +680,33 @@ and its timer are written and **not installed**; installing them is Josh's gate
    `settle verify` re-derives every published row from its own evidence.
 3. `realorrug-serve` ingests (the only writer). See below.
 
-**The rule (`settle-1`), against §2.** The round's `close` in the rounds file is
+**The rule (`settle-2`), against §2.** The round's `close` in the rounds file is
 the end of the entry window (confirmed, not assumed: forecasts are refused at
 `>= close`, and the reveal begins there), and the horizon is `close` plus
-fourteen days. This was checked against the first build's guard and needed no
-change.
+fourteen days. Nothing was ever settled under `settle-1`; `settle-2` added the
+horizon read and tightened `Rugged` (the 2026-09-29 review of PR #209).
 
-- `Rugged` as soon as an observation inside the horizon has level `Rugged`,
-  complete or not: a rug seen is a rug, whatever else the read missed.
-- `Stood` only once the horizon has ended and every one of the fourteen 24-hour
-  spans holds a complete read that was not `Rugged`.
-- `Unresolved` only once the horizon has ended without either.
-- **Nothing is written** for a coin whose horizon is open and which has not been
-  seen rugged. There is no premature `Unresolved`; the earlier build's
+What counts as a rug is **not decided here**. A read is a rug read only when the
+fact sheet's level reached `Rugged` (`realorrug_roast::level`); that level is
+reached only by the rugged pair (`RUGGED_PAIRS` in `verdict.rs`), whose
+definition is the owner's to give.
+
+- `Rugged` needs a first in-window read that was **not** a rug, then two
+  adjacent complete rug reads taken at different times. A coin whose first read
+  after the close is already a rug might have rugged inside the entry window,
+  where players could see it, so it is not a rug the round can call: it goes on
+  to `Unresolved`. One rug read is not a rug either, because a level is a state
+  and a single read can be a launch-block glitch. The rug can be decided
+  inside the window, as soon as the confirming read is made.
+- `Stood` only once the horizon has ended, no read in the window was a rug,
+  each of the fourteen 24-hour spans holds a complete no-rug read, **and** a
+  complete no-rug read was taken at or after the horizon, so the last day is
+  read too (§9: once a day, plus once at the horizon).
+- `Unresolved` once the horizon plus one day of grace (`HORIZON_GRACE_SECS`,
+  twice the timer's interval, so one missed run cannot cost the horizon read)
+  has passed without either. Before then a coin that is neither is still open.
+- **Nothing is written** for a coin whose window is open and which has not
+  rugged. There is no premature `Unresolved`; the earlier build's
   permanent-`Unresolved` problem cannot occur.
 - An incomplete read is recorded but never enters the derivation as evidence, so
   a gap is a gap: absent is not zero, and unknown is not safe.
@@ -701,9 +715,32 @@ change.
   `rederive` returns the outcome from the rule version, the evidence and
   `settled_at`, and nothing when they disagree, when the rule version is
   another's, or when any read is later than `settled_at`.
-- `due` decides whether a coin is read now: only inside its window, not once it
-  has been seen rugged, and not when its current 24-hour span already holds a
-  complete read. That keeps a coin to one complete read per span.
+- `due` decides whether a coin is read now: only from the close to the end of
+  the grace; not once it has settled `Rugged` or its first read is a rug (no
+  later read could change either); a coin whose latest read is a rug that a
+  second read would confirm is owed that second read; not when its current
+  24-hour span already holds a complete read; and, from the horizon on, only
+  while `Stood` is still possible and the horizon read has not been taken.
+
+**Rugged and Stood are unreachable today, and why.** Nothing in production
+builds the signals that lift a sheet to `Rugged` (`LiquidityGone` and
+`BuyersCannotSell`; `BUILT_SIGNALS` in `realorrug-roast` lists what is built,
+and a source-scan test keeps that list honest). If `settle observe` recorded
+every such read as a calm `NothingUglyYet`, a coin that was drained on day two
+would show fourteen days of "no rug seen" and settle `Stood`, permanently: a
+zero from an instrument that could not have measured anything (AGENTS.md §1).
+So a read counts as "no rug seen" only when the sheet **can** detect a rug.
+That is one seam, `realorrug_roast::rug_detectable()`, which is `false` today
+and moves with `RUGGED_PAIRS`. Each observation records it (`rug_detectable`,
+absent means false), a calm read taken while it was false is no evidence, and
+`settle observe` refuses to read at all in such a build, saying so. **The
+consequence today: every coin settles `Unresolved` once its grace is over, no
+coin settles `Stood` or `Rugged`, and no board figure can come from
+settlement.** This is the intended, honest state until the owner decides what a
+rug is; I did not invent a definition. The test
+`a_drained_coin_is_never_stood_through_the_real_sheet` builds a drained coin's
+real `FactSheet` and runs the whole observe-and-decide path for fourteen days,
+and fails if the seam is removed (checked by re-applying the bug).
 
 **How serve ingests, and when.** `REALORRUG_OUTCOMES_FILE` names the published
 file. At start, and then every ten minutes, a task in `realorrug-serve` reads it
@@ -723,6 +760,28 @@ write transaction, so a re-read, a grown file and a restart are all no-ops for
 rows already held. The store's triggers refuse an UPDATE or DELETE, and a
 written `Unresolved` is permanent: correcting one needs a new rule version and a
 decision of Josh's, not a re-run.
+
+**What serve trusts, and what it does not.** The row's `settled_at` is written
+by the job, not by serve, so serve judges it by its own clock (`now`): a row is
+refused when `settled_at` is later than `now` plus five minutes
+(`CLOCK_SKEW_SECS`, an allowance for two machines' clocks), so a row cannot
+cite reads from the server's future. A `Stood` or `Unresolved` row is refused
+before the round's horizon by the server's clock, whatever the row says; a
+`Rugged` row is not held to the horizon, since a rug is decided when it is
+seen. **A second, different outcome for a coin the store already holds** is not
+written (the first stands): it is counted as `conflicting` in the ingest line and
+logged to stderr naming the round, the coin and both values, since it means a
+rule change or a hand-edited file, and a person should see it.
+
+**Torn lines and two runs.** `settle observe` appends each observation as one
+`write_all` of the line and its newline. If the process is killed mid-write the
+file can end in half a line; the next run cuts that torn tail off before it
+appends, and every reader skips a torn final line and reports it rather than
+failing (a bad line in the middle is still an error). A lock beside the
+observations file (a `.lock` sibling) is held for the whole `observe`, so a
+second run started meanwhile exits at once instead of interleaving. The unit's
+`TimeoutStartSec` is 75 minutes: 150 reads at the 20-second read clock is 50
+minutes, plus the publish.
 
 **Cadence.** The timer is not hourly. It fires twice a day (04:15 and 16:15 UTC,
 each with a randomised delay of up to ten minutes; `Persistent=true` catches a
@@ -767,11 +826,13 @@ whole, and the job never overwrites an existing outcomes file it cannot read.
 
 **What is true today, and not.**
 
-- `Stood` is now reachable from real data: fourteen days of complete reads, one
-  per span, are exactly what the job produces. Nothing has run it yet (the units
-  are not installed), so there are no outcomes to show and no board figure; the
-  first `Stood` cannot exist before the first horizon ends, fourteen days after
-  the first close.
+- **`Rugged` and `Stood` are not reachable from real data yet** (above). What
+  the job produces today is `Unresolved`, and only after every window has
+  ended plus its grace; with the units not installed, nothing has run at all.
+  When the owner decides what a rug is and `rug_detectable()` turns true,
+  fourteen days of complete reads plus the horizon read are what `Stood` needs
+  and what the job produces; the first `Stood` cannot exist before the first
+  horizon ends, fourteen days after the first close.
 - **The deviation from ADR 0041 decision 6 is gone.** The first build wrote the
   store directly; this one publishes a file and serve ingests it, as the ADR
   says.

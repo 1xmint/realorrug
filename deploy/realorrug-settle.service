@@ -13,6 +13,10 @@
 #      same per-read budget the analyst uses), builds its fact sheet, and appends
 #      one dated observation to a file. No model call. With no RPC configured it
 #      reads nothing and says so.
+#      Until the roast crate can detect a rug (rug_detectable(), false today) it
+#      also reads nothing and says so, because a calm read from a blind
+#      instrument would let a drained coin stand; every coin then settles
+#      Unresolved after its grace (design 0032 section 12).
 #   2. publish: derives each coin's outcome from those dated observations and
 #      writes the outcomes file.
 # It never opens the research store and holds no store path. realorrug-serve is
@@ -48,8 +52,12 @@ ExecStart=/home/guardian/realorrug/bin/realorrug settle publish
 Nice=19
 IOSchedulingClass=idle
 # A read is bounded by its own 20 s clock and 60-call budget; the run is
-# bounded by a per-run ceiling on reads (design 0032 section 12).
-TimeoutStartSec=30min
+# bounded by a per-run ceiling of 150 reads (design 0032 section 12). The worst
+# case is 150 x 20 s = 50 min of reads plus the publish, so 75 min covers it;
+# a run the timeout killed would leave a torn last line, which the next run
+# cuts off before appending. A second run started while one is running exits
+# at once (a lock beside the observations file).
+TimeoutStartSec=75min
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

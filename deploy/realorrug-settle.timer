@@ -10,8 +10,9 @@
 # already covered by a complete read), so this costs about one read per coin per
 # day. The second slot exists so one missed or late run cannot lose a span, and
 # a lost span would turn a coin that stood into Unresolved. The publish step
-# after each observe is the horizon-end pass: a coin whose fourteen days have
-# ended is decided there. Running it again is harmless.
+# after each observe is the horizon-end pass: the read at the horizon (taken in
+# the day after it ends) is what lets a coin stand, and a coin with no such read
+# is decided Unresolved once that day is over. Running it again is harmless.
 [Unit]
 Description=Settle closed rounds, twice daily
 Documentation=https://github.com/1xmint/realorrug

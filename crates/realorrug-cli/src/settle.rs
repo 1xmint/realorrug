@@ -30,11 +30,20 @@
 //!
 //! # What a read is worth
 //!
-//! `Rugged` is decisive whatever else was unread. Any other level counts as a
-//! complete read only when it is not `CantTell` — `CantTell` is the ladder
-//! saying a fact it needed could not be read — so an incomplete read is
-//! recorded (for the audit) and never covers a 24-hour span (AGENTS.md section
-//! 3 rule 8: unknown is not safe).
+//! A `Rugged` level is a rug read (the rule then wants a second one, design
+//! 0032 §12). Any other level counts as "no rug seen" only when the read was
+//! complete (not `CantTell`, the ladder saying a fact it needed could not be
+//! read) **and** the instrument could have shown a rug at all
+//! (`realorrug_roast::rug_detectable`, recorded on the line). Today it cannot:
+//! nothing builds the signals `Rugged` needs, so every calm read is recorded
+//! and none is evidence, and every coin ends `Unresolved` (AGENTS.md section 3
+//! rule 8: unknown is not safe; section 1: zero is a measurement about your
+//! instrument). An incomplete read is recorded for the audit and never covers
+//! a 24-hour span.
+//!
+//! Each line is written in one write with its newline, under a lock, so two
+//! runs cannot interleave and a kill leaves at worst an unterminated tail,
+//! which is cut off before the next run appends and is never evidence.
 //!
 //! # Cost, and why the timer may fire twice a day
 //!
@@ -128,6 +137,13 @@ struct Observation {
     level: Level,
     /// Whether every fact the ladder needed was read.
     complete: bool,
+    /// Whether a sheet built by the code that took this read could have shown
+    /// a rug at all (`realorrug_roast::rug_detectable`, measured when the read
+    /// was taken). A calm level from an instrument that cannot fire says
+    /// nothing about whether a rug happened. A line written before this field
+    /// existed reads as `false`: it was taken when nothing could be told.
+    #[serde(default)]
+    rug_detectable: bool,
     /// The rule the reading is meant for ([`settle::RULE_VERSION`]).
     rule_version: String,
     /// A digest of the fact sheet the level was computed from, or `unreadable`
@@ -138,14 +154,20 @@ struct Observation {
 }
 
 impl Observation {
-    /// What this read tells the rule, if it tells it anything: a rug when the
-    /// level is `Rugged`, no rug only when the read was complete, and nothing
-    /// otherwise.
+    /// What this read tells the rule, if it tells it anything.
+    ///
+    /// * A rug when the level is `Rugged`: the sheet showed the pair itself.
+    /// * Nothing when the level is `CantTell`.
+    /// * "No rug seen" only from a read that was complete **and** taken with
+    ///   an instrument that could have seen one. This is the one seam that
+    ///   keeps a calm read from an instrument that cannot fire from being
+    ///   published as a coin that stood (design 0032 §12); it changes in this
+    ///   one place when a rug can be detected.
     fn reading(&self) -> Option<Reading> {
         match self.level {
             Level::Rugged => Some(Reading::Rug),
             Level::CantTell => None,
-            _ => self.complete.then_some(Reading::NoRug),
+            _ => (self.complete && self.rug_detectable).then_some(Reading::NoRug),
         }
     }
 }
@@ -154,9 +176,19 @@ impl Observation {
 /// ignored. A line that does not parse is an error naming the line, and
 /// nothing is settled from a file that cannot be read whole, since dropping a
 /// line could drop a rug.
-fn parse_observations(text: &str) -> Result<Vec<Observation>, String> {
+///
+/// The one exception is a final line with no newline after it. The writer
+/// puts each line and its newline down in a single write, so an unterminated
+/// tail is a write that was cut short (a kill, a full disk), never a finished
+/// read; it is not evidence, is reported by the second value, and the coin it
+/// was for is still owed a read. It is never read as a partial line.
+fn parse_observations(text: &str) -> Result<(Vec<Observation>, bool), String> {
+    let (whole, torn) = match text.rfind('\n') {
+        Some(end) => (&text[..=end], text.len() > end + 1),
+        None => ("", !text.is_empty()),
+    };
     let mut out = Vec::new();
-    for (i, line) in text.lines().enumerate() {
+    for (i, line) in whole.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
@@ -164,7 +196,67 @@ fn parse_observations(text: &str) -> Result<Vec<Observation>, String> {
             .map_err(|e| format!("the observations file is not valid at line {}: {e}", i + 1))?;
         out.push(obs);
     }
-    Ok(out)
+    Ok((out, torn))
+}
+
+/// If the observations file ends in a line that was cut short, cuts it off, so
+/// the next line is appended after a newline and not glued to a fragment.
+/// Returns whether anything was cut. Called with the run lock held: no other
+/// writer is appending.
+fn drop_torn_tail(path: &str) -> Result<bool, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("cannot read {path}: {e}")),
+    };
+    if bytes.last().is_none_or(|last| *last == b'\n') {
+        return Ok(false);
+    }
+    let keep = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_len(keep as u64))
+        .map_err(|e| format!("cannot repair {path}: {e}"))?;
+    Ok(true)
+}
+
+/// Held for the length of an `observe` run so two runs cannot interleave their
+/// lines. The lock is the operating system's, on a file beside the
+/// observations, so it goes when the process does: a killed run leaves no
+/// stale lock to clear by hand.
+struct RunLock {
+    _file: std::fs::File,
+}
+
+impl RunLock {
+    fn acquire(observations_path: &str) -> Result<Self, String> {
+        let path = format!("{observations_path}.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|e| format!("cannot open {path}: {e}"))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+                "another settle run holds {path}: nothing was read, and it will be tried at the next run"
+            )),
+            Err(std::fs::TryLockError::Error(e)) => Err(format!("cannot lock {path}: {e}")),
+        }
+    }
+}
+
+/// Writes one line, and its newline, in one write. A kill lands before it or
+/// after it, or leaves a tail [`parse_observations`] and [`drop_torn_tail`]
+/// know how to drop; it can never leave half of one line glued to the next.
+fn append_line(file: &mut std::fs::File, line: &str) -> std::io::Result<()> {
+    let mut bytes = String::with_capacity(line.len() + 1);
+    bytes.push_str(line);
+    bytes.push('\n');
+    file.write_all(bytes.as_bytes())?;
+    file.flush()
 }
 
 /// The reads on record for one coin, taken no later than `now`, that the
@@ -200,6 +292,8 @@ fn key_of(row: &OutcomeRow) -> Key {
 /// What one read of one coin gave.
 struct Sample {
     level: Level,
+    /// Whether the code that built the sheet could have shown a rug at all.
+    rug_detectable: bool,
     evidence: String,
     calls: u32,
 }
@@ -218,17 +312,21 @@ struct ObserveReport {
     capped: bool,
 }
 
-/// Reads every coin that is owed a read at `now` and hands each dated
-/// observation to `sink`. `read` is the chain; `limit` is the run's ceiling.
+/// Reads every coin that is owed a read and hands each dated observation to
+/// `sink`. `read` is the chain; `limit` is the run's ceiling. What is owed is
+/// decided at the clock's reading when the run starts; each read is dated by
+/// `clock` when it finishes, so a late read in a long run is not dated before
+/// it happened.
 fn observe_all(
     rounds: &[Round],
     observations: &[Observation],
     published: &[OutcomeRow],
-    now: i64,
+    clock: &dyn Fn() -> i64,
     limit: usize,
     read: &mut dyn FnMut(&str, &str) -> Result<Sample, String>,
     sink: &mut dyn FnMut(&Observation) -> Result<(), String>,
 ) -> Result<ObserveReport, String> {
+    let now = clock();
     let settled: HashSet<Key> = published.iter().map(key_of).collect();
     let mut report = ObserveReport::default();
     for round in rounds {
@@ -249,9 +347,10 @@ fn observe_all(
                     round: round.id.clone(),
                     chain: coin.chain.clone(),
                     token: coin.token.clone(),
-                    at: now,
+                    at: clock(),
                     level: sample.level,
                     complete: sample.level != Level::CantTell,
+                    rug_detectable: sample.rug_detectable,
                     rule_version: settle::RULE_VERSION.to_owned(),
                     evidence_reference: sample.evidence,
                     calls: sample.calls,
@@ -261,9 +360,10 @@ fn observe_all(
                     round: round.id.clone(),
                     chain: coin.chain.clone(),
                     token: coin.token.clone(),
-                    at: now,
+                    at: clock(),
                     level: Level::CantTell,
                     complete: false,
+                    rug_detectable: false,
                     rule_version: settle::RULE_VERSION.to_owned(),
                     evidence_reference: "unreadable".to_owned(),
                     calls: 0,
@@ -395,6 +495,25 @@ fn sheet_reference(sheet: &FactSheet) -> String {
     format!("sheet-blake3:{}", &hex.as_str()[..32])
 }
 
+/// What one read of one coin gave, from its dossier: the real fact sheet, the
+/// code's own level, and whether that instrument could have shown a rug. The
+/// one place a level is taken for settlement, so a test can drive the same
+/// path the command does.
+fn sample_of(
+    dossier: &realorrug_onchain::Dossier,
+    rates: Option<&BaseRates>,
+    creators: Option<&realorrug_roast::CreatorIndex>,
+    self_mint: Option<&realorrug_types::Address>,
+) -> Sample {
+    let sheet = FactSheet::build(dossier, rates, creators, self_mint, None);
+    Sample {
+        level: realorrug_roast::level(&sheet),
+        rug_detectable: realorrug_roast::rug_detectable(),
+        evidence: sheet_reference(&sheet),
+        calls: dossier.calls,
+    }
+}
+
 /// The rounds and observations paths, both required: there is no default.
 fn input_paths(
     args: &[String],
@@ -420,10 +539,15 @@ fn load_inputs(
     let text = std::fs::read_to_string(rounds_path)
         .map_err(|e| format!("cannot read {rounds_path}: {e}"))?;
     let rounds = parse_rounds(&text)?;
-    let observations = read_optional(observations_path)?
+    let (observations, torn) = read_optional(observations_path)?
         .map(|text| parse_observations(&text))
         .transpose()?
         .unwrap_or_default();
+    if torn {
+        eprintln!(
+            "warning: {observations_path} ends in a line that was cut short; it is not evidence and its coin is read again"
+        );
+    }
     Ok((rounds, observations))
 }
 
@@ -434,6 +558,19 @@ fn observe_command(args: &[String], get: &dyn Fn(&str) -> Option<String>) -> Res
         println!("no RPC is configured (--rpc or REALORRUG_RPC): nothing was read");
         return Ok(());
     };
+    // A read that cannot be evidence is spend for nothing: the fact sheet this
+    // build makes cannot show a rug, so a calm level from it settles nothing
+    // (design 0032 §12). Deny by default; this line goes when the detector does.
+    if !realorrug_roast::rug_detectable() {
+        println!(
+            "this build cannot detect a rug, so a read of a coin could not count as evidence: nothing was read"
+        );
+        return Ok(());
+    }
+    let _lock = RunLock::acquire(&observations_path)?;
+    if drop_torn_tail(&observations_path)? {
+        eprintln!("warning: cut a line that was cut short off the end of {observations_path}");
+    }
     let (rounds, observations) = load_inputs(&rounds_path, &observations_path)?;
     let published = match path_arg(args, "--outcomes", "REALORRUG_OUTCOMES_FILE", get) {
         Some(path) => read_outcomes(&path)?.unwrap_or_default().outcomes,
@@ -467,18 +604,12 @@ fn observe_command(args: &[String], get: &dyn Fn(&str) -> Option<String>) -> Res
 
     let mut read = |_chain: &str, token: &str| -> Result<Sample, String> {
         let dossier = dispatch::read(token, &clients).map_err(|_| "unreadable".to_owned())?;
-        let sheet = FactSheet::build(
+        Ok(sample_of(
             &dossier,
             rates.as_ref(),
             creators.as_ref(),
             self_mint.as_ref(),
-            None,
-        );
-        Ok(Sample {
-            level: realorrug_roast::level(&sheet),
-            evidence: sheet_reference(&sheet),
-            calls: dossier.calls,
-        })
+        ))
     };
 
     let mut file = std::fs::OpenOptions::new()
@@ -488,8 +619,7 @@ fn observe_command(args: &[String], get: &dyn Fn(&str) -> Option<String>) -> Res
         .map_err(|e| format!("cannot open {observations_path}: {e}"))?;
     let mut sink = |o: &Observation| -> Result<(), String> {
         let line = serde_json::to_string(o).map_err(|e| format!("cannot write a line: {e}"))?;
-        writeln!(file, "{line}")
-            .and_then(|()| file.flush())
+        append_line(&mut file, &line)
             .map_err(|e| format!("cannot write {observations_path}: {e}"))?;
         println!(
             "observed {} {}: {:?}{} ({} calls)",
@@ -505,7 +635,7 @@ fn observe_command(args: &[String], get: &dyn Fn(&str) -> Option<String>) -> Res
         &rounds,
         &observations,
         &published,
-        now,
+        &|| secs(SystemTime::now()).unwrap_or(now),
         MAX_READS_PER_RUN,
         &mut read,
         &mut sink,
@@ -644,6 +774,7 @@ mod tests {
             at,
             level,
             complete,
+            rug_detectable: true,
             rule_version: settle::RULE_VERSION.to_owned(),
             evidence_reference: "sheet-blake3:x".to_owned(),
             calls: 7,
@@ -654,11 +785,38 @@ mod tests {
         obs(token, at, Level::NothingUglyYet, true)
     }
 
-    /// One complete calm read in the middle of each of the fourteen spans.
+    /// A calm, complete read from an instrument that could not have shown a
+    /// rug: what every build reads today.
+    fn blind(token: &str, at: i64) -> Observation {
+        Observation {
+            rug_detectable: false,
+            ..calm(token, at)
+        }
+    }
+
+    /// A read that found the rug pair.
+    fn rug(token: &str, at: i64) -> Observation {
+        obs(token, at, Level::Rugged, true)
+    }
+
+    /// One complete calm read in the middle of each of the fourteen spans,
+    /// and the read at the horizon that closes the last day.
     fn daily(token: &str) -> Vec<Observation> {
-        (0..14)
+        let mut reads: Vec<Observation> = (0..14)
             .map(|d| calm(token, CLOSE + d * DAY + 3_600))
-            .collect()
+            .collect();
+        reads.push(calm(token, settle::horizon(CLOSE) + 3_600));
+        reads
+    }
+
+    /// When the horizon read has been taken and `Stood` may be written.
+    fn after_horizon_read() -> i64 {
+        settle::horizon(CLOSE) + 7_200
+    }
+
+    /// When the horizon read's grace is over.
+    fn grace_over() -> i64 {
+        settle::final_read_by(CLOSE)
     }
 
     fn end() -> i64 {
@@ -673,26 +831,36 @@ mod tests {
         decision.added.first().map(|r| r.outcome)
     }
 
-    /// A rug seen inside the window settles the coin `Rugged` at once, and the
-    /// row it publishes re-derives to that from itself.
+    /// A rug seen twice inside the window, after a calm first read, settles the
+    /// coin `Rugged` at once, and the row it publishes re-derives to that from
+    /// itself.
     #[test]
-    fn a_rug_observed_inside_the_window_settles_rugged() {
+    fn a_confirmed_rug_inside_the_window_settles_rugged() {
         let observations = vec![
             calm(TOKEN, CLOSE + 3_600),
-            obs(TOKEN, CLOSE + 2 * DAY, Level::Rugged, true),
+            rug(TOKEN, CLOSE + 2 * DAY),
+            rug(TOKEN, CLOSE + 3 * DAY),
         ];
-        let decision = decide(&one_round(), &observations, &[], CLOSE + 3 * DAY);
+        let decision = decide(&one_round(), &observations, &[], CLOSE + 4 * DAY);
         assert_eq!(outcome_of(&decision), Some(Outcome::Rugged));
         assert!(decision.added[0].rederives());
         assert_eq!(decision.pending, 0);
     }
 
-    /// A rug read is decisive even when the read was flagged incomplete.
+    /// One rug read is not a rug (a zero-reserve read can be a graduation
+    /// block), and a coin whose first read is already a rug might have rugged
+    /// before the close: neither settles `Rugged`, however the read is flagged.
     #[test]
-    fn a_rugged_level_counts_however_the_read_is_flagged() {
-        let observations = vec![obs(TOKEN, CLOSE + DAY, Level::Rugged, false)];
-        let decision = decide(&one_round(), &observations, &[], CLOSE + 2 * DAY);
-        assert_eq!(outcome_of(&decision), Some(Outcome::Rugged));
+    fn one_rug_read_and_a_rug_at_the_close_do_not_settle_rugged() {
+        let one = vec![calm(TOKEN, CLOSE + 3_600), rug(TOKEN, CLOSE + 2 * DAY)];
+        let decision = decide(&one_round(), &one, &[], CLOSE + 3 * DAY);
+        assert!(decision.added.is_empty());
+        assert_eq!(decision.pending, 1);
+        let mut flagged = rug(TOKEN, CLOSE + DAY);
+        flagged.complete = false;
+        let early = vec![flagged, rug(TOKEN, CLOSE + 2 * DAY)];
+        let decision = decide(&one_round(), &early, &[], grace_over());
+        assert_eq!(outcome_of(&decision), Some(Outcome::Unresolved));
     }
 
     /// Nothing is published for an open window unless the coin has rugged.
@@ -704,7 +872,7 @@ mod tests {
         assert!(decision.added.is_empty());
         assert_eq!(decision.pending, 1);
         // Before the close, even a rug read is not evidence.
-        let early = vec![obs(TOKEN, CLOSE - 5, Level::Rugged, true)];
+        let early = vec![rug(TOKEN, CLOSE - 5), rug(TOKEN, CLOSE - 4)];
         assert!(
             decide(&one_round(), &early, &[], CLOSE - 1)
                 .added
@@ -712,18 +880,27 @@ mod tests {
         );
         // The same coin, rugged: written at once.
         let mut rugged = calm_only;
-        rugged.push(obs(TOKEN, CLOSE + 5 * DAY, Level::Rugged, true));
+        rugged.push(rug(TOKEN, CLOSE + 5 * DAY + 100));
+        rugged.push(rug(TOKEN, CLOSE + 5 * DAY + 200));
         let decision = decide(&one_round(), &rugged, &[], end() - 1);
         assert_eq!(outcome_of(&decision), Some(Outcome::Rugged));
     }
 
-    /// Fourteen complete daily reads, and the horizon, make `Stood`.
+    /// Fourteen complete daily reads and the read at the horizon make `Stood`,
+    /// but not before that read: the last day is read too.
     #[test]
-    fn a_full_history_stands_at_the_horizon() {
-        let decision = decide(&one_round(), &daily(TOKEN), &[], end());
+    fn a_full_history_stands_once_the_horizon_is_read() {
+        let full = daily(TOKEN);
+        let decision = decide(&one_round(), &full, &[], after_horizon_read());
         assert_eq!(outcome_of(&decision), Some(Outcome::Stood));
         assert!(decision.added[0].rederives());
-        assert_eq!(decision.added[0].settled_at, end());
+        assert_eq!(decision.added[0].settled_at, after_horizon_read());
+        let without_horizon = &full[..14];
+        let decision = decide(&one_round(), without_horizon, &[], end() + 10);
+        assert!(decision.added.is_empty());
+        assert_eq!(decision.pending, 1);
+        let decision = decide(&one_round(), without_horizon, &[], grace_over());
+        assert_eq!(outcome_of(&decision), Some(Outcome::Unresolved));
     }
 
     /// A missing 24-hour span is a gap in the read history, which is no read:
@@ -733,15 +910,15 @@ mod tests {
         for missing in 0..14usize {
             let mut observations = daily(TOKEN);
             observations.remove(missing);
-            let decision = decide(&one_round(), &observations, &[], end());
+            let decision = decide(&one_round(), &observations, &[], grace_over());
             assert_eq!(
                 outcome_of(&decision),
                 Some(Outcome::Unresolved),
                 "day {missing} missing"
             );
         }
-        // No history at all, after the horizon: unresolved, not absent.
-        let decision = decide(&one_round(), &[], &[], end() + DAY);
+        // No history at all, after the grace: unresolved, not absent.
+        let decision = decide(&one_round(), &[], &[], grace_over());
         assert_eq!(outcome_of(&decision), Some(Outcome::Unresolved));
     }
 
@@ -750,14 +927,29 @@ mod tests {
     fn an_incomplete_read_does_not_cover_its_span() {
         let mut observations = daily(TOKEN);
         observations[6] = obs(TOKEN, CLOSE + 6 * DAY + 3_600, Level::CantTell, false);
-        let decision = decide(&one_round(), &observations, &[], end());
+        let decision = decide(&one_round(), &observations, &[], grace_over());
         assert_eq!(outcome_of(&decision), Some(Outcome::Unresolved));
         // A level other than CantTell that the read itself flagged incomplete
         // is also not a complete read.
         let mut flagged = daily(TOKEN);
         flagged[3].complete = false;
-        let decision = decide(&one_round(), &flagged, &[], end());
+        let decision = decide(&one_round(), &flagged, &[], grace_over());
         assert_eq!(outcome_of(&decision), Some(Outcome::Unresolved));
+    }
+
+    /// A calm read from an instrument that could not have shown a rug is no
+    /// evidence that there was none: fourteen days of them settle `Unresolved`.
+    #[test]
+    fn calm_reads_from_a_blind_instrument_settle_unresolved() {
+        let observations: Vec<Observation> =
+            daily(TOKEN).iter().map(|o| blind(TOKEN, o.at)).collect();
+        let decision = decide(&one_round(), &observations, &[], grace_over());
+        assert_eq!(outcome_of(&decision), Some(Outcome::Unresolved));
+        // And a line written before the field existed reads as blind.
+        let old = r#"{"round":"r1","chain":"solana","token":"coinA","at":5,"level":"NothingUglyYet","complete":true,"rule_version":"settle-2","evidence_reference":"x","calls":1}"#;
+        let (parsed, _) = parse_observations(&format!("{old}\n")).expect("parse");
+        assert!(!parsed[0].rug_detectable);
+        assert_eq!(parsed[0].reading(), None);
     }
 
     /// Only this coin's, this round's reads, under this rule and no later than
@@ -778,6 +970,7 @@ mod tests {
             other_chain,
             calm(TOKEN, CLOSE + 100),
             obs(TOKEN, CLOSE + 60, Level::CantTell, false),
+            blind(TOKEN, CLOSE + 70),
         ];
         let reads = reads_for(&all, "r1", CHAIN, TOKEN, CLOSE + 80);
         assert_eq!(
@@ -793,8 +986,12 @@ mod tests {
     /// carried as they are, and only new decisions are added.
     #[test]
     fn deciding_again_adds_nothing_and_keeps_the_rows() {
-        let observations = vec![obs(TOKEN, CLOSE + DAY, Level::Rugged, true)];
-        let first = decide(&one_round(), &observations, &[], CLOSE + 2 * DAY);
+        let observations = vec![
+            calm(TOKEN, CLOSE + 3_600),
+            rug(TOKEN, CLOSE + DAY),
+            rug(TOKEN, CLOSE + 2 * DAY),
+        ];
+        let first = decide(&one_round(), &observations, &[], CLOSE + 3 * DAY);
         assert_eq!(first.added.len(), 1);
         let again = decide(&one_round(), &observations, &first.added, CLOSE + 9 * DAY);
         assert!(again.added.is_empty());
@@ -806,12 +1003,14 @@ mod tests {
         move |_, _| {
             Ok(Sample {
                 level,
+                rug_detectable: true,
                 evidence: "sheet-blake3:e".to_owned(),
                 calls: 9,
             })
         }
     }
 
+    /// Runs `observe_all` with every read dated `now`.
     fn run_observe(
         rounds: &[Round],
         observations: &[Observation],
@@ -825,7 +1024,7 @@ mod tests {
             rounds,
             observations,
             published,
-            now,
+            &|| now,
             limit,
             read,
             &mut |o| {
@@ -859,9 +1058,36 @@ mod tests {
             (o.at, o.level, o.complete, o.calls),
             (now, Level::Sketchy, true, 9)
         );
+        assert!(o.rug_detectable);
         assert_eq!(o.rule_version, settle::RULE_VERSION);
         assert_eq!(o.evidence_reference, "sheet-blake3:e");
         assert_eq!((o.round.as_str(), o.token.as_str()), ("r1", TOKEN));
+    }
+
+    /// Each read is dated when it finishes, not when the run started: a late
+    /// read in a long run is not stamped before it happened.
+    #[test]
+    fn each_read_is_dated_by_the_clock_when_it_finishes() {
+        let rounds = vec![round("r1", CLOSE, &["a", "b", "c"])];
+        let ticks = std::cell::Cell::new(CLOSE + 100);
+        let mut written = Vec::new();
+        observe_all(
+            &rounds,
+            &[],
+            &[],
+            &|| {
+                ticks.set(ticks.get() + 20);
+                ticks.get()
+            },
+            10,
+            &mut reader(Level::NothingUglyYet),
+            &mut |o| {
+                written.push(o.at);
+                Ok(())
+            },
+        )
+        .expect("observe");
+        assert_eq!(written, vec![CLOSE + 140, CLOSE + 160, CLOSE + 180]);
     }
 
     /// `CantTell` is an incomplete read; a failed read is recorded as one and
@@ -884,6 +1110,7 @@ mod tests {
         assert_eq!((report.read, report.incomplete), (1, 1));
         assert_eq!(written[0].level, Level::CantTell);
         assert!(!written[0].complete);
+        assert!(!written[0].rug_detectable);
         assert_eq!(written[0].evidence_reference, "unreadable");
         assert_eq!(written[0].calls, 0);
         assert!(
@@ -908,12 +1135,13 @@ mod tests {
             calls += 1;
             Ok(Sample {
                 level: Level::NothingUglyYet,
+                rug_detectable: true,
                 evidence: "e".to_owned(),
                 calls: 1,
             })
         };
-        // Before the close and from the horizon on: no window.
-        for now in [CLOSE - 1, end(), end() + DAY] {
+        // Before the close, and after the horizon with no history to stand on.
+        for now in [CLOSE - 1, end(), grace_over()] {
             let (report, written) = run_observe(&one_round(), &[], &[], now, 10, &mut counting);
             assert_eq!((report.read, report.skipped), (0, 1), "now {now}");
             assert!(written.is_empty());
@@ -922,8 +1150,12 @@ mod tests {
         let covered = vec![calm(TOKEN, CLOSE + 100)];
         let (report, _) = run_observe(&one_round(), &covered, &[], CLOSE + 200, 10, &mut counting);
         assert_eq!((report.read, report.skipped), (0, 1));
-        // Rugged (observed, not yet published).
-        let rugged = vec![obs(TOKEN, CLOSE + 100, Level::Rugged, true)];
+        // Rugged (observed twice, not yet published).
+        let rugged = vec![
+            calm(TOKEN, CLOSE + 100),
+            rug(TOKEN, CLOSE + DAY + 100),
+            rug(TOKEN, CLOSE + DAY + 200),
+        ];
         let (report, _) = run_observe(
             &one_round(),
             &rugged,
@@ -935,6 +1167,7 @@ mod tests {
         assert_eq!((report.read, report.skipped), (0, 1));
         // Already published.
         let row = decide(&one_round(), &rugged, &[], CLOSE + 2 * DAY).added;
+        assert_eq!(row.len(), 1);
         let (report, _) = run_observe(&one_round(), &[], &row, CLOSE + 3 * DAY, 10, &mut counting);
         assert_eq!((report.read, report.skipped), (0, 1));
         // The next day's span is owed a read again.
@@ -947,7 +1180,18 @@ mod tests {
             &mut counting,
         );
         assert_eq!(report.read, 1);
-        assert_eq!(calls, 1);
+        // And so is the horizon, once fourteen days are covered.
+        let covered_all = daily(TOKEN)[..14].to_vec();
+        let (report, _) = run_observe(
+            &one_round(),
+            &covered_all,
+            &[],
+            end() + 5,
+            10,
+            &mut counting,
+        );
+        assert_eq!(report.read, 1);
+        assert_eq!(calls, 2);
     }
 
     /// The per-run ceiling stops the run and says so; the coins it did not
@@ -985,7 +1229,7 @@ mod tests {
             &one_round(),
             &[],
             &[],
-            CLOSE + 5,
+            &|| CLOSE + 5,
             5,
             &mut reader(Level::NothingUglyYet),
             &mut |_| Err("disk full".to_owned()),
@@ -1000,12 +1244,171 @@ mod tests {
     fn the_observations_file_is_read_whole_or_not_at_all() {
         let good = serde_json::to_string(&calm(TOKEN, CLOSE)).expect("json");
         let text = format!("{good}\n\n  \n{good}\n");
-        assert_eq!(parse_observations(&text).expect("parse").len(), 2);
-        assert!(parse_observations("").expect("empty").is_empty());
+        let (parsed, torn) = parse_observations(&text).expect("parse");
+        assert_eq!((parsed.len(), torn), (2, false));
+        let (empty, torn) = parse_observations("").expect("empty");
+        assert_eq!((empty.len(), torn), (0, false));
         let err = parse_observations(&format!("{good}\nnot json\n")).expect_err("bad");
         assert!(err.contains("line 2"), "{err}");
-        let extra = good.replace('}', r#","extra":1}"#);
+        let extra = format!("{}\n", good.replace('}', r#","extra":1}"#));
         assert!(parse_observations(&extra).is_err());
+    }
+
+    /// A final line with no newline is a write that was cut short: it is
+    /// skipped and reported, whether it is a fragment or a whole object that
+    /// only lost its newline, and the lines before it are kept.
+    #[test]
+    fn a_torn_final_line_is_skipped_and_reported_not_fatal() {
+        let good = serde_json::to_string(&calm(TOKEN, CLOSE)).expect("json");
+        let fragment = &good[..good.len() / 2];
+        let (parsed, torn) = parse_observations(&format!("{good}\n{fragment}")).expect("parse");
+        assert_eq!((parsed.len(), torn), (1, true));
+        // Even a complete-looking object without its newline is not evidence.
+        let (parsed, torn) = parse_observations(&format!("{good}\n{good}")).expect("parse");
+        assert_eq!((parsed.len(), torn), (1, true));
+        let (parsed, torn) = parse_observations(fragment).expect("parse");
+        assert_eq!((parsed.len(), torn), (0, true));
+        // A bad line that is not the last is still fatal.
+        assert!(parse_observations(&format!("{fragment}\n{good}\n")).is_err());
+    }
+
+    fn scratch(name: &str) -> String {
+        let dir =
+            std::env::temp_dir().join(format!("realorrug-settle-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir.join("observations.jsonl")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// The fragment a killed writer left is cut off before the next line is
+    /// appended, so the next line is never glued to it.
+    #[test]
+    fn the_torn_tail_is_cut_off_before_the_next_append() {
+        let path = scratch("tail");
+        let good = serde_json::to_string(&calm(TOKEN, CLOSE)).expect("json");
+        std::fs::write(&path, format!("{good}\n{}", &good[..20])).expect("write");
+        assert!(drop_torn_tail(&path).expect("cut"));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            format!("{good}\n")
+        );
+        assert!(!drop_torn_tail(&path).expect("nothing to cut"));
+        // A file that is only a fragment is emptied; a missing one is fine.
+        std::fs::write(&path, &good[..20]).expect("write");
+        assert!(drop_torn_tail(&path).expect("cut"));
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "");
+        std::fs::remove_file(&path).expect("remove");
+        assert!(!drop_torn_tail(&path).expect("missing"));
+    }
+
+    /// A line goes down with its newline, and appended lines read back whole.
+    #[test]
+    fn appended_lines_end_in_a_newline_and_read_back() {
+        let path = scratch("append");
+        let _ = std::fs::remove_file(&path);
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .expect("open");
+        for at in [CLOSE, CLOSE + 1] {
+            let line = serde_json::to_string(&calm(TOKEN, at)).expect("json");
+            append_line(&mut file, &line).expect("append");
+        }
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.ends_with('\n'));
+        let (parsed, torn) = parse_observations(&text).expect("parse");
+        assert_eq!((parsed.len(), torn), (2, false));
+    }
+
+    /// Two runs cannot hold the observations file at once.
+    #[test]
+    fn a_second_run_is_refused_while_one_holds_the_lock() {
+        let path = scratch("lock");
+        let first = RunLock::acquire(&path).expect("first");
+        let err = RunLock::acquire(&path).err().expect("refused");
+        assert!(err.contains("another settle run"), "{err}");
+        drop(first);
+        assert!(RunLock::acquire(&path).is_ok());
+    }
+
+    /// The drained coin, through the real builder and the real level, is never
+    /// published `Stood`. Today the sheet cannot show a rug, so no calm read is
+    /// evidence and the coin ends `Unresolved` (design 0032 §12). This is the
+    /// test that goes through `FactSheet::build` rather than a stubbed level:
+    /// with `Observation::reading` counting any complete calm read as "no rug
+    /// seen" it fails.
+    #[test]
+    fn a_drained_coin_is_never_stood_through_the_real_sheet() {
+        let mint =
+            realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address([0x13u8; 20]));
+        let dossier = realorrug_onchain::Dossier {
+            mint,
+            read_at: Some(realorrug_types::ReadAt::Robinhood(3_012_345)),
+            launch: None,
+            curve: Some(realorrug_onchain::dossier::CurveFacts {
+                complete: false,
+                quote_reserves: 0,
+                quote_capacity: None,
+                quote_asset: Some(realorrug_onchain::QuoteAsset::eth()),
+                creator: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
+                    [9u8; 20],
+                )),
+                fees: None,
+            }),
+            creator_transactions: None,
+            chain_launch: Some(realorrug_onchain::ChainLaunch {
+                block: 2_998_000,
+                age_seconds: Some(86_400),
+                dev_buy_wei: Some(50_000_000_000_000_000),
+                dev_buy_tokens: None,
+                supply: None,
+                name: None,
+                symbol: None,
+                correlated_selling: None,
+            }),
+            holders: Some(realorrug_onchain::Holders {
+                count: 3,
+                largest_share_bps: Some(9_900),
+            }),
+            funding: None,
+            market: None,
+            token_ownership: None,
+            creator_cash_flow: None,
+            powers: None,
+            unavailable: Vec::new(),
+            calls: 10,
+            elapsed_ms: 1,
+            retries: 0,
+            paused_ms: 0,
+        };
+        let sample = sample_of(&dossier, None, None, None);
+        assert_ne!(
+            sample.level,
+            Level::CantTell,
+            "the fixture must be a complete read, or the test proves nothing"
+        );
+        assert!(!sample.rug_detectable);
+
+        // Fourteen daily runs and the horizon read, each through the real
+        // sheet; the coin is decided after every one.
+        let mut observations: Vec<Observation> = Vec::new();
+        let mut read = |_: &str, _: &str| Ok(sample_of(&dossier, None, None, None));
+        for day in 0..=14 {
+            let now = CLOSE + day * DAY + 3_600;
+            let (_, written) = run_observe(&one_round(), &observations, &[], now, 10, &mut read);
+            observations.extend(written);
+            let decision = decide(&one_round(), &observations, &[], now);
+            assert!(
+                decision.added.iter().all(|r| r.outcome != Outcome::Stood),
+                "day {day}: {:?}",
+                decision.added
+            );
+        }
+        assert!(observations.iter().all(|o| o.reading().is_none()));
+        let decision = decide(&one_round(), &observations, &[], grace_over());
+        assert_eq!(outcome_of(&decision), Some(Outcome::Unresolved));
     }
 
     /// The round list is read leniently on unknown fields and strictly on ids.
@@ -1163,6 +1566,18 @@ mod tests {
         assert!(err.contains("--observations"), "{err}");
     }
 
+    /// The lines of a rug that began after the close and was seen twice.
+    fn confirmed_rug(close: i64) -> String {
+        [
+            calm(TOKEN, close + 3_600),
+            rug(TOKEN, close + DAY),
+            rug(TOKEN, close + DAY + 100),
+        ]
+        .iter()
+        .map(|o| serde_json::to_string(o).expect("json") + "\n")
+        .collect()
+    }
+
     /// The command over real files: publishes a rug, publishes it once, keeps
     /// the row on a second run, and `verify` passes on the file.
     #[test]
@@ -1179,9 +1594,7 @@ mod tests {
         )
         .expect("rounds");
         let observations = dir.join("observations.jsonl");
-        let line =
-            serde_json::to_string(&obs(TOKEN, close + DAY, Level::Rugged, true)).expect("json");
-        std::fs::write(&observations, format!("{line}\n")).expect("observations");
+        std::fs::write(&observations, confirmed_rug(close)).expect("observations");
         let outcomes = dir.join("outcomes.json");
         let args = args_of(&[
             "settle",
@@ -1343,9 +1756,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&outcomes).expect("file"), marked);
 
         // A rug arrives: the existing file gains the row.
-        let line =
-            serde_json::to_string(&obs(TOKEN, close + DAY, Level::Rugged, true)).expect("json");
-        std::fs::write(&observations, format!("{line}\n")).expect("observations");
+        std::fs::write(&observations, confirmed_rug(close)).expect("observations");
         publish_command(&args, &none).expect("grown");
         assert_eq!(rows(&outcomes), 1);
     }

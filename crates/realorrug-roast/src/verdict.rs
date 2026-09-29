@@ -162,16 +162,59 @@ pub fn level(sheet: &FactSheet) -> Level {
     Level::NothingUglyYet
 }
 
+/// The signal pairs that make a rug: design 0020 §3's observed, completed
+/// extraction. One list, read by [`rugged_pair`] (which decides the level) and
+/// by [`rug_detectable`] (which says whether that decision can ever come out
+/// yes), so the two cannot drift apart.
+const RUGGED_PAIRS: [[Signal; 2]; 2] = [
+    [Signal::LiquidityGone, Signal::HolderConcentration],
+    [Signal::CreatorSoldOut, Signal::BuyersCannotSell],
+];
+
+/// The signals [`FactSheet::build`] can push today: every
+/// `signals.push(Signal::X)` in `sheet.rs`'s production code. A test reads the
+/// source and fails when this list and the code disagree in either direction,
+/// so it cannot be left stale by a change that adds or removes a signal.
+const BUILT_SIGNALS: [Signal; 9] = [
+    Signal::LaunchBlockInStrongestBand,
+    Signal::CreatorNeverGraduatedOrganically,
+    Signal::CreatorBoughtOwnLaunch,
+    Signal::RepeatLauncher,
+    Signal::CreatorSoldOut,
+    Signal::CorrelatedSelling,
+    Signal::OwnerCanStillMintOrPause,
+    Signal::HolderConcentration,
+    Signal::CreatorFundedEarlyBuyers,
+];
+
+/// Whether any sheet [`FactSheet::build`] makes can reach [`Level::Rugged`]:
+/// true only when some rugged pair is made entirely of signals the builder
+/// pushes. The answer is about the instrument, not about a token, and it is
+/// the same on every chain because the builder pushes the same signals on
+/// every chain.
+///
+/// `false` today: nothing pushes `LiquidityGone` or `BuyersCannotSell`, so
+/// `Rugged` is unreachable and a sheet that is not `Rugged` says nothing about
+/// whether a rug happened (AGENTS.md §3 rule 8: unknown is not safe). The
+/// contest's settlement reads this to decide whether a calm read counts as
+/// "no rug seen" (design 0032 §12); it is the one place that changes when a
+/// rug can be detected.
+#[must_use]
+pub fn rug_detectable() -> bool {
+    RUGGED_PAIRS
+        .iter()
+        .any(|pair| pair.iter().all(|signal| BUILT_SIGNALS.contains(signal)))
+}
+
 /// Whether the sheet shows an observed, completed rug -- design 0020 §3's
 /// pair, shared by [`level`] and [`level_from_score`] so the two gates can
 /// never drift apart (research 0052 §4.2: "`Rugged` ... stay gates, never
 /// bands").
 #[must_use]
 fn rugged_pair(sheet: &FactSheet) -> bool {
-    (sheet.signals.contains(&Signal::LiquidityGone)
-        && sheet.signals.contains(&Signal::HolderConcentration))
-        || (sheet.signals.contains(&Signal::CreatorSoldOut)
-            && sheet.signals.contains(&Signal::BuyersCannotSell))
+    RUGGED_PAIRS
+        .iter()
+        .any(|pair| pair.iter().all(|signal| sheet.signals.contains(signal)))
 }
 
 /// Coverage below this share of applicable facts also forces `CantTell`
@@ -1648,7 +1691,13 @@ pub(crate) mod tests {
     /// layer up. Going through the real builder means the labels in the test
     /// are the labels the bot sees.
     pub(crate) fn the_live_robinhood_sheet() -> FactSheet {
-        let dossier = realorrug_onchain::Dossier {
+        FactSheet::build(&the_live_robinhood_dossier(), None, None, None, None)
+    }
+
+    /// The dossier behind [`the_live_robinhood_sheet`], for a test that changes
+    /// one thing about it.
+    pub(crate) fn the_live_robinhood_dossier() -> realorrug_onchain::Dossier {
+        realorrug_onchain::Dossier {
             mint: realorrug_types::ChainAddress::Robinhood(realorrug_robinhood::Address(
                 [0x13u8; 20],
             )),
@@ -1690,8 +1739,95 @@ pub(crate) mod tests {
 
             retries: 0,
             paused_ms: 0,
-        };
-        FactSheet::build(&dossier, None, None, None, None)
+        }
+    }
+    /// Where `sheet.rs`'s production code ends.
+    const MARK: &str = "\n#[cfg(test)]\nmod tests";
+
+    /// Which signals the builder pushes, read from `sheet.rs`'s production
+    /// code (everything above its test module, whitespace removed so a
+    /// reformat cannot hide a push).
+    fn signals_pushed_by_the_builder() -> Vec<String> {
+        let source = include_str!("sheet.rs");
+        assert!(
+            source.contains(MARK),
+            "sheet.rs test module moved; teach the scan"
+        );
+        let production = source
+            .split(MARK)
+            .next()
+            .expect("split always yields one piece");
+        let squeezed: String = production.split_whitespace().collect();
+        assert!(
+            !squeezed.contains("signals.extend(") && !squeezed.contains("signals.insert("),
+            "a signal is added some way this scan does not read; teach the scan"
+        );
+        let mut names: Vec<String> = squeezed
+            .split("signals.push(Signal::")
+            .skip(1)
+            .map(|rest| {
+                rest.chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect()
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// `BUILT_SIGNALS` is what the builder pushes, in both directions. This is
+    /// what keeps `rug_detectable` a measurement of the code and not a flag
+    /// someone has to remember to flip.
+    #[test]
+    fn the_built_signal_list_matches_the_builders_source() {
+        let mut listed: Vec<String> = BUILT_SIGNALS.iter().map(|s| format!("{s:?}")).collect();
+        listed.sort();
+        assert_eq!(listed, signals_pushed_by_the_builder());
+    }
+
+    /// The scan does see a push (so an empty answer cannot pass the test
+    /// above by finding nothing).
+    #[test]
+    fn the_source_scan_finds_the_pushes_it_is_meant_to_find() {
+        let pushed = signals_pushed_by_the_builder();
+        for name in ["HolderConcentration", "CreatorSoldOut", "RepeatLauncher"] {
+            assert!(pushed.iter().any(|p| p == name), "{name} in {pushed:?}");
+        }
+    }
+
+    /// Today no builder pushes a member of every pair, so `Rugged` cannot be
+    /// reached; when one does, this test is the reminder to look at what the
+    /// contest's settlement then records.
+    #[test]
+    fn a_rug_is_not_detectable_while_no_builder_pushes_a_pair() {
+        assert!(!rug_detectable());
+        let built = signals_pushed_by_the_builder();
+        assert!(!built.iter().any(|n| n == "LiquidityGone"));
+        assert!(!built.iter().any(|n| n == "BuyersCannotSell"));
+    }
+
+    /// The property that makes `rug_detectable` mean something: a sheet the
+    /// real builder made from a drained pool, with the holdings gone to one
+    /// wallet and the creator's pool empty, still does not read `Rugged`
+    /// while `rug_detectable` is false.
+    #[test]
+    fn a_drained_pool_built_by_the_real_builder_is_not_rugged_while_undetectable() {
+        let mut dossier = the_live_robinhood_dossier();
+        if let Some(curve) = dossier.curve.as_mut() {
+            curve.quote_reserves = 0;
+        }
+        dossier.holders = Some(realorrug_onchain::Holders {
+            count: 3,
+            largest_share_bps: Some(9_900),
+        });
+        let sheet = FactSheet::build(&dossier, None, None, None, None);
+        assert!(
+            sheet.signals.contains(&Signal::HolderConcentration),
+            "the fixture must be the drained-and-concentrated case: {:?}",
+            sheet.signals
+        );
+        assert!(rug_detectable() || level(&sheet) != Level::Rugged);
     }
 
     /// Renaming a fact's label must not change what the headline or the

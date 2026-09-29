@@ -14,17 +14,27 @@
 //!
 //! # The rule
 //!
-//! Design 0032 §2 and ADR 0041 decision 5, as code. The window is the
-//! [`WINDOW_SECS`] after the round's close; a read is evidence about the window
-//! only when it was taken inside it.
+//! Design 0032 §2 and ADR 0041 decision 5, as code, with the two tightenings
+//! design 0032 §12 records. The window is the [`WINDOW_SECS`] after the
+//! round's close; a read is evidence about the window only when it was taken
+//! inside it. What counts as a rug is not decided here: a read is a
+//! [`Reading::Rug`] only when the caller says so (the sheet's level reached
+//! `Rugged`), which is the one seam that changes when the owner decides.
 //!
-//! * a `Rug` read inside the window settles [`Outcome::Rugged`], at once;
-//! * with none, nothing is written until the window has closed (a coin that has
-//!   not rugged *yet* has not stood);
-//! * once it has closed, [`Outcome::Stood`] needs a `NoRug` read in every
-//!   24-hour span of the window, and anything less is [`Outcome::Unresolved`]:
-//!   a gap in the read history is not "no rug seen", it is no read (AGENTS.md
-//!   §3 rule 8);
+//! * [`Outcome::Rugged`] needs a first in-window read that was *not* a rug
+//!   (so the rug began after the entry window closed, not before it, where
+//!   players could see it) and then two rug reads in a row, taken at different
+//!   times (a level is a state, and one read of it can be a launch-block
+//!   glitch);
+//! * with no such pair, nothing is written until the window has closed (a coin
+//!   that has not rugged *yet* has not stood);
+//! * [`Outcome::Stood`] needs a `NoRug` read in every 24-hour span of the
+//!   window, no rug read in it at all, and a `NoRug` read at or just after the
+//!   horizon (design 0032 §9: once a day, plus once at the horizon), so the
+//!   last day is read too;
+//! * [`Outcome::Unresolved`] is what is left once the horizon read's grace
+//!   ([`HORIZON_GRACE_SECS`]) has passed without `Stood`: a gap in the read
+//!   history is not "no rug seen", it is no read (AGENTS.md §3 rule 8);
 //! * before the round's close nothing settles, whatever was read.
 //!
 //! No model is consulted and none could move the result.
@@ -35,7 +45,9 @@ use crate::calls::Outcome;
 
 /// The rule's name, written on every outcome row it produces. A changed rule
 /// gets a new name, so an old row is never read as the new rule's answer.
-pub const RULE_VERSION: &str = "settle-1";
+/// `settle-2` added the horizon read and the two-read, after-the-close
+/// conditions on `Rugged`; nothing was ever settled under `settle-1`.
+pub const RULE_VERSION: &str = "settle-2";
 
 /// The settlement window after a round's close, in seconds: fourteen days
 /// (design 0028 §2.4; it becomes three only if the replay set says so, and
@@ -44,6 +56,10 @@ pub const WINDOW_SECS: i64 = 14 * SPAN_SECS;
 
 /// One span of the window that `Stood` needs a read in, in seconds.
 pub const SPAN_SECS: i64 = 24 * 60 * 60;
+
+/// How long after the horizon the read that closes the last day may still be
+/// taken. Twice the timer's interval, so a missed run does not cost it.
+pub const HORIZON_GRACE_SECS: i64 = SPAN_SECS;
 
 /// What one observation read found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,10 +86,16 @@ pub fn horizon(close: i64) -> i64 {
     close.saturating_add(WINDOW_SECS)
 }
 
-/// The reads that are evidence about the window, oldest first: those taken at
-/// or after the close and at or before the horizon, once each.
-fn in_window(close: i64, reads: &[Read]) -> Vec<Read> {
-    let end = horizon(close);
+/// The last instant a horizon read may be taken at.
+#[must_use]
+pub fn final_read_by(close: i64) -> i64 {
+    horizon(close).saturating_add(HORIZON_GRACE_SECS)
+}
+
+/// The reads that are evidence, oldest first: those taken at or after the
+/// close and no later than the end of the horizon's grace, once each.
+fn evidence_reads(close: i64, reads: &[Read]) -> Vec<Read> {
+    let end = final_read_by(close);
     let mut kept: Vec<Read> = reads
         .iter()
         .copied()
@@ -82,6 +104,35 @@ fn in_window(close: i64, reads: &[Read]) -> Vec<Read> {
     kept.sort_by_key(|r| (r.at, r.reading == Reading::NoRug));
     kept.dedup();
     kept
+}
+
+/// The evidence reads taken inside the window itself (before the horizon).
+fn inside(close: i64, evidence: &[Read]) -> Vec<Read> {
+    let end = horizon(close);
+    evidence.iter().copied().filter(|r| r.at < end).collect()
+}
+
+/// Whether the window's reads show a rug that began after the entry window
+/// closed and was seen twice in a row.
+///
+/// The first read must be calm: a coin first seen rugged might have rugged
+/// before the close, where players could see it, and a level is a state, not
+/// an event time. Two consecutive rug reads at different times, not one: the
+/// sheet's own twin (`synthetic_ladder.rs`) warns that a zero-reserve read can
+/// be a graduation block.
+fn rugged(window: &[Read]) -> bool {
+    window
+        .first()
+        .is_some_and(|first| first.reading == Reading::NoRug)
+        && window
+            .windows(2)
+            .any(|pair| pair[0].reading == Reading::Rug && pair[1].reading == Reading::Rug)
+}
+
+/// Whether the window holds any rug read at all (which bars `Stood`, even an
+/// unconfirmed one).
+fn rug_seen(window: &[Read]) -> bool {
+    window.iter().any(|r| r.reading == Reading::Rug)
 }
 
 /// Whether every 24-hour span of the window holds a `NoRug` read.
@@ -95,29 +146,39 @@ fn covered(close: i64, window: &[Read]) -> bool {
     })
 }
 
+/// Whether a `NoRug` read was taken at or after the horizon, inside the grace.
+/// A rug read there is no evidence either way (it cannot be dated into the
+/// window), so it is not a horizon read.
+fn horizon_read(close: i64, evidence: &[Read]) -> bool {
+    let end = horizon(close);
+    evidence
+        .iter()
+        .any(|r| r.reading == Reading::NoRug && r.at >= end)
+}
+
 /// The outcome the rule gives at `now`, or `None` when nothing may be written
 /// yet.
 ///
 /// Once it returns `Some`, the same reads give the same answer at any later
-/// `now`: `Rugged` is decided by a read already taken, and the other two only
-/// by reads inside a window that has already closed.
+/// `now`: `Rugged` is decided by reads already taken, and the other two only
+/// by reads inside a period that has already ended.
 #[must_use]
 pub fn derive(close: i64, reads: &[Read], now: i64) -> Option<Outcome> {
     if now < close {
         return None;
     }
-    let window = in_window(close, reads);
-    if window.iter().any(|r| r.reading == Reading::Rug) {
+    let evidence = evidence_reads(close, reads);
+    let window = inside(close, &evidence);
+    if rugged(&window) {
         return Some(Outcome::Rugged);
     }
     if now < horizon(close) {
         return None;
     }
-    if covered(close, &window) {
-        Some(Outcome::Stood)
-    } else {
-        Some(Outcome::Unresolved)
+    if !rug_seen(&window) && covered(close, &window) && horizon_read(close, &evidence) {
+        return Some(Outcome::Stood);
     }
+    (now >= final_read_by(close)).then_some(Outcome::Unresolved)
 }
 
 /// The evidence reference an outcome row carries: the close and the reads it
@@ -127,7 +188,7 @@ pub fn derive(close: i64, reads: &[Read], now: i64) -> Option<Outcome> {
 /// reference. Same inputs, same string.
 #[must_use]
 pub fn encode_evidence(close: i64, reads: &[Read]) -> String {
-    let list: Vec<String> = in_window(close, reads)
+    let list: Vec<String> = evidence_reads(close, reads)
         .iter()
         .map(|r| {
             let tag = match r.reading {
@@ -188,8 +249,15 @@ pub fn rederive(
     derive(close, &reads, settled_at)
 }
 
-/// Whether a coin is owed a chain read at `now`: its window is open, no read
-/// has seen it rug, and the current 24-hour span holds no `NoRug` read yet.
+/// Whether a coin is owed a chain read at `now`.
+///
+/// * Inside the window: unless it has been settled `Rugged`, when the current
+///   24-hour span holds no `NoRug` read yet, or when its latest read is a rug
+///   that a second read would confirm (or clear).
+/// * From the horizon to the end of its grace: when `Stood` is still possible
+///   (every span covered, no rug read) and no `NoRug` read has been taken at
+///   or after the horizon.
+/// * Never before the close, and never after the grace.
 ///
 /// This is what keeps the cost at one complete read per coin per day however
 /// often the timer fires: the timer may run twice a day so that one missed or
@@ -199,18 +267,31 @@ pub fn rederive(
 /// again.
 #[must_use]
 pub fn due(close: i64, reads: &[Read], now: i64) -> bool {
-    if now < close || now >= horizon(close) {
+    if now < close || now >= final_read_by(close) {
         return false;
     }
-    let window = in_window(close, reads);
-    if window.iter().any(|r| r.reading == Reading::Rug) {
+    let evidence = evidence_reads(close, reads);
+    let window = inside(close, &evidence);
+    // Settled `Rugged`, or first seen already rugged: no later read could
+    // settle it either way, so it is owed none.
+    if rugged(&window) || window.first().is_some_and(|f| f.reading == Reading::Rug) {
         return false;
     }
+    if now >= horizon(close) {
+        return !rug_seen(&window) && covered(close, &window) && !horizon_read(close, &evidence);
+    }
+    let confirmation_owed = window
+        .first()
+        .zip(window.last())
+        .is_some_and(|(first, last)| {
+            first.reading == Reading::NoRug && last.reading == Reading::Rug
+        });
     let from = close.saturating_add((now - close) / SPAN_SECS * SPAN_SECS);
     let to = from.saturating_add(SPAN_SECS);
-    !window
-        .iter()
-        .any(|r| r.reading == Reading::NoRug && r.at >= from && r.at < to)
+    confirmation_owed
+        || !window
+            .iter()
+            .any(|r| r.reading == Reading::NoRug && r.at >= from && r.at < to)
 }
 
 /// One published outcome: the row `realorrug-serve` will write, and everything
@@ -308,67 +389,150 @@ mod tests {
             .collect()
     }
 
+    /// The fourteen daily reads and the read just after the horizon.
+    fn full() -> Vec<Read> {
+        let mut reads = daily();
+        reads.push(calm(horizon(CLOSE) + 60));
+        reads
+    }
+
+    /// A calm first read, then two rug reads in a row: the one shape of rug.
+    fn confirmed_rug() -> Vec<Read> {
+        vec![calm(CLOSE + 10), rug(CLOSE + 100), rug(CLOSE + 200)]
+    }
+
     /// Nothing is settled before the close, whatever was read: a rug read
     /// stamped after the close does not settle a round that has not closed.
     #[test]
     fn nothing_settles_before_the_close() {
-        assert_eq!(derive(CLOSE, &[rug(CLOSE + 5)], CLOSE - 1), None);
-        assert_eq!(derive(CLOSE, &daily(), CLOSE - 1), None);
+        assert_eq!(derive(CLOSE, &confirmed_rug(), CLOSE - 1), None);
+        assert_eq!(derive(CLOSE, &full(), CLOSE - 1), None);
         assert_eq!(derive(CLOSE, &[], CLOSE - 1), None);
     }
 
-    /// The close itself is the first instant a rug read can settle.
+    /// A rug is a rug on the day it is confirmed; the round does not wait for
+    /// the horizon to say so.
     #[test]
-    fn a_rug_read_at_the_close_settles_rugged() {
-        assert_eq!(derive(CLOSE, &[rug(CLOSE)], CLOSE), Some(Outcome::Rugged));
-    }
-
-    /// A rug is a rug on the day it is seen; the round does not wait for the
-    /// horizon to say so.
-    #[test]
-    fn a_rug_settles_at_once_inside_the_window() {
+    fn a_confirmed_rug_settles_at_once_inside_the_window() {
         assert_eq!(
-            derive(CLOSE, &[rug(CLOSE + 100)], CLOSE + 200),
+            derive(CLOSE, &confirmed_rug(), CLOSE + 300),
             Some(Outcome::Rugged)
         );
-        // A calm read beside it does not outvote it.
-        assert_eq!(
-            derive(CLOSE, &[calm(CLOSE + 50), rug(CLOSE + 100)], CLOSE + 200),
-            Some(Outcome::Rugged)
-        );
+        // The second rug read is the one that decides: before it, nothing.
+        assert_eq!(derive(CLOSE, &confirmed_rug()[..2], CLOSE + 300), None);
     }
 
-    /// A read before the close, or after the horizon, is not about the window.
+    /// One rug read may be a graduation block: it never settles by itself,
+    /// not even at the end, when the coin is `Unresolved`, not `Stood`.
+    #[test]
+    fn a_single_rug_read_never_settles_rugged() {
+        let mut reads = daily();
+        reads.push(rug(CLOSE + 5 * SPAN_SECS + 100));
+        reads.push(calm(horizon(CLOSE) + 60));
+        assert_eq!(derive(CLOSE, &reads, horizon(CLOSE) + 61), None);
+        assert_eq!(
+            derive(CLOSE, &reads, final_read_by(CLOSE)),
+            Some(Outcome::Unresolved)
+        );
+        // Two rug reads with a calm one between them are not "in a row".
+        let apart = [
+            calm(CLOSE + 10),
+            rug(CLOSE + 100),
+            calm(CLOSE + 150),
+            rug(CLOSE + 200),
+        ];
+        assert_eq!(derive(CLOSE, &apart, CLOSE + 300), None);
+    }
+
+    /// A coin first seen already rugged may have rugged before the close,
+    /// where the entry window could see it: it is never `Rugged`, and it is
+    /// `Unresolved` once the grace has passed.
+    #[test]
+    fn a_coin_already_rugged_at_the_close_is_unresolved() {
+        let reads = [rug(CLOSE + 10), rug(CLOSE + 100), rug(CLOSE + 200)];
+        assert_eq!(derive(CLOSE, &reads, CLOSE + 300), None);
+        assert_eq!(derive(CLOSE, &reads, horizon(CLOSE)), None);
+        assert_eq!(
+            derive(CLOSE, &reads, final_read_by(CLOSE)),
+            Some(Outcome::Unresolved)
+        );
+        // It is owed no more reads: nothing they could show would settle it.
+        assert!(!due(CLOSE, &reads[..1], CLOSE + SPAN_SECS));
+    }
+
+    /// Two rug reads at one instant are one read (a repeated line), not a
+    /// confirmation from a later run.
+    #[test]
+    fn a_repeated_rug_read_is_not_a_confirmation() {
+        let reads = [calm(CLOSE + 10), rug(CLOSE + 100), rug(CLOSE + 100)];
+        assert_eq!(derive(CLOSE, &reads, CLOSE + 300), None);
+    }
+
+    /// A read before the close is not about the window, and a rug read after
+    /// the horizon cannot be dated into it.
     #[test]
     fn a_rug_outside_the_window_is_not_a_rug_in_it() {
         let end = horizon(CLOSE);
         assert_eq!(end, CLOSE + WINDOW_SECS);
+        let early = [rug(CLOSE - 2), rug(CLOSE - 1), calm(CLOSE + 5)];
+        assert_eq!(derive(CLOSE, &early, CLOSE + 10), None);
+        let mut late = daily();
+        late.push(rug(end));
+        late.push(rug(end + 1));
+        assert_eq!(derive(CLOSE, &late, end + 2), None);
         assert_eq!(
-            derive(CLOSE, &[rug(CLOSE - 1)], end),
+            derive(CLOSE, &late, final_read_by(CLOSE)),
             Some(Outcome::Unresolved)
         );
-        assert_eq!(
-            derive(CLOSE, &[rug(end + 1)], end + 2),
-            Some(Outcome::Unresolved)
-        );
-        // The horizon instant itself is inside.
-        assert_eq!(derive(CLOSE, &[rug(end)], end), Some(Outcome::Rugged));
     }
 
-    /// No rug yet is not yet a stand: nothing is written before the horizon.
+    /// No rug yet is not yet a stand: nothing is written before the horizon,
+    /// and the daily reads alone do not make `Stood`; the horizon read does.
     #[test]
-    fn no_rug_yet_writes_nothing_until_the_horizon() {
+    fn stood_needs_the_read_at_the_horizon() {
         let end = horizon(CLOSE);
-        assert_eq!(derive(CLOSE, &daily(), end - 1), None);
+        assert_eq!(derive(CLOSE, &full(), end - 1), None);
         assert_eq!(derive(CLOSE, &[], end - 1), None);
-        assert_eq!(derive(CLOSE, &daily(), end), Some(Outcome::Stood));
+        assert_eq!(derive(CLOSE, &daily(), end), None);
+        assert_eq!(derive(CLOSE, &daily(), final_read_by(CLOSE) - 1), None);
+        assert_eq!(
+            derive(CLOSE, &daily(), final_read_by(CLOSE)),
+            Some(Outcome::Unresolved)
+        );
+        assert_eq!(derive(CLOSE, &full(), end + 61), Some(Outcome::Stood));
+        // The read exactly at the horizon and exactly at the grace's end count.
+        for at in [end, final_read_by(CLOSE)] {
+            let mut reads = daily();
+            reads.push(calm(at));
+            assert_eq!(derive(CLOSE, &reads, at), Some(Outcome::Stood), "at {at}");
+        }
+        // One second past the grace is too late.
+        let mut late = daily();
+        late.push(calm(final_read_by(CLOSE) + 1));
+        assert_eq!(
+            derive(CLOSE, &late, final_read_by(CLOSE) + 1),
+            Some(Outcome::Unresolved)
+        );
     }
 
-    /// No evidence at all is `Unresolved`, never `Stood`.
+    /// A rug read anywhere in the window bars `Stood`, confirmed or not.
+    #[test]
+    fn an_unconfirmed_rug_read_bars_stood() {
+        let mut reads = full();
+        reads.push(rug(CLOSE + 7 * SPAN_SECS + 9));
+        assert_eq!(
+            derive(CLOSE, &reads, final_read_by(CLOSE)),
+            Some(Outcome::Unresolved)
+        );
+    }
+
+    /// No evidence at all is `Unresolved` once the grace has passed, never
+    /// `Stood`.
     #[test]
     fn no_evidence_settles_unresolved() {
+        assert_eq!(derive(CLOSE, &[], horizon(CLOSE)), None);
         assert_eq!(
-            derive(CLOSE, &[], horizon(CLOSE)),
+            derive(CLOSE, &[], final_read_by(CLOSE)),
             Some(Outcome::Unresolved)
         );
     }
@@ -377,10 +541,10 @@ mod tests {
     #[test]
     fn a_gap_in_the_read_history_is_unresolved_not_stood() {
         for missing in 0..14usize {
-            let mut reads = daily();
+            let mut reads = full();
             reads.remove(missing);
             assert_eq!(
-                derive(CLOSE, &reads, horizon(CLOSE) + 1),
+                derive(CLOSE, &reads, final_read_by(CLOSE)),
                 Some(Outcome::Unresolved),
                 "day {missing} missing"
             );
@@ -391,24 +555,29 @@ mod tests {
     /// and a read on the last instant of one counts for it and not the next.
     #[test]
     fn span_edges_belong_to_the_span_they_open() {
+        let horizon_read = calm(horizon(CLOSE));
         let mut reads: Vec<Read> = (0..14).map(|d| calm(CLOSE + d * SPAN_SECS)).collect();
+        reads.push(horizon_read);
         assert_eq!(derive(CLOSE, &reads, horizon(CLOSE)), Some(Outcome::Stood));
         reads = (0..14)
             .map(|d| calm(CLOSE + (d + 1) * SPAN_SECS - 1))
             .collect();
+        reads.push(horizon_read);
         assert_eq!(derive(CLOSE, &reads, horizon(CLOSE)), Some(Outcome::Stood));
         // All fourteen reads in the first span leave the other thirteen empty.
-        let crowded: Vec<Read> = (0..14).map(|s| calm(CLOSE + s)).collect();
+        let mut crowded: Vec<Read> = (0..14).map(|s| calm(CLOSE + s)).collect();
+        crowded.push(horizon_read);
         assert_eq!(
-            derive(CLOSE, &crowded, horizon(CLOSE)),
+            derive(CLOSE, &crowded, final_read_by(CLOSE)),
             Some(Outcome::Unresolved)
         );
-        // A calm read on the horizon instant belongs to no span.
+        // A calm read on the horizon instant belongs to no span: it does not
+        // stand in for the last day.
         let mut shifted = daily();
         shifted.remove(13);
-        shifted.push(calm(horizon(CLOSE)));
+        shifted.push(horizon_read);
         assert_eq!(
-            derive(CLOSE, &shifted, horizon(CLOSE)),
+            derive(CLOSE, &shifted, final_read_by(CLOSE)),
             Some(Outcome::Unresolved)
         );
     }
@@ -416,16 +585,16 @@ mod tests {
     /// The order the reads arrive in, and a read repeated, change nothing.
     #[test]
     fn order_and_repeats_do_not_change_the_answer() {
-        let mut shuffled = daily();
+        let mut shuffled = full();
         shuffled.reverse();
         shuffled.push(calm(CLOSE + 3_600));
         assert_eq!(
-            derive(CLOSE, &shuffled, horizon(CLOSE)),
-            derive(CLOSE, &daily(), horizon(CLOSE))
+            derive(CLOSE, &shuffled, final_read_by(CLOSE)),
+            derive(CLOSE, &full(), final_read_by(CLOSE))
         );
         assert_eq!(
             encode_evidence(CLOSE, &shuffled),
-            encode_evidence(CLOSE, &daily())
+            encode_evidence(CLOSE, &full())
         );
     }
 
@@ -447,17 +616,18 @@ mod tests {
     /// Once decided the answer does not move as `now` advances.
     #[test]
     fn a_decided_outcome_is_stable_as_time_passes() {
-        let cases: [Vec<Read>; 3] = [vec![rug(CLOSE + 10)], daily(), vec![]];
+        let cases: [Vec<Read>; 3] = [confirmed_rug(), full(), vec![]];
         for reads in cases {
-            let first = derive(CLOSE, &reads, horizon(CLOSE));
+            let first = derive(CLOSE, &reads, final_read_by(CLOSE));
             assert!(first.is_some());
             for later in [1, 60, SPAN_SECS, 400 * SPAN_SECS] {
-                assert_eq!(derive(CLOSE, &reads, horizon(CLOSE) + later), first);
+                assert_eq!(derive(CLOSE, &reads, final_read_by(CLOSE) + later), first);
             }
         }
     }
 
-    /// The evidence string is exact and round-trips.
+    /// The evidence string is exact and round-trips; it holds the reads up to
+    /// the end of the grace and no later ones.
     #[test]
     fn evidence_encodes_the_window_reads_and_reads_back() {
         let reads = [
@@ -465,12 +635,16 @@ mod tests {
             calm(CLOSE + 7),
             rug(CLOSE + 9),
             calm(horizon(CLOSE) + 1),
+            calm(final_read_by(CLOSE) + 1),
         ];
         let text = encode_evidence(CLOSE, &reads);
-        assert_eq!(text, "close=1000000;reads=1000007:N,1000009:R");
+        assert_eq!(text, "close=1000000;reads=1000007:N,1000009:R,2209601:N");
         assert_eq!(
             decode_evidence(&text),
-            Some((CLOSE, vec![calm(CLOSE + 7), rug(CLOSE + 9)]))
+            Some((
+                CLOSE,
+                vec![calm(CLOSE + 7), rug(CLOSE + 9), calm(horizon(CLOSE) + 1)]
+            ))
         );
         assert_eq!(encode_evidence(CLOSE, &[]), "close=1000000;reads=");
         assert_eq!(
@@ -504,10 +678,10 @@ mod tests {
     /// A row re-derives to the value it was written with, from the row alone.
     #[test]
     fn rederive_reproduces_the_derived_outcome() {
-        let end = horizon(CLOSE);
+        let end = final_read_by(CLOSE);
         let cases: [(Vec<Read>, i64); 3] = [
-            (vec![rug(CLOSE + 10)], CLOSE + 20),
-            (daily(), end),
+            (confirmed_rug(), CLOSE + 300),
+            (full(), horizon(CLOSE) + 61),
             (vec![], end + 999),
         ];
         for (reads, now) in cases {
@@ -520,19 +694,19 @@ mod tests {
     /// A row it cannot vouch for is `None`, not agreement.
     #[test]
     fn rederive_refuses_what_it_cannot_reproduce() {
-        let evidence = encode_evidence(CLOSE, &[rug(CLOSE + 10)]);
+        let evidence = encode_evidence(CLOSE, &confirmed_rug());
         assert_eq!(
-            rederive(RULE_VERSION, Some(&evidence), CLOSE + 20),
+            rederive(RULE_VERSION, Some(&evidence), CLOSE + 300),
             Some(Outcome::Rugged)
         );
-        assert_eq!(rederive("settle-0", Some(&evidence), CLOSE + 20), None);
-        assert_eq!(rederive(RULE_VERSION, None, CLOSE + 20), None);
-        assert_eq!(rederive(RULE_VERSION, Some("nonsense"), CLOSE + 20), None);
+        assert_eq!(rederive("settle-1", Some(&evidence), CLOSE + 300), None);
+        assert_eq!(rederive(RULE_VERSION, None, CLOSE + 300), None);
+        assert_eq!(rederive(RULE_VERSION, Some("nonsense"), CLOSE + 300), None);
         // A read newer than the row that claims to rest on it.
-        assert_eq!(rederive(RULE_VERSION, Some(&evidence), CLOSE + 9), None);
+        assert_eq!(rederive(RULE_VERSION, Some(&evidence), CLOSE + 199), None);
         // A read exactly as old as the row is fine.
         assert_eq!(
-            rederive(RULE_VERSION, Some(&evidence), CLOSE + 10),
+            rederive(RULE_VERSION, Some(&evidence), CLOSE + 200),
             Some(Outcome::Rugged)
         );
         // Written before the close: nothing to say.
@@ -547,18 +721,45 @@ mod tests {
     fn the_window_is_fourteen_days_of_twenty_four_hours() {
         assert_eq!(SPAN_SECS, 86_400);
         assert_eq!(WINDOW_SECS, 1_209_600);
-        assert_eq!(RULE_VERSION, "settle-1");
+        assert_eq!(HORIZON_GRACE_SECS, 86_400);
+        assert_eq!(RULE_VERSION, "settle-2");
         assert_eq!(horizon(i64::MAX), i64::MAX, "no overflow near the top");
+        assert_eq!(
+            final_read_by(CLOSE),
+            CLOSE + WINDOW_SECS + HORIZON_GRACE_SECS
+        );
     }
 
-    /// A coin is read only while its window is open: not before the close and
-    /// not from the horizon on.
+    /// A coin is read only from its close to the end of the horizon's grace.
     #[test]
     fn a_coin_is_due_only_inside_its_window() {
         assert!(!due(CLOSE, &[], CLOSE - 1));
         assert!(due(CLOSE, &[], CLOSE));
         assert!(due(CLOSE, &[], horizon(CLOSE) - 1));
-        assert!(!due(CLOSE, &[], horizon(CLOSE)));
+        assert!(!due(CLOSE, &[], final_read_by(CLOSE)));
+        assert!(!due(CLOSE, &daily(), final_read_by(CLOSE)));
+    }
+
+    /// The horizon read is owed once every span is covered and no rug was seen,
+    /// until one is taken; a coin that cannot be `Stood` is not read for it.
+    #[test]
+    fn the_horizon_read_is_owed_only_to_a_coin_that_can_still_stand() {
+        let end = horizon(CLOSE);
+        assert!(due(CLOSE, &daily(), end));
+        assert!(due(CLOSE, &daily(), final_read_by(CLOSE) - 1));
+        assert!(!due(CLOSE, &full(), end + 100));
+        // A gap in the history: no read could make it `Stood`.
+        let mut gap = daily();
+        gap.remove(4);
+        assert!(!due(CLOSE, &gap, end));
+        // A rug read in the window bars `Stood` too.
+        let mut rugged_once = daily();
+        rugged_once.push(rug(CLOSE + 100));
+        assert!(!due(CLOSE, &rugged_once, end));
+        // A rug read after the horizon is no horizon read: still owed.
+        let mut after = daily();
+        after.push(rug(end + 5));
+        assert!(due(CLOSE, &after, end + 10));
     }
 
     /// Once the day's span holds a complete read, the day's second run reads
@@ -577,12 +778,18 @@ mod tests {
         ));
     }
 
-    /// A coin that has been seen to rug needs no more reads.
+    /// A coin settled `Rugged` needs no more reads; a lone rug read after a
+    /// calm one is owed its confirmation even inside a covered span.
     #[test]
-    fn a_rugged_coin_is_not_read_again() {
-        assert!(!due(CLOSE, &[rug(CLOSE + 10)], CLOSE + 5 * SPAN_SECS));
+    fn a_rugged_coin_is_not_read_again_and_a_lone_rug_is_confirmed() {
+        assert!(!due(CLOSE, &confirmed_rug(), CLOSE + 5 * SPAN_SECS));
+        let lone = [calm(CLOSE + 10), rug(CLOSE + 100)];
+        assert!(due(CLOSE, &lone, CLOSE + 200));
         // A rug read from before the close is not a rug in the window.
         assert!(due(CLOSE, &[rug(CLOSE - 10)], CLOSE + 5));
+        // Once cleared by a calm read, the span rule applies again.
+        let cleared = [calm(CLOSE + 10), rug(CLOSE + 100), calm(CLOSE + 200)];
+        assert!(!due(CLOSE, &cleared, CLOSE + 300));
     }
 
     /// A span is half open: a read exactly at the next span's start belongs to
@@ -617,19 +824,19 @@ mod tests {
     /// own outcome.
     #[test]
     fn a_row_rederives_only_to_its_own_outcome() {
-        let evidence = encode_evidence(CLOSE, &[rug(CLOSE + 5)]);
-        let good = row(Outcome::Rugged, &evidence, CLOSE + 10);
+        let evidence = encode_evidence(CLOSE, &confirmed_rug());
+        let good = row(Outcome::Rugged, &evidence, CLOSE + 300);
         assert!(good.rederives());
         assert_eq!(good.close(), Some(CLOSE));
-        assert!(!row(Outcome::Stood, &evidence, CLOSE + 10).rederives());
+        assert!(!row(Outcome::Stood, &evidence, CLOSE + 300).rederives());
         assert!(
             !OutcomeRow {
-                rule_version: "settle-0".to_owned(),
+                rule_version: "settle-1".to_owned(),
                 ..good.clone()
             }
             .rederives()
         );
-        let bad = row(Outcome::Rugged, "not evidence", CLOSE + 10);
+        let bad = row(Outcome::Rugged, "not evidence", CLOSE + 300);
         assert!(!bad.rederives());
         assert_eq!(bad.close(), None);
     }
