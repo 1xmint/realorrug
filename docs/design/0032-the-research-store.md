@@ -635,3 +635,77 @@ and "airdrop". "winner" and "win" wait: `History.tsx` still renders the
 retired weekly prize's winner, and "win" is a substring of "window".
 
 **Env** names for the box are in `deploy/README.md`.
+
+## 13. As built (4-5, site pages)
+
+Status: built. The site shows the game over the routes §11 merged. It is free
+to play and pays nothing; every page says so.
+
+**Pages and the routes each calls.**
+
+| Page | Path | Calls |
+| --- | --- | --- |
+| Call a round | `/play` | none; a round is opened by its id, because the server has no round-list route |
+| A round | `/play/:round` | `GET /v1/rounds/{round}`, then `.../forecasts` and `.../outcomes` only if the round says `closed: true`; `GET /auth/me`; `GET /forecast/mine?round=`; `POST /forecast`; `POST /auth/logout` |
+| The board | `/board` | `GET /v1/board` |
+| My calls | `/my-calls/:round?` | `GET /auth/me`, `GET /forecast/mine?round=` |
+| Game privacy | `/game-privacy` | `GET /v1/privacy`, drawn as returned |
+
+`/play` and `/board` are in the header. The other three are reached from them
+and are not in `ROUTES`, like `/check/:address`.
+
+**No API base means the game is off** (rule 7). `VITE_API_BASE` must be `https`
+(or `http` on a loopback host) and is read at call time. With it unset every
+game page says "The forecasting game is not running", draws nothing else and
+makes no request, not even to the site's own origin. There is no sample round,
+board or demo mode anywhere. A server that does not answer, or refuses, is
+drawn as that, never as an empty round or a board of zeroes (rule 8). The API
+still has to be a subdomain of the site's registrable domain (§11), and the
+build has to be given `VITE_API_BASE`; neither is settled by this change.
+
+**Before a round closes.** The round page asks for the forecasts and outcomes
+only after the round says `closed: true`, draws them only if those responses
+say so too, and shows no count, not even a zero, and no wording that implies
+one. The player sees their own call (`/forecast/mine`), never anyone else's.
+
+**After it closes.** A coin shows how it settled and "Calls filed on this coin:
+n". It does not show how they split, in words, a number or a share: that is the
+crowd signal Q2 dropped.
+
+**The board** is Q1 as written: hit and miss counts with n per player, in the
+order the server sent them, under an opaque id. No score, rank, winner or total,
+no sort by hits. An empty board is a sentence with a reason, not an empty table.
+
+**Read age.** Every public figure carries `read_at` (and `newest_at` where the
+server gives one) as an ISO time and an age, and its n. Public reads are cached
+up to 30 seconds and the line says so.
+
+**Sign-in.** "Sign in with X" is a link to `{base}/auth/x/start`; there is no
+other way in. `GET /auth/me` decides the state: 401 is signed out, and any other
+failure is "unknown", which turns the call form off, because a form that posts on
+a guess files a call for the wrong state. Session fetches use
+`credentials: "include"`; public reads use `"omit"`. Every POST carries the CSRF
+token from `/auth/me` as `x-csrf-token`. The body is `{round, chain, token,
+side}` and nothing else, since the server refuses unknown fields. A 409 is shown
+as "the first call stands".
+
+**Copy.** `gameCopyViolations` in `honesty.ts` checks the rendered text of every
+game page. `FORBIDDEN_CLAIMS` alone cannot: it holds "prize", and the pages must
+say "no prize", and "win" is inside "window". So the check is word-bounded, strips
+the one denying phrase "no prize(s)", and adds win/winner/earn/leaderboard and the
+rest as whole words. The privacy notice from the server is shown as returned and
+is not run through it. The static Privacy page no longer says the site has no
+account or cookie; it says browsing collects nothing and points to the game's
+notice.
+
+**Tests** (`site/src/game.test.tsx`), each watched failing with its bug
+re-applied and restored from a backup copy: no base falls back to the same
+origin (6 failures, one per page); an open round asks for the forecasts route
+(1); the fetch drops `credentials: "include"` (4); the POST drops the CSRF
+header (2). A closed round's board with counts, n and read age, an open round
+drawing no other player's call and the copy check are held by the same file.
+
+**Left open.** There is no account-deletion button: `POST /account/delete`
+exists (§11) and the notice describes it, but the packet's scope was sign-in and
+sign-out. Signing in navigates the browser to the API, so a server with sign-in
+closed shows its JSON error page rather than a message on the site.

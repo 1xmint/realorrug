@@ -40,11 +40,15 @@ export function Privacy() {
       <div className="max-w-2xl">
         <Card className="mb-10 border-[var(--color-edge)]">
           <p className="text-[var(--color-text)]">
-            <strong>This site collects nothing about you.</strong> There is no
-            account, no login, no cookie, no analytics and no form that sends
-            anything anywhere. It is a folder of static files. That is a claim
-            about code anybody can read, and the code is{" "}
-            <Out href={SOURCE}>public</Out>.
+            <strong>Browsing this site collects nothing about you.</strong> There
+            is no analytics, the paste box sends nothing anywhere, and the
+            pages set no cookie. They are a folder of static files. That is a
+            claim about code anybody can read, and the code is{" "}
+            <Out href={SOURCE}>public</Out>. The one exception is the
+            forecasting game, which you can play only by signing in with X, and
+            which keeps a few things about you. Those are listed, as the game
+            server returns them, on <Here href="/game-privacy">its own privacy
+            page</Here>.
           </p>
         </Card>
 

@@ -301,3 +301,44 @@ export const FORBIDDEN_CLAIMS: readonly string[] = [
   "redeem",
   "airdrop",
 ];
+
+/**
+ * The words the forecasting game's own copy may not use (design 0032 §13).
+ *
+ * [`FORBIDDEN_CLAIMS`] is a substring list, and it cannot be the whole check
+ * for the game pages: "win" is inside "window", which these pages use for the
+ * call window, and the pages must also say the true thing, that there is **no
+ * prize**. So this is word-bounded, and the one sentence shape that names a
+ * retired word to deny it, "no prize" or "no prizes", is removed before the
+ * check. Nothing else is: "a prize", "prizes for" and the rest still fail.
+ *
+ * Returns what it found, so a failing test names the word. Applied to rendered
+ * text in `game.test.tsx`, never to text the server sent (the privacy notice
+ * is shown as returned).
+ */
+export function gameCopyViolations(text: string): string[] {
+  const denied = text.toLowerCase().replace(/\bno prizes?\b/g, " ");
+  const found: string[] = [];
+  for (const claim of FORBIDDEN_CLAIMS) {
+    if (denied.includes(claim)) found.push(claim);
+  }
+  const words = [
+    "win",
+    "wins",
+    "winner",
+    "winners",
+    "winning",
+    "earn",
+    "earns",
+    "earned",
+    "earnings",
+    "prizes",
+    "holders get",
+    "leaderboard",
+    "jackpot",
+  ];
+  for (const word of words) {
+    if (new RegExp(String.raw`\b${word}\b`).test(denied)) found.push(word);
+  }
+  return found;
+}

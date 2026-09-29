@@ -67,6 +67,12 @@ export const ROUTES = [
   { path: "/how-it-works", label: "How it works", short: "How", inNav: true },
   { path: "/tokenomics", label: "Tokenomics", short: "Token", inNav: true },
   { path: "/about", label: "About", inNav: true },
+  // The forecasting game (design 0032 §13). In the header, not the footer:
+  // routes.test.tsx holds the footer to exactly the three trust pages. The
+  // game's other pages (/play/:round, /my-calls, /game-privacy) are reached
+  // from these and are not in this table, like /check/:address.
+  { path: "/play", label: "Play", inNav: true },
+  { path: "/board", label: "Board", inNav: true },
   // The three trust pages. Footer, not header: a stranger looks for these
   // before deciding whether to believe the rest of the site, and a young
   // domain talking about tokens without any of them reads to a reputation
