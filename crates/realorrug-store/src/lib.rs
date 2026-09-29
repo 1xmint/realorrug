@@ -1076,6 +1076,52 @@ mod tests {
         );
     }
 
+    /// A constraint other than the `x_id` uniqueness is not `XIdTaken`: a
+    /// caller that tells a user "that X account already has a key" when the
+    /// write was refused for another reason sends them down the wrong path.
+    #[test]
+    fn an_identity_refused_for_another_reason_is_not_reported_as_x_id_taken() {
+        let store = store();
+        let p = key(&store);
+        store
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER refuse_identity BEFORE INSERT ON identity \
+                 BEGIN SELECT RAISE(ABORT, 'refused for another reason'); END;",
+            )
+            .expect("trigger");
+        let err = store
+            .upsert_identity(&identity_for(&p, "x-1", "alice"))
+            .expect_err("refused");
+        assert!(
+            matches!(err, StoreError::Constraint(_)),
+            "expected Constraint, got {err:?}"
+        );
+    }
+
+    /// Only a constraint failure becomes `Constraint`; any other `SQLite`
+    /// failure (a busy database, an I/O error) stays `Sqlite`, so a caller
+    /// does not treat "try again" as "your data was refused".
+    #[test]
+    fn a_non_constraint_sqlite_failure_stays_sqlite() {
+        let busy = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            None,
+        );
+        assert!(
+            matches!(constraint_or_sqlite(busy), StoreError::Sqlite(_)),
+            "a busy database is not a constraint"
+        );
+        let constraint = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+            None,
+        );
+        assert!(
+            matches!(constraint_or_sqlite(constraint), StoreError::Constraint(_)),
+            "a constraint failure is one"
+        );
+    }
+
     /// `Unresolved` adds no points and no n -- proved at
     /// `realorrug_contest::calls`, reused here rather than re-tested against
     /// a copy, per design 0032 §6 ("do not copy them").
