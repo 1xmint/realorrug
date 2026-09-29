@@ -42,6 +42,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 /**
@@ -129,6 +130,9 @@ describe("the three trust pages", () => {
   });
 
   it("puts every non-header page in the footer and nothing else", () => {
+    // With the game on, header and footer between them hold every page. With it
+    // off the two game pages are in neither (see game.test.tsx).
+    vi.stubEnv("VITE_GAME_API_BASE", "https://api.example.test");
     expect(footer().map((r) => r.path)).toEqual([...TRUST]);
     expect([...nav(), ...footer()]).toHaveLength(ROUTES.length);
   });

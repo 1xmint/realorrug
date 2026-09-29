@@ -29,12 +29,18 @@ export const CSRF_HEADER = "x-csrf-token";
 /**
  * Where the game's API lives, or `null` when the game is off.
  *
+ * Its own variable, `VITE_GAME_API_BASE`, and never `VITE_API_BASE`: that one
+ * is already set in production for the public reads (`api.ts`) and points at
+ * `radar-serve`, which has no game routes and is cross-site with the page.
+ * Reusing it would switch the game on at the next build. Production leaves
+ * this one unset until the game is meant to be live.
+ *
  * `https` only, with `http` allowed for a loopback host so a local
  * `realorrug-serve` can be tried. A malformed value is off, not repaired: the
  * session cookie is sent to this host, so a guessed host is a leak.
  */
 export function gameBase(): string | null {
-  const configured: unknown = import.meta.env["VITE_API_BASE"];
+  const configured: unknown = import.meta.env["VITE_GAME_API_BASE"];
   if (typeof configured !== "string" || configured.trim() === "") return null;
   let url: URL;
   try {

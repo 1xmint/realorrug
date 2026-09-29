@@ -112,7 +112,7 @@ const CLOSED_ROUND: Canned = {
 };
 
 beforeEach(() => {
-  vi.stubEnv("VITE_API_BASE", API);
+  vi.stubEnv("VITE_GAME_API_BASE", API);
 });
 afterEach(() => {
   cleanup();
@@ -125,7 +125,7 @@ describe("with no API base the game is not running", () => {
 
   for (const path of PAGES) {
     it(`${path} says so, draws nothing else and asks nobody`, async () => {
-      vi.stubEnv("VITE_API_BASE", "");
+      vi.stubEnv("VITE_GAME_API_BASE", "");
       const seen = serve({});
       const { container } = renderAt(path);
       expect(await screen.findByText(/game is not running/i)).toBeTruthy();
@@ -140,11 +140,87 @@ describe("with no API base the game is not running", () => {
   }
 
   it("a base that is not https (and not loopback) is off, not repaired", async () => {
-    vi.stubEnv("VITE_API_BASE", "http://api.example.test");
+    vi.stubEnv("VITE_GAME_API_BASE", "http://api.example.test");
     const seen = serve({});
     renderAt("/board");
     expect(await screen.findByText(/game is not running/i)).toBeTruthy();
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe("the public-read base does not switch the game on", () => {
+  // Production already sets VITE_API_BASE for the public reads (api.ts), and it
+  // points at radar-serve, which has no game routes. Only VITE_GAME_API_BASE
+  // may turn the game on.
+  const OTHER = "https://radar.example.test";
+
+  it("hides Play and Board and draws no game page, and asks nobody", async () => {
+    vi.stubEnv("VITE_GAME_API_BASE", "");
+    vi.stubEnv("VITE_API_BASE", OTHER);
+    const seen = serve({});
+    const { container } = renderAt("/play/r1");
+    expect(await screen.findByText(/game is not running/i)).toBeTruthy();
+    const header = Array.from(container.querySelectorAll("header a")).map((a) => a.getAttribute("href"));
+    expect(header).not.toContain("/play");
+    expect(header).not.toContain("/board");
+    expect(container.querySelector(`a[href$="/auth/x/start"]`)).toBeNull();
+    expect(seen.filter((s) => s.url.origin === OTHER)).toHaveLength(0);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("shows Play and Board in the header when the game base is set", () => {
+    const { container } = renderAt("/");
+    const header = Array.from(container.querySelectorAll("header a")).map((a) => a.getAttribute("href"));
+    expect(header).toContain("/play");
+    expect(header).toContain("/board");
+  });
+});
+
+describe("a closed round whose reads failed", () => {
+  const FORECASTS: Canned = {
+    body: { round: "r1", closed: true, forecasts: [{ ...COIN_A, side: "rug" }], read_at: READ_AT, newest_at: NEWEST_AT },
+  };
+  const OUTCOMES: Canned = {
+    body: { round: "r1", closed: true, outcomes: [], read_at: READ_AT, newest_at: null },
+  };
+
+  it("says the outcomes could not be read on a 429, and never that nothing settled", async () => {
+    const { container } = (serve({
+      ...SIGNED_OUT,
+      "GET /v1/rounds/r1": CLOSED_ROUND,
+      "GET /v1/rounds/r1/forecasts": FORECASTS,
+      "GET /v1/rounds/r1/outcomes": { status: 429, body: { error: "slow down" } },
+    }), renderAt("/play/r1"));
+    expect(await screen.findByText(/how the coins settled could not be read/i)).toBeTruthy();
+    const text = drawn(container);
+    expect(text).toContain("How this coin settled could not be read.");
+    expect(text).not.toContain("Not settled yet");
+    expect(text).not.toContain("Nothing has been settled yet");
+  });
+
+  it("says the count could not be read when the forecasts read fails, rather than dropping it", async () => {
+    const { container } = (serve({
+      ...SIGNED_OUT,
+      "GET /v1/rounds/r1": CLOSED_ROUND,
+      "GET /v1/rounds/r1/forecasts": { status: 500, body: { error: "store down" } },
+      "GET /v1/rounds/r1/outcomes": OUTCOMES,
+    }), renderAt("/play/r1"));
+    expect(await screen.findByText(/how many calls were filed could not be read/i)).toBeTruthy();
+    const text = drawn(container);
+    expect(text).toContain("filed on this coin could not be read");
+    expect(text).not.toContain("Calls filed on this coin");
+  });
+
+  it("shows an error, not a permanent Reading, when the player's own calls cannot be read", async () => {
+    const { container } = (serve({
+      ...SIGNED_IN,
+      "GET /v1/rounds/r1": OPEN_ROUND,
+      "GET /forecast/mine": { status: 500, body: { error: "store down" } },
+    }), renderAt("/play/r1"));
+    expect(await screen.findAllByText(/your own calls could not be read/i)).not.toHaveLength(0);
+    const text = drawn(container);
+    expect(text).not.toContain("Reading your calls");
+    expect(screen.queryByRole("button", { name: /^Call /i })).toBeNull();
   });
 });
 
@@ -555,7 +631,14 @@ describe("my calls and the privacy notice", () => {
 
 describe("the copy", () => {
   it("passes honesty.ts on every page, with and without a server", async () => {
-    const pages = ["/play", "/play/r1", "/board", "/my-calls/r1"];
+    // Each page with something only the server's answer draws, so the check
+    // runs on the server-backed states and not on the notice alone.
+    const pages: [string, string | RegExp | null][] = [
+      ["/play", null],
+      ["/play/r1", COIN_A.token],
+      ["/board", "p-1"],
+      ["/my-calls/r1", "p-mine"],
+    ];
     const withServer = {
       ...SIGNED_IN,
       "GET /v1/rounds/r1": CLOSED_ROUND,
@@ -573,13 +656,13 @@ describe("the copy", () => {
       },
     };
     for (const configured of [true, false]) {
-      for (const path of pages) {
-        vi.stubEnv("VITE_API_BASE", configured ? API : "");
+      for (const [path, marker] of pages) {
+        vi.stubEnv("VITE_GAME_API_BASE", configured ? API : "");
         serve(configured ? withServer : {});
         const { container, unmount } = renderAt(path);
-        await waitFor(() => expect(drawn(container).length).toBeGreaterThan(200));
-        // Let the reads land before reading the text.
-        await new Promise((r) => setTimeout(r, 20));
+        if (!configured) await screen.findByText(/game is not running/i);
+        else if (marker !== null) await screen.findByText(marker);
+        else await waitFor(() => expect(drawn(container).length).toBeGreaterThan(200));
         expect(gameCopyViolations(drawn(container)), `${path} (server: ${configured})`).toEqual([]);
         unmount();
       }

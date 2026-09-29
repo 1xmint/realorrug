@@ -11,6 +11,8 @@
 //! 404 -- it is a page that silently requires operator identity. Here there is
 //! no such seam to get wrong.
 
+import { gameBase } from "./game";
+
 /** One page. */
 export interface Route {
   readonly path: string;
@@ -38,6 +40,12 @@ export interface Route {
    * `routes.test.tsx` fails on it.
    */
   readonly inNav: boolean;
+  /**
+   * Part of the forecasting game. Left out of the header, not just emptied,
+   * while `VITE_GAME_API_BASE` is unset (rule 7): a link to a page that can only
+   * say "not running" is a promise the site is not keeping.
+   */
+  readonly game?: true;
 }
 
 /**
@@ -71,8 +79,8 @@ export const ROUTES = [
   // routes.test.tsx holds the footer to exactly the three trust pages. The
   // game's other pages (/play/:round, /my-calls, /game-privacy) are reached
   // from these and are not in this table, like /check/:address.
-  { path: "/play", label: "Play", inNav: true },
-  { path: "/board", label: "Board", inNav: true },
+  { path: "/play", label: "Play", inNav: true, game: true },
+  { path: "/board", label: "Board", inNav: true, game: true },
   // The three trust pages. Footer, not header: a stranger looks for these
   // before deciding whether to believe the rest of the site, and a young
   // domain talking about tokens without any of them reads to a reputation
@@ -84,7 +92,9 @@ export const ROUTES = [
 
 /** The pages the header shows. */
 export function nav(): readonly Route[] {
-  return ROUTES.filter((r) => r.inNav);
+  const gameOn = gameBase() !== null;
+  const all: readonly Route[] = ROUTES;
+  return all.filter((r) => r.inNav && (gameOn || r.game !== true));
 }
 
 /**

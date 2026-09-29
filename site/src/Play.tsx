@@ -127,7 +127,15 @@ type Public =
 /** `/play/:round`. */
 export function Round() {
   const [, params] = useRoute("/play/:round");
-  const id = decodeURIComponent(params?.round ?? "");
+  // A stray "%" in the address makes decodeURIComponent throw, which would
+  // take the page down. An undecodable id is a malformed id: `roundIdShaped`
+  // refuses it and nothing is requested.
+  let id = "";
+  try {
+    id = decodeURIComponent(params?.round ?? "");
+  } catch {
+    id = "%";
+  }
   useTitle("Round");
   const shaped = roundIdShaped(id);
   const [seen, setSeen] = useState<Public>({ kind: "loading" });
@@ -168,11 +176,17 @@ export function Round() {
     }
     let live = true;
     void fetchMine(id).then((reply) => {
-      if (live) setOwn(reply);
+      if (!live) return;
+      setOwn(reply);
+      // The session ended between /auth/me and this read: say so by
+      // re-reading the session, rather than leaving the coins on "Reading".
+      if (reply.kind === "refused" && reply.status === 401) reload();
     });
     return () => {
       live = false;
     };
+    // `reload` is a fresh function each render; the tick and the session kind
+    // are what should re-run the read.
   }, [id, shaped, session.kind, ownTick]);
 
   return (
@@ -257,7 +271,20 @@ function RoundBody({
   }
   const o = seen.outcomes.kind === "ok" && seen.outcomes.body.closed === true ? seen.outcomes.body : null;
   const f = seen.forecasts.kind === "ok" && seen.forecasts.body.closed === true ? seen.forecasts.body : null;
+  // A read that did not answer is not "nothing settled" and not "n = 0"
+  // (AGENTS rule 8): say it could not be read, and say each coin's line could
+  // not be read, instead of the wording for a settled-nothing round.
+  const unread = { outcomes: o === null, forecasts: f === null };
+  const failure = (what: string, reply: Reply<unknown>) => (
+    <GameProblem
+      what={what}
+      {...(reply.kind === "refused" ? { status: reply.status, error: reply.error } : {})}
+    />
+  );
   return (
+    <>
+      {unread.outcomes && failure("How the coins settled could not be read.", seen.outcomes)}
+      {unread.forecasts && failure("How many calls were filed could not be read.", seen.forecasts)}
     <OpenOrClosed
       id={id}
       info={seen.info}
@@ -265,9 +292,11 @@ function RoundBody({
       own={own}
       outcomes={o}
       forecasts={f}
+      unread={unread}
       onFiled={onFiled}
       onSignedOut={onSignedOut}
     />
+    </>
   );
 }
 
@@ -278,6 +307,7 @@ function OpenOrClosed({
   own,
   outcomes,
   forecasts,
+  unread = { outcomes: false, forecasts: false },
   onFiled,
   onSignedOut,
 }: {
@@ -287,6 +317,8 @@ function OpenOrClosed({
   own: Reply<Mine> | null;
   outcomes: RoundOutcomes | null;
   forecasts: RoundForecasts | null;
+  /** A read that failed, as distinct from one that answered with nothing. */
+  unread?: { outcomes: boolean; forecasts: boolean };
   onFiled: () => void;
   onSignedOut: () => void;
 }) {
@@ -311,6 +343,7 @@ function OpenOrClosed({
       {own?.kind === "refused" && own.status !== 401 && (
         <GameProblem what="Your own calls could not be read." status={own.status} error={own.error} />
       )}
+      {own?.kind === "unreachable" && <GameProblem what="Your own calls could not be read." />}
       <ul className="space-y-4">
         {info.coins.map((coin) => {
           const key = `${coin.chain}/${coin.token}`;
@@ -336,7 +369,15 @@ function OpenOrClosed({
                     info={info}
                     session={session}
                     mine={mineByCoin.get(key) ?? null}
-                    ownKnown={own?.kind === "ok"}
+                    own={
+                      own === null
+                        ? "loading"
+                        : own.kind === "ok"
+                          ? "ok"
+                          : own.kind === "refused" && own.status === 401
+                            ? "loading"
+                            : "failed"
+                    }
                     onFiled={onFiled}
                     onSignedOut={onSignedOut}
                   />
@@ -345,9 +386,15 @@ function OpenOrClosed({
                       <p>
                         {settled
                           ? `Settled ${isoOf(settled.settled_at) ?? ""}: ${settled.reading}`
-                          : "Not settled yet. Nothing is said about how it turned out."}
+                          : unread.outcomes
+                            ? "How this coin settled could not be read."
+                            : "Not settled yet. Nothing is said about how it turned out."}
                       </p>
-                      {filed !== null && <p>Calls filed on this coin: n = {filed}.</p>}
+                      {filed !== null ? (
+                        <p>Calls filed on this coin: n = {filed}.</p>
+                      ) : (
+                        unread.forecasts && <p>How many calls were filed on this coin could not be read.</p>
+                      )}
                     </>
                   )}
                 </div>
@@ -373,7 +420,7 @@ function YourCall({
   info,
   session,
   mine,
-  ownKnown,
+  own,
   onFiled,
   onSignedOut,
 }: {
@@ -382,7 +429,7 @@ function YourCall({
   info: RoundInfo;
   session: Session;
   mine: Mine["forecasts"][number] | null;
-  ownKnown: boolean;
+  own: "loading" | "ok" | "failed";
   onFiled: () => void;
   onSignedOut: () => void;
 }) {
@@ -396,13 +443,14 @@ function YourCall({
   }
   if (session.kind !== "in") {
     if (info.closed) return null;
-    return session.kind === "closed" ? (
-      <p>Sign-in is not open yet, so this coin cannot be called.</p>
-    ) : (
-      <p>Sign in with X to call this coin.</p>
-    );
+    // Only a session that answered "signed out" is invited to sign in; while
+    // it is still being read, or could not be, the bar above says which.
+    if (session.kind === "closed") return <p>Sign-in is not open yet, so this coin cannot be called.</p>;
+    if (session.kind === "out") return <p>Sign in with X to call this coin.</p>;
+    return null;
   }
-  if (!ownKnown) return <p>Reading your calls…</p>;
+  if (own === "failed") return <p>Your calls could not be read, so this coin cannot be called yet.</p>;
+  if (own === "loading") return <p>Reading your calls…</p>;
   if (info.closed) return <p>You did not call this coin.</p>;
   return (
     <CallForm

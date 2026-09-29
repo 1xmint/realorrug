@@ -654,14 +654,23 @@ to play and pays nothing; every page says so.
 `/play` and `/board` are in the header. The other three are reached from them
 and are not in `ROUTES`, like `/check/:address`.
 
-**No API base means the game is off** (rule 7). `VITE_API_BASE` must be `https`
+**No API base means the game is off** (rule 7). `VITE_GAME_API_BASE` must be `https`
 (or `http` on a loopback host) and is read at call time. With it unset every
 game page says "The forecasting game is not running", draws nothing else and
 makes no request, not even to the site's own origin. There is no sample round,
 board or demo mode anywhere. A server that does not answer, or refuses, is
 drawn as that, never as an empty round or a board of zeroes (rule 8). The API
 still has to be a subdomain of the site's registrable domain (§11), and the
-build has to be given `VITE_API_BASE`; neither is settled by this change.
+build has to be given `VITE_GAME_API_BASE`; neither is settled by this change.
+
+The variable is deliberately not `VITE_API_BASE`. That one is already set in
+production for the public reads (`site/src/api.ts`) and points at
+`radar-serve`, which has no game routes and is cross-site with the page
+(`deploy/README.md`, plan 0001). Keying the game on it would switch the game on
+at the next site build. `VITE_GAME_API_BASE` is unset in production until the
+game is meant to be live. While it is unset the header does not link Play or
+Board (`routes.ts`: `nav()` leaves out `game` routes), the game pages still
+answer at their addresses with "not running", and nothing is requested.
 
 **Before a round closes.** The round page asks for the forecasts and outcomes
 only after the round says `closed: true`, draws them only if those responses
@@ -695,8 +704,14 @@ say "no prize", and "win" is inside "window". So the check is word-bounded, stri
 the one denying phrase "no prize(s)", and adds win/winner/earn/leaderboard and the
 rest as whole words. The privacy notice from the server is shown as returned and
 is not run through it. The static Privacy page no longer says the site has no
-account or cookie; it says browsing collects nothing and points to the game's
-notice.
+account or cookie; it says browsing collects nothing, says that signing in to
+the game sets a session cookie on the game server's address (cleared by sign-out
+or deletion) and keeps an identity record, and points to the game's notice.
+
+**Failed reads.** On a closed round, an outcomes or forecasts read that did not
+answer (429, 5xx, no answer) is drawn as "could not be read", per page and per
+coin, never as "Not settled yet" or a missing count (rule 8). A failed read of the
+player's own calls shows an error instead of "Reading your calls…".
 
 **Tests** (`site/src/game.test.tsx`), each watched failing with its bug
 re-applied and restored from a backup copy: no base falls back to the same

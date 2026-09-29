@@ -55,9 +55,13 @@ export function Privacy() {
         <Block title="No cookies, no analytics, no tracking">
           <p>
             The pages set no cookies. They store nothing in your browser — no
-            local storage, no session storage, nothing to clear afterwards.
-            There is no analytics script, no tag manager, no advertising pixel
-            and no session recorder. Nothing measures you.
+            local storage, no session storage, nothing to clear afterwards —
+            with one exception: if you sign in to the forecasting game, the
+            game server sets a session cookie in your browser, on its own
+            address. Signing out, or deleting your account, clears it. There is
+            no analytics script, no tag manager, no advertising pixel and no
+            session recorder. Nothing measures you. What the game keeps is on{" "}
+            <Here href="/game-privacy">its own privacy page</Here>.
           </p>
           <p>
             The typeface is served from this site's own address rather than from
@@ -132,7 +136,10 @@ export function Privacy() {
           <p>
             There is no data to sell, no advertising, no third-party analytics
             provider, no mailing list and no data broker. Nothing is shared with
-            anybody, because nothing is gathered in the first place.
+            anybody, because nothing is gathered in the first place — apart from
+            the game: if you sign in with X, it keeps an identity record
+            (listed on <Here href="/game-privacy">the game's privacy page</Here>),
+            which is not sold or shared either, and which you can delete.
           </p>
         </Block>
 
@@ -156,7 +163,7 @@ export function Privacy() {
         </Block>
 
         <p className="mt-12 text-sm text-[var(--color-faint)]">
-          Last reviewed 2026-09-08, against the source in this repository. This
+          Last reviewed 2026-09-29, against the source in this repository. This
           page changes by a public commit, so every version of it can be read
           alongside every other.
         </p>

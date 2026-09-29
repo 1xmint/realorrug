@@ -27,7 +27,12 @@ export function MyCalls() {
   useTitle("My calls");
   const [, params] = useRoute("/my-calls/:round?");
   const [, go] = useLocation();
-  const id = params?.round === undefined ? "" : decodeURIComponent(params.round);
+  let id = "";
+  try {
+    id = params?.round === undefined ? "" : decodeURIComponent(params.round);
+  } catch {
+    id = "%"; // undecodable: malformed, so nothing is requested
+  }
   const shaped = roundIdShaped(id);
   const { session, reload } = useSession();
   const [reply, setReply] = useState<Reply<Mine> | null>(null);
@@ -59,7 +64,8 @@ export function MyCalls() {
             {deleted && session.kind !== "in" && (
               <p role="status" className="text-[var(--color-text)]">
                 Your account was deleted and you are signed out. Your past calls stay in the public
-                record under a random key that nothing links to you.
+                record under a random key, and nothing in the store links them to your
+                X account.
               </p>
             )}
             <SessionBar session={session} onChange={reload} />

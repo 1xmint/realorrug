@@ -194,8 +194,8 @@ export function SessionBar({
             Sign in with X
           </a>
         )}{" "}
-        to file a call. Signing in reads your handle once; X sign-in is the only
-        way in. If sign-in is closed when you follow the link, the server shows a
+        to file a call. Signing in reads your handle, your X id and your account
+        creation date once; X sign-in is the only way in. If sign-in is closed when you follow the link, the server shows a
         short error and nothing is signed in; come back later.
       </p>
     );
