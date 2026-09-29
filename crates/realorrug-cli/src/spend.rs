@@ -185,8 +185,9 @@ fn lock_ledger(dir: &str) -> Option<File> {
         Ok(()) => Some(file),
         Err(std::fs::TryLockError::WouldBlock) => {
             eprintln!(
-                "another hand-run paid command already holds {path}; only one at a time. If \
-                 you are certain none is actually running, remove that file by hand and retry."
+                "another hand-run paid command is running and holds {path}; wait for it or \
+                 stop it. The lock releases when that process exits; deleting the file does \
+                 not release it. No paid call."
             );
             None
         }

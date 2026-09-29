@@ -421,7 +421,8 @@ fn wants_model(args: &[String]) -> bool {
 /// tested rather than only readable.
 fn model_unavailable_notice(wants_model: bool, has_spend: bool) -> Option<&'static str> {
     (wants_model && !has_spend).then_some(
-        "--model was given but no Spend could be opened (prices are not fully configured); \
+        "--model was given but no Spend could be opened (see the line above: prices or \
+         the monthly slice unset, or the ledger locked or unwritable); \
          every case below falls back to the template",
     )
 }

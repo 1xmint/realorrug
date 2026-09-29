@@ -316,10 +316,12 @@ fn dollars_var(get: &impl Fn(&str) -> Option<String>, name: &str) -> Option<Micr
 /// fixed share of it. `REALORRUG_CLI_MONTHLY_USD` and
 /// `REALORRUG_SERVE_MONTHLY_USD` (design 0032's name for serve, which does
 /// not read it yet) are each read the same way `monthly_allowance_from` reads
-/// its own vars; a slice that is unset or will not parse counts as **zero
-/// taken from the daemon**, not as an error here, because the caller that
-/// slice belongs to closes itself the same way (rule 7) and so never spends
-/// it anyway.
+/// its own vars. A slice that is **unset** counts as zero taken from the
+/// daemon, because the caller that slice belongs to closes itself the same
+/// way (rule 7) and so never spends it. A slice that is **set but will not
+/// parse** closes the daemon (`None`) rather than reading as zero: a typo
+/// in a spending slice must not hand its share back to the daemon
+/// (9-27-0026c finding 4).
 ///
 /// `None` -- and so [`Budget::CLOSED`] at the call site -- when the slices
 /// taken together are at least what was left: never negative, and never
