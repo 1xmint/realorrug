@@ -1409,6 +1409,25 @@ mod tests {
         );
     }
 
+    /// A path no other call anywhere in this file can land on.
+    ///
+    /// Process id alone named these fixtures before, and every test in this
+    /// binary shares one process id: run in parallel (the default), two
+    /// tests calling `funded()` raced on the same file, one's `settle` or
+    /// `release` overwriting the other's `authorize` mid-flight. `Spend::
+    /// authorize/settle/release` now save on every call (crash-safety for
+    /// the daemon), which turned a once-harmless shared path into a data
+    /// race the moment more than one test used it. A per-call counter is
+    /// unique even when the pid is not.
+    fn unique_ledger_path(prefix: &str) -> String {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir()
+            .join(format!("{prefix}-{}-{n}", std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
     /// A meter with no budget, for the close paths that never scan.
     ///
     /// `Budget::CLOSED` refuses every call, which is right here: these tests
@@ -1426,10 +1445,7 @@ mod tests {
                 model_call: realorrug_types::MicroUsd(2_000),
                 user_read: realorrug_types::MicroUsd(20_000),
             },
-            std::env::temp_dir()
-                .join(format!("realorrug-contest-meter-{}", std::process::id()))
-                .to_string_lossy()
-                .into_owned(),
+            unique_ledger_path("realorrug-contest-meter"),
             1,
         )
     }
@@ -2388,10 +2404,7 @@ mod tests {
                 model_call: realorrug_types::MicroUsd(2_000),
                 user_read: realorrug_types::MicroUsd(20_000),
             },
-            std::env::temp_dir()
-                .join(format!("realorrug-contest-funded-{}", std::process::id()))
-                .to_string_lossy()
-                .into_owned(),
+            unique_ledger_path("realorrug-contest-funded"),
             1,
         )
     }
