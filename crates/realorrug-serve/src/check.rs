@@ -315,7 +315,17 @@ pub(crate) fn client_ip(
     headers: &HeaderMap,
     connect_info: Option<ConnectInfo<std::net::SocketAddr>>,
 ) -> String {
-    if state.trust_cloudflare
+    client_ip_from(state.trust_cloudflare, headers, connect_info)
+}
+
+/// [`client_ip`] with the trust decision passed in, so the sign-in route
+/// (`auth.rs`) applies the same rule without holding a `CheckState`.
+pub(crate) fn client_ip_from(
+    trust_cloudflare: bool,
+    headers: &HeaderMap,
+    connect_info: Option<ConnectInfo<std::net::SocketAddr>>,
+) -> String {
+    if trust_cloudflare
         && let Some(v) = headers.get("CF-Connecting-IP")
         && let Ok(v) = v.to_str()
         && !v.trim().is_empty()

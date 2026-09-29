@@ -231,6 +231,23 @@ impl Store {
         identity::player_for_x_id(&self.conn, x_id)
     }
 
+    /// The player a session belongs to, with the time the session was issued
+    /// (the identity row's `signed_in_at`), or `None` for a hash no identity
+    /// holds. The caller decides expiry from the issue time and its own clock.
+    ///
+    /// An identity holds one `session_hash`, so a new sign-in replaces the old
+    /// session, and a deleted identity takes its session with it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Sqlite`] on a read failure.
+    pub fn player_for_session_hash(
+        &self,
+        session_hash: &str,
+    ) -> Result<Option<(PlayerKey, i64)>, StoreError> {
+        identity::player_for_session_hash(&self.conn, session_hash)
+    }
+
     /// Runs `f` inside `BEGIN IMMEDIATE` ... `COMMIT`, rolling back on error.
     ///
     /// `IMMEDIATE` takes SQLite's write lock at the start, so the tail read in
@@ -1350,6 +1367,40 @@ mod tests {
         assert!(
             err.to_string().contains("UNIQUE"),
             "expected a unique-constraint failure, got {err}"
+        );
+    }
+
+    /// A session maps to its player through the identity table alone, a new
+    /// sign-in replaces the old session, and deleting the identity ends it.
+    #[test]
+    fn a_session_hash_finds_its_player_and_dies_with_the_identity() {
+        let store = store();
+        let p = key(&store);
+        let mut id = identity_for(&p, "x-1", "alice");
+        id.session_hash = Some("hash-1".to_owned());
+        id.signed_in_at = 500;
+        store.upsert_identity(&id).expect("identity");
+        assert_eq!(
+            store.player_for_session_hash("hash-1").expect("lookup"),
+            Some((p.clone(), 500))
+        );
+        assert_eq!(
+            store.player_for_session_hash("other").expect("lookup"),
+            None
+        );
+
+        id.session_hash = Some("hash-2".to_owned());
+        store.upsert_identity(&id).expect("a second sign-in");
+        assert_eq!(
+            store.player_for_session_hash("hash-1").expect("lookup"),
+            None,
+            "one identity holds one session; the new sign-in replaced the old"
+        );
+
+        store.delete_identity(&p).expect("delete");
+        assert_eq!(
+            store.player_for_session_hash("hash-2").expect("lookup"),
+            None
         );
     }
 }

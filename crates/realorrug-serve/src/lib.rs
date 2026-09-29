@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The public site's server.
 //!
-//! Five documents and a health check, each read from a published file. No
-//! store, no identity, no operator routes: the reply log's full fact sheets are
-//! an operator's working material and stay on the box, so nothing here serves
-//! them.
+//! Five documents and a health check, each read from a published file, plus
+//! the sign-in and account routes of `auth.rs`, which exist only when a store
+//! path and an X app are configured. No operator routes: the reply log's full
+//! fact sheets are an operator's working material and stay on the box, so
+//! nothing here serves them.
 
+mod auth;
 pub mod card;
 pub mod check;
 pub mod facts;
@@ -41,7 +43,8 @@ pub fn app() -> Router {
         .route("/v1/public/hunters", get(public::hunters))
         .route("/v1/public/recent", get(public::recent))
         .merge(check::router(check_state.clone()))
-        .merge(card::router(check_state));
+        .merge(card::router(check_state))
+        .merge(auth::router(Arc::new(auth::AuthState::from_env())));
     // ADR 0036 decision 4: no `REALORRUG_X402_PAY_TO`, no route at all. A
     // request under `/v1/facts` on an unconfigured box then 404s the
     // ordinary axum way, the same as any other unrouted path.
