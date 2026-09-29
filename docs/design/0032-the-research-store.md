@@ -300,8 +300,7 @@ named directly in plan 0002's 2026-09-25 decision log entry:
   depends on that job actually running, so its live install is Josh's gate
   the same way the timer's own PR already says.
 - **The legal packet, extended.** Before launch, design 0030 gains §8, "the
-  forecasting game and personal data": free entry and no prize; whether the
-  crowd signal (design 0028 §9; §9 below) reads as advice; retention of the personal data
+  forecasting game and personal data": free entry and no prize; retention of the personal data
   §4's identity table holds. The legal and tax review (row 9-26-0022,
   research 0066) answers those questions the same way it answers design
   0030's other sections (ADR 0042).
@@ -311,11 +310,12 @@ named directly in plan 0002's 2026-09-25 decision log entry:
 - **Q1 — decided (Josh, 2026-09-27).** While G1 (the odds-by-level replay,
   design 0028 §10) is unmeasured, the board shows hit/miss counts with
   sample sizes only. It moves to odds scoring once G1's replay lands.
-- **Q2 — open.** The crowd signal (§9): weighted by record, or unweighted?
-  **Recommendation:** an unweighted split of eligible accounts (the account-
-  age rule plus 10 settled calls), shown after close with n, never on the
-  project's own token until the legal review clears it. Josh asked on
-  2026-09-27 what the signal means before choosing; 4-7 waits on his answer.
+- **Q2 — decided (Josh, 2026-09-28): no crowd signal.** The audit asked
+  whether the crowd signal (design 0028 §9, "62% of players called this a
+  rug") should be weighted by record. Josh dropped it instead: an aggregate
+  of players' calls is noise, fake accounts can tilt it, and shown beside a
+  live, tradeable token it is the part of phase 4 most likely to read as
+  investment advice. Step 4-7 is removed (§8); design 0028's G8 is dropped.
 - **Q3 — decided (Josh, 2026-09-27).** $REALORRUG is playable in the daily
   five exactly like any other token, settlement posts included. The audit
   recommended withholding settlement posts about it; Josh chose no exception,
@@ -333,7 +333,8 @@ carried before the audit:
 3. **4-4 settlement.**
 4. **4-5 site pages.**
 5. **4-6 research assistant.**
-6. **4-7 crowd signal** (design 0028 §9).
+
+There is no 4-7: the crowd signal was dropped (Josh, 2026-09-28; Q2 in §7).
 
 **Correction.** The table this replaced said "design 0028's daily five
 already existing (G1–G3, done)". G1, the table of odds by level, is not
@@ -373,7 +374,7 @@ row's, and answers nothing for anyone else's key. This relaxes §2's earlier
 contradiction.
 
 **Sample size.** §5's "every record carries its sample size" means
-reputation and crowd-signal figures, which are aggregates over many rows. A
+reputation figures, which are aggregates over many rows. A
 single forecast has no n of its own — the sample-size discipline applies to
 what is computed from forecasts, not to the forecast row itself.
 
@@ -384,7 +385,7 @@ origin" (AGENTS §3 rule 7). OAuth 2 with PKCE plus `state`. A CSRF token on
 every POST. Prefer an `api.` subdomain of the site's own domain over a
 separate domain, so cookies scope correctly.
 
-**Account age.** The account-age eligibility rule (Q2's recommendation)
+**Account age.** The account-age eligibility rule (design 0028 §1)
 needs `user.fields=created_at` on the `/2/users/me` read, stored in the
 identity table (§4) alongside the handle and X id.
 
@@ -397,9 +398,3 @@ step must make.
 horizon — not hourly. Hourly reads across roughly 70 coins run to about
 100M compute units a month, against the free plan's 30M
 (**estimate — verify at 4-4** before committing to a cadence in code).
-
-**Crowd signal wording (design 0028 §9; §8's 4-7 above).** Labelled "what
-signed-in players called, not advice." States its own moment and sample
-size, the same discipline §4's cache-age rule already requires. Never
-enters the bot's fact sheet or a reply (AGENTS §3 rule 2), and never takes
-"will" form (AGENTS §3 rule 5).

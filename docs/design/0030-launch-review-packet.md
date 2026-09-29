@@ -98,11 +98,6 @@ Questions only; the review answers them.
 - Free entry and no prize (ADR 0038 decision 5): does a free calling game
   with no prize, no holder benefit and no redeemable reputation create any
   obligation this packet's other sections do not already cover?
-- The crowd signal (design 0028 §9; design 0032 §9) is labelled "what
-  signed-in players called, not advice." _Question: does publishing an
-  aggregate of players' real-or-rug calls, with no weighting toward the
-  bot's own verdict, read as investment advice under any reading counsel or
-  the review would apply to §2's investment-contract question?_
 - Retention of personal data: design 0032 §4's identity table holds the X
   handle, id, account creation date and a session hash, separately from the
   append-only chain rows, deleted on account deletion. _Question: does this
