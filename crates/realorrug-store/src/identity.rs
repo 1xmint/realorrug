@@ -7,6 +7,29 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::StoreError;
 
+/// The random key chain rows name a player by (design 0032 §4), never an X id.
+///
+/// Only the store builds one: [`Store::new_player_key`](crate::Store::new_player_key)
+/// (128 bits from SQLite's `randomblob`), or reading one back from an identity
+/// row. The field is private and there is no `From<String>`, so a write method
+/// that takes `&PlayerKey` cannot be handed an X id, a handle or a
+/// guessable counter by mistake.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PlayerKey(String);
+
+impl PlayerKey {
+    /// Wraps a key the store itself produced or read from its own table.
+    pub(crate) const fn from_stored(key: String) -> Self {
+        Self(key)
+    }
+
+    /// The key as text, for a read that takes one.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A player's sign-in identity.
 ///
 /// Never referenced from a chain row: a forecast, an evidence submission or
@@ -16,8 +39,9 @@ use crate::StoreError;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
     /// The random key chain rows name this player by.
-    pub player_key: String,
-    /// The X user id.
+    pub player_key: PlayerKey,
+    /// The X user id. Unique: one X account has one player key, so a
+    /// returning user keeps their record ([`Store::player_for_x_id`](crate::Store::player_for_x_id)).
     pub x_id: String,
     /// The X handle.
     pub handle: String,
@@ -34,40 +58,48 @@ pub struct Identity {
 
 pub(crate) fn upsert(conn: &Connection, identity: &Identity) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO identity (player_key, x_id, handle, account_created_at, session_hash, \
-         signed_in_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-         ON CONFLICT(player_key) DO UPDATE SET \
-         x_id = excluded.x_id, handle = excluded.handle, \
-         account_created_at = excluded.account_created_at, \
-         session_hash = excluded.session_hash, signed_in_at = excluded.signed_in_at",
+        "INSERT INTO identity (player_key, x_id, handle, account_created_at, session_hash,          signed_in_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)          ON CONFLICT(player_key) DO UPDATE SET          x_id = excluded.x_id, handle = excluded.handle,          account_created_at = excluded.account_created_at,          session_hash = excluded.session_hash, signed_in_at = excluded.signed_in_at",
         params![
-            identity.player_key,
+            identity.player_key.as_str(),
             identity.x_id,
             identity.handle,
             identity.account_created_at,
             identity.session_hash,
             identity.signed_in_at,
         ],
-    )?;
+    )
+    .map_err(|e| match &e {
+        // `x_id` is UNIQUE, and `ON CONFLICT(player_key)` does not cover it:
+        // a second key for an X account that already has one is refused, so
+        // one person cannot split their record across two keys.
+        rusqlite::Error::SqliteFailure(f, _)
+            if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+        {
+            StoreError::XIdTaken
+        }
+        _ => crate::constraint_or_sqlite(e),
+    })?;
     Ok(())
 }
 
-pub(crate) fn delete(conn: &Connection, player_key: &str) -> Result<(), StoreError> {
+pub(crate) fn delete(conn: &Connection, player_key: &PlayerKey) -> Result<(), StoreError> {
     conn.execute(
         "DELETE FROM identity WHERE player_key = ?1",
-        params![player_key],
+        params![player_key.as_str()],
     )?;
     Ok(())
 }
 
-pub(crate) fn read(conn: &Connection, player_key: &str) -> Result<Option<Identity>, StoreError> {
+pub(crate) fn read(
+    conn: &Connection,
+    player_key: &PlayerKey,
+) -> Result<Option<Identity>, StoreError> {
     conn.query_row(
-        "SELECT player_key, x_id, handle, account_created_at, session_hash, signed_in_at \
-         FROM identity WHERE player_key = ?1",
-        params![player_key],
+        "SELECT player_key, x_id, handle, account_created_at, session_hash, signed_in_at          FROM identity WHERE player_key = ?1",
+        params![player_key.as_str()],
         |r| {
             Ok(Identity {
-                player_key: r.get(0)?,
+                player_key: PlayerKey::from_stored(r.get(0)?),
                 x_id: r.get(1)?,
                 handle: r.get(2)?,
                 account_created_at: r.get(3)?,
@@ -75,6 +107,19 @@ pub(crate) fn read(conn: &Connection, player_key: &str) -> Result<Option<Identit
                 signed_in_at: r.get(5)?,
             })
         },
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
+
+pub(crate) fn player_for_x_id(
+    conn: &Connection,
+    x_id: &str,
+) -> Result<Option<PlayerKey>, StoreError> {
+    conn.query_row(
+        "SELECT player_key FROM identity WHERE x_id = ?1",
+        params![x_id],
+        |r| Ok(PlayerKey::from_stored(r.get(0)?)),
     )
     .optional()
     .map_err(StoreError::from)

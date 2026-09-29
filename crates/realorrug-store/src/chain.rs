@@ -37,6 +37,18 @@ pub fn digest(previous: &str, fields: &[&str]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+/// The digest field for a row's player key: a presence marker, then the key.
+///
+/// `"0"` for no player, `"1"` followed by the key otherwise. Hashing
+/// `unwrap_or("")` instead would give a NULL key and an empty-string key the
+/// same digest, so an edit from one to the other would verify as intact.
+/// Both writers (`Store::append`) and the reader (`row::verify`) call this
+/// one function, so the two cannot disagree.
+#[must_use]
+pub fn player_field(player_key: Option<&str>) -> String {
+    player_key.map_or_else(|| "0".to_owned(), |key| format!("1{key}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -49,6 +61,13 @@ mod tests {
         let a = digest(GENESIS, &["round-1", "coin-a", "player-1"]);
         let b = digest(GENESIS, &["round-1", "coin-a", "player-2"]);
         assert_ne!(a, b);
+    }
+
+    /// NULL and the empty string are different players-or-none, and must hash
+    /// differently.
+    #[test]
+    fn no_player_and_an_empty_player_key_differ() {
+        assert_ne!(player_field(None), player_field(Some("")));
     }
 
     /// Splitting bytes across a field boundary must not collide with moving

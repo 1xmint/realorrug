@@ -135,7 +135,7 @@ pub enum Outcome {
 /// `score::rank` trusts the week it is given rather than re-deriving it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettledCall {
-    /// The player: the X user id.
+    /// The player: the player key (design 0032 §4), never the X id.
     pub player: String,
     /// The coin the call was about.
     pub coin_id: String,
@@ -266,7 +266,7 @@ pub const MIN_DISTINCT_CREATORS: u32 = 10;
 /// One player's record over their settled calls.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlayerRecord {
-    /// The X user id.
+    /// The player key (design 0032 §4), never the X id.
     pub player: String,
     /// Sum of points over every settled call, in basis points.
     pub total: i64,

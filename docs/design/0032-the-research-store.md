@@ -416,19 +416,52 @@ submission order regardless of kind. §3 names the chain as one property of
 the store, not one per record kind, so one chain across all four kinds is
 what "each row carries the previous row's digest" means literally; splitting
 it into four independent chains would have been a design choice this
-section does not ask for. `chain::digest` is the same primitive
-`realorrug-journal` chains its own events with (blake3, length-prefixed
-fields so a byte cannot shift across a field boundary and hash the same).
-`Store::verify` walks it and reports the first broken `seq`; it has no
-`Torn` case the way `realorrug_journal::Verified` does, because a single
-`INSERT` either lands or does not — there is no "complete row with no
+section does not ask for. Only the hash function, blake3, is shared with
+`realorrug-journal`; the field encoding is this crate's own (each field
+length-prefixed so a byte cannot shift across a field boundary and hash the
+same, and a player key hashed with a presence marker, `0` for none and `1`
+followed by the key, so a NULL and an empty string cannot hash alike).
+`Store::verify` walks the chain and reports the first broken `seq`; it has no
+`Torn` case the way `realorrug_journal::Verified` does, because a write is
+one transaction that lands or does not — there is no "complete row with no
 terminator" shape to distinguish from a broken one.
+
+**Departures from §2 and §3, on purpose.** A forecast row carries no rule
+version, no horizon and no evidence references of its own (the close time is
+in its payload; the rule version and the evidence reference belong to the
+outcome row, which is where they are known). And a correction is not a new
+row that references the one it corrects: the store picks the authoritative
+outcome as the latest outcome row for the round and coin (`Store::outcome`),
+because a reference from the correction to the corrected row would be one
+more field for a caller to get wrong for no reader that needs it yet. §2 and
+§3 are the aim; this is what 4-2 built.
+
+**Append is one locked unit.** Every write reads the tail and inserts inside
+one `BEGIN IMMEDIATE` … `COMMIT` (rolled back on error), so a second
+connection on the same file waits or gets `SQLITE_BUSY` instead of reading
+the same tail and chaining a second row to it. Two autocommit statements
+would not do it, however many connections there are. A unique index on
+`previous_hash` (`ux_chain_link`) is the structural backstop: the first row
+chains from the fixed genesis constant and only one row can hold it, so two
+rows can never share a predecessor. Append-only is also enforced in the
+schema: `BEFORE UPDATE` and `BEFORE DELETE` triggers on `rows` abort with
+"rows are append-only". They are not tamper-proofing — a host attacker with
+the file drops them — but a raw statement on an open connection is refused.
+
+**What `verify` proves and does not.** `Verified::Intact` carries `rows` and
+`head`, the last row's hash. A deleted middle row, a swapped `seq` and an
+edited field each break the chain at a named row. A truncated tail does not:
+the shorter chain is valid. It is detected only against a head recorded
+earlier where the writer cannot reach it, which is why `head` is returned.
 
 **The unique-once-stands rule** is a partial SQLite index,
 `ux_forecast_once` on `(round, chain, token, player_key) WHERE kind =
 'forecast'`, so it costs outcome/evidence/discussion rows nothing.
-`Store::submit_forecast` maps the resulting `SQLITE_CONSTRAINT` into
-`StoreError::Duplicate`; `realorrug-serve` maps that to `409` in 4-3.
+`Store::submit_forecast` checks the rule itself under the write lock and
+returns `StoreError::Duplicate`; `realorrug-serve` maps that to `409` in 4-3.
+Any other constraint failure is `StoreError::Constraint`, never `Duplicate`,
+so a `409` always means "you already called this." A stored row whose kind
+and payload disagree is `StoreError::Corrupt`, not a panic.
 
 **Visibility (§9's "Authors see their own call").** `Store::forecast` takes
 both the row's own player and the requesting player and answers `None` for
@@ -448,6 +481,15 @@ outcome, `Unresolved` is excluded from all three counts, and `n = hits +
 misses`. It is what 4-3's board serves, not `score_calls`: a count carries
 no value, where `score_calls` produces points and a winner (§9).
 
+**The player key.** `PlayerKey` is a newtype only the store can build:
+`Store::new_player_key` (128 bits from SQLite's `randomblob`, 32 lower-case
+hex characters) or a read of an identity row. Every write method takes
+`&PlayerKey`, so an X id or a counter cannot be passed by mistake. `x_id` is
+`UNIQUE` on `identity` (a second key for the same X account is
+`StoreError::XIdTaken`), and `Store::player_for_x_id` returns the existing key
+so a returning user keeps one record. `calls::SettledCall::player` and
+`PlayerRecord::player` are this key, never the X id.
+
 **Identity (§4).** A second table, `identity`, keyed by `player_key`, holds
 the X id, handle, `account_created_at` and session hash. No chain row has a
 column for any of them — not "redacted on delete," never present to begin
@@ -464,8 +506,10 @@ gained `Unresolved` there (§9), excluded from `points`, a player's
 `eligibility` sum anything, rather than teaching `points` to score it. The
 store's own `Store::public_wording` is the §2/A4 mapping
 (`Rugged`→"rug observed within the window", `Stood`→"no qualifying rug
-observed", `Unresolved`→"unresolved") — the only place either internal name
-is allowed to reach a reply.
+observed", `Unresolved`→"unresolved"). That `Store::public_wording` is the
+only place either internal name reaches a reply is a convention 4-3 must
+keep, not something the types enforce: `Outcome` derives `Serialize`, so a
+handler that serialises one directly would print `Rugged` or `Stood`.
 
 `realorrug-store` is added to `repo-conformance`'s `MODEL_SIDE` list
 (§9's requirement) in the same commit.

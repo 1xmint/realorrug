@@ -24,10 +24,13 @@
 //!
 //! # Append-only, hash-chained (§3)
 //!
-//! Every row carries the previous row's digest ([`chain::digest`]), the same
-//! primitive `realorrug-journal` chains its own events with. A row is never
-//! updated or deleted; a correction is a new row. [`Store::verify`] walks the
-//! chain and reports the first break.
+//! Every row carries the previous row's digest ([`chain::digest`]), and the
+//! hash function is the one `realorrug-journal` uses (blake3); the field
+//! encoding is this crate's own. A row is never updated or deleted -- no path
+//! here does it and triggers refuse it -- and a correction is a new row.
+//! Every append reads the tail and inserts inside one `BEGIN IMMEDIATE`, and a
+//! unique index on the previous hash refuses a fork. [`Store::verify`] walks
+//! the chain and reports the first break, and the head to record.
 //!
 //! # Identity is separate (§4)
 //!
@@ -41,7 +44,7 @@ mod chain;
 mod identity;
 mod row;
 
-pub use identity::Identity;
+pub use identity::{Identity, PlayerKey};
 pub use row::{ForecastView, OutcomeView, RowPayload, Verified};
 
 use std::path::Path;
@@ -79,6 +82,35 @@ pub enum StoreError {
     /// `409 Conflict`.
     #[error("a forecast for this round, coin and player already stands")]
     Duplicate,
+    /// A second identity for an X account that already has one. One X id has
+    /// one player key (design 0032 §4); look it up with
+    /// [`Store::player_for_x_id`] instead of minting another.
+    #[error("an identity for this X account already exists")]
+    XIdTaken,
+    /// A database constraint other than the one-forecast rule refused the
+    /// write. Not `Duplicate`: a caller that maps it to `409 Conflict` would
+    /// tell a player their call was a repeat when the chain refused it for
+    /// another reason.
+    #[error("store: a constraint refused the write: {0}")]
+    Constraint(String),
+    /// A stored row is not what its own kind says it is. The chain check
+    /// ([`Store::verify`]) is the tool that names where; this refuses to read
+    /// on rather than guess.
+    #[error("store: a stored row is corrupt: {0}")]
+    Corrupt(String),
+}
+
+/// A constraint failure becomes [`StoreError::Constraint`]; anything else stays
+/// [`StoreError::Sqlite`].
+pub(crate) fn constraint_or_sqlite(e: rusqlite::Error) -> StoreError {
+    match &e {
+        rusqlite::Error::SqliteFailure(f, _)
+            if f.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            StoreError::Constraint(e.to_string())
+        }
+        _ => StoreError::Sqlite(e),
+    }
 }
 
 /// The research store: one SQLite [`Connection`] behind `&self`, because
@@ -87,6 +119,10 @@ pub enum StoreError {
 /// same reason).
 pub struct Store {
     conn: Connection,
+    /// Test-only: runs once between an append's tail read and its INSERT, so
+    /// a test can put a second connection in exactly the window a race would.
+    #[cfg(test)]
+    between_tail_and_insert: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
 impl Store {
@@ -134,25 +170,92 @@ impl Store {
              CREATE UNIQUE INDEX IF NOT EXISTS ux_forecast_once
                 ON rows(round, chain, token, player_key)
                 WHERE kind = 'forecast';
+             -- One row per predecessor: two rows cannot both extend the same
+             -- tail, so a fork is refused by the schema even if a writer skips
+             -- the lock. The first row chains from the fixed genesis constant,
+             -- and only one row can hold it, which is right.
+             CREATE UNIQUE INDEX IF NOT EXISTS ux_chain_link ON rows(previous_hash);
+             -- Append-only is enforced here as well as by having no update
+             -- path in this crate: a raw UPDATE or DELETE on a file this
+             -- process has open is refused. The tamper tests DROP these first,
+             -- the way a host attacker with file access would have to.
+             CREATE TRIGGER IF NOT EXISTS rows_no_update BEFORE UPDATE ON rows
+             BEGIN SELECT RAISE(ABORT, 'rows are append-only'); END;
+             CREATE TRIGGER IF NOT EXISTS rows_no_delete BEFORE DELETE ON rows
+             BEGIN SELECT RAISE(ABORT, 'rows are append-only'); END;
              CREATE TABLE IF NOT EXISTS identity (
                 player_key         TEXT    PRIMARY KEY,
-                x_id                TEXT    NOT NULL,
+                x_id                TEXT    NOT NULL UNIQUE,
                 handle              TEXT    NOT NULL,
                 account_created_at  INTEGER,
                 session_hash        TEXT,
                 signed_in_at        INTEGER NOT NULL
              );",
         )?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            #[cfg(test)]
+            between_tail_and_insert: std::cell::RefCell::new(None),
+        })
+    }
+
+    /// A fresh player key: 128 bits from SQLite's `randomblob`, lower-case
+    /// hex, 32 characters. SQLite seeds its generator from the operating
+    /// system, so the key is not derived from an X id, a counter or the
+    /// clock (design 0032 §4). It is not stored until an identity row or a
+    /// chain row uses it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Sqlite`] if the query fails.
+    pub fn new_player_key(&self) -> Result<PlayerKey, StoreError> {
+        let key: String = self
+            .conn
+            .query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))?;
+        Ok(PlayerKey::from_stored(key))
+    }
+
+    /// The player key already on file for an X account, so a returning user
+    /// keeps one key (and one record) instead of getting a new one each
+    /// sign-in.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Sqlite`] on a read failure.
+    pub fn player_for_x_id(&self, x_id: &str) -> Result<Option<PlayerKey>, StoreError> {
+        identity::player_for_x_id(&self.conn, x_id)
+    }
+
+    /// Runs `f` inside `BEGIN IMMEDIATE` ... `COMMIT`, rolling back on error.
+    ///
+    /// `IMMEDIATE` takes SQLite's write lock at the start, so the tail read in
+    /// `f` and its INSERT are one unit: a second connection on the same file
+    /// waits (or gets `SQLITE_BUSY`) instead of reading the same tail and
+    /// chaining a second row to it. Two autocommit statements do not give
+    /// that, whatever the connection count.
+    fn with_write<T>(&self, f: impl FnOnce() -> Result<T, StoreError>) -> Result<T, StoreError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        match f() {
+            Ok(value) => match self.conn.execute_batch("COMMIT") {
+                Ok(()) => Ok(value),
+                Err(e) => {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    Err(e.into())
+                }
+            },
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     /// The digest of the last row written, or [`chain::GENESIS`] if the
     /// store is empty. Read fresh on every write rather than cached on
-    /// `self`: design 0032 §3 names `realorrug-serve` as the store's only
-    /// writer, but nothing in this crate needs to assume that to stay
-    /// correct -- a second process appending between two calls is still
-    /// chained correctly because this always reads the tail it is about to
-    /// extend.
+    /// `self`, and only ever inside [`Store::with_write`]: the read and the
+    /// INSERT that extends it must be one locked unit, or a second connection
+    /// could read the same tail in between. Reading fresh is necessary but
+    /// not sufficient; the lock is what makes it correct.
     fn tail(&self) -> Result<String, StoreError> {
         Ok(self
             .conn
@@ -163,8 +266,10 @@ impl Store {
             .unwrap_or_else(|| chain::GENESIS.to_owned()))
     }
 
-    /// Appends one row to the chain. Every public write method funnels
-    /// through here, so the chain's shape cannot drift between them.
+    /// Appends one row to the chain in its own write transaction. Every
+    /// public write method except `submit_forecast` funnels through here, and
+    /// that one uses [`Store::append_in_write`] inside a transaction of its
+    /// own, so the chain's shape cannot drift between them.
     #[expect(
         clippy::too_many_arguments,
         reason = "one column per argument, the row's own fields"
@@ -175,12 +280,37 @@ impl Store {
         round: &str,
         chain_name: &str,
         token: &str,
-        player_key: Option<&str>,
+        player_key: Option<&PlayerKey>,
+        at: i64,
+        payload: &RowPayload,
+    ) -> Result<(), StoreError> {
+        self.with_write(|| {
+            self.append_in_write(kind, round, chain_name, token, player_key, at, payload)
+        })
+    }
+
+    /// The tail read and the INSERT. Call only inside [`Store::with_write`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one column per argument, the row's own fields"
+    )]
+    fn append_in_write(
+        &self,
+        kind: &str,
+        round: &str,
+        chain_name: &str,
+        token: &str,
+        player_key: Option<&PlayerKey>,
         at: i64,
         payload: &RowPayload,
     ) -> Result<(), StoreError> {
         let previous = self.tail()?;
+        #[cfg(test)]
+        if let Some(hook) = self.between_tail_and_insert.borrow_mut().take() {
+            hook();
+        }
         let payload_json = serde_json::to_string(payload)?;
+        let player_key = player_key.map(PlayerKey::as_str);
         let digest = chain::digest(
             &previous,
             &[
@@ -188,26 +318,28 @@ impl Store {
                 round,
                 chain_name,
                 token,
-                player_key.unwrap_or(""),
+                &chain::player_field(player_key),
                 &at.to_string(),
                 &payload_json,
             ],
         );
-        self.conn.execute(
-            "INSERT INTO rows (kind, round, chain, token, player_key, at, payload, \
-             previous_hash, hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                kind,
-                round,
-                chain_name,
-                token,
-                player_key,
-                at,
-                payload_json,
-                previous,
-                digest,
-            ],
-        )?;
+        self.conn
+            .execute(
+                "INSERT INTO rows (kind, round, chain, token, player_key, at, payload, \
+                 previous_hash, hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    kind,
+                    round,
+                    chain_name,
+                    token,
+                    player_key,
+                    at,
+                    payload_json,
+                    previous,
+                    digest,
+                ],
+            )
+            .map_err(constraint_or_sqlite)?;
         Ok(())
     }
 
@@ -228,7 +360,7 @@ impl Store {
         round: &str,
         chain_name: &str,
         token: &str,
-        player_key: &str,
+        player_key: &PlayerKey,
         side: Side,
         q: Odds,
         now: i64,
@@ -246,22 +378,33 @@ impl Store {
             q_basis_points: q.basis_points(),
             window_close,
         };
-        match self.append(
-            "forecast",
-            round,
-            chain_name,
-            token,
-            Some(player_key),
-            now,
-            &payload,
-        ) {
-            Err(StoreError::Sqlite(rusqlite::Error::SqliteFailure(e, _)))
-                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                Err(StoreError::Duplicate)
+        self.with_write(|| {
+            // The one-forecast rule is checked here, under the write lock, and
+            // not by catching the unique index's error: that error is
+            // indistinguishable from any other constraint failure without
+            // parsing its message, and a caller that maps every constraint
+            // failure to `Duplicate` tells a player "you already called it"
+            // when the chain refused for another reason. The index stays as
+            // the backstop.
+            let exists: bool = self.conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM rows WHERE kind = 'forecast' AND round = ?1 \
+                 AND chain = ?2 AND token = ?3 AND player_key = ?4)",
+                params![round, chain_name, token, player_key.as_str()],
+                |r| r.get(0),
+            )?;
+            if exists {
+                return Err(StoreError::Duplicate);
             }
-            other => other,
-        }
+            self.append_in_write(
+                "forecast",
+                round,
+                chain_name,
+                token,
+                Some(player_key),
+                now,
+                &payload,
+            )
+        })
     }
 
     /// Reads one player's forecast for a round and coin, if the requester is
@@ -301,7 +444,9 @@ impl Store {
             window_close,
         } = serde_json::from_str(&payload_json)?
         else {
-            unreachable!("a row stored under kind 'forecast' always deserialises to Forecast")
+            return Err(StoreError::Corrupt(format!(
+                "a row of kind 'forecast' holds another kind's payload (round {round}, coin {token})"
+            )));
         };
         let visible = target_player == requester_player || now >= window_close;
         if !visible {
@@ -382,7 +527,9 @@ impl Store {
             evidence_reference,
         } = serde_json::from_str(&payload_json)?
         else {
-            unreachable!("a row stored under kind 'outcome' always deserialises to Outcome")
+            return Err(StoreError::Corrupt(format!(
+                "a row of kind 'outcome' holds another kind's payload (round {round}, coin {token})"
+            )));
         };
         Ok(Some(OutcomeView {
             outcome,
@@ -419,7 +566,7 @@ impl Store {
         round: &str,
         chain_name: &str,
         token: &str,
-        player_key: &str,
+        player_key: &PlayerKey,
         reference: &str,
         note: &str,
         at: i64,
@@ -452,7 +599,7 @@ impl Store {
         round: &str,
         chain_name: &str,
         token: &str,
-        player_key: &str,
+        player_key: &PlayerKey,
         comment: &str,
         at: i64,
     ) -> Result<(), StoreError> {
@@ -488,7 +635,7 @@ impl Store {
     /// # Errors
     ///
     /// [`StoreError::Sqlite`] on a write failure.
-    pub fn delete_identity(&self, player_key: &str) -> Result<(), StoreError> {
+    pub fn delete_identity(&self, player_key: &PlayerKey) -> Result<(), StoreError> {
         identity::delete(&self.conn, player_key)
     }
 
@@ -497,7 +644,7 @@ impl Store {
     /// # Errors
     ///
     /// [`StoreError::Sqlite`] on a read failure.
-    pub fn identity(&self, player_key: &str) -> Result<Option<Identity>, StoreError> {
+    pub fn identity(&self, player_key: &PlayerKey) -> Result<Option<Identity>, StoreError> {
         identity::read(&self.conn, player_key)
     }
 
@@ -516,6 +663,8 @@ impl Store {
 mod tests {
     use super::*;
     use realorrug_contest::calls::Side;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     fn odds(bp: u16) -> Odds {
         Odds::new(bp).expect("valid odds")
@@ -525,24 +674,74 @@ mod tests {
         Store::open_in_memory().expect("open")
     }
 
+    fn key(store: &Store) -> PlayerKey {
+        store.new_player_key().expect("a player key")
+    }
+
+    /// A forecast by `player` on `coin` in round `r1`, closing at `close`.
+    fn forecast_on(
+        store: &Store,
+        player: &PlayerKey,
+        coin: &str,
+        now: i64,
+        close: i64,
+    ) -> Result<(), StoreError> {
+        store.submit_forecast(
+            "r1",
+            "solana",
+            coin,
+            player,
+            Side::Rug,
+            odds(6_000),
+            now,
+            close,
+        )
+    }
+
+    /// What a host attacker with file access has to do before editing a row:
+    /// remove the triggers that refuse it.
+    fn drop_guards(store: &Store) {
+        store
+            .conn
+            .execute_batch("DROP TRIGGER rows_no_update; DROP TRIGGER rows_no_delete;")
+            .expect("drop triggers");
+    }
+
+    fn intact(verified: Verified) -> (usize, String) {
+        match verified {
+            Verified::Intact { rows, head } => (rows, head),
+            broken @ Verified::Broken { .. } => panic!("expected Intact, got {broken:?}"),
+        }
+    }
+
+    fn broken_at(verified: Verified) -> i64 {
+        match verified {
+            Verified::Broken { at, .. } => at,
+            intact @ Verified::Intact { .. } => panic!("expected Broken, got {intact:?}"),
+        }
+    }
+
+    /// Three forecast rows, then the guards dropped, ready to be tampered
+    /// with.
+    fn three_rows_unguarded() -> Store {
+        let store = store();
+        let p = key(&store);
+        forecast_on(&store, &p, "coin-a", 10, 100).expect("row 1");
+        forecast_on(&store, &p, "coin-b", 11, 100).expect("row 2");
+        forecast_on(&store, &p, "coin-c", 12, 100).expect("row 3");
+        assert_eq!(intact(store.verify().expect("verify")).0, 3);
+        drop_guards(&store);
+        store
+    }
+
     /// A forecast at the close is refused, because `forecast` reveals a call
     /// at `now >= window_close`: at exactly the close, entry shuts and the
     /// reveal begins (design 0028 §2.4; design 0032 §10).
     #[test]
     fn a_forecast_at_exactly_the_close_is_refused() {
         let store = store();
-        let err = store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-a",
-                "player-1",
-                Side::Rug,
-                odds(6_000),
-                100,
-                100,
-            )
-            .expect_err("a forecast at the close");
+        let p = key(&store);
+        let err = forecast_on(&store, &p, "coin-a", 100, 100).expect_err("a forecast at the close");
         assert!(matches!(
             err,
             StoreError::WindowClosed {
@@ -551,36 +750,15 @@ mod tests {
             }
         ));
         // One tick before the close is still open.
-        store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-a",
-                "player-1",
-                Side::Rug,
-                odds(6_000),
-                99,
-                100,
-            )
-            .expect("a forecast one tick before the close");
+        forecast_on(&store, &p, "coin-a", 99, 100).expect("a forecast one tick before the close");
     }
 
     /// After the close a forecast is refused (design 0032 §9).
     #[test]
     fn a_late_forecast_is_refused() {
         let store = store();
-        let err = store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-a",
-                "player-1",
-                Side::Rug,
-                odds(6_000),
-                101,
-                100,
-            )
-            .expect_err("late forecast");
+        let p = key(&store);
+        let err = forecast_on(&store, &p, "coin-a", 101, 100).expect_err("late forecast");
         assert!(matches!(
             err,
             StoreError::WindowClosed {
@@ -590,7 +768,7 @@ mod tests {
         ));
         assert!(
             store
-                .forecast("r1", "solana", "coin-a", "player-1", "player-1", 101)
+                .forecast("r1", "solana", "coin-a", p.as_str(), p.as_str(), 101)
                 .expect("read")
                 .is_none(),
             "a refused forecast must not have been written"
@@ -602,24 +780,14 @@ mod tests {
     #[test]
     fn a_duplicate_returns_duplicate_and_the_first_stands() {
         let store = store();
-        store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-a",
-                "player-1",
-                Side::Rug,
-                odds(6_000),
-                10,
-                100,
-            )
-            .expect("first forecast");
+        let p = key(&store);
+        forecast_on(&store, &p, "coin-a", 10, 100).expect("first forecast");
         let err = store
             .submit_forecast(
                 "r1",
                 "solana",
                 "coin-a",
-                "player-1",
+                &p,
                 Side::Real,
                 odds(4_000),
                 20,
@@ -629,7 +797,7 @@ mod tests {
         assert!(matches!(err, StoreError::Duplicate));
 
         let view = store
-            .forecast("r1", "solana", "coin-a", "player-1", "player-1", 100)
+            .forecast("r1", "solana", "coin-a", p.as_str(), p.as_str(), 100)
             .expect("read")
             .expect("a forecast exists");
         assert_eq!(
@@ -640,55 +808,31 @@ mod tests {
         assert_eq!(view.submitted_at, 10);
     }
 
-    /// A tampered middle row makes `verify` name that row -- re-applying the
-    /// bug (skipping the tamper) must make this test fail, which is why the
-    /// assertion checks the *specific* sequence the tamper landed on rather
-    /// than only "is broken."
+    /// A constraint other than the one-forecast rule is not a duplicate: a
+    /// caller that maps `Duplicate` to `409 Conflict` must not tell a player
+    /// their call was a repeat when the chain refused it for another reason.
+    #[test]
+    fn a_non_duplicate_constraint_is_not_reported_as_duplicate() {
+        let store = store();
+        let p = key(&store);
+        store
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER refuse_all BEFORE INSERT ON rows \
+                 BEGIN SELECT RAISE(ABORT, 'refused for another reason'); END;",
+            )
+            .expect("trigger");
+        let err = forecast_on(&store, &p, "coin-a", 10, 100).expect_err("refused");
+        assert!(
+            matches!(err, StoreError::Constraint(_)),
+            "expected Constraint, got {err:?}"
+        );
+    }
+
+    /// A tampered middle row makes `verify` name that row.
     #[test]
     fn a_tampered_middle_row_makes_verify_name_that_row() {
-        let store = store();
-        store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-a",
-                "player-1",
-                Side::Rug,
-                odds(6_000),
-                10,
-                100,
-            )
-            .expect("row 1");
-        store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-b",
-                "player-1",
-                Side::Real,
-                odds(5_000),
-                11,
-                100,
-            )
-            .expect("row 2");
-        store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-c",
-                "player-1",
-                Side::Rug,
-                odds(3_000),
-                12,
-                100,
-            )
-            .expect("row 3");
-
-        assert_eq!(
-            store.verify().expect("verify"),
-            Verified::Intact { rows: 3 }
-        );
-
+        let store = three_rows_unguarded();
         // Tamper with the middle row's payload directly, the way a host
         // attacker with file access would -- not through this crate's API,
         // which has no update path at all.
@@ -699,11 +843,91 @@ mod tests {
                 [],
             )
             .expect("tamper");
+        assert_eq!(broken_at(store.verify().expect("verify")), 2);
+    }
 
-        match store.verify().expect("verify") {
-            Verified::Broken { at, .. } => assert_eq!(at, 2, "the tamper landed on row 2"),
-            intact @ Verified::Intact { .. } => panic!("expected Broken, got {intact:?}"),
-        }
+    /// The triggers refuse a raw UPDATE and a raw DELETE while they stand,
+    /// so tampering needs the file, not just a connection.
+    #[test]
+    fn a_raw_update_or_delete_on_a_row_is_refused() {
+        let store = store();
+        let p = key(&store);
+        forecast_on(&store, &p, "coin-a", 10, 100).expect("row");
+        let update = store
+            .conn
+            .execute("UPDATE rows SET payload = 'x' WHERE seq = 1", [])
+            .expect_err("update");
+        assert!(update.to_string().contains("rows are append-only"));
+        let delete = store
+            .conn
+            .execute("DELETE FROM rows WHERE seq = 1", [])
+            .expect_err("delete");
+        assert!(delete.to_string().contains("rows are append-only"));
+        assert_eq!(intact(store.verify().expect("verify")).0, 1);
+    }
+
+    /// Deleting a middle row leaves the row after it chained to a row that is
+    /// no longer there.
+    #[test]
+    fn a_deleted_middle_row_is_detected() {
+        let store = three_rows_unguarded();
+        store
+            .conn
+            .execute("DELETE FROM rows WHERE seq = 2", [])
+            .expect("delete");
+        assert_eq!(broken_at(store.verify().expect("verify")), 3);
+    }
+
+    /// Swapping two rows' `seq` puts a row after a predecessor it was never
+    /// chained to.
+    #[test]
+    fn swapped_sequence_numbers_are_detected() {
+        let store = three_rows_unguarded();
+        store
+            .conn
+            .execute_batch(
+                "UPDATE rows SET seq = 99 WHERE seq = 2; \
+                 UPDATE rows SET seq = 2 WHERE seq = 3; \
+                 UPDATE rows SET seq = 3 WHERE seq = 99;",
+            )
+            .expect("swap");
+        assert_eq!(broken_at(store.verify().expect("verify")), 2);
+    }
+
+    /// A truncated tail is still a valid chain: `verify` cannot see it. Only
+    /// a head recorded earlier shows it, which is why `Intact` carries one.
+    #[test]
+    fn a_truncated_tail_is_detected_only_against_a_recorded_head() {
+        let store = three_rows_unguarded();
+        let (rows, recorded_head) = intact(store.verify().expect("verify"));
+        assert_eq!(rows, 3);
+        store
+            .conn
+            .execute("DELETE FROM rows WHERE seq = 3", [])
+            .expect("truncate");
+        let (rows, head) = intact(store.verify().expect("verify"));
+        assert_eq!(rows, 2, "the shorter chain still verifies");
+        assert_ne!(
+            head, recorded_head,
+            "but its head is no longer the recorded one"
+        );
+    }
+
+    /// A row with no player and a row whose player is the empty string are
+    /// different rows: editing one into the other must be caught.
+    #[test]
+    fn a_null_player_key_turned_empty_is_detected() {
+        let store = store();
+        store
+            .record_outcome("r1", "solana", "coin-a", Outcome::Rugged, "v1", None, 20)
+            .expect("outcome (no player)");
+        assert_eq!(intact(store.verify().expect("verify")).0, 1);
+        drop_guards(&store);
+        store
+            .conn
+            .execute("UPDATE rows SET player_key = '' WHERE seq = 1", [])
+            .expect("tamper");
+        assert_eq!(broken_at(store.verify().expect("verify")), 1);
     }
 
     /// An identity delete leaves the chain valid and unlinked: no row holds
@@ -711,8 +935,9 @@ mod tests {
     #[test]
     fn an_identity_delete_leaves_the_chain_valid_and_unlinked() {
         let store = store();
+        let p = key(&store);
         let identity = Identity {
-            player_key: "player-1".to_owned(),
+            player_key: p.clone(),
             x_id: "999999".to_owned(),
             handle: "realtestuser".to_owned(),
             account_created_at: Some(1_600_000_000),
@@ -720,26 +945,12 @@ mod tests {
             signed_in_at: 5,
         };
         store.upsert_identity(&identity).expect("upsert");
-        store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-a",
-                "player-1",
-                Side::Rug,
-                odds(6_000),
-                10,
-                100,
-            )
-            .expect("forecast");
+        forecast_on(&store, &p, "coin-a", 10, 100).expect("forecast");
 
-        store.delete_identity("player-1").expect("delete");
+        store.delete_identity(&p).expect("delete");
 
-        assert_eq!(store.identity("player-1").expect("read"), None);
-        assert_eq!(
-            store.verify().expect("verify"),
-            Verified::Intact { rows: 1 }
-        );
+        assert_eq!(store.identity(&p).expect("read"), None);
+        assert_eq!(intact(store.verify().expect("verify")).0, 1);
 
         // No row anywhere in the chain ever held the X id or handle -- the
         // schema never gave them a column to be stored in, so this is the
@@ -771,9 +982,10 @@ mod tests {
         let handle = "handle-5d2e8b90c41a";
 
         let store = Store::open(&path).expect("open");
+        let p = key(&store);
         store
             .upsert_identity(&Identity {
-                player_key: "player-1".to_owned(),
+                player_key: p.clone(),
                 x_id: x_id.to_owned(),
                 handle: handle.to_owned(),
                 account_created_at: None,
@@ -795,12 +1007,73 @@ mod tests {
         assert!(scan(x_id), "the scan must see the X id while it is stored");
         assert!(scan(handle), "the scan must see the handle while stored");
 
-        store.delete_identity("player-1").expect("delete");
+        store.delete_identity(&p).expect("delete");
         drop(store);
 
         // Every file beside the database (a `-journal` or `-wal`) is scanned.
         assert!(!scan(x_id), "the X id survived the delete in the file");
         assert!(!scan(handle), "the handle survived the delete in the file");
+    }
+
+    /// Two player keys differ, and a key is 32 lower-case hex characters
+    /// (128 bits).
+    #[test]
+    fn player_keys_are_distinct_and_32_hex_characters() {
+        let store = store();
+        let a = key(&store);
+        let b = key(&store);
+        assert_ne!(a, b);
+        for k in [&a, &b] {
+            assert_eq!(k.as_str().len(), 32);
+            assert!(
+                k.as_str()
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+                "not lower-case hex: {}",
+                k.as_str()
+            );
+        }
+    }
+
+    fn identity_for(player_key: &PlayerKey, x_id: &str, handle: &str) -> Identity {
+        Identity {
+            player_key: player_key.clone(),
+            x_id: x_id.to_owned(),
+            handle: handle.to_owned(),
+            account_created_at: None,
+            session_hash: None,
+            signed_in_at: 1,
+        }
+    }
+
+    /// One X account has one player key: a second identity with the same X
+    /// id is refused, and a returning user is found by their X id.
+    #[test]
+    fn a_second_identity_for_the_same_x_id_is_refused() {
+        let store = store();
+        let first = key(&store);
+        let second = key(&store);
+        store
+            .upsert_identity(&identity_for(&first, "x-1", "alice"))
+            .expect("first identity");
+        let err = store
+            .upsert_identity(&identity_for(&second, "x-1", "alice-again"))
+            .expect_err("same X id, another key");
+        assert!(matches!(err, StoreError::XIdTaken), "got {err:?}");
+
+        assert_eq!(
+            store.player_for_x_id("x-1").expect("lookup"),
+            Some(first.clone())
+        );
+        assert_eq!(store.player_for_x_id("x-unknown").expect("lookup"), None);
+        // The same key may update its own row.
+        store
+            .upsert_identity(&identity_for(&first, "x-1", "alice-renamed"))
+            .expect("same key updates");
+        assert_eq!(
+            store.identity(&first).expect("read").expect("row").handle,
+            "alice-renamed"
+        );
     }
 
     /// `Unresolved` adds no points and no n -- proved at
@@ -840,39 +1113,164 @@ mod tests {
     #[test]
     fn a_hidden_forecast_is_visible_only_to_its_author_before_close() {
         let store = store();
-        store
-            .submit_forecast(
-                "r1",
-                "solana",
-                "coin-a",
-                "player-1",
-                Side::Rug,
-                odds(6_000),
-                10,
-                100,
-            )
-            .expect("forecast");
+        let p1 = key(&store);
+        let p2 = key(&store);
+        forecast_on(&store, &p1, "coin-a", 10, 100).expect("forecast");
 
         assert!(
             store
-                .forecast("r1", "solana", "coin-a", "player-1", "player-2", 50)
+                .forecast("r1", "solana", "coin-a", p1.as_str(), p2.as_str(), 50)
                 .expect("read")
                 .is_none(),
             "another player must not see it before close"
         );
         assert!(
             store
-                .forecast("r1", "solana", "coin-a", "player-1", "player-1", 50)
+                .forecast("r1", "solana", "coin-a", p1.as_str(), p1.as_str(), 50)
                 .expect("read")
                 .is_some(),
             "the author sees their own call before close"
         );
         assert!(
             store
-                .forecast("r1", "solana", "coin-a", "player-1", "player-2", 100)
+                .forecast("r1", "solana", "coin-a", p1.as_str(), p2.as_str(), 100)
                 .expect("read")
                 .is_some(),
             "anyone sees it once the window has closed"
+        );
+    }
+
+    /// A stored row whose kind and payload disagree is `Corrupt`, not a
+    /// panic.
+    #[test]
+    fn a_row_whose_kind_and_payload_disagree_is_corrupt_not_a_panic() {
+        let store = store();
+        for (i, kind) in ["forecast", "outcome"].into_iter().enumerate() {
+            store
+                .conn
+                .execute(
+                    "INSERT INTO rows (kind, round, chain, token, player_key, at, payload, \
+                     previous_hash, hash) VALUES (?1, 'r1', 'solana', 'coin-a', 'p', 1, \
+                     '{\"kind\":\"discussion\",\"comment\":\"x\"}', ?2, 'h')",
+                    params![kind, format!("link-{i}")],
+                )
+                .expect("raw insert");
+        }
+        let forecast = store.forecast("r1", "solana", "coin-a", "p", "p", 1);
+        assert!(
+            matches!(forecast, Err(StoreError::Corrupt(_))),
+            "{forecast:?}"
+        );
+        let outcome = store.outcome("r1", "solana", "coin-a");
+        assert!(
+            matches!(outcome, Err(StoreError::Corrupt(_))),
+            "{outcome:?}"
+        );
+    }
+
+    /// Two `Store`s on one file, appending alternately, keep one chain, and a
+    /// second connection's append sees the first's new tail.
+    #[test]
+    fn two_connections_on_one_file_keep_one_chain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("store.db");
+        let a = Store::open(&path).expect("a");
+        let b = Store::open(&path).expect("b");
+        let pa = key(&a);
+        let pb = key(&b);
+
+        for i in 0..3 {
+            a.submit_discussion("r1", "solana", "coin-a", &pa, "from a", i)
+                .expect("a appends");
+            assert_eq!(
+                b.tail().expect("b tail"),
+                a.tail().expect("a tail"),
+                "b sees the row a just appended"
+            );
+            b.submit_discussion("r1", "solana", "coin-a", &pb, "from b", i)
+                .expect("b appends");
+            assert_eq!(
+                a.tail().expect("a tail"),
+                b.tail().expect("b tail"),
+                "a sees the row b just appended"
+            );
+        }
+        let (rows, head) = intact(a.verify().expect("verify"));
+        assert_eq!(rows, 6);
+        assert_eq!(head, b.tail().expect("tail"));
+        assert_eq!(intact(b.verify().expect("verify")).0, 6);
+    }
+
+    /// The race itself, made deterministic: a second connection tries to
+    /// write in the window between the first's tail read and its INSERT. With
+    /// the write lock held from the start it is refused (`SQLITE_BUSY`), so
+    /// only one row extends the tail; without it both would chain to the same
+    /// tail and fork. Checked on every write path.
+    #[test]
+    fn a_second_connection_cannot_write_between_a_tail_read_and_the_insert() {
+        type Write = fn(&Store, &PlayerKey) -> Result<(), StoreError>;
+        let writes: [(&str, Write); 4] = [
+            ("forecast", |s, p| forecast_on(s, p, "coin-a", 10, 100)),
+            ("evidence", |s, p| {
+                s.submit_evidence("r1", "solana", "coin-a", p, "https://x", "note", 10)
+            }),
+            ("discussion", |s, p| {
+                s.submit_discussion("r1", "solana", "coin-a", p, "hi", 10)
+            }),
+            ("outcome", |s, _| {
+                s.record_outcome("r1", "solana", "coin-a", Outcome::Stood, "v1", None, 10)
+            }),
+        ];
+        for (name, write) in writes {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("store.db");
+            let a = Store::open(&path).expect("a");
+            let b = Store::open(&path).expect("b");
+            b.conn
+                .busy_timeout(std::time::Duration::ZERO)
+                .expect("no waiting");
+            let pa = key(&a);
+            let pb = key(&b);
+
+            let b_wrote = Rc::new(Cell::new(None));
+            let seen = Rc::clone(&b_wrote);
+            *a.between_tail_and_insert.borrow_mut() = Some(Box::new(move || {
+                seen.set(Some(write(&b, &pb).is_ok()));
+            }));
+
+            write(&a, &pa).unwrap_or_else(|e| panic!("{name}: a's write failed: {e}"));
+
+            assert_eq!(
+                b_wrote.get(),
+                Some(false),
+                "{name}: b must be refused while a holds the write lock"
+            );
+            let (rows, _) = intact(a.verify().expect("verify"));
+            assert_eq!(rows, 1, "{name}: only a's row is on the chain");
+        }
+    }
+
+    /// The schema refuses a second row chained to the same predecessor, even
+    /// from a writer that skips the lock.
+    #[test]
+    fn the_schema_refuses_two_rows_with_the_same_predecessor() {
+        let store = store();
+        let p = key(&store);
+        store
+            .submit_discussion("r1", "solana", "coin-a", &p, "first", 1)
+            .expect("first row, chained to genesis");
+        let err = store
+            .conn
+            .execute(
+                "INSERT INTO rows (kind, round, chain, token, player_key, at, payload, \
+                 previous_hash, hash) VALUES ('discussion', 'r1', 'solana', 'coin-a', 'p', 2, \
+                 '{}', ?1, 'other')",
+                params![chain::GENESIS],
+            )
+            .expect_err("a second row chained to genesis");
+        assert!(
+            err.to_string().contains("UNIQUE"),
+            "expected a unique-constraint failure, got {err}"
         );
     }
 }

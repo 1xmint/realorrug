@@ -84,15 +84,25 @@ pub struct OutcomeView {
 /// What walking the chain established.
 ///
 /// Two states, not `realorrug_journal`'s three: SQLite's own durability
-/// (`Store::append`'s single `INSERT`) does not leave the "complete but no
+/// (`Store::append`'s transaction) does not leave the "complete but no
 /// terminator" shape a hand-rolled append-only file can, so there is no
 /// `Torn` case here to distinguish from `Broken`.
+///
+/// `Intact` proves the rows that are there chain from genesis. It cannot
+/// prove rows were not cut off the end: deleting the last rows leaves a
+/// shorter chain that is still valid. A truncated tail is detected only by
+/// comparing `head` against a head recorded earlier, somewhere the writer of
+/// this file cannot reach.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verified {
     /// Every row's digest matched, chained from [`chain::GENESIS`].
     Intact {
         /// How many rows.
         rows: usize,
+        /// The last row's hash ([`chain::GENESIS`] for an empty store): the
+        /// value to record and later compare, since it is the only thing that
+        /// shows a truncated tail.
+        head: String,
     },
     /// A row's digest did not match what its own fields and the row before
     /// it should have produced.
@@ -141,7 +151,7 @@ pub(crate) fn verify(conn: &Connection) -> Result<Verified, StoreError> {
                 round.as_str(),
                 chain_name.as_str(),
                 token.as_str(),
-                player_key.as_deref().unwrap_or(""),
+                &chain::player_field(player_key.as_deref()),
                 &at.to_string(),
                 payload.as_str(),
             ],
@@ -155,5 +165,8 @@ pub(crate) fn verify(conn: &Connection) -> Result<Verified, StoreError> {
         previous = hash;
         count += 1;
     }
-    Ok(Verified::Intact { rows: count })
+    Ok(Verified::Intact {
+        rows: count,
+        head: previous,
+    })
 }
