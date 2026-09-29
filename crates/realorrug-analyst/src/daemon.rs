@@ -2212,9 +2212,18 @@ mod tests {
             model_call: MicroUsd::from_dollars(1.0),
             user_read: MicroUsd(20_000),
         };
+        // 9-27-0026c finding 7: `daily_max` must sit well above `monthly_max`
+        // so the refusal below is provably the monthly check firing, not the
+        // daily one masking it. With both at $1 (the previous value), the
+        // reply that fills the month also fills the day at the same instant,
+        // so a `Meter::authorize` that dropped its monthly branch entirely
+        // would still refuse here on the daily check alone -- a bug the test
+        // could never see. Re-apply that bug locally (bypass the monthly
+        // branch in `Meter::authorize`) and this test still fails, because
+        // $1 of $10 daily is nowhere near the daily cap.
         let budget = Budget {
             per_call_max: MicroUsd::from_dollars(1.0),
-            daily_max: MicroUsd::from_dollars(1.0),
+            daily_max: MicroUsd::from_dollars(10.0),
             monthly_max: MicroUsd::from_dollars(1.0),
         };
         let mut spend = Spend::open(budget, prices, ledger, 1);
@@ -2238,6 +2247,11 @@ mod tests {
         assert!(
             gated.is_none(),
             "a refused reservation must not hand the provider through"
+        );
+        assert_eq!(
+            spend.refusals(),
+            1,
+            "exactly one reservation was attempted and refused -- the monthly cap, not the daily one"
         );
         // The property under test: nothing here may call `.ask()`. `answer`
         // only ever does that through `ctx.provider`, and `gated` is exactly

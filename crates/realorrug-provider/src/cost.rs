@@ -328,8 +328,8 @@ fn dollars_var(get: &impl Fn(&str) -> Option<String>, name: &str) -> Option<Micr
 #[must_use]
 pub fn daemon_monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> Option<MicroUsd> {
     let left = monthly_allowance_from(get)?;
-    let cli = dollars_var(get, "REALORRUG_CLI_MONTHLY_USD").unwrap_or(MicroUsd::ZERO);
-    let serve = dollars_var(get, "REALORRUG_SERVE_MONTHLY_USD").unwrap_or(MicroUsd::ZERO);
+    let cli = zero_if_unset(get, "REALORRUG_CLI_MONTHLY_USD")?;
+    let serve = zero_if_unset(get, "REALORRUG_SERVE_MONTHLY_USD")?;
     // `saturating_add`, not `+`: two adversarial-but-finite dollar figures
     // could in principle overflow `u64` micro-USD before the comparison
     // below ever runs. Saturating just means the slices read as "at least
@@ -342,6 +342,24 @@ pub fn daemon_monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> O
     Some(MicroUsd(left.get() - slices))
 }
 
+/// A monthly slice that is silently absent rather than configured.
+///
+/// Unset reads as zero taken from the daemon (rule 7): the caller that owns
+/// this slice closes its own budget the same way, via
+/// [`cli_monthly_allowance_from`] or its serve equivalent, so it was never
+/// going to spend against this month anyway. But **set-and-unparseable is
+/// `None`**, not zero (9-27-0026c finding 4) -- before this, a slice that
+/// failed to parse (`"-1"`, `"NaN"`, `"abc"`) read exactly like one nobody
+/// had ever set, so a typo in a monthly slice quietly handed the whole
+/// ceiling back to the daemon instead of closing it the way a mistyped daily
+/// cap already does.
+fn zero_if_unset(get: &impl Fn(&str) -> Option<String>, name: &str) -> Option<MicroUsd> {
+    match get(name) {
+        None => Some(MicroUsd::ZERO),
+        Some(_) => dollars_var(get, name),
+    }
+}
+
 /// The CLI's own metered monthly allowance, entirely separate from the
 /// daemon's ledger and the daemon's slice above (9-27-0026b defect 2: the CLI
 /// used to open the daemon's own ledger file and the two processes'
@@ -351,9 +369,23 @@ pub fn daemon_monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> O
 /// refuses every paid call rather than falling back to the daemon's or
 /// serve's share, which would let the CLI spend money no slice of the
 /// ceiling was ever set aside for.
+///
+/// **Also bounded by what `REALORRUG_MONTHLY_USD` leaves after fixed costs
+/// and the serve slice** (9-27-0026c finding 1): before this, the function
+/// handed back `REALORRUG_CLI_MONTHLY_USD` on its own, so a CLI slice bigger
+/// than the whole ceiling -- or configured with no ceiling set at all --
+/// still spent, uncounted against anything. A slice that, added to the serve
+/// slice, would exceed what is left closes the CLI the same way an
+/// individually-invalid slice already does.
 #[must_use]
 pub fn cli_monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> Option<MicroUsd> {
-    dollars_var(get, "REALORRUG_CLI_MONTHLY_USD")
+    let left = monthly_allowance_from(get)?;
+    let cli = dollars_var(get, "REALORRUG_CLI_MONTHLY_USD")?;
+    let serve = zero_if_unset(get, "REALORRUG_SERVE_MONTHLY_USD")?;
+    if cli.get().saturating_add(serve.get()) > left.get() {
+        return None;
+    }
+    Some(cli)
 }
 
 /// Days since the Unix epoch (UTC, midnight) to a month index that increases
@@ -825,6 +857,91 @@ mod tests {
             ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
         ]);
         assert_eq!(cli_monthly_allowance_from(&get), None);
+    }
+
+    #[test]
+    fn a_cli_cap_bigger_than_what_is_left_closes_the_cli() {
+        // 9-27-0026c finding 1: before the fix, `cli_monthly_allowance_from`
+        // returned `REALORRUG_CLI_MONTHLY_USD` on its own, ignoring
+        // `monthly_allowance_from` entirely. $30 is left after fixed costs,
+        // but the CLI slice claims $50 -- more than the whole ceiling has
+        // room for -- so the CLI must close rather than hand back $50 it was
+        // never given.
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+            ("REALORRUG_CLI_MONTHLY_USD", "50.00"),
+        ]);
+        assert_eq!(cli_monthly_allowance_from(&get), None);
+    }
+
+    #[test]
+    fn a_cli_cap_plus_the_serve_slice_bigger_than_what_is_left_closes_the_cli() {
+        // 9-27-0026c finding 1: the CLI slice alone ($20) fits in the $30
+        // left, but added to the serve slice ($15) the two claim $35 -- more
+        // than the ceiling leaves once fixed costs are taken off. The old
+        // code never read the serve slice at all when answering for the CLI,
+        // so this would have passed the CLI its full $20 regardless.
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+            ("REALORRUG_CLI_MONTHLY_USD", "20.00"),
+            ("REALORRUG_SERVE_MONTHLY_USD", "15.00"),
+        ]);
+        assert_eq!(cli_monthly_allowance_from(&get), None);
+    }
+
+    #[test]
+    fn a_cli_cap_with_no_monthly_ceiling_at_all_closes_the_cli() {
+        // 9-27-0026c finding 1: `REALORRUG_MONTHLY_USD` is never set (a
+        // misconfigured box, or one where only the CLI slice was set up), so
+        // `monthly_allowance_from` itself returns `None`. Before the fix,
+        // `cli_monthly_allowance_from` never called it at all and would have
+        // handed back $10, uncounted against any ceiling whatsoever.
+        let get = only(&[("REALORRUG_CLI_MONTHLY_USD", "10.00")]);
+        assert_eq!(cli_monthly_allowance_from(&get), None);
+    }
+
+    #[test]
+    fn an_invalid_slice_closes_the_daemon_rather_than_reading_as_zero() {
+        // 9-27-0026c finding 4: before the fix, `daemon_monthly_allowance_from`
+        // read each slice with `.unwrap_or(ZERO)`, so a slice that was set but
+        // failed to parse -- "-1" (negative), "NaN" (non-finite) or "abc" (not
+        // a number) -- read exactly like one nobody had ever configured.
+        // Set-and-invalid must close the daemon's budget instead (rule 7): a
+        // typo in a monthly slice must not quietly hand the whole ceiling
+        // back to the daemon.
+        for bad in ["-1", "NaN", "abc"] {
+            // Bound to a local rather than passed as `only(&[..])` directly:
+            // with a non-constant element (`bad`, a loop variable) the array
+            // is no longer a candidate for constant promotion, so the
+            // reference `only` returns must borrow a named value that
+            // outlives the `assert_eq!` below, not an anonymous temporary
+            // scoped to just this statement.
+            let cli_pairs = [
+                ("REALORRUG_MONTHLY_USD", "90.00"),
+                ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+                ("REALORRUG_CLI_MONTHLY_USD", bad),
+            ];
+            let get = only(&cli_pairs);
+            assert_eq!(
+                daemon_monthly_allowance_from(&get),
+                None,
+                "an invalid CLI slice of {bad:?} must close the daemon"
+            );
+
+            let serve_pairs = [
+                ("REALORRUG_MONTHLY_USD", "90.00"),
+                ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+                ("REALORRUG_SERVE_MONTHLY_USD", bad),
+            ];
+            let get = only(&serve_pairs);
+            assert_eq!(
+                daemon_monthly_allowance_from(&get),
+                None,
+                "an invalid serve slice of {bad:?} must close the daemon"
+            );
+        }
     }
 
     #[test]

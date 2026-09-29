@@ -51,10 +51,23 @@ pub fn open() -> Option<Spend> {
     let dir = std::env::var("REALORRUG_ANALYST_DIR")
         .or_else(|_| std::env::var("RADAR_ANALYST_DIR"))
         .unwrap_or_else(|_| "data/analyst".to_owned());
-    // Beside the daemon's ledger (`Paths::under(&dir).ledger` names
-    // `<dir>/ledger.json`), never the daemon's own file -- see the module doc.
-    let ledger = format!("{dir}/cli-ledger.json");
-    Some(Spend::open(budget, prices, ledger, day_of(now())))
+    Some(Spend::open(
+        budget,
+        prices,
+        ledger_path(&dir),
+        day_of(now()),
+    ))
+}
+
+/// This process's own ledger file, beside the daemon's
+/// (`Paths::under(dir).ledger` names `<dir>/ledger.json`), never the
+/// daemon's own file -- see the module doc. A `fn` rather than an inline
+/// `format!` in `open()` so the test proving a CLI charge never lands in the
+/// daemon's file calls the same path-building code `open()` does, rather
+/// than a second copy that could drift from it silently (9-27-0026c finding
+/// 6).
+fn ledger_path(dir: &str) -> String {
+    format!("{dir}/cli-ledger.json")
 }
 
 /// Today's day number, on the ledger's own clock -- exported so a caller
@@ -87,10 +100,14 @@ mod tests {
     fn a_cli_charge_never_lands_in_the_daemon_s_ledger_file() {
         // (d) Before 9-27-0026b, this module opened `Paths::under(dir).ledger`
         // -- the daemon's own file -- so a hand-run charge and the daemon's
-        // next save erased each other. Re-apply that bug by writing the CLI's
-        // spend to `Paths::under(&dir).ledger` here instead of a sibling
-        // path, and this fails: the daemon's ledger would carry the CLI's
-        // reservation instead of staying exactly as it started, untouched.
+        // next save erased each other. This test writes through `ledger_path`,
+        // the same production function `open()` calls (9-27-0026c finding 6:
+        // the previous version rebuilt the path inline instead, so a change
+        // that made `ledger_path` itself return the daemon's path would have
+        // passed this test unnoticed). Re-apply that bug locally by making
+        // `ledger_path` return `Paths::under(dir).ledger` and this fails: the
+        // daemon's ledger would carry the CLI's reservation instead of
+        // staying exactly as it started, untouched.
         let dir = std::env::temp_dir().join(format!("radar-cli-ledger-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a temp dir");
         let dir = dir.to_string_lossy().into_owned();
@@ -99,7 +116,7 @@ mod tests {
         let _ = std::fs::remove_file(&daemon_ledger);
         std::fs::write(&daemon_ledger, "untouched").expect("seed the daemon's own file");
 
-        let cli_ledger = format!("{dir}/cli-ledger.json");
+        let cli_ledger = super::ledger_path(&dir);
         let _ = std::fs::remove_file(&cli_ledger);
         assert_ne!(
             cli_ledger, daemon_ledger,
@@ -109,12 +126,21 @@ mod tests {
         // A budget built the same way `open()` builds one -- through
         // `cli_budget_from`, never a `Budget` literal named directly, which
         // would need a dependency this crate does not otherwise have.
+        //
+        // MONTHLY and FIXED are set here too (9-27-0026c finding 1): once
+        // `cli_monthly_allowance_from` bounds the CLI's slice by what
+        // `REALORRUG_MONTHLY_USD` leaves, a CLI slice configured with no
+        // monthly ceiling at all correctly closes the budget -- this test's
+        // budget must actually be funded, or it would exercise that closed
+        // path instead of the ledger-isolation property it means to prove.
         let mut env = std::collections::HashMap::new();
         env.insert("REALORRUG_ANALYST_DAILY_USD".to_owned(), "1.0".to_owned());
         env.insert(
             "REALORRUG_ANALYST_PER_CALL_USD".to_owned(),
             "1.0".to_owned(),
         );
+        env.insert("REALORRUG_MONTHLY_USD".to_owned(), "10.0".to_owned());
+        env.insert("REALORRUG_FIXED_MONTHLY_USD".to_owned(), "0.0".to_owned());
         env.insert("REALORRUG_CLI_MONTHLY_USD".to_owned(), "1.0".to_owned());
         let get = |k: &str| env.get(k).cloned();
         let budget = cli_budget_from(&get);
