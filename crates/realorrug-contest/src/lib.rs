@@ -40,6 +40,7 @@ pub mod daily;
 pub mod hunter;
 pub mod ledger;
 pub mod score;
+pub mod settle;
 pub mod week;
 
 pub use calls::{

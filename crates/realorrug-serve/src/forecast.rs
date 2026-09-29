@@ -69,9 +69,9 @@ const MAX_ID: usize = 128;
 /// One coin a round allows.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Coin {
-    chain: String,
-    token: String,
+pub(crate) struct Coin {
+    pub(crate) chain: String,
+    pub(crate) token: String,
     /// The bot's odds when the coin was listed, fixed then (design 0028 §3).
     ///
     /// Required, not `Option`: a coin without odds fails to parse, so the
@@ -84,12 +84,12 @@ struct Coin {
 /// One round, with its single close.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Round {
-    id: String,
+pub(crate) struct Round {
+    pub(crate) id: String,
     /// Seconds since the epoch. Entry shuts at this instant and the reveal
     /// begins at it (`submit_forecast` and `forecast` share the `>=`).
-    close: i64,
-    coins: Vec<Coin>,
+    pub(crate) close: i64,
+    pub(crate) coins: Vec<Coin>,
 }
 
 #[derive(Deserialize)]
@@ -100,7 +100,7 @@ struct RoundsFile {
 
 /// Reads the rounds file. `None` for a file that is absent, unreadable, not
 /// this shape, or names a round twice: a round with two closes has no close.
-fn load_rounds(state: &AuthState) -> Option<Vec<Round>> {
+pub(crate) fn load_rounds(state: &AuthState) -> Option<Vec<Round>> {
     let text = std::fs::read_to_string(state.rounds_path.as_ref()?).ok()?;
     parse_rounds(&text)
 }

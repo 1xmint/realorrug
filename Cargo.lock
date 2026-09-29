@@ -1342,6 +1342,7 @@ dependencies = [
 name = "realorrug-cli"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "realorrug-analyst",
  "realorrug-contest",
  "realorrug-journal",

@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# NOT INSTALLED. Installing is the owner's gate (deploy/README.md, "Settle
+# closed rounds"). Install to /etc/systemd/system/realorrug-settle.service
+# beside its timer. Run the two steps once by hand first (the publish step as a
+# dry run) and then check the file:
+#   sudo -u guardian /home/guardian/realorrug/bin/realorrug settle observe
+#   sudo -u guardian /home/guardian/realorrug/bin/realorrug settle publish --dry-run
+#   sudo -u guardian /home/guardian/realorrug/bin/realorrug settle verify
+#
+# The settlement job (design 0032 section 12). Two steps, run in order:
+#   1. observe: reads each open round coin's chain (the same readers and the
+#      same per-read budget the analyst uses), builds its fact sheet, and appends
+#      one dated observation to a file. No model call. With no RPC configured it
+#      reads nothing and says so.
+#      Until the roast crate can detect a rug (rug_detectable(), false today) it
+#      also reads nothing and says so, because a calm read from a blind
+#      instrument would let a drained coin stand; every coin then settles
+#      Unresolved after its grace (design 0032 section 12).
+#   2. publish: derives each coin's outcome from those dated observations and
+#      writes the outcomes file.
+# It never opens the research store and holds no store path. realorrug-serve is
+# the store's one writer: it ingests the outcomes file (REALORRUG_OUTCOMES_FILE
+# in serve's own environment, the same path as below).
+#
+# Nothing here posts, signs, or spends. The only secret is the RPC endpoint,
+# which is read from a file of its own so this unit never holds the X app's
+# secrets or the analyst's environment. Create it as root:guardian, mode 0640,
+# with REALORRUG_RPC= and optionally REALORRUG_ROBINHOOD_RPC=. If it is absent
+# observe does nothing, by design (AGENTS.md rule 7).
+#
+# The three data paths below must equal the ones realorrug-serve runs with
+# (REALORRUG_ROUNDS_FILE, REALORRUG_OUTCOMES_FILE). They are Environment=
+# lines, not read from serve's file. EDIT THEM to match serve before installing.
+# Not ordered after any other job: nothing else feeds it.
+[Unit]
+Description=Settle closed rounds: observe the chain, publish the outcomes file
+Documentation=https://github.com/1xmint/realorrug
+
+[Service]
+Type=oneshot
+User=guardian
+Group=guardian
+WorkingDirectory=/home/guardian/realorrug
+EnvironmentFile=-/etc/realorrug/settle.env
+Environment=REALORRUG_ROUNDS_FILE=/home/guardian/realorrug/data/contest/rounds.json
+Environment=REALORRUG_SETTLE_OBSERVATIONS=/home/guardian/realorrug/data/settle/observations.jsonl
+Environment=REALORRUG_OUTCOMES_FILE=/home/guardian/realorrug/data/settle/outcomes.json
+ExecStart=/home/guardian/realorrug/bin/realorrug settle observe
+ExecStart=/home/guardian/realorrug/bin/realorrug settle publish
+# Lowest priority: the analyst answering people comes first on a small box.
+Nice=19
+IOSchedulingClass=idle
+# A read is bounded by its own 20 s clock and 60-call budget; the run is
+# bounded by a per-run ceiling of 150 reads (design 0032 section 12). The worst
+# case is 150 x 20 s = 50 min of reads plus the publish, so 75 min covers it;
+# a run the timeout killed would leave a torn last line, which the next run
+# cuts off before appending. A second run started while one is running exits
+# at once (a lock beside the observations file).
+TimeoutStartSec=75min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The published files' directory, not only the files: the write is a temporary
+# file and a rename beside them. The store's directory is deliberately absent.
+ReadWritePaths=/home/guardian/realorrug/data/settle
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=32

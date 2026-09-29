@@ -62,7 +62,7 @@ pub use clause::{Clause, Kind, Selection, Voice};
 pub use creator::{CreatorIndex, Population};
 pub use report::Report;
 pub use sheet::{About, Fact, FactSheet};
-pub use verdict::{Level, Verdict, level, level_from_score, template};
+pub use verdict::{Level, Verdict, level, level_from_score, rug_detectable, template};
 pub use voice::{Billed, Fellback, Reply, write};
 
 use realorrug_model::Provider;

@@ -51,7 +51,13 @@ async fn main() -> ExitCode {
     // peer address when `REALORRUG_TRUST_CLOUDFLARE` is unset -- without this the
     // route would fall back to a fixed placeholder for every visitor, and the
     // "10 a minute per IP" limit would not exist for anyone at all.
-    let app = realorrug_serve::app().into_make_service_with_connect_info::<SocketAddr>();
+    let (router, ingest) = realorrug_serve::app_with_ingest();
+    // Design 0032 §12: the one writer ingests the settlement job's published
+    // outcomes. No file configured, no task (AGENTS.md rule 7).
+    if ingest.enabled() {
+        tokio::spawn(ingest.run());
+    }
+    let app = router.into_make_service_with_connect_info::<SocketAddr>();
     match axum::serve(listener, app).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

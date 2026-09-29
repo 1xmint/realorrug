@@ -33,6 +33,7 @@ EnvironmentFile=-/etc/realorrug/serve.env
 #   REALORRUG_SERVE_MONTHLY_USD   serve's slice, at most ceiling minus fixed; unset or over = closed
 #   REALORRUG_APP_ORIGINS         exact origins allowed credentialed CORS; unset = no header
 #   REALORRUG_ROUNDS_FILE         the round record (id, close, coins with q_basis_points); unset or a coin without odds = 503
+#   REALORRUG_OUTCOMES_FILE       the settlement job's published outcomes; serve ingests it (design 0032 s12), writing through its own store; unset = nothing ingested
 #   REALORRUG_TRUST_CLOUDFLARE    1 to key the rate limit on CF-Connecting-IP
 Restart=always
 RestartSec=10

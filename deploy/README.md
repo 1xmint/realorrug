@@ -91,6 +91,7 @@ committed. Use the test X app, not a live one.
 | `REALORRUG_SERVE_MONTHLY_USD` | serve's own monthly spending stop (X reads), at most ceiling minus fixed | spending refused |
 | `REALORRUG_APP_ORIGINS` | exact origins granted credentialed CORS | no CORS header |
 | `REALORRUG_ROUNDS_FILE` | the round record: id, close, and per coin chain, token and `q_basis_points` (required for every coin) | every round route answers 503, and so does a coin with no odds |
+| `REALORRUG_OUTCOMES_FILE` | the settlement job's published outcomes file, ingested through the store's one write path (design 0032 section 12) | nothing is ingested |
 | `REALORRUG_TRUST_CLOUDFLARE` | key the rate limit on `CF-Connecting-IP` | the socket address is used |
 
 The site is pointed at this API by `VITE_GAME_API_BASE` (a build-time
@@ -286,6 +287,77 @@ analyst's cursor file changes after the start (`ls -l
 ~/realorrug/data/analyst/cursor`). Then the copies under `~/radar/data` can go.
 To go back before that: stop both, install the two kept units
 (`~/realorrug/realorrug-*.service`) where they came from, reload, start.
+
+## Settle closed rounds
+
+`realorrug settle` decides every round coin's one outcome from the job's own
+dated chain reads ([design 0032](../docs/design/0032-the-research-store.md),
+section 12). `realorrug-settle.service` and `realorrug-settle.timer` are in this
+folder and are **not installed**. Installing them is Josh's gate: nothing here
+runs them, and an agent must not. Install only on his yes.
+
+Three steps, and the job never opens the store:
+
+- `settle observe` reads each coin whose fourteen-day horizon has not ended
+  (the analyst's own readers, under the same per-read budget), builds its fact
+  sheet, and appends one dated line to the observations file: read time, the
+  code-computed level, whether the read was complete, the rule version and a
+  hash of the sheet. No model call. **With no RPC configured
+  (`REALORRUG_RPC`) it reads nothing and says so.** The URL is never printed.
+  **Nor does it read while the roast crate cannot detect a rug** (true today):
+  a calm read from an instrument that cannot see a rug would let a drained
+  coin stand, so nothing is read and every coin settles `Unresolved` after its
+  grace. Do not install the timer expecting `Stood` or `Rugged` until Josh has
+  decided what a rug is (design 0032 section 12).
+- `settle publish` derives outcomes from those lines and writes the outcomes
+  file. `Rugged` is written when two adjacent reads see a rug that the first read after the close did not; `Stood` only after
+  the horizon has ended, with a complete read in every 24-hour span and one at
+  the horizon; `Unresolved` only once a day past the horizon, without either Nothing is written for an
+  open coin that has not been seen rugged. `--dry-run` writes nothing.
+- `realorrug-serve` ingests the outcomes file through its own single store
+  write path, at start and every ten minutes, when `REALORRUG_OUTCOMES_FILE` is
+  set (unset ingests nothing). Each row is checked against the rounds file and
+  re-derived from its own evidence before it is written; ingesting the same file
+  again writes nothing new.
+
+Before installing, edit the `Environment=` paths in the settle service so the
+rounds and outcomes paths equal the ones `realorrug-serve` runs with
+(`REALORRUG_ROUNDS_FILE` and `REALORRUG_OUTCOMES_FILE`), and create a small
+environment file for the job holding only the RPC endpoint (`REALORRUG_RPC`,
+and `REALORRUG_ROBINHOOD_RPC` for Robinhood coins), owned by root with group
+`guardian` and mode 0640. The job needs write access to its own data directory
+only, and none to the store's. Serve needs read access to the outcomes file.
+
+```bash
+# 1. First by hand: read once, then look at what would be published.
+sudo -u guardian /home/guardian/realorrug/bin/realorrug settle observe
+sudo -u guardian /home/guardian/realorrug/bin/realorrug settle publish --dry-run
+# 2. Then for real, and check every published row re-derives from its evidence
+sudo -u guardian /home/guardian/realorrug/bin/realorrug settle publish
+sudo -u guardian /home/guardian/realorrug/bin/realorrug settle verify
+# 3. Only then add REALORRUG_OUTCOMES_FILE to serve's environment, restart
+#    serve, and install the units and start the timer
+sudo install -m 0644 deploy/realorrug-settle.service deploy/realorrug-settle.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now realorrug-settle.timer
+```
+
+The timer fires twice a day. A coin already covered for its current 24-hour
+span is not read again, so the cost is about one read per coin per day; the
+second slot is there so one missed run cannot lose a span (a lost span makes a
+coin that stood `Unresolved`). Nothing else feeds the job, so it is not ordered
+after any other unit. A run reads at most 150 coins and says so when it stops
+early. That is at most 50 minutes of reads, so the unit allows 75; a second
+run started while one is running exits at once (a lock beside the observations
+file), and a half line left by a killed run is cut off before the next append.
+Serve refuses a row dated more than five minutes past its own clock, and a
+`Stood` or `Unresolved` row before the horizon by its own clock; a second,
+different outcome for a coin it already holds is kept out, counted as
+conflicting and logged.
+
+To stop it: `sudo systemctl disable --now realorrug-settle.timer`. Rows already
+in the store stay, because it is append-only, and a written `Unresolved` is
+permanent (see the design).
 
 ## Install
 

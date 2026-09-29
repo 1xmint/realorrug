@@ -299,8 +299,10 @@ named directly in plan 0002's 2026-09-25 decision log entry:
   steps for the hourly job that records every launch; "nothing is installed
   by this PR; installing waits for the owner's yes" (PR #141's own
   description). Design 0028's G5 (settling calls on the observation jobs)
-  depends on that job actually running, so its live install is Josh's gate
-  the same way the timer's own PR already says.
+  depended on that job actually running. As of 2026-09-29 (section 12) it does
+  not: settlement reads the chain itself and is ordered after nothing, so this
+  install is no longer a dependency of it. Installing either job stays Josh's
+  gate.
 - **The legal packet, extended.** Before launch, design 0030 gains §8, "the
   forecasting game and personal data": free entry and no prize; retention of the personal data
   §4's identity table holds. The legal and tax review (row 9-26-0022,
@@ -399,7 +401,7 @@ step must make.
 **Settlement cadence and cost.** Settle once a day, plus once at the
 horizon — not hourly. Hourly reads across roughly 70 coins run to about
 100M compute units a month, against the free plan's 30M
-(**estimate — verify at 4-4** before committing to a cadence in code).
+(**estimate**; section 12 records the cadence built, the arithmetic at that cadence, and the method for the measured figure, which is not yet taken).
 
 ## 10. As built (4-2, `realorrug-store`)
 
@@ -635,6 +637,208 @@ and "airdrop". "winner" and "win" wait: `History.tsx` still renders the
 retired weekly prize's winner, and "win" is a substring of "window".
 
 **Env** names for the box are in `deploy/README.md`.
+
+## 12. As built (4-4, settlement)
+
+*Reworked 2026-09-29.* The first build (PR #209 before this rework) read the
+analyst memory's `verdict_outcomes` label and wrote the store itself. Both were
+wrong against this document: one overwritten, untimed label per token cannot say
+whether a rug fell inside the horizon or whether each 24-hour span was read
+(the outcome row in §2 says the settlement job's own dated reads are the
+evidence), and a second writer against the store contradicts "one writer, even
+for settlement" (§3, G5). The coordinator's packet pointed at both; the code
+followed the packet. This section describes the corrected build.
+
+`realorrug settle` decides each round coin's one outcome from dated chain reads
+it made itself. No model decides, nothing is posted or signed, and the command
+never opens the store. The pure rule is `realorrug-contest/src/settle.rs`; the
+command is `realorrug-cli/src/settle.rs`; the ingest is
+`realorrug-serve/src/outcomes.rs`. The units `deploy/realorrug-settle.service`
+and its timer are written and **not installed**; installing them is Josh's gate
+(`deploy/README.md`, "Settle closed rounds").
+
+**Three steps, three owners.**
+
+1. `settle observe` (reads the chain, appends to a file). For every round coin
+   that `due` says is owed a read (from the close to a day past the horizon), it reads the coin with
+   the analyst's own readers under the normal per-read budget
+   (`Budget::default()`, plus the compute-unit meter on Robinhood reads), builds
+   the fact sheet, and appends one observation: read time, the level the code
+   computes (`realorrug_roast::level`), whether the read was complete (any level
+   but `CantTell`), the rule version, `sheet-blake3:<hash>` of the rendered sheet
+   as the evidence reference, and the number of calls the read used. **No model
+   call.** With no RPC configured (`--rpc` or `REALORRUG_RPC`; there is no
+   default and the public endpoint is not used) it reads nothing, creates
+   nothing and says so. The RPC URL is never printed, and a failed read is
+   recorded as an incomplete `CantTell` observation with the error text
+   dropped, since an RPC error can carry the URL. Reads per run are capped at 150.
+2. `settle publish` (derives, writes a file). It derives each coin's outcome from
+   the observations and appends the new rows to the outcomes file, in the
+   published-file shape of design 0023 §0 (the whole file is written to a
+   temporary name and renamed, so a reader never sees half of it). It writes
+   nothing when there is nothing new. `--dry-run` prints and writes nothing.
+   `settle verify` re-derives every published row from its own evidence.
+3. `realorrug-serve` ingests (the only writer). See below.
+
+**The rule (`settle-2`), against §2.** The round's `close` in the rounds file is
+the end of the entry window (confirmed, not assumed: forecasts are refused at
+`>= close`, and the reveal begins there), and the horizon is `close` plus
+fourteen days. Nothing was ever settled under `settle-1`; `settle-2` added the
+horizon read and tightened `Rugged` (the 2026-09-29 review of PR #209).
+
+What counts as a rug is **not decided here**. A read is a rug read only when the
+fact sheet's level reached `Rugged` (`realorrug_roast::level`); that level is
+reached only by the rugged pair (`RUGGED_PAIRS` in `verdict.rs`), whose
+definition is the owner's to give.
+
+- `Rugged` needs a first in-window read that was **not** a rug, then two
+  adjacent complete rug reads taken at different times. A coin whose first read
+  after the close is already a rug might have rugged inside the entry window,
+  where players could see it, so it is not a rug the round can call: it goes on
+  to `Unresolved`. One rug read is not a rug either, because a level is a state
+  and a single read can be a launch-block glitch. The rug can be decided
+  inside the window, as soon as the confirming read is made.
+- `Stood` only once the horizon has ended, no read in the window was a rug,
+  each of the fourteen 24-hour spans holds a complete no-rug read, **and** a
+  complete no-rug read was taken at or after the horizon, so the last day is
+  read too (§9: once a day, plus once at the horizon).
+- `Unresolved` once the horizon plus one day of grace (`HORIZON_GRACE_SECS`,
+  twice the timer's interval, so one missed run cannot cost the horizon read)
+  has passed without either. Before then a coin that is neither is still open.
+- **Nothing is written** for a coin whose window is open and which has not
+  rugged. There is no premature `Unresolved`; the earlier build's
+  permanent-`Unresolved` problem cannot occur.
+- An incomplete read is recorded but never enters the derivation as evidence, so
+  a gap is a gap: absent is not zero, and unknown is not safe.
+- The evidence reference of an outcome is `close=<n>;reads=<at>:<R|N>,...`
+  (canonical, in-window complete reads), so a row is checkable from itself:
+  `rederive` returns the outcome from the rule version, the evidence and
+  `settled_at`, and nothing when they disagree, when the rule version is
+  another's, or when any read is later than `settled_at`.
+- `due` decides whether a coin is read now: only from the close to the end of
+  the grace; not once it has settled `Rugged` or its first read is a rug (no
+  later read could change either); a coin whose latest read is a rug that a
+  second read would confirm is owed that second read; not when its current
+  24-hour span already holds a complete read; and, from the horizon on, only
+  while `Stood` is still possible and the horizon read has not been taken.
+
+**Rugged and Stood are unreachable today, and why.** Nothing in production
+builds the signals that lift a sheet to `Rugged` (`LiquidityGone` and
+`BuyersCannotSell`; `BUILT_SIGNALS` in `realorrug-roast` lists what is built,
+and a source-scan test keeps that list honest). If `settle observe` recorded
+every such read as a calm `NothingUglyYet`, a coin that was drained on day two
+would show fourteen days of "no rug seen" and settle `Stood`, permanently: a
+zero from an instrument that could not have measured anything (AGENTS.md §1).
+So a read counts as "no rug seen" only when the sheet **can** detect a rug.
+That is one seam, `realorrug_roast::rug_detectable()`, which is `false` today
+and moves with `RUGGED_PAIRS`. Each observation records it (`rug_detectable`,
+absent means false), a calm read taken while it was false is no evidence, and
+`settle observe` refuses to read at all in such a build, saying so. **The
+consequence today: every coin settles `Unresolved` once its grace is over, no
+coin settles `Stood` or `Rugged`, and no board figure can come from
+settlement.** This is the intended, honest state until the owner decides what a
+rug is; I did not invent a definition. The test
+`a_drained_coin_is_never_stood_through_the_real_sheet` builds a drained coin's
+real `FactSheet` and runs the whole observe-and-decide path for fourteen days,
+and fails if the seam is removed (checked by re-applying the bug).
+
+**How serve ingests, and when.** `REALORRUG_OUTCOMES_FILE` names the published
+file. At start, and then every ten minutes, a task in `realorrug-serve` reads it
+and, for each row, writes through `Store::record_outcome_once`, the same single
+write path the forecast routes use. A poll, not a file watch: the file changes
+at most twice a day, a poll has nothing platform-specific to go wrong, and a
+missed tick costs ten minutes, not a row. **Deny by default:** with the variable
+unset no task runs and nothing is ingested; a file not published yet, unreadable,
+or not the published shape ingests nothing; an unreadable rounds file ingests
+nothing, since the close a row is checked against comes from it. A row is
+written only when its round and coin are in the rounds file, the close in its
+own evidence equals the rounds file's close, and it re-derives to its own
+outcome from its own evidence. A row that fails is counted and skipped, and the
+rest are still ingested. **Ingesting the same file twice writes nothing new:**
+`record_outcome_once` checks for an existing outcome and appends inside one
+write transaction, so a re-read, a grown file and a restart are all no-ops for
+rows already held. The store's triggers refuse an UPDATE or DELETE, and a
+written `Unresolved` is permanent: correcting one needs a new rule version and a
+decision of Josh's, not a re-run.
+
+**What serve trusts, and what it does not.** The row's `settled_at` is written
+by the job, not by serve, so serve judges it by its own clock (`now`): a row is
+refused when `settled_at` is later than `now` plus five minutes
+(`CLOCK_SKEW_SECS`, an allowance for two machines' clocks), so a row cannot
+cite reads from the server's future. A `Stood` or `Unresolved` row is refused
+before the round's horizon by the server's clock, whatever the row says; a
+`Rugged` row is not held to the horizon, since a rug is decided when it is
+seen. **A second, different outcome for a coin the store already holds** is not
+written (the first stands): it is counted as `conflicting` in the ingest line and
+logged to stderr naming the round, the coin and both values, since it means a
+rule change or a hand-edited file, and a person should see it.
+
+**Torn lines and two runs.** `settle observe` appends each observation as one
+`write_all` of the line and its newline. If the process is killed mid-write the
+file can end in half a line; the next run cuts that torn tail off before it
+appends, and every reader skips a torn final line and reports it rather than
+failing (a bad line in the middle is still an error). A lock beside the
+observations file (a `.lock` sibling) is held for the whole `observe`, so a
+second run started meanwhile exits at once instead of interleaving. The unit's
+`TimeoutStartSec` is 75 minutes: 150 reads at the 20-second read clock is 50
+minutes, plus the publish.
+
+**Cadence.** The timer is not hourly. It fires twice a day (04:15 and 16:15 UTC,
+each with a randomised delay of up to ten minutes; `Persistent=true` catches a
+missed one). Twice, not once, because `Stood` needs a complete read in every
+24-hour span: with one run a day, a single missed or jittered run leaves a span
+empty and turns a coin that stood into `Unresolved`, permanently. With `due`,
+the second slot reads only the coins whose span is still empty, so the cost
+stays at about one complete read per coin per day. The publish step after each
+observe is the horizon-end pass. **The ordering dependency on record-launches is
+dropped**: nothing here reads what that job writes.
+
+**Cost, and what is not yet measured.** Design 0027 §2.4 gives 2,000 compute
+units as the ceiling for one cold dossier (the Alchemy table it cites, checked
+2026-09-18, 30M free CU a month), and the earlier estimate in §9 (about 100M CU
+a month) was hourly reads of 70 coins: 70 x 24 x 30 x 2,000. At the cadence
+built, the ceiling is:
+
+> 5 coins a day x 14-day horizon = **70 coins in flight**, one complete read
+> each per day: 70 x 30 x 2,000 CU = **4.2M CU a month at the ceiling**, about
+> 14% of the 30M free plan, and at most 70 x 60 = **4,200 calls a day** (the
+> read's 60-call budget). Reading every coin twice a day would be 8.4M, which is
+> what a missing `due` would cost.
+
+Two limits on that arithmetic. It is a ceiling, not a measurement: the figure
+per read is the budget's cap, and the read's real use is lower. And only
+Robinhood reads draw compute units (`take_cu`); a Solana read is metered by its
+calls alone. **The measured number is not in this document.** The dossier
+records its calls but not its compute units, no capture stores either, and
+measuring it needs a live read against a paid endpoint, which this build did not
+make. The method for whoever runs it: run `realorrug settle observe` once
+against the configured RPC for one open round, then read the `calls` field of
+each line in the observations file (and, for Robinhood coins, the provider's own
+usage dashboard for the same interval, since the dossier does not count compute
+units). Multiply the mean by 70 coins and 30 days, and replace the ceiling above
+with it, dated and sourced.
+
+**Files.** The rounds file (`REALORRUG_ROUNDS_FILE`), the observations file
+(`REALORRUG_SETTLE_OBSERVATIONS`, one JSON object a line, append-only, each line
+strict about unknown fields) and the outcomes file (`REALORRUG_OUTCOMES_FILE`).
+The job holds no store path. A file that is not the expected shape is refused
+whole, and the job never overwrites an existing outcomes file it cannot read.
+
+**What is true today, and not.**
+
+- **`Rugged` and `Stood` are not reachable from real data yet** (above). What
+  the job produces today is `Unresolved`, and only after every window has
+  ended plus its grace; with the units not installed, nothing has run at all.
+  When the owner decides what a rug is and `rug_detectable()` turns true,
+  fourteen days of complete reads plus the horizon read are what `Stood` needs
+  and what the job produces; the first `Stood` cannot exist before the first
+  horizon ends, fourteen days after the first close.
+- **The deviation from ADR 0041 decision 6 is gone.** The first build wrote the
+  store directly; this one publishes a file and serve ingests it, as the ADR
+  says.
+- An observation is a code-computed level from a fact sheet at a moment. It is
+  not a claim about a person, and no model wrote any of it (AGENTS.md section 3
+  rules 1 and 4).
 
 ## 13. As built (4-5, site pages)
 
