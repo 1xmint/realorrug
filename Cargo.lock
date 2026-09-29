@@ -1498,6 +1498,7 @@ dependencies = [
  "realorrug-store",
  "realorrug-types",
  "resvg",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

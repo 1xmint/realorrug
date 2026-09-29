@@ -267,13 +267,21 @@ fn parse_utc(text: &str) -> Option<i64> {
 pub(crate) fn serve_monthly_allowance_from(
     get: &impl Fn(&str) -> Option<String>,
 ) -> Option<MicroUsd> {
+    // `from_dollars` already answers zero for a non-finite or non-positive
+    // figure, and the filter refuses zero (which is also what a fraction of a
+    // micro-dollar rounds to): a second check before it would only repeat it.
     get("REALORRUG_SERVE_MONTHLY_USD")?
         .trim()
         .parse::<f64>()
         .ok()
-        .filter(|v| v.is_finite() && *v > 0.0)
         .map(MicroUsd::from_dollars)
         .filter(|m| m.get() > 0)
+}
+
+/// The meter's day number for a unix time. One function, so the start-up
+/// ledger and every booking agree on what a day is.
+fn day_of(unix_seconds: i64) -> u64 {
+    u64::try_from(unix_seconds / 86_400).unwrap_or(0)
 }
 
 /// The origins allowed to call the API from a browser with credentials, from
@@ -448,7 +456,7 @@ impl AuthState {
             let mut ledger = store_path.clone().into_bytes();
             ledger.extend_from_slice(b".spend.json");
             let ledger = PathBuf::from(String::from_utf8(ledger).ok()?);
-            let day = u64::try_from(clock() / 86_400).unwrap_or(0);
+            let day = day_of(clock());
             match Spend::open(ledger, budget, day) {
                 Ok(spend) => Some(Mutex::new(spend)),
                 Err(why) => {
@@ -572,7 +580,7 @@ impl Live {
                 "the spend record is unavailable",
             )
         })?;
-        let day = u64::try_from(now / 86_400).unwrap_or(0);
+        let day = day_of(now);
         let Ok(commitment) = spend.meter.authorize(READ_COST, day) else {
             let _ = spend.persist();
             return Err(refuse(
@@ -1884,5 +1892,242 @@ mod tests {
             assert!(app_origins_from(&get(bad)).is_empty(), "{bad}");
         }
         assert!(app_origins_from(&|_| None).is_empty());
+    }
+
+    // ---- Boundaries the mutation run found unpinned (CI, PR #207). --------
+
+    #[test]
+    fn a_utc_time_is_read_only_within_its_calendar_and_clock_bounds() {
+        // Exactly the shortest accepted form, and one character less.
+        assert_eq!(parse_utc("1970-01-01T00:00:00"), Some(0));
+        assert_eq!(parse_utc("1970-01-01T00:00:0"), None);
+        // Each separator on its own.
+        assert_eq!(parse_utc("1970/01-01T00:00:00Z"), None);
+        assert_eq!(parse_utc("1970-01/01T00:00:00Z"), None);
+        assert_eq!(parse_utc("1970-01-01 00:00:00Z"), None);
+        // Each clock field at its last good value and its first bad one.
+        assert_eq!(parse_utc("1970-01-01T23:00:00Z"), Some(82_800));
+        assert_eq!(parse_utc("1970-01-01T24:00:00Z"), None);
+        assert_eq!(parse_utc("1970-01-01T00:59:00Z"), Some(3_540));
+        assert_eq!(parse_utc("1970-01-01T00:60:00Z"), None);
+        assert_eq!(parse_utc("1970-01-01T00:00:60Z"), Some(60));
+        assert_eq!(parse_utc("1970-01-01T00:00:61Z"), None);
+        // And the calendar fields.
+        assert_eq!(parse_utc("1970-00-01T00:00:00Z"), None);
+        assert_eq!(parse_utc("1970-01-00T00:00:00Z"), None);
+        assert_eq!(parse_utc("1970-01-32T00:00:00Z"), None);
+    }
+
+    #[test]
+    fn an_x_error_is_labelled_without_its_headers_or_body() {
+        assert_eq!(short(&ureq::Error::StatusCode(429)), "X answered 429");
+        assert_eq!(
+            short(&ureq::Error::Timeout(ureq::Timeout::Global)),
+            "timed out"
+        );
+        assert_eq!(short(&ureq::Error::HostNotFound), "could not reach X");
+    }
+
+    #[test]
+    fn the_wall_clock_is_the_present_and_a_day_is_86400_seconds() {
+        assert!(now_secs() > 1_700_000_000, "the clock reads {}", now_secs());
+        assert_eq!(day_of(0), 0);
+        assert_eq!(day_of(86_399), 0);
+        assert_eq!(day_of(86_400), 1);
+        assert_eq!(day_of(T0), 20_727);
+        assert_eq!(day_of(-1), 0);
+    }
+
+    #[test]
+    fn the_monthly_allowance_is_open_only_for_a_positive_finite_figure() {
+        let read = |v: &str| serve_monthly_allowance_from(&|_| Some(v.to_owned()));
+        assert_eq!(
+            read("5").map(realorrug_types::MicroUsd::get),
+            Some(5_000_000)
+        );
+        assert_eq!(
+            read(" 0.5 ").map(realorrug_types::MicroUsd::get),
+            Some(500_000)
+        );
+        for closed in ["0", "-1", "inf", "NaN", "abc", "", "0.0000001"] {
+            assert!(read(closed).is_none(), "{closed:?} opened the allowance");
+        }
+        assert!(serve_monthly_allowance_from(&|_| None).is_none());
+    }
+
+    #[test]
+    fn only_our_own_hex_tokens_pass_and_a_swapped_pair_is_not_equal() {
+        let good = "0123456789abcdef".repeat(4);
+        assert!(is_token(&good));
+        assert!(!is_token(&good[..63]));
+        assert!(!is_token(&"g".repeat(64)));
+        assert!(!is_token(&good.to_uppercase()));
+        assert!(!is_token(&format!("{good}0")));
+        // Same length, same bytes swapped: an XOR fold would cancel to zero.
+        assert!(ct_eq("ab", "ab"));
+        assert!(!ct_eq("ab", "ba"));
+        assert!(!ct_eq("ab", "abc"));
+    }
+
+    #[test]
+    fn cloudflare_is_trusted_only_when_the_variable_is_exactly_one() {
+        let with = |v: Option<&str>| {
+            let dir = tempfile::tempdir().unwrap();
+            let vars: HashMap<&str, String> = HashMap::from([
+                (
+                    "REALORRUG_STORE_PATH",
+                    dir.path().join("s.db").to_string_lossy().into_owned(),
+                ),
+                ("REALORRUG_X_CLIENT_ID", "c".to_owned()),
+                ("REALORRUG_X_REDIRECT_URI", "https://api.test/cb".to_owned()),
+                ("REALORRUG_SERVE_MONTHLY_USD", "5".to_owned()),
+                ("REALORRUG_TRUST_CLOUDFLARE", v.unwrap_or("").to_owned()),
+            ]);
+            let state = AuthState::from_vars(
+                &|k| vars.get(k).cloned(),
+                Some(FakeX::new() as Arc<dyn XClient>),
+                Arc::new(|| T0),
+            );
+            state.live().unwrap().trust_cloudflare
+        };
+        assert!(with(Some("1")));
+        assert!(!with(Some("0")));
+        assert!(!with(Some("true")));
+        assert!(!with(None));
+    }
+
+    #[test]
+    fn a_busy_store_is_a_503_and_any_other_store_failure_is_a_500() {
+        let h = Harness::open();
+        let busy = h
+            .state
+            .with_store(|_| -> Result<(), StoreError> {
+                Err(StoreError::Sqlite(rusqlite::Error::QueryReturnedNoRows))
+            })
+            .unwrap_err();
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let other = h
+            .state
+            .with_store(|_| -> Result<(), StoreError> { Err(StoreError::Duplicate) })
+            .unwrap_err();
+        assert_eq!(other.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn a_callback_with_an_error_or_an_empty_code_never_reaches_x() {
+        let h = Harness::open();
+        let (state, cookie, _) = h.begin().await;
+        for query in [
+            format!("code=abc&error=access_denied&state={state}"),
+            format!("code=&state={state}"),
+        ] {
+            let (status, _, _) = h
+                .get(&format!("/auth/x/callback?{query}"), Some(&cookie))
+                .await;
+            assert_ne!(status, StatusCode::FOUND, "{query}");
+        }
+        assert_eq!(h.fake.calls(), 0, "a refused callback must not reach X");
+        assert!(h.player_of("1001").is_none());
+    }
+
+    #[test]
+    fn a_sign_in_that_keeps_losing_the_race_stops_after_three_retries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("s.db")).unwrap();
+        let user = XUser {
+            id: "5".into(),
+            handle: "h".into(),
+            created_at: None,
+        };
+        sign_in(&store, &user, "a", 1, &|s, x| s.player_for_x_id(x)).unwrap();
+        // A lookup that never sees the winner, so every write says XIdTaken.
+        let looks = std::cell::Cell::new(0);
+        let result = sign_in(&store, &user, "b", 2, &|_, _| {
+            looks.set(looks.get() + 1);
+            Ok(None)
+        });
+        assert!(matches!(result, Err(StoreError::XIdTaken)), "{result:?}");
+        assert_eq!(looks.get(), 4, "one try and three retries, no more");
+    }
+
+    #[test]
+    fn the_start_table_is_capped_and_forgets_only_what_is_an_hour_old() {
+        let h = Harness::open();
+        let live = h.state.live().unwrap();
+        let now = T0;
+        let fill = |stamp: i64| {
+            let mut starts = live.starts.lock().unwrap();
+            starts.clear();
+            for i in 0..LIMITER_CAP {
+                starts.insert(format!("ip{i}"), vec![stamp]);
+            }
+        };
+        let len = || live.starts.lock().unwrap().len();
+
+        // Full of attempts still inside the hour: a stranger is turned away,
+        // an address already in the table is still counted, not shut out.
+        fill(now - START_WINDOW_SECS + 1);
+        assert!(!live.allow_start("stranger", now));
+        assert!(live.allow_start("ip0", now));
+        assert_eq!(len(), LIMITER_CAP, "a known address never purges the table");
+        // One short of full leaves room.
+        live.starts.lock().unwrap().remove("ip1");
+        assert!(live.allow_start("stranger", now));
+
+        // Full of attempts exactly an hour old: all forgotten, then counted.
+        fill(now - START_WINDOW_SECS);
+        assert!(live.allow_start("stranger", now));
+        assert_eq!(len(), 1);
+
+        // Below the cap nothing is purged, old or not.
+        {
+            let mut starts = live.starts.lock().unwrap();
+            starts.clear();
+            starts.insert("old".into(), vec![now - START_WINDOW_SECS]);
+        }
+        assert!(live.allow_start("stranger", now));
+        assert!(live.starts.lock().unwrap().contains_key("old"));
+    }
+
+    #[test]
+    fn a_started_sign_in_is_capped_in_flight_and_dies_after_its_ttl() {
+        let h = Harness::open();
+        let live = h.state.live().unwrap();
+        let now = T0;
+        let fill = |expires: i64| {
+            let mut pending = live.pending.lock().unwrap();
+            pending.clear();
+            for i in 0..PENDING_CAP {
+                pending.insert(
+                    format!("s{i}"),
+                    Pending {
+                        verifier: "v".into(),
+                        expires,
+                    },
+                );
+            }
+        };
+        let len = || live.pending.lock().unwrap().len();
+
+        fill(now + 1);
+        assert!(!live.remember("new", "v", now), "a full table took another");
+        live.pending.lock().unwrap().remove("s0");
+        assert!(live.remember("new", "v", now), "one short of full has room");
+
+        // Full of states that have just expired: purged, then stored.
+        fill(now);
+        assert!(live.remember("new", "v", now));
+        assert_eq!(len(), 1);
+
+        // A state lives for exactly OAUTH_TTL_SECS and works once.
+        live.pending.lock().unwrap().clear();
+        assert!(live.remember("a", "ver", now));
+        assert_eq!(
+            live.take("a", now + OAUTH_TTL_SECS - 1).as_deref(),
+            Some("ver")
+        );
+        assert!(live.take("a", now).is_none(), "a callback works once");
+        assert!(live.remember("b", "ver", now));
+        assert!(live.take("b", now + OAUTH_TTL_SECS).is_none());
     }
 }
