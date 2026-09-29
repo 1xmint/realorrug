@@ -585,6 +585,14 @@ mod tests {
         assert!(due(CLOSE, &[rug(CLOSE - 10)], CLOSE + 5));
     }
 
+    /// A span is half open: a read exactly at the next span's start belongs to
+    /// that span and does not cover this one.
+    #[test]
+    fn a_read_on_the_next_spans_first_second_does_not_cover_this_one() {
+        assert!(due(CLOSE, &[calm(CLOSE + SPAN_SECS)], CLOSE + 100));
+        assert!(!due(CLOSE, &[calm(CLOSE)], CLOSE + 100));
+    }
+
     /// The last span is read too: the horizon-end pass is the daily one.
     #[test]
     fn the_last_span_is_owed_a_read() {

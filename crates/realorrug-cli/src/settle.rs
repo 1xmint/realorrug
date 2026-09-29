@@ -1263,6 +1263,93 @@ mod tests {
         assert!(run(&args_of(&["settle", "--verify"])).is_err());
     }
 
+    /// Each subcommand reaches its own command, not the usage line: with
+    /// nothing given, each fails on the path it needs. (A dropped dispatch
+    /// arm would answer with the usage for all three.)
+    #[test]
+    fn each_subcommand_reaches_its_own_command() {
+        for sub in ["observe", "publish", "verify"] {
+            let err = run(&args_of(&["settle", sub])).expect_err(sub);
+            assert_ne!(err, USAGE, "{sub} fell through to the usage line");
+            assert!(err.contains("PATH"), "{sub}: {err}");
+        }
+        assert_eq!(
+            run(&args_of(&["settle", "nonsense"])),
+            Err(USAGE.to_owned())
+        );
+    }
+
+    /// `CantTell` tells the rule nothing even when the read is marked
+    /// complete; a rug is a rug even when it is not; another level counts as
+    /// no rug only when complete.
+    #[test]
+    fn a_read_tells_the_rule_only_what_it_established() {
+        assert_eq!(obs(TOKEN, 1, Level::CantTell, true).reading(), None);
+        assert_eq!(obs(TOKEN, 1, Level::CantTell, false).reading(), None);
+        assert_eq!(
+            obs(TOKEN, 1, Level::Rugged, false).reading(),
+            Some(Reading::Rug)
+        );
+        assert_eq!(
+            obs(TOKEN, 1, Level::NothingUglyYet, true).reading(),
+            Some(Reading::NoRug)
+        );
+        assert_eq!(obs(TOKEN, 1, Level::NothingUglyYet, false).reading(), None);
+    }
+
+    /// Publish rewrites an existing file when a row is new, and leaves it
+    /// byte for byte alone when nothing is.
+    #[test]
+    fn publish_adds_a_new_row_to_an_existing_file_and_leaves_it_alone_otherwise() {
+        let dir = temp_dir("publish-grow");
+        let now = secs(SystemTime::now()).expect("clock");
+        let close = now - 3 * DAY;
+        let rounds = dir.join("rounds.json");
+        std::fs::write(
+            &rounds,
+            format!(
+                r#"{{"rounds":[{{"id":"r1","close":{close},"coins":[{{"chain":"solana","token":"{TOKEN}"}}]}}]}}"#
+            ),
+        )
+        .expect("rounds");
+        let observations = dir.join("observations.jsonl");
+        let outcomes = dir.join("outcomes.json");
+        let args = args_of(&[
+            "settle",
+            "publish",
+            "--rounds",
+            rounds.to_str().expect("p"),
+            "--observations",
+            observations.to_str().expect("p"),
+            "--outcomes",
+            outcomes.to_str().expect("p"),
+        ]);
+        let none = |_: &str| None;
+        let rows = |p: &std::path::Path| {
+            settle::parse_outcomes(&std::fs::read_to_string(p).expect("file"))
+                .expect("parse")
+                .outcomes
+                .len()
+        };
+
+        // Nothing to say yet: an empty file exists.
+        publish_command(&args, &none).expect("empty");
+        assert_eq!(rows(&outcomes), 0);
+
+        // Nothing new: the file is not touched (a marker survives).
+        let marked = format!("{}\n\n", std::fs::read_to_string(&outcomes).expect("file"));
+        std::fs::write(&outcomes, &marked).expect("mark");
+        publish_command(&args, &none).expect("nothing new");
+        assert_eq!(std::fs::read_to_string(&outcomes).expect("file"), marked);
+
+        // A rug arrives: the existing file gains the row.
+        let line =
+            serde_json::to_string(&obs(TOKEN, close + DAY, Level::Rugged, true)).expect("json");
+        std::fs::write(&observations, format!("{line}\n")).expect("observations");
+        publish_command(&args, &none).expect("grown");
+        assert_eq!(rows(&outcomes), 1);
+    }
+
     #[test]
     fn a_missing_optional_file_is_none_and_a_directory_is_an_error() {
         let dir = temp_dir("optional");

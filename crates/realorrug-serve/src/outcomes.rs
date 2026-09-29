@@ -59,6 +59,19 @@ pub(crate) struct Report {
     pub(crate) refused: usize,
 }
 
+/// The log line for one ingest, or nothing when it did nothing (an idle poll
+/// every ten minutes would drown the rest of the log).
+fn describe(result: &Result<Report, String>) -> Option<String> {
+    match result {
+        Ok(report) if *report == Report::default() => None,
+        Ok(report) => Some(format!(
+            "realorrug-serve: outcomes ingested: {} written, {} already held, {} refused",
+            report.written, report.already, report.refused
+        )),
+        Err(why) => Some(format!("realorrug-serve: outcomes not ingested: {why}")),
+    }
+}
+
 /// Whether the rounds file vouches for a row.
 fn vetted(row: &OutcomeRow, rounds: &[Round]) -> bool {
     let Some(round) = rounds.iter().find(|r| r.id == row.round) else {
@@ -147,14 +160,12 @@ impl Ingest {
             // not sit on an async worker.
             if let Ok(Some(result)) =
                 tokio::task::spawn_blocking(move || state.ingest_outcomes()).await
+                && let Some(line) = describe(&result)
             {
-                match result {
-                    Ok(report) if report == Report::default() => {}
-                    Ok(report) => println!(
-                        "realorrug-serve: outcomes ingested: {} written, {} already held, {} refused",
-                        report.written, report.already, report.refused
-                    ),
-                    Err(why) => eprintln!("realorrug-serve: outcomes not ingested: {why}"),
+                if result.is_err() {
+                    eprintln!("{line}");
+                } else {
+                    println!("{line}");
                 }
             }
             tokio::time::sleep(INGEST_EVERY).await;
@@ -270,6 +281,30 @@ mod tests {
 
     fn file(rows: Vec<OutcomeRow>) -> OutcomesFile {
         OutcomesFile { outcomes: rows }
+    }
+
+    /// An idle poll logs nothing; work and failure are each said once.
+    #[test]
+    fn only_a_poll_that_did_something_is_logged() {
+        assert_eq!(describe(&Ok(Report::default())), None);
+        let some = describe(&Ok(Report {
+            written: 2,
+            already: 1,
+            refused: 3,
+        }))
+        .expect("a line");
+        assert!(
+            some.contains("2 written, 1 already held, 3 refused"),
+            "{some}"
+        );
+        let idle_but_held = describe(&Ok(Report {
+            written: 0,
+            already: 1,
+            refused: 0,
+        }));
+        assert!(idle_but_held.is_some());
+        let failed = describe(&Err("no such file".to_owned())).expect("a line");
+        assert!(failed.contains("not ingested: no such file"), "{failed}");
     }
 
     /// The same file ingested twice writes its rows once.
