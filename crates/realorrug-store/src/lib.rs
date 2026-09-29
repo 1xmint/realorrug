@@ -159,6 +159,10 @@ impl Store {
 
     /// Appends one row to the chain. Every public write method funnels
     /// through here, so the chain's shape cannot drift between them.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one column per argument, the row's own fields"
+    )]
     fn append(
         &self,
         kind: &str,
@@ -232,7 +236,15 @@ impl Store {
             q_basis_points: q.basis_points(),
             window_close,
         };
-        match self.append("forecast", round, chain_name, token, Some(player_key), now, &payload) {
+        match self.append(
+            "forecast",
+            round,
+            chain_name,
+            token,
+            Some(player_key),
+            now,
+            &payload,
+        ) {
             Err(StoreError::Sqlite(rusqlite::Error::SqliteFailure(e, _)))
                 if e.code == rusqlite::ErrorCode::ConstraintViolation =>
             {
@@ -309,6 +321,7 @@ impl Store {
     /// coin -- a correction is a new row (§3), and picking which of several
     /// outcome rows is authoritative is a caller question this pure store
     /// does not answer for itself.
+    #[expect(clippy::too_many_arguments, reason = "the outcome row's own fields")]
     pub fn record_outcome(
         &self,
         round: &str,
@@ -324,7 +337,9 @@ impl Store {
             rule_version: rule_version.to_owned(),
             evidence_reference: evidence_reference.map(str::to_owned),
         };
-        self.append("outcome", round, chain_name, token, None, settled_at, &payload)
+        self.append(
+            "outcome", round, chain_name, token, None, settled_at, &payload,
+        )
     }
 
     /// The most recently recorded outcome for a round and coin, if any.
@@ -388,6 +403,7 @@ impl Store {
     ///
     /// [`StoreError::Sqlite`] or [`StoreError::Serialise`] on a write
     /// failure.
+    #[expect(clippy::too_many_arguments, reason = "the evidence row's own fields")]
     pub fn submit_evidence(
         &self,
         round: &str,
@@ -402,7 +418,15 @@ impl Store {
             reference: reference.to_owned(),
             note: note.to_owned(),
         };
-        self.append("evidence", round, chain_name, token, Some(player_key), at, &payload)
+        self.append(
+            "evidence",
+            round,
+            chain_name,
+            token,
+            Some(player_key),
+            at,
+            &payload,
+        )
     }
 
     /// Submits a discussion comment (design 0032 §2, "Discussion / vote").
@@ -425,7 +449,15 @@ impl Store {
         let payload = RowPayload::Discussion {
             comment: comment.to_owned(),
         };
-        self.append("discussion", round, chain_name, token, Some(player_key), at, &payload)
+        self.append(
+            "discussion",
+            round,
+            chain_name,
+            token,
+            Some(player_key),
+            at,
+            &payload,
+        )
     }
 
     /// Records or replaces a player's identity (design 0032 §4). The X id,
@@ -488,9 +520,24 @@ mod tests {
     fn a_late_forecast_is_refused() {
         let store = store();
         let err = store
-            .submit_forecast("r1", "solana", "coin-a", "player-1", Side::Rug, odds(6_000), 101, 100)
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-a",
+                "player-1",
+                Side::Rug,
+                odds(6_000),
+                101,
+                100,
+            )
             .expect_err("late forecast");
-        assert!(matches!(err, StoreError::WindowClosed { window_close: 100, now: 101 }));
+        assert!(matches!(
+            err,
+            StoreError::WindowClosed {
+                window_close: 100,
+                now: 101
+            }
+        ));
         assert!(
             store
                 .forecast("r1", "solana", "coin-a", "player-1", "player-1", 101)
@@ -506,10 +553,28 @@ mod tests {
     fn a_duplicate_returns_duplicate_and_the_first_stands() {
         let store = store();
         store
-            .submit_forecast("r1", "solana", "coin-a", "player-1", Side::Rug, odds(6_000), 10, 100)
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-a",
+                "player-1",
+                Side::Rug,
+                odds(6_000),
+                10,
+                100,
+            )
             .expect("first forecast");
         let err = store
-            .submit_forecast("r1", "solana", "coin-a", "player-1", Side::Real, odds(4_000), 20, 100)
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-a",
+                "player-1",
+                Side::Real,
+                odds(4_000),
+                20,
+                100,
+            )
             .expect_err("duplicate");
         assert!(matches!(err, StoreError::Duplicate));
 
@@ -517,7 +582,11 @@ mod tests {
             .forecast("r1", "solana", "coin-a", "player-1", "player-1", 100)
             .expect("read")
             .expect("a forecast exists");
-        assert_eq!(view.side, Side::Rug, "the first call stands, not the second");
+        assert_eq!(
+            view.side,
+            Side::Rug,
+            "the first call stands, not the second"
+        );
         assert_eq!(view.submitted_at, 10);
     }
 
@@ -529,28 +598,61 @@ mod tests {
     fn a_tampered_middle_row_makes_verify_name_that_row() {
         let store = store();
         store
-            .submit_forecast("r1", "solana", "coin-a", "player-1", Side::Rug, odds(6_000), 10, 100)
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-a",
+                "player-1",
+                Side::Rug,
+                odds(6_000),
+                10,
+                100,
+            )
             .expect("row 1");
         store
-            .submit_forecast("r1", "solana", "coin-b", "player-1", Side::Real, odds(5_000), 11, 100)
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-b",
+                "player-1",
+                Side::Real,
+                odds(5_000),
+                11,
+                100,
+            )
             .expect("row 2");
         store
-            .submit_forecast("r1", "solana", "coin-c", "player-1", Side::Rug, odds(3_000), 12, 100)
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-c",
+                "player-1",
+                Side::Rug,
+                odds(3_000),
+                12,
+                100,
+            )
             .expect("row 3");
 
-        assert_eq!(store.verify().expect("verify"), Verified::Intact { rows: 3 });
+        assert_eq!(
+            store.verify().expect("verify"),
+            Verified::Intact { rows: 3 }
+        );
 
         // Tamper with the middle row's payload directly, the way a host
         // attacker with file access would -- not through this crate's API,
         // which has no update path at all.
         store
             .conn
-            .execute("UPDATE rows SET payload = '{\"kind\":\"tampered\"}' WHERE seq = 2", [])
+            .execute(
+                "UPDATE rows SET payload = '{\"kind\":\"tampered\"}' WHERE seq = 2",
+                [],
+            )
             .expect("tamper");
 
         match store.verify().expect("verify") {
             Verified::Broken { at, .. } => assert_eq!(at, 2, "the tamper landed on row 2"),
-            other => panic!("expected Broken, got {other:?}"),
+            intact @ Verified::Intact { .. } => panic!("expected Broken, got {intact:?}"),
         }
     }
 
@@ -569,13 +671,25 @@ mod tests {
         };
         store.upsert_identity(&identity).expect("upsert");
         store
-            .submit_forecast("r1", "solana", "coin-a", "player-1", Side::Rug, odds(6_000), 10, 100)
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-a",
+                "player-1",
+                Side::Rug,
+                odds(6_000),
+                10,
+                100,
+            )
             .expect("forecast");
 
         store.delete_identity("player-1").expect("delete");
 
         assert_eq!(store.identity("player-1").expect("read"), None);
-        assert_eq!(store.verify().expect("verify"), Verified::Intact { rows: 1 });
+        assert_eq!(
+            store.verify().expect("verify"),
+            Verified::Intact { rows: 1 }
+        );
 
         // No row anywhere in the chain ever held the X id or handle -- the
         // schema never gave them a column to be stored in, so this is the
@@ -632,7 +746,16 @@ mod tests {
     fn a_hidden_forecast_is_visible_only_to_its_author_before_close() {
         let store = store();
         store
-            .submit_forecast("r1", "solana", "coin-a", "player-1", Side::Rug, odds(6_000), 10, 100)
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-a",
+                "player-1",
+                Side::Rug,
+                odds(6_000),
+                10,
+                100,
+            )
             .expect("forecast");
 
         assert!(

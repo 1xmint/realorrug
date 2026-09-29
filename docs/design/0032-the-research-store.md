@@ -398,3 +398,62 @@ step must make.
 horizon — not hourly. Hourly reads across roughly 70 coins run to about
 100M compute units a month, against the free plan's 30M
 (**estimate — verify at 4-4** before committing to a cadence in code).
+
+## 10. As built (4-2, `realorrug-store`)
+
+A new crate, `crates/realorrug-store`, holding one `rusqlite::Connection`
+(`bundled`), no pool, no async runtime, no clock and no key — matching
+`realorrug-onchain::memory::Memory`'s own shape. `Store::open` is the only
+way in; a caller with no configured path never calls it, the same
+deny-by-default shape `realorrug-serve/src/record.rs` uses for its verdict
+write.
+
+**One table, four kinds.** Rather than one table per record kind, every
+forecast, outcome, evidence and discussion row lands in a single `rows`
+table (`kind`, `round`, `chain`, `token`, `player_key`, `at`, a
+kind-specific JSON `payload`, `previous_hash`, `hash`), chained in
+submission order regardless of kind. §3 names the chain as one property of
+the store, not one per record kind, so one chain across all four kinds is
+what "each row carries the previous row's digest" means literally; splitting
+it into four independent chains would have been a design choice this
+section does not ask for. `chain::digest` is the same primitive
+`realorrug-journal` chains its own events with (blake3, length-prefixed
+fields so a byte cannot shift across a field boundary and hash the same).
+`Store::verify` walks it and reports the first broken `seq`; it has no
+`Torn` case the way `realorrug_journal::Verified` does, because a single
+`INSERT` either lands or does not — there is no "complete row with no
+terminator" shape to distinguish from a broken one.
+
+**The unique-once-stands rule** is a partial SQLite index,
+`ux_forecast_once` on `(round, chain, token, player_key) WHERE kind =
+'forecast'`, so it costs outcome/evidence/discussion rows nothing.
+`Store::submit_forecast` maps the resulting `SQLITE_CONSTRAINT` into
+`StoreError::Duplicate`; `realorrug-serve` maps that to `409` in 4-3.
+
+**Visibility (§9's "Authors see their own call").** `Store::forecast` takes
+both the row's own player and the requesting player and answers `None` for
+anyone but the author before the row's own `window_close` — never a
+separate "is this mine" flag a caller could get wrong, since the row itself
+carries the close time it was submitted against.
+
+**Identity (§4).** A second table, `identity`, keyed by `player_key`, holds
+the X id, handle, `account_created_at` and session hash. No chain row has a
+column for any of them — not "redacted on delete," never present to begin
+with — so `Store::delete_identity` is one `DELETE` against one table and the
+chain needs no migration to stay valid and unlinked.
+
+**Reused, not copied (§6).** `realorrug_contest::calls::{Side, Odds,
+Outcome}` are the store's own forecast-side and outcome types; `Outcome`
+gained `Unresolved` there (§9), excluded from `points`, a player's
+`variance` and `settled` (`n`) by filtering it out before `record_for` and
+`eligibility` sum anything, rather than teaching `points` to score it. The
+store's own `Store::public_wording` is the §2/A4 mapping
+(`Rugged`→"rug observed within the window", `Stood`→"no qualifying rug
+observed", `Unresolved`→"unresolved") — the only place either internal name
+is allowed to reach a reply.
+
+`realorrug-store` is added to `repo-conformance`'s `MODEL_SIDE` list
+(§9's requirement) in the same commit.
+
+**Not done in 4-2, deferred to 4-3+ per the packet's own scope:** HTTP,
+sign-in, and the `FORBIDDEN_CLAIMS` site edit.

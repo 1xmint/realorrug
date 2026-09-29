@@ -53,7 +53,10 @@ pub(crate) fn upsert(conn: &Connection, identity: &Identity) -> Result<(), Store
 }
 
 pub(crate) fn delete(conn: &Connection, player_key: &str) -> Result<(), StoreError> {
-    conn.execute("DELETE FROM identity WHERE player_key = ?1", params![player_key])?;
+    conn.execute(
+        "DELETE FROM identity WHERE player_key = ?1",
+        params![player_key],
+    )?;
     Ok(())
 }
 

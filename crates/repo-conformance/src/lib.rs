@@ -592,6 +592,7 @@ mod tests {
             "realorrug-roast",
             "realorrug-analyst",
             "realorrug-serve",
+            "realorrug-store",
         ];
         const PAYOUT: &str = "realorrug-payout";
 
