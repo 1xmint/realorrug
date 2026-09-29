@@ -5,7 +5,9 @@
 //!
 //! [`derive`] turns a round's close and the observation reads recorded for one
 //! coin into an [`Outcome`], or into nothing yet. The `realorrug settle`
-//! command feeds it and writes what it returns; nothing here reads a chain, a
+//! command feeds it with the settlement job's own dated chain reads and
+//! publishes what it returns as an [`OutcomesFile`]; `realorrug-serve` ingests
+//! that file through the store's one write path. Nothing here reads a chain, a
 //! file or a clock, so the same close, reads and `now` give the same outcome
 //! on any machine, which is what lets [`rederive`] check a stored row from the
 //! row alone.
@@ -26,6 +28,8 @@
 //! * before the round's close nothing settles, whatever was read.
 //!
 //! No model is consulted and none could move the result.
+
+use serde::{Deserialize, Serialize};
 
 use crate::calls::Outcome;
 
@@ -182,6 +186,99 @@ pub fn rederive(
         return None;
     }
     derive(close, &reads, settled_at)
+}
+
+/// Whether a coin is owed a chain read at `now`: its window is open, no read
+/// has seen it rug, and the current 24-hour span holds no `NoRug` read yet.
+///
+/// This is what keeps the cost at one complete read per coin per day however
+/// often the timer fires: the timer may run twice a day so that one missed or
+/// late run cannot lose a span, and the second run of a day finds the span
+/// already covered and reads nothing. An incomplete read is not a `Read` (the
+/// caller drops it), so it leaves the span uncovered and the next run tries
+/// again.
+#[must_use]
+pub fn due(close: i64, reads: &[Read], now: i64) -> bool {
+    if now < close || now >= horizon(close) {
+        return false;
+    }
+    let window = in_window(close, reads);
+    if window.iter().any(|r| r.reading == Reading::Rug) {
+        return false;
+    }
+    let from = close.saturating_add((now - close) / SPAN_SECS * SPAN_SECS);
+    let to = from.saturating_add(SPAN_SECS);
+    !window
+        .iter()
+        .any(|r| r.reading == Reading::NoRug && r.at >= from && r.at < to)
+}
+
+/// One published outcome: the row `realorrug-serve` will write, and everything
+/// it needs to check the row before it does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomeRow {
+    /// The round.
+    pub round: String,
+    /// The coin's chain, as the rounds file names it.
+    pub chain: String,
+    /// The coin's address.
+    pub token: String,
+    /// What the rule decided.
+    pub outcome: Outcome,
+    /// The rule that decided it ([`RULE_VERSION`]).
+    pub rule_version: String,
+    /// The close and the reads it rests on ([`encode_evidence`]).
+    pub evidence_reference: String,
+    /// When the settlement job decided it (seconds since the epoch).
+    pub settled_at: i64,
+}
+
+impl OutcomeRow {
+    /// Whether the row re-derives to its own outcome from its own rule version,
+    /// evidence and `settled_at`. A row that does not is one nobody can vouch
+    /// for: serve refuses it.
+    #[must_use]
+    pub fn rederives(&self) -> bool {
+        rederive(
+            &self.rule_version,
+            Some(&self.evidence_reference),
+            self.settled_at,
+        ) == Some(self.outcome)
+    }
+
+    /// The round's close, as the row's own evidence states it.
+    #[must_use]
+    pub fn close(&self) -> Option<i64> {
+        decode_evidence(&self.evidence_reference).map(|(close, _)| close)
+    }
+}
+
+/// The published file: every outcome the settlement job has decided.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutcomesFile {
+    /// The rows, in the order they were decided.
+    pub outcomes: Vec<OutcomeRow>,
+}
+
+/// Reads a published outcomes file's text.
+///
+/// # Errors
+///
+/// A message when the text is not this shape. Nothing is guessed from a file
+/// that does not parse: the caller ingests nothing from it.
+pub fn parse_outcomes(text: &str) -> Result<OutcomesFile, String> {
+    serde_json::from_str(text).map_err(|e| format!("the outcomes file is not valid: {e}"))
+}
+
+/// The published file's text for `file`. Same rows, same text.
+///
+/// # Errors
+///
+/// A message if the rows cannot be serialised.
+pub fn render_outcomes(file: &OutcomesFile) -> Result<String, String> {
+    serde_json::to_string_pretty(file).map_err(|e| format!("cannot write the outcomes file: {e}"))
 }
 
 #[cfg(test)]
@@ -452,5 +549,93 @@ mod tests {
         assert_eq!(WINDOW_SECS, 1_209_600);
         assert_eq!(RULE_VERSION, "settle-1");
         assert_eq!(horizon(i64::MAX), i64::MAX, "no overflow near the top");
+    }
+
+    /// A coin is read only while its window is open: not before the close and
+    /// not from the horizon on.
+    #[test]
+    fn a_coin_is_due_only_inside_its_window() {
+        assert!(!due(CLOSE, &[], CLOSE - 1));
+        assert!(due(CLOSE, &[], CLOSE));
+        assert!(due(CLOSE, &[], horizon(CLOSE) - 1));
+        assert!(!due(CLOSE, &[], horizon(CLOSE)));
+    }
+
+    /// Once the day's span holds a complete read, the day's second run reads
+    /// nothing; the next span is owed one again.
+    #[test]
+    fn a_covered_span_is_not_read_twice() {
+        let reads = [calm(CLOSE + 3_600)];
+        assert!(!due(CLOSE, &reads, CLOSE + 7_200));
+        assert!(!due(CLOSE, &reads, CLOSE + SPAN_SECS - 1));
+        assert!(due(CLOSE, &reads, CLOSE + SPAN_SECS));
+        // A read in another span does not cover this one.
+        assert!(due(
+            CLOSE,
+            &[calm(CLOSE + 3_600)],
+            CLOSE + 2 * SPAN_SECS + 5
+        ));
+    }
+
+    /// A coin that has been seen to rug needs no more reads.
+    #[test]
+    fn a_rugged_coin_is_not_read_again() {
+        assert!(!due(CLOSE, &[rug(CLOSE + 10)], CLOSE + 5 * SPAN_SECS));
+        // A rug read from before the close is not a rug in the window.
+        assert!(due(CLOSE, &[rug(CLOSE - 10)], CLOSE + 5));
+    }
+
+    /// The last span is read too: the horizon-end pass is the daily one.
+    #[test]
+    fn the_last_span_is_owed_a_read() {
+        let mut reads = daily();
+        reads.pop();
+        assert!(due(CLOSE, &reads, CLOSE + 13 * SPAN_SECS + 100));
+    }
+
+    fn row(outcome: Outcome, evidence: &str, at: i64) -> OutcomeRow {
+        OutcomeRow {
+            round: "r".to_owned(),
+            chain: "solana".to_owned(),
+            token: "t".to_owned(),
+            outcome,
+            rule_version: RULE_VERSION.to_owned(),
+            evidence_reference: evidence.to_owned(),
+            settled_at: at,
+        }
+    }
+
+    /// A published row vouches for itself only when its own evidence gives its
+    /// own outcome.
+    #[test]
+    fn a_row_rederives_only_to_its_own_outcome() {
+        let evidence = encode_evidence(CLOSE, &[rug(CLOSE + 5)]);
+        let good = row(Outcome::Rugged, &evidence, CLOSE + 10);
+        assert!(good.rederives());
+        assert_eq!(good.close(), Some(CLOSE));
+        assert!(!row(Outcome::Stood, &evidence, CLOSE + 10).rederives());
+        assert!(
+            !OutcomeRow {
+                rule_version: "settle-0".to_owned(),
+                ..good.clone()
+            }
+            .rederives()
+        );
+        let bad = row(Outcome::Rugged, "not evidence", CLOSE + 10);
+        assert!(!bad.rederives());
+        assert_eq!(bad.close(), None);
+    }
+
+    /// The file round-trips, and a file of any other shape reads as nothing.
+    #[test]
+    fn the_outcomes_file_round_trips_and_refuses_other_shapes() {
+        let file = OutcomesFile {
+            outcomes: vec![row(Outcome::Unresolved, &encode_evidence(CLOSE, &[]), 1)],
+        };
+        let text = render_outcomes(&file).expect("render");
+        assert_eq!(parse_outcomes(&text).expect("parse"), file);
+        assert!(parse_outcomes("[]").is_err());
+        assert!(parse_outcomes(r#"{"outcomes":[],"extra":1}"#).is_err());
+        assert!(parse_outcomes("").is_err());
     }
 }

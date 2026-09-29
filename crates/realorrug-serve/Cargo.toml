@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "sync"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
 # The reply log's type, the contest ledger, and the base-rate and population
 # files the documents are built from. Read-only: this server runs neither the
 # analyst nor the payout, it shows what they wrote.

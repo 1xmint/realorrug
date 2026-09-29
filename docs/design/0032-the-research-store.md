@@ -299,8 +299,10 @@ named directly in plan 0002's 2026-09-25 decision log entry:
   steps for the hourly job that records every launch; "nothing is installed
   by this PR; installing waits for the owner's yes" (PR #141's own
   description). Design 0028's G5 (settling calls on the observation jobs)
-  depends on that job actually running, so its live install is Josh's gate
-  the same way the timer's own PR already says.
+  depended on that job actually running. As of 2026-09-29 (section 12) it does
+  not: settlement reads the chain itself and is ordered after nothing, so this
+  install is no longer a dependency of it. Installing either job stays Josh's
+  gate.
 - **The legal packet, extended.** Before launch, design 0030 gains §8, "the
   forecasting game and personal data": free entry and no prize; retention of the personal data
   §4's identity table holds. The legal and tax review (row 9-26-0022,
@@ -399,7 +401,7 @@ step must make.
 **Settlement cadence and cost.** Settle once a day, plus once at the
 horizon — not hourly. Hourly reads across roughly 70 coins run to about
 100M compute units a month, against the free plan's 30M
-(**estimate — verify at 4-4** before committing to a cadence in code).
+(**estimate**; section 12 records the cadence built, the arithmetic at that cadence, and the method for the measured figure, which is not yet taken).
 
 ## 10. As built (4-2, `realorrug-store`)
 
@@ -638,72 +640,141 @@ retired weekly prize's winner, and "win" is a substring of "window".
 
 ## 12. As built (4-4, settlement)
 
-`realorrug settle` gives each coin of a closed round one outcome row in the
-store, so the board's `hit_miss` has something to count. Code only: no model
-decides, no network is spent, nothing is posted or signed. The pure rule is
-`realorrug-contest/src/settle.rs`; the command, which reads and writes, is
-`realorrug-cli/src/settle.rs`. The units `deploy/realorrug-settle.service` and
-its timer are written and **not installed**; installing them is Josh's gate
-(`deploy/README.md`, "Settle closed rounds, daily").
+*Reworked 2026-09-29.* The first build (PR #209 before this rework) read the
+analyst memory's `verdict_outcomes` label and wrote the store itself. Both were
+wrong against this document: one overwritten, untimed label per token cannot say
+whether a rug fell inside the horizon or whether each 24-hour span was read
+(the outcome row in §2 says the settlement job's own dated reads are the
+evidence), and a second writer against the store contradicts "one writer, even
+for settlement" (§3, G5). The coordinator's packet pointed at both; the code
+followed the packet. This section describes the corrected build.
 
-**Reads.** The rounds file (`--rounds` or `REALORRUG_ROUNDS_FILE`: no default,
-so none means nothing settles), the analyst's memory (`--memory`, else
-`REALORRUG_ANALYST_DIR/memory.sqlite3`) and the store. From memory it reads
-one thing per coin: the label in `verdict_outcomes` that `realorrug
-label-outcomes` wrote, and when it was written. A missing memory file is an
-error that writes nothing; a missing store is refused, never created.
+`realorrug settle` decides each round coin's one outcome from dated chain reads
+it made itself. No model decides, nothing is posted or signed, and the command
+never opens the store. The pure rule is `realorrug-contest/src/settle.rs`; the
+command is `realorrug-cli/src/settle.rs`; the ingest is
+`realorrug-serve/src/outcomes.rs`. The units `deploy/realorrug-settle.service`
+and its timer are written and **not installed**; installing them is Josh's gate
+(`deploy/README.md`, "Settle closed rounds").
 
-**Writes.** One `outcome` row per round, chain and token, through
-`Store::record_outcome_once`, which checks for an existing outcome and appends
-inside the same `BEGIN IMMEDIATE` transaction. The store's triggers refuse an
-UPDATE or DELETE but nothing refused a second outcome row, so a second run
-would have stacked one; the check is what makes re-running a no-op. Each row
-carries `rule_version` (`settle-1`), `settled_at` and the evidence reference.
+**Three steps, three owners.**
 
-**The rule (`settle-1`).** The round's `close` in the rounds file is the end of
-the entry window, so the settlement window is the fourteen days after it
-(the horizon). Before the close nothing settles, whatever was read, and a label
-stamped after the moment of running is dropped. A `Rug` read inside the window
-settles `Rugged` at once. With none, nothing is written until the horizon.
-At or after it, `Stood` needs a `NoRug` read in each of the fourteen 24-hour
-spans; anything less is `Unresolved`, which the board leaves out of its n (a
-gap in the read history is no read, AGENTS.md section 3 rule 8). Reads outside
-the window are ignored. A coin with no evidence at all is therefore `Unresolved`
-at the horizon, not `Stood` and not absent.
+1. `settle observe` (reads the chain, appends to a file). For every round coin
+   whose horizon has not ended and that is owed a read, it reads the coin with
+   the analyst's own readers under the normal per-read budget
+   (`Budget::default()`, plus the compute-unit meter on Robinhood reads), builds
+   the fact sheet, and appends one observation: read time, the level the code
+   computes (`realorrug_roast::level`), whether the read was complete (any level
+   but `CantTell`), the rule version, `sheet-blake3:<hash>` of the rendered sheet
+   as the evidence reference, and the number of calls the read used. **No model
+   call.** With no RPC configured (`--rpc` or `REALORRUG_RPC`; there is no
+   default and the public endpoint is not used) it reads nothing, creates
+   nothing and says so. The RPC URL is never printed, and a failed read is
+   recorded as an incomplete `CantTell` observation with the error text
+   dropped, since an RPC error can carry the URL. Reads per run are capped at 150.
+2. `settle publish` (derives, writes a file). It derives each coin's outcome from
+   the observations and appends the new rows to the outcomes file, in the
+   published-file shape of design 0023 §0 (the whole file is written to a
+   temporary name and renamed, so a reader never sees half of it). It writes
+   nothing when there is nothing new. `--dry-run` prints and writes nothing.
+   `settle verify` re-derives every published row from its own evidence.
+3. `realorrug-serve` ingests (the only writer). See below.
 
-**Determinism and `--verify`.** The evidence reference is
-`close=<n>;reads=<at>:<R|N>,...`, canonical (sorted, deduplicated, in-window
-reads only), so a row is checkable from itself. `realorrug settle --verify`
-re-derives every stored outcome from its own rule version, evidence and
-`settled_at`, exits non-zero on any disagreement or unverifiable row, and refuses a broken hash
-chain. A read stamped after a row's `settled_at` makes the re-derivation
-answer nothing, which is reported as unverifiable, not as agreement, and fails too.
-`--dry-run` prints what would be written and writes nothing.
+**The rule (`settle-1`), against §2.** The round's `close` in the rounds file is
+the end of the entry window (confirmed, not assumed: forecasts are refused at
+`>= close`, and the reveal begins there), and the horizon is `close` plus
+fourteen days. This was checked against the first build's guard and needed no
+change.
+
+- `Rugged` as soon as an observation inside the horizon has level `Rugged`,
+  complete or not: a rug seen is a rug, whatever else the read missed.
+- `Stood` only once the horizon has ended and every one of the fourteen 24-hour
+  spans holds a complete read that was not `Rugged`.
+- `Unresolved` only once the horizon has ended without either.
+- **Nothing is written** for a coin whose horizon is open and which has not been
+  seen rugged. There is no premature `Unresolved`; the earlier build's
+  permanent-`Unresolved` problem cannot occur.
+- An incomplete read is recorded but never enters the derivation as evidence, so
+  a gap is a gap: absent is not zero, and unknown is not safe.
+- The evidence reference of an outcome is `close=<n>;reads=<at>:<R|N>,...`
+  (canonical, in-window complete reads), so a row is checkable from itself:
+  `rederive` returns the outcome from the rule version, the evidence and
+  `settled_at`, and nothing when they disagree, when the rule version is
+  another's, or when any read is later than `settled_at`.
+- `due` decides whether a coin is read now: only inside its window, not once it
+  has been seen rugged, and not when its current 24-hour span already holds a
+  complete read. That keeps a coin to one complete read per span.
+
+**How serve ingests, and when.** `REALORRUG_OUTCOMES_FILE` names the published
+file. At start, and then every ten minutes, a task in `realorrug-serve` reads it
+and, for each row, writes through `Store::record_outcome_once`, the same single
+write path the forecast routes use. A poll, not a file watch: the file changes
+at most twice a day, a poll has nothing platform-specific to go wrong, and a
+missed tick costs ten minutes, not a row. **Deny by default:** with the variable
+unset no task runs and nothing is ingested; a file not published yet, unreadable,
+or not the published shape ingests nothing; an unreadable rounds file ingests
+nothing, since the close a row is checked against comes from it. A row is
+written only when its round and coin are in the rounds file, the close in its
+own evidence equals the rounds file's close, and it re-derives to its own
+outcome from its own evidence. A row that fails is counted and skipped, and the
+rest are still ingested. **Ingesting the same file twice writes nothing new:**
+`record_outcome_once` checks for an existing outcome and appends inside one
+write transaction, so a re-read, a grown file and a restart are all no-ops for
+rows already held. The store's triggers refuse an UPDATE or DELETE, and a
+written `Unresolved` is permanent: correcting one needs a new rule version and a
+decision of Josh's, not a re-run.
+
+**Cadence.** The timer is not hourly. It fires twice a day (04:15 and 16:15 UTC,
+each with a randomised delay of up to ten minutes; `Persistent=true` catches a
+missed one). Twice, not once, because `Stood` needs a complete read in every
+24-hour span: with one run a day, a single missed or jittered run leaves a span
+empty and turns a coin that stood into `Unresolved`, permanently. With `due`,
+the second slot reads only the coins whose span is still empty, so the cost
+stays at about one complete read per coin per day. The publish step after each
+observe is the horizon-end pass. **The ordering dependency on record-launches is
+dropped**: nothing here reads what that job writes.
+
+**Cost, and what is not yet measured.** Design 0027 §2.4 gives 2,000 compute
+units as the ceiling for one cold dossier (the Alchemy table it cites, checked
+2026-09-18, 30M free CU a month), and the earlier estimate in §9 (about 100M CU
+a month) was hourly reads of 70 coins: 70 x 24 x 30 x 2,000. At the cadence
+built, the ceiling is:
+
+> 5 coins a day x 14-day horizon = **70 coins in flight**, one complete read
+> each per day: 70 x 30 x 2,000 CU = **4.2M CU a month at the ceiling**, about
+> 14% of the 30M free plan, and at most 70 x 60 = **4,200 calls a day** (the
+> read's 60-call budget). Reading every coin twice a day would be 8.4M, which is
+> what a missing `due` would cost.
+
+Two limits on that arithmetic. It is a ceiling, not a measurement: the figure
+per read is the budget's cap, and the read's real use is lower. And only
+Robinhood reads draw compute units (`take_cu`); a Solana read is metered by its
+calls alone. **The measured number is not in this document.** The dossier
+records its calls but not its compute units, no capture stores either, and
+measuring it needs a live read against a paid endpoint, which this build did not
+make. The method for whoever runs it: run `realorrug settle observe` once
+against the configured RPC for one open round, then read the `calls` field of
+each line in the observations file (and, for Robinhood coins, the provider's own
+usage dashboard for the same interval, since the dossier does not count compute
+units). Multiply the mean by 70 coins and 30 days, and replace the ceiling above
+with it, dated and sourced.
+
+**Files.** The rounds file (`REALORRUG_ROUNDS_FILE`), the observations file
+(`REALORRUG_SETTLE_OBSERVATIONS`, one JSON object a line, append-only, each line
+strict about unknown fields) and the outcomes file (`REALORRUG_OUTCOMES_FILE`).
+The job holds no store path. A file that is not the expected shape is refused
+whole, and the job never overwrites an existing outcomes file it cannot read.
 
 **What is true today, and not.**
 
-- `Stood` cannot be reached from real data yet. The only evidence is the single,
-  overwritten label per token, not a read history: `Rug` maps to a `Rug` read,
-  `Failed` and `Alive` to `NoRug` reads, all stamped when written, so at most one
-  span is ever covered and a live coin settles `Unresolved` at the horizon.
-  Fourteen daily reads need the observation job of design 0027 slice 9, which
-  does not exist. Until it does, the honest outcomes are `Rugged` (the label
-  says a rug) and `Unresolved`. The rule and its tests already cover `Stood`.
-- PR #141 (`record-launches`) is not merged and records names only, so it
-  supplies no evidence. The service is ordered `After=` it so that when it is
-  installed a same-time run sees its output; nothing requires it.
-- **A written `Unresolved` is permanent.** The store is append-only and settle
-  never writes a second row, so if a later job could have supplied a missing
-  read, the row already at the horizon stands. Correcting one needs a new rule
-  version and a decision of Josh's, not a re-run.
-- **Deviation from ADR 0041 decision 6**, which has settlement publish a file
-  that serve ingests, keeping serve the only writer. The packet for this step
-  had the command write through `realorrug-store` directly, and it does, using
-  SQLite's write lock as the coordination. It is the opposite of "one writer";
-  flagged for Josh to rule on, and if he prefers the file, the pure rule and
-  the evidence encoding stay and only the last step changes.
-
-**Cadence.** Daily, plus the horizon (the timer runs once a day at 04:15 UTC
-with a randomised delay; `Persistent=true` catches a missed day). A rug is
-written on the first run after the label appears; the rest at the first run on
-or after the horizon.
+- `Stood` is now reachable from real data: fourteen days of complete reads, one
+  per span, are exactly what the job produces. Nothing has run it yet (the units
+  are not installed), so there are no outcomes to show and no board figure; the
+  first `Stood` cannot exist before the first horizon ends, fourteen days after
+  the first close.
+- **The deviation from ADR 0041 decision 6 is gone.** The first build wrote the
+  store directly; this one publishes a file and serve ingests it, as the ADR
+  says.
+- An observation is a code-computed level from a fact sheet at a moment. It is
+  not a claim about a person, and no model wrote any of it (AGENTS.md section 3
+  rules 1 and 4).

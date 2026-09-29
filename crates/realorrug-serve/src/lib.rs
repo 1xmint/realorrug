@@ -12,6 +12,7 @@ pub mod card;
 pub mod check;
 pub mod facts;
 mod forecast;
+pub mod outcomes;
 pub mod public;
 mod record;
 
@@ -30,6 +31,19 @@ use serde_json::{Value, json};
 /// merged in rather than added to this router's own state-free routes.
 /// Anything unrouted is a 404, including other methods.
 pub fn app() -> Router {
+    app_with_ingest().0
+}
+
+/// The router, and the task that ingests the settlement job's published
+/// outcomes (`outcomes.rs`). The two share one `AuthState`, so the store has
+/// one handle and one writer. The caller runs the task only when
+/// [`outcomes::Ingest::enabled`]; the server's `main` does.
+pub fn app_with_ingest() -> (Router, outcomes::Ingest) {
+    let auth = Arc::new(auth::AuthState::from_env());
+    (build(Arc::clone(&auth)), outcomes::Ingest(auth))
+}
+
+fn build(auth: Arc<auth::AuthState>) -> Router {
     // One `CheckState` shared by `/v1/check/{address}` and
     // `/v1/check/{address}/card.png` -- they must agree on the same cache,
     // rate limiter and daily budget, not each hold their own (card.rs's own
@@ -37,7 +51,7 @@ pub fn app() -> Router {
     let check_state = check::CheckState::shared();
     // One `AuthState` for the sign-in and the forecast routes: two would open
     // the store twice and split the session table's one writer in two.
-    let session_routes = session_routes(Arc::new(auth::AuthState::from_env()));
+    let session_routes = session_routes(auth);
     let router = Router::new()
         .route("/health", get(health))
         .route("/v1/public/stats", get(public::stats))

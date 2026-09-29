@@ -138,17 +138,23 @@ commands:
                                  from a stored cursor; an unreadable name
                                  still writes a row (rule 8). Read-only chain
                                  access, holds no key, posts nothing
-  settle [--rounds PATH] [--store PATH] [--memory PATH] [--dry-run | --verify]
-                                 gives every coin of a closed round its one
-                                 outcome row in the research store, from the
-                                 labels `label-outcomes` recorded and the
-                                 published settlement rule (design 0032 §12).
-                                 A coin with no evidence settles unresolved,
-                                 never guessed; nothing is written before a
-                                 round closes; a second run adds nothing.
-                                 `--verify` re-derives every stored outcome
-                                 from its own evidence. No model, no network,
-                                 holds no key, posts nothing
+  settle observe|publish|verify [--rounds PATH] [--observations PATH]
+                                 [--outcomes PATH] [--rpc URL] [--dry-run]
+                                 the settlement job (design 0032 §12). `observe`
+                                 reads the chain, once per coin per day, for each
+                                 coin of a closed round whose 14-day window is
+                                 open, and appends one dated line (level from the
+                                 code, read complete or not) to the observations
+                                 file; no model, no RPC configured means it reads
+                                 nothing and says so. `publish` derives outcomes
+                                 from those dated lines with the published rule
+                                 and writes the outcomes file (rugged as soon as
+                                 seen, stood or unresolved only at the horizon);
+                                 it never opens the research store, since
+                                 realorrug-serve is the one writer and ingests
+                                 the file. `verify` re-derives every published
+                                 row from its own evidence. Holds no key, posts
+                                 nothing
   model-prices <model> [--check] | --list
                                  what to paste into analyst.env for a model,
                                  read from models.dev rather than typed

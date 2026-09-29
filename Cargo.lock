@@ -1342,6 +1342,7 @@ dependencies = [
 name = "realorrug-cli"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "realorrug-analyst",
  "realorrug-contest",
  "realorrug-journal",
@@ -1351,7 +1352,6 @@ dependencies = [
  "realorrug-pumpfun",
  "realorrug-roast",
  "realorrug-robinhood",
- "realorrug-store",
  "realorrug-types",
  "serde",
  "serde_json",

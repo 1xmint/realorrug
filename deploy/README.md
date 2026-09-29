@@ -91,6 +91,7 @@ committed. Use the test X app, not a live one.
 | `REALORRUG_SERVE_MONTHLY_USD` | serve's own monthly spending stop (X reads), at most ceiling minus fixed | spending refused |
 | `REALORRUG_APP_ORIGINS` | exact origins granted credentialed CORS | no CORS header |
 | `REALORRUG_ROUNDS_FILE` | the round record: id, close, and per coin chain, token and `q_basis_points` (required for every coin) | every round route answers 503, and so does a coin with no odds |
+| `REALORRUG_OUTCOMES_FILE` | the settlement job's published outcomes file, ingested through the store's one write path (design 0032 section 12) | nothing is ingested |
 | `REALORRUG_TRUST_CLOUDFLARE` | key the rate limit on `CF-Connecting-IP` | the socket address is used |
 
 The API must be served from the site's own registrable domain (for
@@ -280,41 +281,65 @@ analyst's cursor file changes after the start (`ls -l
 To go back before that: stop both, install the two kept units
 (`~/realorrug/realorrug-*.service`) where they came from, reload, start.
 
-## Settle closed rounds, daily
+## Settle closed rounds
 
-`realorrug settle` gives every coin of a closed round its one outcome row in
-the research store ([design 0032](../docs/design/0032-the-research-store.md),
-section 12). It is code only: no model, no network, no key, nothing posted.
-`realorrug-settle.service` and `realorrug-settle.timer` are in this folder and
-are **not installed**. Installing them is Josh's gate: nothing here runs them,
-and an agent must not. Install only on his yes.
+`realorrug settle` decides every round coin's one outcome from the job's own
+dated chain reads ([design 0032](../docs/design/0032-the-research-store.md),
+section 12). `realorrug-settle.service` and `realorrug-settle.timer` are in this
+folder and are **not installed**. Installing them is Josh's gate: nothing here
+runs them, and an agent must not. Install only on his yes.
 
-Before installing, edit the two `Environment=` paths in the service so they
-equal the ones `realorrug-serve` runs with (`REALORRUG_STORE_PATH` and
-`REALORRUG_ROUNDS_FILE`), and the `ReadWritePaths=` line to the store's
-directory. A wrong path fails closed: settle refuses a store or a rounds file
-that is not there and never makes one.
+Three steps, and the job never opens the store:
+
+- `settle observe` reads each coin whose fourteen-day horizon has not ended
+  (the analyst's own readers, under the same per-read budget), builds its fact
+  sheet, and appends one dated line to the observations file: read time, the
+  code-computed level, whether the read was complete, the rule version and a
+  hash of the sheet. No model call. **With no RPC configured
+  (`REALORRUG_RPC`) it reads nothing and says so.** The URL is never printed.
+- `settle publish` derives outcomes from those lines and writes the outcomes
+  file. `Rugged` is written the day a read sees the rug; `Stood` only after the
+  horizon has ended and every 24-hour span holds a complete read; `Unresolved`
+  only after the horizon has ended without either. Nothing is written for an
+  open coin that has not been seen rugged. `--dry-run` writes nothing.
+- `realorrug-serve` ingests the outcomes file through its own single store
+  write path, at start and every ten minutes, when `REALORRUG_OUTCOMES_FILE` is
+  set (unset ingests nothing). Each row is checked against the rounds file and
+  re-derived from its own evidence before it is written; ingesting the same file
+  again writes nothing new.
+
+Before installing, edit the `Environment=` paths in the settle service so the
+rounds and outcomes paths equal the ones `realorrug-serve` runs with
+(`REALORRUG_ROUNDS_FILE` and `REALORRUG_OUTCOMES_FILE`), and create a small
+environment file for the job holding only the RPC endpoint (`REALORRUG_RPC`,
+and `REALORRUG_ROBINHOOD_RPC` for Robinhood coins), owned by root with group
+`guardian` and mode 0640. The job needs write access to its own data directory
+only, and none to the store's. Serve needs read access to the outcomes file.
 
 ```bash
-# 1. First by hand, writing nothing: what would it settle?
-sudo -u guardian /usr/local/bin/realorrug settle --dry-run \
-  --rounds /home/guardian/realorrug/data/contest/rounds.json \
-  --store  /home/guardian/realorrug/data/store/research.sqlite3
-# 2. Then for real, then check every stored outcome re-derives from its own evidence
-#    (same flags; add --verify to check instead of settling)
-# 3. Only then install the units and start the timer
+# 1. First by hand: read once, then look at what would be published.
+sudo -u guardian /usr/local/bin/realorrug settle observe
+sudo -u guardian /usr/local/bin/realorrug settle publish --dry-run
+# 2. Then for real, and check every published row re-derives from its evidence
+sudo -u guardian /usr/local/bin/realorrug settle publish
+sudo -u guardian /usr/local/bin/realorrug settle verify
+# 3. Only then add REALORRUG_OUTCOMES_FILE to serve's environment, restart
+#    serve, and install the units and start the timer
 sudo install -m 0644 deploy/realorrug-settle.service deploy/realorrug-settle.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now realorrug-settle.timer
 ```
 
+The timer fires twice a day. A coin already covered for its current 24-hour
+span is not read again, so the cost is about one read per coin per day; the
+second slot is there so one missed run cannot lose a span (a lost span makes a
+coin that stood `Unresolved`). Nothing else feeds the job, so it is not ordered
+after any other unit. A run reads at most 150 coins and says so when it stops
+early.
+
 To stop it: `sudo systemctl disable --now realorrug-settle.timer`. Rows already
-written stay, because the store is append-only, and a written `Unresolved` is
-permanent (see the design). The service is ordered after the record-launches
-job's unit (PR #141), so a same-time run reads what that job just wrote; the
-two do not require each other. That job is not merged yet and records names
-only, so today settlement reads only the labels
-`realorrug label-outcomes` wrote.
+in the store stay, because it is append-only, and a written `Unresolved` is
+permanent (see the design).
 
 ## Install
 

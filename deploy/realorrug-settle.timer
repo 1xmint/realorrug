@@ -1,21 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # NOT INSTALLED. Installing is the owner's gate (deploy/README.md, "Settle
-# closed rounds, daily"). Install to /etc/systemd/system/realorrug-settle.timer,
+# closed rounds"). Install to /etc/systemd/system/realorrug-settle.timer,
 # then:
 #   sudo systemctl enable --now realorrug-settle.timer
 #
-# Daily, not hourly (design 0032 section 9): a rug is written the day a read
-# sees it, and the rest at the fourteen-day horizon, so an hourly run would add
-# reads and rows to no purpose. Running twice is harmless: a coin that already
-# has an outcome is skipped. Late in the day, after the hourly record-launches
-# has run.
+# Twice a day, which is the daily cadence design 0032 section 9 asks for: a
+# coin is read at most once per 24-hour span (the job skips a coin whose span is
+# already covered by a complete read), so this costs about one read per coin per
+# day. The second slot exists so one missed or late run cannot lose a span, and
+# a lost span would turn a coin that stood into Unresolved. The publish step
+# after each observe is the horizon-end pass: a coin whose fourteen days have
+# ended is decided there. Running it again is harmless.
 [Unit]
-Description=Settle closed rounds, daily
+Description=Settle closed rounds, twice daily
 Documentation=https://github.com/1xmint/realorrug
 
 [Timer]
 OnCalendar=*-*-* 04:15:00 UTC
+OnCalendar=*-*-* 16:15:00 UTC
 Persistent=true
 RandomizedDelaySec=10min
 Unit=realorrug-settle.service

@@ -454,6 +454,9 @@ pub(crate) struct AuthState {
     pub(crate) app_origins: Vec<String>,
     /// The rounds file (`REALORRUG_ROUNDS_FILE`). `None` refuses every forecast.
     pub(crate) rounds_path: Option<PathBuf>,
+    /// The settlement job's published outcomes file (`REALORRUG_OUTCOMES_FILE`).
+    /// `None` ingests nothing (AGENTS.md rule 7).
+    pub(crate) outcomes_path: Option<PathBuf>,
 }
 
 /// A signed-in caller: whose forecasts these are, and the CSRF token their
@@ -481,11 +484,13 @@ impl AuthState {
         let app_origins = app_origins_from(get);
         let live = Self::live_from(get, x, &clock, &app_origins);
         let rounds_path = nonempty(get, "REALORRUG_ROUNDS_FILE").map(PathBuf::from);
+        let outcomes_path = nonempty(get, "REALORRUG_OUTCOMES_FILE").map(PathBuf::from);
         Self {
             live,
             clock,
             app_origins,
             rounds_path,
+            outcomes_path,
         }
     }
 
