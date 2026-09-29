@@ -157,6 +157,25 @@ fn env_legacy(new: &str, old: &str) -> Option<String> {
 /// **closed**, not ignored: a typo in a spending ceiling must not read as
 /// permission.
 pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
+    budget_with_monthly(get, realorrug_provider::daemon_monthly_allowance_from(get))
+}
+
+/// The CLI's own budget (9-27-0026b defect 2): the same per-call and daily
+/// ceilings [`budget_from`] reads (`REALORRUG_ANALYST_*`) -- a call made by
+/// hand from a terminal costs the same as one the daemon makes -- but its own
+/// monthly slice, `REALORRUG_CLI_MONTHLY_USD`
+/// ([`realorrug_provider::cli_monthly_allowance_from`]), never the daemon's
+/// or serve's share. Unset or invalid closes it the same way an unset daemon
+/// ceiling does.
+#[must_use]
+pub fn cli_budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
+    budget_with_monthly(get, realorrug_provider::cli_monthly_allowance_from(get))
+}
+
+/// The daily and per-call ceilings both [`budget_from`] and [`cli_budget_from`]
+/// share, paired with whichever monthly figure the caller has already worked
+/// out for itself -- the only ceiling of the three that differs between them.
+fn budget_with_monthly(get: &impl Fn(&str) -> Option<String>, monthly: Option<MicroUsd>) -> Budget {
     let daily = env_or_legacy(
         "REALORRUG_ANALYST_DAILY_USD",
         "RADAR_ANALYST_DAILY_USD",
@@ -171,7 +190,6 @@ pub fn budget_from(get: &impl Fn(&str) -> Option<String>) -> Budget {
     )
     .and_then(|v| v.trim().parse::<f64>().ok())
     .map(MicroUsd::from_dollars);
-    let monthly = realorrug_provider::monthly_allowance_from(get);
     match (daily, per_call, monthly) {
         (Some(daily_max), Some(per_call_max), Some(monthly_max)) => Budget {
             per_call_max,

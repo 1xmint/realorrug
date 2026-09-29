@@ -283,24 +283,77 @@ impl Meter {
 /// rename of anything that existed before it.
 #[must_use]
 pub fn monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> Option<MicroUsd> {
-    let dollars = |name: &str| {
-        get(name)?
-            .trim()
-            .parse::<f64>()
-            .ok()
-            // Checked before conversion: `from_dollars` turns a negative, NaN
-            // or infinite figure into zero. That is safe for a ceiling but
-            // fails open for the fixed cost subtracted from one: a mistyped
-            // "-60" would hand the whole ceiling to metered spend.
-            .filter(|v| v.is_finite() && *v >= 0.0)
-            .map(MicroUsd::from_dollars)
-    };
-    let monthly = dollars("REALORRUG_MONTHLY_USD")?;
-    let fixed = dollars("REALORRUG_FIXED_MONTHLY_USD")?;
+    let monthly = dollars_var(get, "REALORRUG_MONTHLY_USD")?;
+    let fixed = dollars_var(get, "REALORRUG_FIXED_MONTHLY_USD")?;
     if fixed >= monthly {
         return None;
     }
     Some(MicroUsd(monthly.get() - fixed.get()))
+}
+
+/// A dollar-figure env var, parsed and checked before conversion.
+///
+/// `from_dollars` turns a negative, NaN or infinite figure into zero. That is
+/// safe for a ceiling but fails open for a figure subtracted from one: a
+/// mistyped "-60" would hand back the whole thing rather than closing.
+fn dollars_var(get: &impl Fn(&str) -> Option<String>, name: &str) -> Option<MicroUsd> {
+    get(name)?
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(MicroUsd::from_dollars)
+}
+
+/// The daemon's own slice of what [`monthly_allowance_from`] leaves, once the
+/// CLI's and serve's own shares (9-27-0026b, orchestrator decision
+/// 2026-09-28) are set aside.
+///
+/// Each metered process now keeps its own ledger rather than sharing the
+/// daemon's file, so nothing here can see what another process has already
+/// spent this month — the only way three processes summing past one ceiling
+/// is prevented is if none of them can ever be handed more than its own
+/// fixed share of it. `REALORRUG_CLI_MONTHLY_USD` and
+/// `REALORRUG_SERVE_MONTHLY_USD` (design 0032's name for serve, which does
+/// not read it yet) are each read the same way `monthly_allowance_from` reads
+/// its own vars; a slice that is unset or will not parse counts as **zero
+/// taken from the daemon**, not as an error here, because the caller that
+/// slice belongs to closes itself the same way (rule 7) and so never spends
+/// it anyway.
+///
+/// `None` -- and so [`Budget::CLOSED`] at the call site -- when the slices
+/// taken together are at least what was left: never negative, and never
+/// saturating back up to a positive number the way a plain subtraction on
+/// unsigned totals could.
+#[must_use]
+pub fn daemon_monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> Option<MicroUsd> {
+    let left = monthly_allowance_from(get)?;
+    let cli = dollars_var(get, "REALORRUG_CLI_MONTHLY_USD").unwrap_or(MicroUsd::ZERO);
+    let serve = dollars_var(get, "REALORRUG_SERVE_MONTHLY_USD").unwrap_or(MicroUsd::ZERO);
+    // `saturating_add`, not `+`: two adversarial-but-finite dollar figures
+    // could in principle overflow `u64` micro-USD before the comparison
+    // below ever runs. Saturating just means the slices read as "at least
+    // everything that's left", which closes the daemon's budget anyway --
+    // the same outcome a real oversized pair of slices deserves.
+    let slices = cli.get().saturating_add(serve.get());
+    if slices >= left.get() {
+        return None;
+    }
+    Some(MicroUsd(left.get() - slices))
+}
+
+/// The CLI's own metered monthly allowance, entirely separate from the
+/// daemon's ledger and the daemon's slice above (9-27-0026b defect 2: the CLI
+/// used to open the daemon's own ledger file and the two processes'
+/// end-of-call saves erased each other's charges).
+///
+/// Unset or invalid closes it (rule 7): a CLI cap that is not configured
+/// refuses every paid call rather than falling back to the daemon's or
+/// serve's share, which would let the CLI spend money no slice of the
+/// ceiling was ever set aside for.
+#[must_use]
+pub fn cli_monthly_allowance_from(get: &impl Fn(&str) -> Option<String>) -> Option<MicroUsd> {
+    dollars_var(get, "REALORRUG_CLI_MONTHLY_USD")
 }
 
 /// Days since the Unix epoch (UTC, midnight) to a month index that increases
@@ -703,6 +756,75 @@ mod tests {
             monthly_allowance_from(&get),
             Some(MicroUsd::from_dollars(30.0))
         );
+    }
+
+    // -- 9-27-0026b defect 2: each process's own slice of the ceiling -------
+
+    #[test]
+    fn a_cli_cap_shrinks_the_daemon_s_allowance_by_exactly_that_much() {
+        // (a) Re-apply the bug by having `daemon_monthly_allowance_from`
+        // ignore the CLI slice (return `monthly_allowance_from(get)`
+        // unchanged) and this fails: the daemon would still see the whole
+        // $30 left after fixed costs, not the $20 left once the CLI's $10
+        // is set aside for it.
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+            ("REALORRUG_CLI_MONTHLY_USD", "10.00"),
+        ]);
+        assert_eq!(
+            daemon_monthly_allowance_from(&get),
+            Some(MicroUsd::from_dollars(20.0))
+        );
+    }
+
+    #[test]
+    fn slices_that_exceed_what_is_left_close_the_daemon_s_budget() {
+        // (b) The CLI's and serve's caps together account for all $30 left
+        // after fixed costs -- nothing remains for the daemon, and "nothing
+        // left" must read as closed, the same way `monthly_allowance_from`
+        // already treats a fixed cost that meets the whole ceiling. Re-apply
+        // the bug with a `>=` to `>` mutant and this fails: exactly-exhausted
+        // would answer `Some(MicroUsd::ZERO)`, a budget that is not
+        // `Budget::CLOSED` but spends identically to one, undetected by
+        // every other test here.
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+            ("REALORRUG_CLI_MONTHLY_USD", "10.00"),
+            ("REALORRUG_SERVE_MONTHLY_USD", "20.00"),
+        ]);
+        assert_eq!(daemon_monthly_allowance_from(&get), None);
+    }
+
+    #[test]
+    fn an_unset_cli_cap_costs_the_daemon_nothing() {
+        // A slice nobody configured is zero taken from the daemon, not an
+        // error: the CLI that never set it closes itself instead (the next
+        // test), so it was never going to spend against this month anyway.
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+        ]);
+        assert_eq!(
+            daemon_monthly_allowance_from(&get),
+            Some(MicroUsd::from_dollars(30.0))
+        );
+    }
+
+    #[test]
+    fn an_unset_cli_cap_closes_the_cli_s_own_reservation() {
+        // (c) Re-apply the bug by having `cli_monthly_allowance_from` fall
+        // back to `monthly_allowance_from` (borrowing the whole ceiling, or
+        // the daemon's share of it) and this fails: an operator who never
+        // set `REALORRUG_CLI_MONTHLY_USD` would still be able to spend
+        // through the CLI, against a slice of the ceiling nothing set aside
+        // for it (rule 7).
+        let get = only(&[
+            ("REALORRUG_MONTHLY_USD", "90.00"),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60.00"),
+        ]);
+        assert_eq!(cli_monthly_allowance_from(&get), None);
     }
 
     #[test]

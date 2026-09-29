@@ -35,6 +35,24 @@
   call. RPC is counted as a fixed cost, which holds only while the RPC plan
   is a flat fee with no per-request overage; the meter does not count RPC
   calls.
+- **Amended 2026-09-28 (orchestrator decision, 9-27-0026b defect 2):** the
+  daemon's `Spend`/`Meter`/`Ledger` is shared by the X and Telegram lanes
+  because both run inside that one process, but `realorrug analyst`,
+  `realorrug roast` and `realorrug replay --model` are separate processes run
+  by hand, and were found opening the daemon's own ledger file rather than
+  sharing its in-memory total -- a hand-run charge and the daemon's next save
+  erased each other, uncounted against the cap either way. Each process now
+  meters its own ledger file beside the daemon's (`crate::spend` in
+  `realorrug-cli`, `cli-ledger.json`), and the $90 ceiling is split into
+  slices that cannot sum past it: `REALORRUG_CLI_MONTHLY_USD` for the CLI
+  (unset closes it, rule 7) and `REALORRUG_SERVE_MONTHLY_USD` (design 0032's
+  name) for `realorrug-serve`, both taken off what
+  `REALORRUG_MONTHLY_USD − REALORRUG_FIXED_MONTHLY_USD` leaves before the
+  daemon's own allowance is computed; if the slices leave nothing, the
+  daemon's budget is `Budget::CLOSED` too, never negative. See
+  `crates/realorrug-provider/src/cost.rs`
+  (`daemon_monthly_allowance_from`/`cli_monthly_allowance_from`) and
+  `deploy/analyst.env.example`.
 - Statistical proof of forecasting skill is **not** a launch gate. Calibration
   continues after launch (plan 0002 phase 5), and no probability is published
   before calibration supports it.
