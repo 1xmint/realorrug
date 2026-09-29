@@ -643,7 +643,7 @@ store, so the board's `hit_miss` has something to count. Code only: no model
 decides, no network is spent, nothing is posted or signed. The pure rule is
 `realorrug-contest/src/settle.rs`; the command, which reads and writes, is
 `realorrug-cli/src/settle.rs`. The units `deploy/realorrug-settle.service` and
-`.timer` are written and **not installed**; installing them is Josh's gate
+its timer are written and **not installed**; installing them is Josh's gate
 (`deploy/README.md`, "Settle closed rounds, daily").
 
 **Reads.** The rounds file (`--rounds` or `REALORRUG_ROUNDS_FILE`: no default,

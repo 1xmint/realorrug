@@ -310,10 +310,10 @@ sudo systemctl enable --now realorrug-settle.timer
 
 To stop it: `sudo systemctl disable --now realorrug-settle.timer`. Rows already
 written stay, because the store is append-only, and a written `Unresolved` is
-permanent (see the design). The service is ordered
-`After=realorrug-record-launches.service` so a same-time run reads what that
-job just wrote; the two do not require each other. That job is not merged yet
-and records names only, so today settlement reads only the labels
+permanent (see the design). The service is ordered after the record-launches
+job's unit (PR #141), so a same-time run reads what that job just wrote; the
+two do not require each other. That job is not merged yet and records names
+only, so today settlement reads only the labels
 `realorrug label-outcomes` wrote.
 
 ## Install

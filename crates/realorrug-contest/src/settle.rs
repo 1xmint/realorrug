@@ -332,6 +332,21 @@ mod tests {
         );
     }
 
+    /// Two reads taken at the same instant that disagree are written in one
+    /// fixed order, a rug first, whichever way they arrive, so the reference is
+    /// one string and it decodes back.
+    #[test]
+    fn reads_at_the_same_instant_are_written_rug_first() {
+        let at = CLOSE + 50;
+        let expected = format!("close={CLOSE};reads={at}:R,{at}:N");
+        assert_eq!(encode_evidence(CLOSE, &[rug(at), calm(at)]), expected);
+        assert_eq!(encode_evidence(CLOSE, &[calm(at), rug(at)]), expected);
+        assert_eq!(
+            decode_evidence(&expected),
+            Some((CLOSE, vec![rug(at), calm(at)]))
+        );
+    }
+
     /// Once decided the answer does not move as `now` advances.
     #[test]
     fn a_decided_outcome_is_stable_as_time_passes() {

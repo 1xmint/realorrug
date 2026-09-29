@@ -164,8 +164,7 @@ fn settle_all(
                         now,
                     )
                     .map_err(|e| format!("cannot write the outcome: {e}"))?;
-                if !wrote {
-                    report.already += 1;
+                if !tally(&mut report, wrote) {
                     continue;
                 }
             }
@@ -229,6 +228,32 @@ fn verify_all(store: &Store, rounds: &[Round]) -> Result<Audit, String> {
     Ok(audit)
 }
 
+/// Counts the outcome of a write. `false` means another run put this coin's
+/// outcome in between our check and our write, which is the same as having
+/// found it there: counted as already settled, and the row is not ours.
+fn tally(report: &mut Report, wrote: bool) -> bool {
+    if !wrote {
+        report.already += 1;
+    }
+    wrote
+}
+
+/// An environment value, or nothing when it is unset or empty: an empty path
+/// is a config that was not given, not a path (AGENTS.md section 3 rule 7).
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.is_empty())
+}
+
+/// `--verify`'s verdict: clean only when nothing disagrees AND nothing is
+/// unverifiable. A row this code cannot check is not a row it has confirmed.
+fn audit_result(audit: &Audit) -> Result<(), String> {
+    if audit.disagree == 0 && audit.unverifiable == 0 {
+        Ok(())
+    } else {
+        Err("a stored outcome does not re-derive from its own evidence".to_owned())
+    }
+}
+
 /// Runs the command.
 ///
 /// # Errors
@@ -238,7 +263,7 @@ fn verify_all(store: &Store, rounds: &[Round]) -> Result<Audit, String> {
 /// memory cannot be opened, or, with `--verify`, when a stored outcome does not
 /// re-derive.
 pub fn run(args: &[String]) -> Result<(), String> {
-    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let env = |name: &str| non_empty(std::env::var(name).ok());
     let rounds_path = flag(args, "--rounds")
         .or_else(|| env("REALORRUG_ROUNDS_FILE"))
         .ok_or(
@@ -264,11 +289,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             "{} outcomes re-derive, {} disagree, {} cannot be re-derived, {} coins unsettled",
             audit.agree, audit.disagree, audit.unverifiable, audit.unsettled
         );
-        return if audit.disagree == 0 && audit.unverifiable == 0 {
-            Ok(())
-        } else {
-            Err("a stored outcome does not re-derive from its own evidence".to_owned())
-        };
+        return audit_result(&audit);
     }
 
     let memory_path = flag(args, "--memory").unwrap_or_else(|| {
@@ -588,6 +609,38 @@ mod tests {
         let rounds = [round("r1", CLOSE, &["calm"])];
         settle_all(&memory, &store, &rounds, settle::horizon(CLOSE), false).expect("settle");
         assert_eq!(outcome_of(&store, "r1", "calm"), Some(Outcome::Unresolved));
+    }
+
+    /// A lost race is counted as already settled, a win is not.
+    #[test]
+    fn a_lost_write_race_counts_as_already_settled() {
+        let mut report = Report::default();
+        assert!(!tally(&mut report, false));
+        assert_eq!(report.already, 1);
+        assert!(tally(&mut report, true));
+        assert_eq!(report.already, 1, "a win adds nothing");
+    }
+
+    #[test]
+    fn an_empty_environment_value_is_a_missing_one() {
+        assert_eq!(non_empty(None), None);
+        assert_eq!(non_empty(Some(String::new())), None);
+        assert_eq!(non_empty(Some("x".to_owned())), Some("x".to_owned()));
+    }
+
+    /// Either kind of problem fails `--verify`; only a clean audit passes.
+    #[test]
+    fn verify_passes_only_when_nothing_disagrees_and_nothing_is_unverifiable() {
+        let audit = |disagree, unverifiable| Audit {
+            agree: 3,
+            disagree,
+            unverifiable,
+            unsettled: 2,
+        };
+        assert!(audit_result(&audit(0, 0)).is_ok());
+        assert!(audit_result(&audit(1, 0)).is_err());
+        assert!(audit_result(&audit(0, 1)).is_err());
+        assert!(audit_result(&audit(1, 1)).is_err());
     }
 
     /// Rounds are independent and so are coins; a mix of settled, pending and
