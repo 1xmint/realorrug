@@ -306,17 +306,22 @@ named directly in plan 0002's 2026-09-25 decision log entry:
   research 0066) answers those questions the same way it answers design
   0030's other sections (ADR 0042).
 
-### Open questions — not decided here
+### The audit's owner questions
 
-- **Q1.** What does the board rank by while G1 (the odds-by-level replay,
-  design 0028 §10) is unmeasured? **Recommendation:** hit/miss counts with
-  sample sizes only, until G1's replay lands.
-- **Q2.** The crowd signal (§9): weighted by record, or unweighted?
+- **Q1 — decided (Josh, 2026-09-27).** While G1 (the odds-by-level replay,
+  design 0028 §10) is unmeasured, the board shows hit/miss counts with
+  sample sizes only. It moves to odds scoring once G1's replay lands.
+- **Q2 — open.** The crowd signal (§9): weighted by record, or unweighted?
   **Recommendation:** an unweighted split of eligible accounts (the account-
   age rule plus 10 settled calls), shown after close with n, never on the
-  project's own token until the legal review clears it.
-- **Q3.** Is $REALORRUG playable in the daily five? **Recommendation:**
-  playable, with settlement posts about it withheld.
+  project's own token until the legal review clears it. Josh asked on
+  2026-09-27 what the signal means before choosing; 4-7 waits on his answer.
+- **Q3 — decided (Josh, 2026-09-27).** $REALORRUG is playable in the daily
+  five exactly like any other token, settlement posts included. The audit
+  recommended withholding settlement posts about it; Josh chose no exception,
+  which keeps AGENTS §3 rule 5 ("the project's own token is treated exactly
+  like any other") literal. The legal and tax review (row 9-26-0022) reads
+  whether a project posting its own token's outcome reads as promotion.
 
 ## 8. Build order
 
