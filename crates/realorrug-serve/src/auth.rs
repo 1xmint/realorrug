@@ -1824,6 +1824,8 @@ mod tests {
         let looks = std::cell::Cell::new(0);
         sign_in(&store, &user, "hash-b", 2, &|s, x| {
             looks.set(looks.get() + 1);
+            // A retry counter that never counts must fail the test, not hang it.
+            assert!(looks.get() < 20, "the sign-in retried without end");
             if looks.get() == 1 {
                 Ok(None)
             } else {
@@ -2044,6 +2046,8 @@ mod tests {
         let looks = std::cell::Cell::new(0);
         let result = sign_in(&store, &user, "b", 2, &|_, _| {
             looks.set(looks.get() + 1);
+            // A retry counter that never counts must fail the test, not hang it.
+            assert!(looks.get() < 20, "the sign-in retried without end");
             Ok(None)
         });
         assert!(matches!(result, Err(StoreError::XIdTaken)), "{result:?}");
