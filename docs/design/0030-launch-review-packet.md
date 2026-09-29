@@ -87,3 +87,19 @@ trading or second-chain launch. A later prize would come back to counsel with
 its own rules, funding and eligibility process, since wallet ownership is not
 eligibility and terms cannot waive US sanctions obligations
 ([OFAC guidance](https://ofac.treasury.gov/system/files/126/virtual_currency_guidance_brochure.pdf)).
+
+## 8. The forecasting game and personal data
+
+Added 2026-09-27, from design 0032's amendment after audit — phase 4 (the
+research store: sign-in, forecasts, evidence, reputation) reaches this
+packet because it is a legal and tax review question, not a code question.
+Questions only; the review answers them.
+
+- Free entry and no prize (ADR 0038 decision 5): does a free calling game
+  with no prize, no holder benefit and no redeemable reputation create any
+  obligation this packet's other sections do not already cover?
+- Retention of personal data: design 0032 §4's identity table holds the X
+  handle, id, account creation date and a session hash, separately from the
+  append-only chain rows, deleted on account deletion. _Question: does this
+  satisfy any data-retention obligation beyond X's own developer policy
+  (research 0051 §1)?_

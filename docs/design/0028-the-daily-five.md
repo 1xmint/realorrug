@@ -171,7 +171,12 @@ Each post type is Josh's gate until he approves its rule once.
   worth a reader yet, because what a dev can honestly declare is declared
   on-chain in the launch calldata.
 
-## 9. The crowd signal (later)
+## 9. The crowd signal (dropped)
+
+**Dropped (Josh, 2026-09-28; design 0032 §7, Q2).** An aggregate of players'
+calls is noise, fake accounts can tilt it, and beside a live token it reads
+as advice. Nothing below is built. The original text is kept for the record.
+
 
 Once records exist, the site shows beside the bot's verdict what proven
 callers said, weighted by record so a new account counts for nothing and a
@@ -189,7 +194,7 @@ moves the bot's score or level.
 | G5 | Settle calls on the observation jobs | 0027 slice 9 |
 | G6 | Board endpoints beside `/v1/public/hunters` and site pages | G2, G4 |
 | G7 | Settlement and weekly posts; a result card players post themselves, from `crates/realorrug-serve/src/card.rs` | Josh's gate; re-read X's automation rules and the pay-for-posting policy first-hand (research 0051 §2, §3 rest on secondary sources) |
-| G8 | The crowd signal | Settled records |
+| G8 | ~~The crowd signal~~ — dropped (§9) | — |
 | G9 | Point the payout at the G2 ranking | The lawyer's answer; Josh's gate |
 
 Until G1 lands, G2 and G3 are built and tested against an odds table given in
