@@ -11,7 +11,15 @@ import { useEffect, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 
 import { type Mine, type Reply, gameBase, isoOf, mine, roundIdShaped } from "./game";
-import { GameNotice, GameOff, GameProblem, ReadAge, SessionBar, useSession } from "./GameUi";
+import {
+  DeleteAccount,
+  GameNotice,
+  GameOff,
+  GameProblem,
+  ReadAge,
+  SessionBar,
+  useSession,
+} from "./GameUi";
 import { useTitle } from "./title";
 import { Card, Heading, Here, Nothing, Section } from "./ui";
 
@@ -24,6 +32,7 @@ export function MyCalls() {
   const { session, reload } = useSession();
   const [reply, setReply] = useState<Reply<Mine> | null>(null);
   const [typed, setTyped] = useState("");
+  const [deleted, setDeleted] = useState(false);
 
   useEffect(() => {
     if (!shaped || session.kind !== "in") {
@@ -47,6 +56,12 @@ export function MyCalls() {
           <GameOff />
         ) : (
           <>
+            {deleted && session.kind !== "in" && (
+              <p role="status" className="text-[var(--color-text)]">
+                Your account was deleted and you are signed out. Your past calls stay in the public
+                record under a random key that nothing links to you.
+              </p>
+            )}
             <SessionBar session={session} onChange={reload} />
             {id === "" ? (
               <form
@@ -82,6 +97,15 @@ export function MyCalls() {
                 why="Your calls are shown only to you, and only while you are signed in."
               />
             ) : null}
+            {session.kind === "in" && (
+              <DeleteAccount
+                csrf={session.csrf}
+                onDeleted={() => {
+                  setDeleted(true);
+                  reload();
+                }}
+              />
+            )}
           </>
         )}
       </div>

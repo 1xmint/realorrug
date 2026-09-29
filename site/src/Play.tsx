@@ -395,7 +395,10 @@ function YourCall({
     );
   }
   if (session.kind !== "in") {
-    return info.closed ? null : (
+    if (info.closed) return null;
+    return session.kind === "closed" ? (
+      <p>Sign-in is not open yet, so this coin cannot be called.</p>
+    ) : (
       <p>Sign in with X to call this coin.</p>
     );
   }

@@ -409,6 +409,18 @@ describe("the form that files a call", () => {
     expect(new Headers(out?.init?.headers as HeadersInit).get(CSRF_HEADER)).toBe("csrf-abc");
   });
 
+  it("shows sign-in as not open on a 503 from /auth/me, with no link to the API", async () => {
+    serve({
+      "GET /auth/me": { status: 503, body: { error: "sign-in is not configured" } },
+      "GET /v1/rounds/r1": OPEN_ROUND,
+    });
+    const { container } = renderAt("/play/r1");
+    await screen.findByText(COIN_A.token);
+    await waitFor(() => expect(drawn(container)).toContain("Sign-in is not open yet"));
+    expect(container.querySelector(`a[href="${API}/auth/x/start"]`)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Call /i })).toBeNull();
+  });
+
   it("public reads carry no cookie", async () => {
     const seen = serve({ ...SIGNED_OUT, "GET /v1/rounds/r1": OPEN_ROUND });
     renderAt("/play/r1");
@@ -419,6 +431,72 @@ describe("the form that files a call", () => {
 });
 
 describe("my calls and the privacy notice", () => {
+  const MINE = {
+    body: { round: "r1", board_id: "p-mine", forecasts: [], read_at: READ_AT },
+  };
+
+  it("deletes the account only after a confirm step, with the CSRF header and the cookie", async () => {
+    const table: Record<string, Canned> = {
+      ...SIGNED_IN,
+      "GET /forecast/mine": MINE,
+      get "POST /account/delete"(): Canned {
+        // The server has removed the identity row: the next /auth/me is 401.
+        table["GET /auth/me"] = SIGNED_OUT["GET /auth/me"] as Canned;
+        return { body: { deleted: true } };
+      },
+    };
+    const seen = serve(table);
+    const { container } = renderAt("/my-calls/r1");
+    fireEvent.click(await screen.findByRole("button", { name: "Delete my account" }));
+    // The confirm step says what goes and what stays, and has sent nothing yet.
+    const text = drawn(container);
+    expect(text).toContain("your X id, your handle, your account creation date and your session");
+    expect(text).toContain("append-only public record");
+    expect(text).toContain("nothing in the store links that key to your X account");
+    expect(gameCopyViolations(text)).toEqual([]);
+    expect(seen.some((s) => s.url.pathname === "/account/delete")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: /yes, delete my account/i }));
+    await waitFor(() => expect(seen.some((s) => s.url.pathname === "/account/delete")).toBe(true));
+    const del = seen.find((s) => s.url.pathname === "/account/delete");
+    expect(del?.init?.method).toBe("POST");
+    expect(del?.init?.credentials).toBe("include");
+    expect(new Headers(del?.init?.headers as HeadersInit).get(CSRF_HEADER)).toBe("csrf-abc");
+    // Then the signed-out state, and the control is gone.
+    expect(await screen.findByText(/your account was deleted/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Delete my account" })).toBeNull();
+    expect(container.querySelector(`a[href="${API}/auth/x/start"]`)).not.toBeNull();
+  });
+
+  it("keeps the account when the player backs out of the confirm step", async () => {
+    const seen = serve({ ...SIGNED_IN, "GET /forecast/mine": MINE });
+    renderAt("/my-calls/r1");
+    fireEvent.click(await screen.findByRole("button", { name: "Delete my account" }));
+    fireEvent.click(screen.getByRole("button", { name: /keep my account/i }));
+    expect(screen.getByRole("button", { name: "Delete my account" })).toBeTruthy();
+    expect(seen.some((s) => s.url.pathname === "/account/delete")).toBe(false);
+  });
+
+  it("offers no delete control when signed out", async () => {
+    serve(SIGNED_OUT);
+    renderAt("/my-calls/r1");
+    await screen.findByText(/sign in to see your calls/i);
+    expect(screen.queryByRole("button", { name: /delete my account/i })).toBeNull();
+  });
+
+  it("says nothing was deleted when the server refuses", async () => {
+    serve({
+      ...SIGNED_IN,
+      "GET /forecast/mine": MINE,
+      "POST /account/delete": { status: 403, body: { error: "csrf token missing or wrong" } },
+    });
+    const { container } = renderAt("/my-calls/r1");
+    fireEvent.click(await screen.findByRole("button", { name: "Delete my account" }));
+    fireEvent.click(screen.getByRole("button", { name: /yes, delete my account/i }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(drawn(container)).not.toContain("was deleted");
+  });
+
   it("lists only the signed-in player's own calls with their board id and read age", async () => {
     const seen = serve({
       ...SIGNED_IN,

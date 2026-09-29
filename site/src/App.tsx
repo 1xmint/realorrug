@@ -23,21 +23,21 @@ function Header() {
   const [location] = useLocation();
   return (
     <header className="sticky top-0 z-30 border-b border-[var(--color-line)] bg-[var(--color-ink)]/85 backdrop-blur">
-      <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:gap-4 sm:px-6 sm:py-4">
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-3 sm:gap-4 sm:px-6 sm:py-4">
         <Link
           href="/"
           className="display text-lg whitespace-nowrap text-[var(--color-text)] sm:text-xl"
         >
           Real <span className="text-[var(--color-signal)]">or</span> Rug
         </Link>
-        <nav className="flex items-center gap-0.5 text-xs sm:gap-1 sm:text-sm">
+        <nav className="flex flex-wrap items-center gap-0.5 text-xs sm:gap-1 sm:text-sm">
           {nav()
             .filter((r) => r.path !== "/")
             .map((r) => (
               <Link
                 key={r.path}
                 href={r.path}
-                className={`rounded px-2 py-1.5 whitespace-nowrap transition-colors sm:px-3 ${
+                className={`rounded px-1.5 py-1.5 whitespace-nowrap transition-colors sm:px-3 ${
                   location === r.path
                     ? "bg-[var(--color-raised)] text-[var(--color-text)]"
                     : "text-[var(--color-dim)] hover:text-[var(--color-text)]"

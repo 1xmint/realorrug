@@ -241,6 +241,10 @@ export const mine = (round: string) =>
 export const signOut = (csrf: string) =>
   call<{ signed_out: boolean }>("/auth/logout", { method: "POST", session: true, csrf, body: {} });
 
+/** Removes the identity record (design 0032 §4). Session, CSRF and an empty body, like sign-out. */
+export const deleteAccount = (csrf: string) =>
+  call<{ deleted: boolean }>("/account/delete", { method: "POST", session: true, csrf, body: {} });
+
 /** Files one call. The body is `{round, chain, token, side}` and nothing else (deny_unknown_fields). */
 export const fileCall = (
   csrf: string,

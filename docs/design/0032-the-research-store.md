@@ -705,7 +705,23 @@ origin (6 failures, one per page); an open round asks for the forecasts route
 header (2). A closed round's board with counts, n and read age, an open round
 drawing no other player's call and the copy check are held by the same file.
 
-**Left open.** There is no account-deletion button: `POST /account/delete`
-exists (§11) and the notice describes it, but the packet's scope was sign-in and
-sign-out. Signing in navigates the browser to the API, so a server with sign-in
-closed shows its JSON error page rather than a message on the site.
+**Account deletion.** `/my-calls` shows a signed-in player a "Delete my account"
+control. It sends nothing until a second button, "Yes, delete my account", after
+a confirm step that repeats the notice: what is deleted (the identity record: X
+id, handle, account creation date, session) and what stays (forecast and outcome
+rows, an append-only public record, under a random key nothing in the store links
+to the X account). The POST carries the session cookie and the CSRF header; on
+success the page reloads the session and shows the signed-out state.
+
+**Sign-in closed.** `/auth/me` answers 503 when sign-in is not configured, and the
+pages then say "Sign-in is not open yet" with no link. That is all the site can
+know beforehand: an exhausted spend allowance is reported only by
+`/auth/x/start`, and the callback failures are JSON pages, not redirects the
+site could catch, so those still show the API error after the link is followed.
+The note beside the link says so. Closing that gap needs a server change (a
+status field on `/auth/me`, or error redirects to `return_to`), which this
+packet did not make.
+
+**Header.** With Play and Board the header has seven items; it wraps to a second
+row on a narrow screen instead of overflowing (checked at 375 px in a browser:
+no horizontal scroll).
