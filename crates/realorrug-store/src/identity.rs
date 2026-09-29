@@ -36,7 +36,7 @@ impl PlayerKey {
 /// a discussion comment names its player only by [`Identity::player_key`],
 /// so deleting this row (`Store::delete_identity`) leaves the chain rows
 /// standing with nothing left to link them to a person (§4).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Identity {
     /// The random key chain rows name this player by.
     pub player_key: PlayerKey,
@@ -56,9 +56,27 @@ pub struct Identity {
     pub signed_in_at: i64,
 }
 
+/// Written by hand so a `{:?}` in a log or an error never carries the X id,
+/// handle or session hash: a log line is out of `delete_identity`'s reach.
+impl std::fmt::Debug for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Identity")
+            .field("player_key", &self.player_key)
+            .field("x_id", &"<redacted>")
+            .field("handle", &"<redacted>")
+            .field("account_created_at", &self.account_created_at)
+            .field("session_hash", &"<redacted>")
+            .field("signed_in_at", &self.signed_in_at)
+            .finish()
+    }
+}
+
 pub(crate) fn upsert(conn: &Connection, identity: &Identity) -> Result<(), StoreError> {
-    conn.execute(
-        "INSERT INTO identity (player_key, x_id, handle, account_created_at, session_hash,          signed_in_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)          ON CONFLICT(player_key) DO UPDATE SET          x_id = excluded.x_id, handle = excluded.handle,          account_created_at = excluded.account_created_at,          session_hash = excluded.session_hash, signed_in_at = excluded.signed_in_at",
+    // A key never moves to another X account: the update is conditional on the
+    // stored `x_id`, and a refused update changes no row. Updating `x_id` too
+    // would hand one person's whole chain history to someone else's account.
+    let changed = conn.execute(
+        "INSERT INTO identity (player_key, x_id, handle, account_created_at, session_hash,          signed_in_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)          ON CONFLICT(player_key) DO UPDATE SET          handle = excluded.handle,          account_created_at = excluded.account_created_at,          session_hash = excluded.session_hash, signed_in_at = excluded.signed_in_at          WHERE identity.x_id = excluded.x_id",
         params![
             identity.player_key.as_str(),
             identity.x_id,
@@ -79,6 +97,9 @@ pub(crate) fn upsert(conn: &Connection, identity: &Identity) -> Result<(), Store
         }
         _ => crate::constraint_or_sqlite(e),
     })?;
+    if changed == 0 {
+        return Err(StoreError::KeyTaken);
+    }
     Ok(())
 }
 

@@ -473,7 +473,9 @@ carries the close time it was submitted against.
 and `forecast` reveals at the same `now >= window_close`, so no instant
 exists at which entry is open and a call can already be read. This is design
 0028 §2.4: at close, entry shuts and the reveal begins. A test pins
-`now == window_close` to `WindowClosed`.
+`now == window_close` to `WindowClosed`. This holds for forecasts that
+share one `window_close`: the store takes the close per call and trusts it,
+so 4-3 must source it from the round, never the client (follow-up 13).
 
 **The Q1 board's count.** `realorrug_contest::calls::hit_miss` returns
 `HitMiss { hits, misses, n }`: a hit is a call whose side matched the
@@ -503,7 +505,7 @@ journal for the X id after the delete.
 Outcome}` are the store's own forecast-side and outcome types; `Outcome`
 gained `Unresolved` there (§9), excluded from `points`, a player's
 `variance` and `settled` (`n`) by filtering it out before `record_for` and
-`eligibility` sum anything, rather than teaching `points` to score it. The
+`eligibility` sum anything, rather than scoring it; `points` returns 0 for it only to keep the match exhaustive. The
 store's own `Store::public_wording` is the §2/A4 mapping
 (`Rugged`→"rug observed within the window", `Stood`→"no qualifying rug
 observed", `Unresolved`→"unresolved"). That `Store::public_wording` is the

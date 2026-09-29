@@ -87,6 +87,11 @@ pub enum StoreError {
     /// [`Store::player_for_x_id`] instead of minting another.
     #[error("an identity for this X account already exists")]
     XIdTaken,
+    /// An identity write for an existing player key named a different X id.
+    /// A key never moves to another X account: that would hand one person's
+    /// chain history to someone else.
+    #[error("this player key belongs to another X account")]
+    KeyTaken,
     /// A database constraint other than the one-forecast rule refused the
     /// write. Not `Duplicate`: a caller that maps it to `409 Conflict` would
     /// tell a player their call was a repeat when the chain refused it for
@@ -795,6 +800,10 @@ mod tests {
             )
             .expect_err("duplicate");
         assert!(matches!(err, StoreError::Duplicate));
+        // The refusal rolled its transaction back: without the ROLLBACK the
+        // connection stays inside it and every later write fails.
+        forecast_on(&store, &p, "coin-b", 21, 100)
+            .expect("the connection is usable after a refusal");
 
         let view = store
             .forecast("r1", "solana", "coin-a", p.as_str(), p.as_str(), 100)
@@ -1074,6 +1083,30 @@ mod tests {
             store.identity(&first).expect("read").expect("row").handle,
             "alice-renamed"
         );
+    }
+
+    /// A player key never moves to another X account, and a debug print of
+    /// an identity carries no X id, handle or session hash.
+    #[test]
+    fn a_key_cannot_be_moved_to_another_x_account_and_debug_redacts() {
+        let store = store();
+        let first = key(&store);
+        store
+            .upsert_identity(&identity_for(&first, "x-1", "alice"))
+            .expect("first identity");
+        let err = store
+            .upsert_identity(&identity_for(&first, "x-2", "mallory"))
+            .expect_err("same key, another X id");
+        assert!(matches!(err, StoreError::KeyTaken), "got {err:?}");
+        let kept = store.identity(&first).expect("read").expect("row");
+        assert_eq!((kept.x_id.as_str(), kept.handle.as_str()), ("x-1", "alice"));
+
+        let mut shown = identity_for(&first, "x-secret-id", "secret-handle");
+        shown.session_hash = Some("secret-hash".to_owned());
+        let printed = format!("{shown:?}");
+        for secret in ["x-secret-id", "secret-handle", "secret-hash"] {
+            assert!(!printed.contains(secret), "{secret} leaked in {printed}");
+        }
     }
 
     /// A constraint other than the `x_id` uniqueness is not `XIdTaken`: a
