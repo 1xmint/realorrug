@@ -290,4 +290,14 @@ export const FORBIDDEN_CLAIMS: readonly string[] = [
   "buyback",
   "holders earn",
   "yield",
+  // Design 0032 (4-3): the forecast game has no reward and no redemption.
+  // "winner" and bare "win" are left off on purpose: `History.tsx` still
+  // renders the retired weekly prize's winner, and "win" is a substring of
+  // "window", which the forecast pages use for the call window. Both belong
+  // here once History is retired.
+  "reward",
+  "winnings",
+  "you win",
+  "redeem",
+  "airdrop",
 ];

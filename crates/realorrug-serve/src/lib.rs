@@ -11,6 +11,7 @@ mod auth;
 pub mod card;
 pub mod check;
 pub mod facts;
+mod forecast;
 pub mod public;
 mod record;
 
@@ -34,6 +35,9 @@ pub fn app() -> Router {
     // rate limiter and daily budget, not each hold their own (card.rs's own
     // doc comment: "never a second chain read").
     let check_state = check::CheckState::shared();
+    // One `AuthState` for the sign-in and the forecast routes: two would open
+    // the store twice and split the session table's one writer in two.
+    let session_routes = session_routes(Arc::new(auth::AuthState::from_env()));
     let router = Router::new()
         .route("/health", get(health))
         .route("/v1/public/stats", get(public::stats))
@@ -44,7 +48,7 @@ pub fn app() -> Router {
         .route("/v1/public/recent", get(public::recent))
         .merge(check::router(check_state.clone()))
         .merge(card::router(check_state))
-        .merge(auth::router(Arc::new(auth::AuthState::from_env())));
+        .merge(session_routes);
     // ADR 0036 decision 4: no `REALORRUG_X402_PAY_TO`, no route at all. A
     // request under `/v1/facts` on an unconfigured box then 404s the
     // ordinary axum way, the same as any other unrouted path.
@@ -52,6 +56,14 @@ pub fn app() -> Router {
         Some(state) => router.merge(facts::router(Arc::new(state))),
         None => router,
     }
+}
+
+/// The sign-in, account and forecast routes with credentialed CORS over all of
+/// them. One function so the tests drive the same layering the server runs.
+fn session_routes(auth: Arc<auth::AuthState>) -> Router {
+    auth::router(Arc::clone(&auth))
+        .merge(forecast::router(Arc::clone(&auth)))
+        .layer(axum::middleware::from_fn_with_state(auth, auth::cors))
 }
 
 /// `GET /health`: the version and the commit, so "is the running process the

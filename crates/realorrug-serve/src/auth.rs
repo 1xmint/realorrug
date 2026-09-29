@@ -41,7 +41,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::extract::{ConnectInfo, Query, Request, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE};
+use axum::http::header::{
+    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+    ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_MAX_AGE, CACHE_CONTROL, CONTENT_TYPE, COOKIE,
+    LOCATION, ORIGIN, SET_COOKIE, VARY,
+};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -369,6 +373,11 @@ struct Live {
 pub(crate) struct AuthState {
     live: Option<Live>,
     pub(crate) clock: Clock,
+    /// The exact origins allowed to call with credentials. Empty sends no CORS
+    /// header at all (AGENTS.md rule 7).
+    pub(crate) app_origins: Vec<String>,
+    /// The rounds file (`REALORRUG_ROUNDS_FILE`). `None` refuses every forecast.
+    pub(crate) rounds_path: Option<PathBuf>,
 }
 
 /// A signed-in caller: whose forecasts these are, and the CSRF token their
@@ -395,7 +404,13 @@ impl AuthState {
     ) -> Self {
         let app_origins = app_origins_from(get);
         let live = Self::live_from(get, x, &clock, &app_origins);
-        Self { live, clock }
+        let rounds_path = nonempty(get, "REALORRUG_ROUNDS_FILE").map(PathBuf::from);
+        Self {
+            live,
+            clock,
+            app_origins,
+            rounds_path,
+        }
     }
 
     fn live_from(
@@ -414,6 +429,7 @@ impl AuthState {
                 return None;
             }
         };
+        record_head(&store);
         let x = x.unwrap_or_else(|| {
             Arc::new(HttpX::new(
                 &client_id,
@@ -643,7 +659,7 @@ impl Live {
 // Small pure helpers
 // ---------------------------------------------------------------------------
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(64);
     for b in digest.as_slice() {
@@ -655,7 +671,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// The CSRF token for a session: a hash of the raw session token under a
 /// domain label, so it is unguessable without the cookie, stable for the
 /// session's life, and needs no second thing stored.
-fn csrf_for(session_token: &str) -> String {
+pub(crate) fn csrf_for(session_token: &str) -> String {
     sha256_hex(format!("realorrug-csrf-v1:{session_token}").as_bytes())
 }
 
@@ -723,7 +739,7 @@ fn clear_cookie(name: &str, path: &str) -> String {
 // Responses
 // ---------------------------------------------------------------------------
 
-fn refuse(status: StatusCode, why: &str) -> Response {
+pub(crate) fn refuse(status: StatusCode, why: &str) -> Response {
     let mut response = (status, Json(json!({ "error": why }))).into_response();
     no_store(&mut response);
     response
@@ -745,7 +761,7 @@ fn closed() -> Response {
 
 /// Nothing here is cacheable: a shared cache holding a `Set-Cookie` or a
 /// CSRF token would hand one visitor's session to the next.
-fn no_store(response: &mut Response) {
+pub(crate) fn no_store(response: &mut Response) {
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -771,6 +787,76 @@ fn redirect(to: &str) -> Response {
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
+
+/// Credentialed CORS for the sign-in and forecast routes, to one exact origin
+/// at a time.
+///
+/// The header is set only when the request's `Origin` equals, byte for byte,
+/// an origin in `REALORRUG_APP_ORIGINS`. It is never `*` -- a wildcard with
+/// credentials is refused by browsers and is the thing this list exists to
+/// prevent -- and with no origin configured nothing is sent (AGENTS.md rule
+/// 7), so a browser elsewhere cannot read a signed-in reply. `Vary: Origin`
+/// always, so a shared cache never serves one origin's answer to another.
+pub(crate) async fn cors(
+    State(auth): State<Arc<AuthState>>,
+    request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let allowed = request
+        .headers()
+        .get(ORIGIN)
+        .and_then(|o| o.to_str().ok())
+        .filter(|o| auth.app_origins.iter().any(|a| a == o))
+        .and_then(|o| HeaderValue::from_str(o).ok());
+    let preflight = request.method() == axum::http::Method::OPTIONS;
+    let mut response = if preflight {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        next.run(request).await
+    };
+    let headers = response.headers_mut();
+    headers.append(VARY, HeaderValue::from_static("Origin"));
+    if let Some(origin) = allowed {
+        headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        headers.insert(
+            ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
+        if preflight {
+            headers.insert(
+                ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_static("GET, POST, OPTIONS"),
+            );
+            headers.insert(
+                ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_static("content-type, x-csrf-token"),
+            );
+            headers.insert(ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
+        }
+    }
+    response
+}
+
+/// Writes the chain's head to the process log at start-up, where the service
+/// user cannot rewrite it (journald keeps it under its own account).
+///
+/// `Verified::Intact` proves the rows there chain from genesis and cannot
+/// prove a tail was not cut off; only a head recorded somewhere the writer of
+/// the database cannot reach can (design 0032 §3). The head is a hash: it
+/// carries no identity and, unlike the row count beside it, is not printed to
+/// any response -- a count before close would tell a reader how many calls are
+/// hidden.
+fn record_head(store: &Store) {
+    match store.verify() {
+        Ok(realorrug_store::Verified::Intact { head, .. }) => {
+            eprintln!("realorrug-serve: store head {head}");
+        }
+        Ok(realorrug_store::Verified::Broken { at, .. }) => {
+            eprintln!("realorrug-serve: THE STORE CHAIN DOES NOT VERIFY (first fault at row {at})");
+        }
+        Err(_) => eprintln!("realorrug-serve: the store chain could not be read"),
+    }
+}
 
 /// The sign-in, session and account routes.
 pub(crate) fn router(state: Arc<AuthState>) -> Router {

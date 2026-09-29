@@ -71,7 +71,29 @@ Radar's folders, which realorrug leaves in plan 0001 step 7a (below).
 | unit | binary | what it does | writes |
 |---|---|---|---|
 | `realorrug-analyst.service` | `realorrug-analyst` | answers summoned mentions on X with measured facts | `data/analyst`, `data/contest` |
-| `realorrug-serve.service` | `realorrug-serve` | the public site's five documents | nothing |
+| `realorrug-serve.service` | `realorrug-serve` | the public site's five documents; with a store path and an X app, sign-in and the forecast routes | nothing, or `REALORRUG_STORE_PATH` only |
+
+### The sign-in and forecast environment
+
+`realorrug-serve` opens no store and serves no sign-in unless configured; each
+variable below closes its feature when missing (design 0032 section 11). Names
+only here; values live in `/etc/realorrug/serve.env` on the box and are never
+committed. Use the test X app, not a live one.
+
+| variable | what it does | when missing |
+|---|---|---|
+| `REALORRUG_STORE_PATH` | the SQLite file for forecasts and identities | no store, no sign-in, no forecast |
+| `REALORRUG_X_CLIENT_ID` | the X app's OAuth2 client id | sign-in refuses |
+| `REALORRUG_X_REDIRECT_URI` | the callback the X app lists | sign-in refuses |
+| `REALORRUG_X_CLIENT_SECRET` | optional, for a confidential app | public-client PKCE only |
+| `REALORRUG_SERVE_MONTHLY_USD` | serve's own monthly spending stop (X reads) | spending refused |
+| `REALORRUG_APP_ORIGINS` | exact origins granted credentialed CORS | no CORS header |
+| `REALORRUG_ROUNDS_FILE` | the round record: id, close, coins | every round route answers 503 |
+| `REALORRUG_TRUST_CLOUDFLARE` | key the rate limit on `CF-Connecting-IP` | the socket address is used |
+
+The store directory must be writable by the unit (the system unit lists it in
+`ReadWritePaths`), and the database stays in SQLite's default journal mode:
+no WAL, so there is no side file to lose or to copy half-written.
 
 ## It reads nothing from Radar
 

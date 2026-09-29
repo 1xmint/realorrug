@@ -192,6 +192,11 @@ describe("FORBIDDEN_CLAIMS", () => {
       "buyback",
       "holders earn",
       "yield",
+      "reward",
+      "winnings",
+      "you win",
+      "redeem",
+      "airdrop",
     ]) {
       expect(FORBIDDEN_CLAIMS).toContain(claim);
     }

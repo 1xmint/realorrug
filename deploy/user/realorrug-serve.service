@@ -33,6 +33,16 @@ Environment=REALORRUG_CONTEST_DIR=/home/guardian/realorrug/data/contest
 Environment=REALORRUG_ANALYST_DIR=/home/guardian/realorrug/data/analyst
 # The same origin radar-serve sends today, from its own env file in Radar.
 Environment=REALORRUG_SITE_ORIGIN=https://cabalhunter.org
+# Sign-in and forecast routes (design 0032 s11). Every name below is read from
+# a line in this unit or an EnvironmentFile; a missing one closes that feature, it never opens it:
+#   REALORRUG_STORE_PATH          the SQLite file (default journal mode, no WAL)
+#   REALORRUG_X_CLIENT_ID         the test X app's OAuth2 client id
+#   REALORRUG_X_REDIRECT_URI      the callback the X app lists
+#   REALORRUG_X_CLIENT_SECRET     optional; only for a confidential X app
+#   REALORRUG_SERVE_MONTHLY_USD   the serve-owned monthly spending stop; unset = closed
+#   REALORRUG_APP_ORIGINS         exact origins allowed credentialed CORS; unset = no header
+#   REALORRUG_ROUNDS_FILE         the round record (id, close, coins); unset = 503
+#   REALORRUG_TRUST_CLOUDFLARE    1 to key the rate limit on CF-Connecting-IP
 Restart=always
 RestartSec=10
 NoNewPrivileges=true

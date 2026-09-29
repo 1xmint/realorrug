@@ -68,6 +68,51 @@ pub struct ForecastView {
     pub window_close: i64,
 }
 
+/// A forecast as the public may read it: after its close, with no player in it.
+///
+/// There is deliberately no player field. A per-coin list that named its
+/// callers would be a second board beside the one that counts, and the raw key
+/// is a stable pseudonym that must never sit next to a handle (design 0032
+/// §11).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClosedForecast {
+    /// The chain the coin is on.
+    pub chain: String,
+    /// The coin.
+    pub token: String,
+    /// Which way it was called.
+    pub side: Side,
+    /// The odds at the moment of listing.
+    pub q_basis_points: u16,
+    /// When it was submitted.
+    pub submitted_at: i64,
+}
+
+/// A closed forecast joined to the outcome recorded for its coin, for the
+/// board's hit/miss count. Only forecasts whose own close has passed, and only
+/// those with an outcome row, appear.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettledForecast {
+    /// The player's key. The store's caller must not print this beside a handle.
+    pub player_key: String,
+    /// The round.
+    pub round: String,
+    /// The chain the coin is on.
+    pub chain: String,
+    /// The coin.
+    pub token: String,
+    /// Which way it was called.
+    pub side: Side,
+    /// The odds at the moment of listing.
+    pub q_basis_points: u16,
+    /// The latest outcome recorded for the coin.
+    pub outcome: Outcome,
+    /// When the forecast was submitted.
+    pub submitted_at: i64,
+    /// When the outcome was recorded.
+    pub settled_at: i64,
+}
+
 /// An outcome, as read back.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutcomeView {
