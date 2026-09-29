@@ -1562,4 +1562,28 @@ mod tests {
         assert_eq!(settled[0].outcome, Outcome::Rugged);
         assert_eq!(settled[0].settled_at, 1_600);
     }
+
+    /// The settled read trusts a row's payload only under its own kind: a
+    /// forecast payload filed as an outcome, or the reverse, is `Corrupt`
+    /// rather than read as the other thing.
+    #[test]
+    fn settled_forecasts_refuse_a_payload_filed_under_the_wrong_kind() {
+        let forecast_payload = "{\"kind\":\"forecast\",\"side\":\"Rug\",                                \"q_basis_points\":5000,\"window_close\":1}";
+        let outcome_payload = "{\"kind\":\"outcome\",\"outcome\":\"Rugged\",                               \"rule_version\":\"v1\",\"evidence_reference\":null}";
+        for (kind, payload) in [("outcome", forecast_payload), ("forecast", outcome_payload)] {
+            let store = store();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO rows (kind, round, chain, token, player_key, at, payload,                      previous_hash, hash) VALUES (?1, 'r1', 'solana', 'coin-a', 'p', 1, ?2,                      'link-0', 'h')",
+                    params![kind, payload],
+                )
+                .expect("raw insert");
+            let read = store.settled_forecasts(1_000);
+            assert!(
+                matches!(read, Err(StoreError::Corrupt(_))),
+                "a '{kind}' row with the other payload was read as fine: {read:?}"
+            );
+        }
+    }
 }

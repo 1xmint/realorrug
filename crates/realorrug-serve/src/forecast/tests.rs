@@ -515,3 +515,36 @@ async fn the_privacy_notice_lists_every_kept_field_and_needs_no_configuration() 
     assert!(r.body.contains("replaces the old one"));
     assert!(r.body.contains("thrown away"));
 }
+
+#[test]
+fn a_round_id_is_kept_only_when_present_unique_and_at_most_the_limit() {
+    let one = |id: &str| format!(r#"{{"rounds":[{{"id":"{id}","close":5,"coins":[]}}]}}"#);
+    // Empty alone, and a too-long id alone: each is refused by its own clause.
+    assert!(parse_rounds(&one("")).is_none());
+    assert!(parse_rounds(&one(&"a".repeat(MAX_ID + 1))).is_none());
+    // The last good length and the shortest good one are kept.
+    assert!(parse_rounds(&one(&"a".repeat(MAX_ID))).is_some());
+    assert!(parse_rounds(&one("a")).is_some());
+    // Distinct ids are kept, so "already seen" is not just "any second id".
+    let two = r#"{"rounds":[{"id":"r1","close":5,"coins":[]},{"id":"r2","close":9,"coins":[]}]}"#;
+    assert_eq!(parse_rounds(two).map(|r| r.len()), Some(2));
+}
+
+#[tokio::test]
+async fn a_body_of_exactly_the_limit_is_read_and_one_byte_more_is_a_413() {
+    let h = H::open();
+    let (a, _) = h.player(1);
+    let base = r#"{"round":"r1","chain":"solana","token":"coinA","side":"rug"}"#;
+    let pad = |n: usize| format!("{base}{}", " ".repeat(n - base.len()));
+    let post = |body: String| {
+        let (h, a) = (&h, a.clone());
+        async move {
+            h.send(Method::POST, "/forecast", Some(&a), true, None, Some(&body))
+                .await
+        }
+    };
+    let over = post(pad(MAX_BODY + 1)).await;
+    assert_eq!(over.status, StatusCode::PAYLOAD_TOO_LARGE);
+    let at_limit = post(pad(MAX_BODY)).await;
+    assert_eq!(at_limit.status, StatusCode::CREATED, "{}", at_limit.body);
+}
