@@ -191,17 +191,32 @@ fn lock_ledger(dir: &str) -> Option<File> {
             None
         }
         Err(std::fs::TryLockError::Error(e)) => {
-            // Not the ordinary contention case -- an OS or filesystem that
-            // cannot lock at all. `ErrorKind::Unsupported` names it plainly
-            // rather than reading like the same "someone else has it" case.
-            let why = if e.kind() == ErrorKind::Unsupported {
-                "file locking is not supported here".to_owned()
-            } else {
-                e.to_string()
-            };
-            eprintln!("cannot lock {path}: {why}; no paid call");
+            eprintln!(
+                "cannot lock {path}: {}; no paid call",
+                lock_error_reason(&e)
+            );
             None
         }
+    }
+}
+
+/// Chooses the wording for a lock failure that is not the ordinary
+/// contention case (`TryLockError::WouldBlock`, handled above and needing no
+/// wording of its own).
+///
+/// Split out from [`lock_ledger`] so the `==`/`!=` choice at
+/// `ErrorKind::Unsupported` is a two-line unit test rather than something
+/// only provable by getting the real OS or filesystem into an unsupported
+/// state -- which `lock_ledger` cannot be driven to in a test, but the
+/// wording it picks can be, on a plain `std::io::Error` built from a kind.
+fn lock_error_reason(e: &std::io::Error) -> String {
+    if e.kind() == ErrorKind::Unsupported {
+        // Not the ordinary contention case -- an OS or filesystem that
+        // cannot lock at all. Named plainly rather than reading like the
+        // same "someone else has it" case `WouldBlock` already covers.
+        "file locking is not supported here".to_owned()
+    } else {
+        e.to_string()
     }
 }
 
@@ -407,5 +422,32 @@ mod tests {
         // day-since-epoch count clears it.
         let day = crate::spend::today();
         assert!(day > 19_000, "today() looks stubbed: got {day}");
+    }
+
+    #[test]
+    fn an_unsupported_lock_error_gets_a_plain_reason() {
+        // CI's mutation report flagged "replace == with != in lock_ledger"
+        // as MISSED: nothing here asserted which wording an unsupported
+        // lock error gets. `lock_ledger` itself cannot be driven into this
+        // branch in a test (it needs a real OS or filesystem that refuses to
+        // lock at all), so the wording it picks is tested directly instead.
+        let e = std::io::Error::from(super::ErrorKind::Unsupported);
+        assert_eq!(
+            super::lock_error_reason(&e),
+            "file locking is not supported here"
+        );
+    }
+
+    #[test]
+    fn any_other_lock_error_keeps_its_own_message() {
+        // The other side of the same boundary: a kind that is not
+        // `Unsupported` must fall through to the error's own message rather
+        // than the plain wording above -- which is exactly what `!=` in
+        // place of `==` would do to *every* kind, `Unsupported` included.
+        let kind = super::ErrorKind::PermissionDenied;
+        assert_eq!(
+            super::lock_error_reason(&std::io::Error::from(kind)),
+            std::io::Error::from(kind).to_string()
+        );
     }
 }

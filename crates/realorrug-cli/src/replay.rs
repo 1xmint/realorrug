@@ -120,11 +120,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     // reviewer diffing this run's tally against an earlier one would have no
     // way to tell "the model refused every draft" apart from "there was never
     // a model to ask".
-    if wants_model(args) && spend.is_none() {
-        eprintln!(
-            "--model was given but no Spend could be opened (prices are not fully configured); \
-             every case below falls back to the template"
-        );
+    if let Some(notice) = model_unavailable_notice(wants_model(args), spend.is_some()) {
+        eprintln!("{notice}");
     }
 
     // Every reply is computed up front, before anything is written, so the
@@ -418,10 +415,31 @@ fn wants_model(args: &[String]) -> bool {
     args.iter().any(|a| a == "--model")
 }
 
+/// The line a `--model` run prints when no `Spend` opened, and only then --
+/// a plain replay never asked for a model, so telling it none is available
+/// would be noise. Split out of `run` so both halves of that condition are
+/// tested rather than only readable.
+fn model_unavailable_notice(wants_model: bool, has_spend: bool) -> Option<&'static str> {
+    (wants_model && !has_spend).then_some(
+        "--model was given but no Spend could be opened (prices are not fully configured); \
+         every case below falls back to the template",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use realorrug_model::{Answer, Request, Unreachable};
+
+    #[test]
+    fn only_a_model_run_with_no_spend_says_the_model_is_unavailable() {
+        // `||` in place of `&&` would print the notice on every plain replay
+        // and on a funded `--model` run -- the mutant CI reported MISSED.
+        assert!(model_unavailable_notice(true, false).is_some());
+        assert!(model_unavailable_notice(false, false).is_none());
+        assert!(model_unavailable_notice(true, true).is_none());
+        assert!(model_unavailable_notice(false, true).is_none());
+    }
     use realorrug_roast::{Assessment, FactSheet};
     use realorrug_types::MicroUsd;
 
