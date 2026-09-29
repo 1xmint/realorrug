@@ -187,6 +187,41 @@ pub fn points(side: Side, q: Odds, outcome: Outcome) -> i64 {
     }
 }
 
+/// A count of right and wrong calls, with no value attached (design 0028 §7;
+/// AGENTS §3 rule 1). This is what a Q1 board shows, never [`points`] or a
+/// winner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HitMiss {
+    /// Calls whose side matched the outcome.
+    pub hits: u32,
+    /// Calls whose side did not match the outcome.
+    pub misses: u32,
+    /// `hits + misses`: the sample size shown beside the counts.
+    pub n: u32,
+}
+
+/// Counts hits and misses over settled calls. A hit is a call whose side
+/// matched the outcome (`Rug` on `Rugged`, `Real` on `Stood`). `Unresolved`
+/// calls are excluded from all three counts: an unread coin proves nothing
+/// about who called it right (design 0032 §2), and `n` must not grow on it.
+#[must_use]
+pub fn hit_miss(calls: &[SettledCall]) -> HitMiss {
+    let mut hits: u32 = 0;
+    let mut misses: u32 = 0;
+    for call in calls {
+        match (call.side, call.outcome) {
+            (Side::Rug, Outcome::Rugged) | (Side::Real, Outcome::Stood) => hits += 1,
+            (Side::Rug, Outcome::Stood) | (Side::Real, Outcome::Rugged) => misses += 1,
+            (Side::Rug | Side::Real, Outcome::Unresolved) => {}
+        }
+    }
+    HitMiss {
+        hits,
+        misses,
+        n: hits + misses,
+    }
+}
+
 /// The per-call contribution to a zero-edge player's variance:
 /// `q(10 000 − q)`, an integer, summed exactly over a player's calls.
 ///
@@ -1093,6 +1128,145 @@ mod tests {
         assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    // --- Unresolved: excluded everywhere, not merely scored as zero ---
+
+    /// A resolved call for player `p`, on its own creator when `creator` is
+    /// given, so a test can add an eleventh creator through one call.
+    fn resolved_call(i: u64, creator: &str) -> SettledCall {
+        SettledCall {
+            player: "p".to_string(),
+            coin_id: format!("coin-{i}"),
+            creator_id: creator.to_string(),
+            side: if i.is_multiple_of(2) {
+                Side::Rug
+            } else {
+                Side::Real
+            },
+            q: Odds::new(2_000 + 100 * u16::try_from(i).expect("small")).expect("odds"),
+            outcome: if i.is_multiple_of(3) {
+                Outcome::Rugged
+            } else {
+                Outcome::Stood
+            },
+            called_at: 1_000 + i,
+            account_age_days: Some(365),
+        }
+    }
+
+    fn only_record(calls: &[SettledCall]) -> PlayerRecord {
+        let ranking = score_calls(calls, 30);
+        ranking
+            .within_luck
+            .into_iter()
+            .chain(ranking.above_line)
+            .find(|r| r.player == "p")
+            .expect("player p is eligible")
+    }
+
+    #[test]
+    fn an_unresolved_call_changes_nothing_in_the_record() {
+        let resolved: Vec<SettledCall> = (0..20)
+            .map(|i| resolved_call(i, &format!("creator-{}", i % 10)))
+            .collect();
+        let without = only_record(&resolved);
+        assert_eq!(without.settled, 20);
+        assert_eq!(without.distinct_creators, 10);
+
+        // An Unresolved call at a scoring q, on an eleventh creator, with the
+        // earliest `called_at` of all: it would move every field if it leaked.
+        let mut with_unresolved = resolved.clone();
+        with_unresolved.push(SettledCall {
+            player: "p".to_string(),
+            coin_id: "coin-unread".to_string(),
+            creator_id: "creator-eleventh".to_string(),
+            side: Side::Rug,
+            q: Odds::new(5_000).expect("odds"),
+            outcome: Outcome::Unresolved,
+            called_at: 1,
+            account_age_days: Some(365),
+        });
+        let with = only_record(&with_unresolved);
+
+        assert_eq!(with.total, without.total);
+        assert_eq!(with.settled, without.settled);
+        assert_eq!(with.variance, without.variance);
+        assert_eq!(with.distinct_creators, without.distinct_creators);
+        assert_eq!(with.first_call_at, without.first_call_at);
+        assert_eq!(with, without);
+    }
+
+    #[test]
+    fn unresolved_calls_do_not_make_a_player_eligible() {
+        // 19 resolved calls plus one Unresolved is 19 settled, not 20.
+        let mut calls: Vec<SettledCall> = (0..19)
+            .map(|i| resolved_call(i, &format!("creator-{}", i % 10)))
+            .collect();
+        let mut unread = resolved_call(19, "creator-9");
+        unread.outcome = Outcome::Unresolved;
+        calls.push(unread);
+        assert_eq!(
+            score_calls(&calls, 30).excluded,
+            vec![("p".to_string(), Excluded::TooFewCalls { settled: 19 })]
+        );
+
+        // 20 resolved calls on 9 creators plus an Unresolved call on a tenth
+        // is 9 creators, not 10.
+        let mut calls: Vec<SettledCall> = (0..20)
+            .map(|i| resolved_call(i, &format!("creator-{}", i % 9)))
+            .collect();
+        let mut unread = resolved_call(20, "creator-tenth");
+        unread.outcome = Outcome::Unresolved;
+        calls.push(unread);
+        assert_eq!(
+            score_calls(&calls, 30).excluded,
+            vec![("p".to_string(), Excluded::TooFewCreators { creators: 9 })]
+        );
+    }
+
+    #[test]
+    fn points_for_an_unresolved_call_are_zero() {
+        // The arm `record_for` never reaches once it filters: pinned at the
+        // function so the zero is not left to that filter alone.
+        for side in [Side::Rug, Side::Real] {
+            for bp in [0, 1_000, 5_000, 9_000, 10_000] {
+                let q = Odds::new(bp).expect("odds");
+                assert_eq!(points(side, q, Outcome::Unresolved), 0);
+            }
+        }
+    }
+
+    // --- hit_miss: the Q1 board's count ---
+
+    fn call_with(side: Side, outcome: Outcome) -> SettledCall {
+        SettledCall {
+            side,
+            outcome,
+            ..resolved_call(0, "creator-0")
+        }
+    }
+
+    #[test]
+    fn hit_miss_counts_matches_and_excludes_unresolved() {
+        let calls = vec![
+            call_with(Side::Rug, Outcome::Rugged),
+            call_with(Side::Rug, Outcome::Rugged),
+            call_with(Side::Real, Outcome::Stood),
+            call_with(Side::Rug, Outcome::Stood),
+            call_with(Side::Real, Outcome::Rugged),
+            call_with(Side::Rug, Outcome::Unresolved),
+            call_with(Side::Real, Outcome::Unresolved),
+        ];
+        assert_eq!(
+            hit_miss(&calls),
+            HitMiss {
+                hits: 3,
+                misses: 2,
+                n: 5
+            }
+        );
+        assert_eq!(hit_miss(&[]), HitMiss::default());
     }
 
     #[test]

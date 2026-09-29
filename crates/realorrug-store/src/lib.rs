@@ -62,10 +62,11 @@ pub enum StoreError {
     /// A row could not be turned into or read back from its stored form.
     #[error("store: a row could not be serialised: {0}")]
     Serialise(#[from] serde_json::Error),
-    /// A forecast arrived after its round's window had already closed
-    /// (design 0032 §9: "refused by the server clock, not the client's" --
-    /// the caller passes `now`, this refuses by comparing it to the round's
-    /// close it was also given).
+    /// A forecast arrived at or after its round's window close (design 0032
+    /// §9: "refused by the server clock, not the client's" -- the caller
+    /// passes `now`, this refuses by comparing it to the round's close it
+    /// was also given). At the close itself is already too late: that is the
+    /// instant reveals begin.
     #[error("the window closed at {window_close} and this forecast arrived at {now}")]
     WindowClosed {
         /// When the round's window closed.
@@ -110,7 +111,12 @@ impl Store {
 
     fn init(conn: Connection) -> Result<Self, StoreError> {
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS rows (
+            // Deleting an identity must remove its bytes from the file, not
+            // only its row: without this SQLite leaves a deleted page's
+            // content in the free list, and the X id would stay readable
+            // in the file after "deletion" (design 0032 §4).
+            "PRAGMA secure_delete = ON;
+             CREATE TABLE IF NOT EXISTS rows (
                 seq           INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind          TEXT    NOT NULL,
                 round         TEXT    NOT NULL,
@@ -228,7 +234,11 @@ impl Store {
         now: i64,
         window_close: i64,
     ) -> Result<(), StoreError> {
-        if now > window_close {
+        // `>=`, not `>`: `forecast` reveals a call to everyone at
+        // `now >= window_close`, so a call submitted at exactly the close would
+        // let a second player read the first one's and still enter (design
+        // 0028 §2.4: at close, entry shuts and the reveal begins).
+        if now >= window_close {
             return Err(StoreError::WindowClosed { window_close, now });
         }
         let payload = RowPayload::Forecast {
@@ -515,7 +525,47 @@ mod tests {
         Store::open_in_memory().expect("open")
     }
 
-    /// A forecast after its window closes is refused (design 0032 §9).
+    /// A forecast at the close is refused, because `forecast` reveals a call
+    /// at `now >= window_close`: at exactly the close, entry shuts and the
+    /// reveal begins (design 0028 §2.4; design 0032 §10).
+    #[test]
+    fn a_forecast_at_exactly_the_close_is_refused() {
+        let store = store();
+        let err = store
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-a",
+                "player-1",
+                Side::Rug,
+                odds(6_000),
+                100,
+                100,
+            )
+            .expect_err("a forecast at the close");
+        assert!(matches!(
+            err,
+            StoreError::WindowClosed {
+                window_close: 100,
+                now: 100
+            }
+        ));
+        // One tick before the close is still open.
+        store
+            .submit_forecast(
+                "r1",
+                "solana",
+                "coin-a",
+                "player-1",
+                Side::Rug,
+                odds(6_000),
+                99,
+                100,
+            )
+            .expect("a forecast one tick before the close");
+    }
+
+    /// After the close a forecast is refused (design 0032 §9).
     #[test]
     fn a_late_forecast_is_refused() {
         let store = store();
@@ -706,6 +756,51 @@ mod tests {
             assert!(!payload.contains(&identity.x_id));
             assert!(!payload.contains(&identity.handle));
         }
+    }
+
+    /// Deleting an identity removes its bytes from the file, not only its
+    /// row (design 0032 §4). The first read is the instrument check: the
+    /// same scan must find the X id while it is stored, so a clean result
+    /// after the delete means the bytes are gone and not that the scan is
+    /// blind.
+    #[test]
+    fn a_deleted_identity_leaves_no_bytes_in_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("store.db");
+        let x_id = "x-id-7f3a9c1e5b2d4086";
+        let handle = "handle-5d2e8b90c41a";
+
+        let store = Store::open(&path).expect("open");
+        store
+            .upsert_identity(&Identity {
+                player_key: "player-1".to_owned(),
+                x_id: x_id.to_owned(),
+                handle: handle.to_owned(),
+                account_created_at: None,
+                session_hash: None,
+                signed_in_at: 5,
+            })
+            .expect("upsert");
+
+        let scan = |needle: &str| -> bool {
+            let mut found = false;
+            for entry in std::fs::read_dir(dir.path()).expect("read_dir") {
+                let bytes = std::fs::read(entry.expect("entry").path()).expect("read");
+                found |= bytes
+                    .windows(needle.len())
+                    .any(|window| window == needle.as_bytes());
+            }
+            found
+        };
+        assert!(scan(x_id), "the scan must see the X id while it is stored");
+        assert!(scan(handle), "the scan must see the handle while stored");
+
+        store.delete_identity("player-1").expect("delete");
+        drop(store);
+
+        // Every file beside the database (a `-journal` or `-wal`) is scanned.
+        assert!(!scan(x_id), "the X id survived the delete in the file");
+        assert!(!scan(handle), "the handle survived the delete in the file");
     }
 
     /// `Unresolved` adds no points and no n -- proved at

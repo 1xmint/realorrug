@@ -436,11 +436,26 @@ anyone but the author before the row's own `window_close` — never a
 separate "is this mine" flag a caller could get wrong, since the row itself
 carries the close time it was submitted against.
 
+**The close boundary.** `submit_forecast` refuses at `now >= window_close`,
+and `forecast` reveals at the same `now >= window_close`, so no instant
+exists at which entry is open and a call can already be read. This is design
+0028 §2.4: at close, entry shuts and the reveal begins. A test pins
+`now == window_close` to `WindowClosed`.
+
+**The Q1 board's count.** `realorrug_contest::calls::hit_miss` returns
+`HitMiss { hits, misses, n }`: a hit is a call whose side matched the
+outcome, `Unresolved` is excluded from all three counts, and `n = hits +
+misses`. It is what 4-3's board serves, not `score_calls`: a count carries
+no value, where `score_calls` produces points and a winner (§9).
+
 **Identity (§4).** A second table, `identity`, keyed by `player_key`, holds
 the X id, handle, `account_created_at` and session hash. No chain row has a
 column for any of them — not "redacted on delete," never present to begin
 with — so `Store::delete_identity` is one `DELETE` against one table and the
-chain needs no migration to stay valid and unlinked.
+chain needs no migration to stay valid and unlinked. `init` sets `PRAGMA
+secure_delete = ON`, so the deleted row's bytes are overwritten in the file
+and not left in a free page; a file-backed test scans the database and any
+journal for the X id after the delete.
 
 **Reused, not copied (§6).** `realorrug_contest::calls::{Side, Odds,
 Outcome}` are the store's own forecast-side and outcome types; `Outcome`
