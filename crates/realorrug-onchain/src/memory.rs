@@ -928,6 +928,54 @@ impl Memory {
         Ok(())
     }
 
+    /// The one label held for a token on `chain`, if any.
+    ///
+    /// The settle job's read (design 0032 §12). There is at most one row per
+    /// token, and a later label replaces an earlier one, so this is the
+    /// latest observation and never a history: the caller that needs to keep
+    /// what it saw copies it, and does not point back here.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sqlite`] if the read fails, or if the stored label is not one
+    /// [`OutcomeLabel::parse`] knows.
+    pub fn outcome_label(&self, chain: &str, token: &str) -> Result<Option<Outcome>, Error> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT label, at_block, evidence, observed_at FROM verdict_outcomes
+                 WHERE chain = ?1 AND token = ?2",
+                params![chain, token],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((label, at_block, evidence, observed_at)) = row else {
+            return Ok(None);
+        };
+        let label = OutcomeLabel::parse(&label).ok_or_else(|| {
+            Error::Sqlite(rusqlite::Error::InvalidColumnType(
+                0,
+                "label".to_owned(),
+                rusqlite::types::Type::Text,
+            ))
+        })?;
+        Ok(Some(Outcome {
+            chain: chain.to_owned(),
+            token: token.to_owned(),
+            label,
+            at_block: at_block.map(from_i64),
+            evidence,
+            observed_at: from_unix(observed_at),
+        }))
+    }
+
     /// Every verdict on `chain` whose token now has an outcome, oldest first.
     ///
     /// The inner join is the point: a verdict with no outcome yet is not half
@@ -2782,6 +2830,34 @@ mod tests {
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].0, a_verdict("Sketchy", 1_000));
         assert_eq!(pairs[0].1, an_outcome(OutcomeLabel::Rug, 2_000));
+    }
+
+    /// The settle job reads the token's own label: none when there is none,
+    /// the whole label when there is, and only for the chain and token asked.
+    #[test]
+    fn outcome_label_reads_one_tokens_label_and_only_that() {
+        let mem = Memory::open_in_memory().expect("open");
+        assert_eq!(mem.outcome_label(CHAIN, TOKEN).expect("read"), None);
+        mem.record_outcome(&an_outcome(OutcomeLabel::Rug, 2_000))
+            .expect("record");
+        assert_eq!(
+            mem.outcome_label(CHAIN, TOKEN).expect("read"),
+            Some(an_outcome(OutcomeLabel::Rug, 2_000))
+        );
+        assert_eq!(mem.outcome_label(CHAIN, "OtherToken").expect("read"), None);
+        assert_eq!(mem.outcome_label("otherchain", TOKEN).expect("read"), None);
+        mem.record_outcome(&Outcome {
+            at_block: None,
+            ..an_outcome(OutcomeLabel::Alive, 3_000)
+        })
+        .expect("relabel");
+        let now = mem
+            .outcome_label(CHAIN, TOKEN)
+            .expect("read")
+            .expect("some");
+        assert_eq!(now.label, OutcomeLabel::Alive);
+        assert_eq!(now.at_block, None);
+        assert_eq!(now.observed_at, secs(3_000));
     }
 
     /// A verdict with no outcome yet is not half a pair -- it is not a pair,

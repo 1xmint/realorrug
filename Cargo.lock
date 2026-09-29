@@ -1351,6 +1351,7 @@ dependencies = [
  "realorrug-pumpfun",
  "realorrug-roast",
  "realorrug-robinhood",
+ "realorrug-store",
  "realorrug-types",
  "serde",
  "serde_json",

@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# NOT INSTALLED. Installing is the owner's gate (deploy/README.md, "Settle
+# closed rounds, daily"). Install to /etc/systemd/system/realorrug-settle.service
+# beside its timer. Run once by hand first, as a dry run:
+#   sudo -u guardian /home/guardian/realorrug/bin/realorrug settle --dry-run
+#
+# Gives every coin of a closed round its one outcome row in the research store
+# (design 0032 section 12). Code only: no model, no network, no key, nothing
+# posted. It reads the rounds file and the analyst's memory (the labels
+# `realorrug label-outcomes` wrote) and writes outcome rows to the store.
+#
+# Order: after record-launches, which feeds the same memory file. `After=` only
+# orders the two when both are queued; it does not start the other, and settle
+# does not need it installed.
+#
+# The two paths below must equal the ones realorrug-serve runs with
+# (REALORRUG_STORE_PATH and REALORRUG_ROUNDS_FILE in /etc/realorrug/serve.env).
+# They are written here as Environment= lines, not read from that file, so this
+# unit never holds the X app's secrets. A wrong path fails closed: settle
+# refuses a store file that is not there and never makes one. EDIT THEM to match
+# serve before installing.
+[Unit]
+Description=Settle closed rounds into the research store (outcome rows, once each)
+Documentation=https://github.com/1xmint/realorrug
+After=realorrug-record-launches.service
+
+[Service]
+Type=oneshot
+User=guardian
+Group=guardian
+WorkingDirectory=/home/guardian/realorrug
+Environment=REALORRUG_STORE_PATH=/home/guardian/realorrug/data/store/research.sqlite3
+Environment=REALORRUG_ROUNDS_FILE=/home/guardian/realorrug/data/contest/rounds.json
+ExecStart=/home/guardian/realorrug/bin/realorrug settle --memory /home/guardian/realorrug/data/analyst/memory.sqlite3
+# Lowest priority: the analyst answering people comes first on a small box.
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=10min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The store's directory, not only its file: SQLite's default journal mode
+# writes a journal beside the database.
+ReadWritePaths=/home/guardian/realorrug/data/store /home/guardian/realorrug/data/analyst
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+# No network is needed, and none is given.
+PrivateNetwork=true
+MemoryMax=128M
+TasksMax=32

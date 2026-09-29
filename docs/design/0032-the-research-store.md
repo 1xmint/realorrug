@@ -635,3 +635,75 @@ and "airdrop". "winner" and "win" wait: `History.tsx` still renders the
 retired weekly prize's winner, and "win" is a substring of "window".
 
 **Env** names for the box are in `deploy/README.md`.
+
+## 12. As built (4-4, settlement)
+
+`realorrug settle` gives each coin of a closed round one outcome row in the
+store, so the board's `hit_miss` has something to count. Code only: no model
+decides, no network is spent, nothing is posted or signed. The pure rule is
+`realorrug-contest/src/settle.rs`; the command, which reads and writes, is
+`realorrug-cli/src/settle.rs`. The units `deploy/realorrug-settle.service` and
+`.timer` are written and **not installed**; installing them is Josh's gate
+(`deploy/README.md`, "Settle closed rounds, daily").
+
+**Reads.** The rounds file (`--rounds` or `REALORRUG_ROUNDS_FILE`: no default,
+so none means nothing settles), the analyst's memory (`--memory`, else
+`REALORRUG_ANALYST_DIR/memory.sqlite3`) and the store. From memory it reads
+one thing per coin: the label in `verdict_outcomes` that `realorrug
+label-outcomes` wrote, and when it was written. A missing memory file is an
+error that writes nothing; a missing store is refused, never created.
+
+**Writes.** One `outcome` row per round, chain and token, through
+`Store::record_outcome_once`, which checks for an existing outcome and appends
+inside the same `BEGIN IMMEDIATE` transaction. The store's triggers refuse an
+UPDATE or DELETE but nothing refused a second outcome row, so a second run
+would have stacked one; the check is what makes re-running a no-op. Each row
+carries `rule_version` (`settle-1`), `settled_at` and the evidence reference.
+
+**The rule (`settle-1`).** The round's `close` in the rounds file is the end of
+the entry window, so the settlement window is the fourteen days after it
+(the horizon). Before the close nothing settles, whatever was read, and a label
+stamped after the moment of running is dropped. A `Rug` read inside the window
+settles `Rugged` at once. With none, nothing is written until the horizon.
+At or after it, `Stood` needs a `NoRug` read in each of the fourteen 24-hour
+spans; anything less is `Unresolved`, which the board leaves out of its n (a
+gap in the read history is no read, AGENTS.md section 3 rule 8). Reads outside
+the window are ignored. A coin with no evidence at all is therefore `Unresolved`
+at the horizon, not `Stood` and not absent.
+
+**Determinism and `--verify`.** The evidence reference is
+`close=<n>;reads=<at>:<R|N>,...`, canonical (sorted, deduplicated, in-window
+reads only), so a row is checkable from itself. `realorrug settle --verify`
+re-derives every stored outcome from its own rule version, evidence and
+`settled_at`, exits non-zero on any disagreement or unverifiable row, and refuses a broken hash
+chain. A read stamped after a row's `settled_at` makes the re-derivation
+answer nothing, which is reported as unverifiable, not as agreement, and fails too.
+`--dry-run` prints what would be written and writes nothing.
+
+**What is true today, and not.**
+
+- `Stood` cannot be reached from real data yet. The only evidence is the single,
+  overwritten label per token, not a read history: `Rug` maps to a `Rug` read,
+  `Failed` and `Alive` to `NoRug` reads, all stamped when written, so at most one
+  span is ever covered and a live coin settles `Unresolved` at the horizon.
+  Fourteen daily reads need the observation job of design 0027 slice 9, which
+  does not exist. Until it does, the honest outcomes are `Rugged` (the label
+  says a rug) and `Unresolved`. The rule and its tests already cover `Stood`.
+- PR #141 (`record-launches`) is not merged and records names only, so it
+  supplies no evidence. The service is ordered `After=` it so that when it is
+  installed a same-time run sees its output; nothing requires it.
+- **A written `Unresolved` is permanent.** The store is append-only and settle
+  never writes a second row, so if a later job could have supplied a missing
+  read, the row already at the horizon stands. Correcting one needs a new rule
+  version and a decision of Josh's, not a re-run.
+- **Deviation from ADR 0041 decision 6**, which has settlement publish a file
+  that serve ingests, keeping serve the only writer. The packet for this step
+  had the command write through `realorrug-store` directly, and it does, using
+  SQLite's write lock as the coordination. It is the opposite of "one writer";
+  flagged for Josh to rule on, and if he prefers the file, the pure rule and
+  the evidence encoding stay and only the last step changes.
+
+**Cadence.** Daily, plus the horizon (the timer runs once a day at 04:15 UTC
+with a randomised delay; `Persistent=true` catches a missed day). A rug is
+written on the first run after the label appears; the rest at the first run on
+or after the horizon.

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# NOT INSTALLED. Installing is the owner's gate (deploy/README.md, "Settle
+# closed rounds, daily"). Install to /etc/systemd/system/realorrug-settle.timer,
+# then:
+#   sudo systemctl enable --now realorrug-settle.timer
+#
+# Daily, not hourly (design 0032 section 9): a rug is written the day a read
+# sees it, and the rest at the fourteen-day horizon, so an hourly run would add
+# reads and rows to no purpose. Running twice is harmless: a coin that already
+# has an outcome is skipped. Late in the day, after the hourly record-launches
+# has run.
+[Unit]
+Description=Settle closed rounds, daily
+Documentation=https://github.com/1xmint/realorrug
+
+[Timer]
+OnCalendar=*-*-* 04:15:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+Unit=realorrug-settle.service
+
+[Install]
+WantedBy=timers.target

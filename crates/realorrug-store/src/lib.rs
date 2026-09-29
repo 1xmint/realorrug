@@ -562,6 +562,52 @@ impl Store {
         )
     }
 
+    /// Records an outcome only if the round and coin have none yet, in one
+    /// write transaction. `true` when a row was written, `false` when one was
+    /// already there and nothing changed.
+    ///
+    /// The settle job's entry point (design 0032 §12). [`Store::record_outcome`]
+    /// alone would make a second run of a timer append a second row for every
+    /// coin, and `Store::outcome` would then read the newer one as the
+    /// authoritative one. Checking with `outcome` first and then calling
+    /// `record_outcome` is two transactions, so two overlapping runs could both
+    /// pass the check; the check and the append share the write lock here.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Sqlite`] or [`StoreError::Serialise`] on a write failure.
+    #[expect(clippy::too_many_arguments, reason = "the outcome row's own fields")]
+    pub fn record_outcome_once(
+        &self,
+        round: &str,
+        chain_name: &str,
+        token: &str,
+        outcome: Outcome,
+        rule_version: &str,
+        evidence_reference: Option<&str>,
+        settled_at: i64,
+    ) -> Result<bool, StoreError> {
+        let payload = RowPayload::Outcome {
+            outcome,
+            rule_version: rule_version.to_owned(),
+            evidence_reference: evidence_reference.map(str::to_owned),
+        };
+        self.with_write(|| {
+            let exists: bool = self.conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM rows WHERE kind = 'outcome' AND round = ?1                  AND chain = ?2 AND token = ?3)",
+                params![round, chain_name, token],
+                |r| r.get(0),
+            )?;
+            if exists {
+                return Ok(false);
+            }
+            self.append_in_write(
+                "outcome", round, chain_name, token, None, settled_at, &payload,
+            )?;
+            Ok(true)
+        })
+    }
+
     /// The most recently recorded outcome for a round and coin, if any.
     ///
     /// # Errors
@@ -1505,7 +1551,7 @@ mod tests {
     #[test]
     fn a_second_connection_cannot_write_between_a_tail_read_and_the_insert() {
         type Write = fn(&Store, &PlayerKey) -> Result<(), StoreError>;
-        let writes: [(&str, Write); 4] = [
+        let writes: [(&str, Write); 5] = [
             ("forecast", |s, p| forecast_on(s, p, "coin-a", 10, 100)),
             ("evidence", |s, p| {
                 s.submit_evidence("r1", "solana", "coin-a", p, "https://x", "note", 10)
@@ -1515,6 +1561,10 @@ mod tests {
             }),
             ("outcome", |s, _| {
                 s.record_outcome("r1", "solana", "coin-a", Outcome::Stood, "v1", None, 10)
+            }),
+            ("outcome once", |s, _| {
+                s.record_outcome_once("r1", "solana", "coin-a", Outcome::Stood, "v1", None, 10)
+                    .map(|_| ())
             }),
         ];
         for (name, write) in writes {
@@ -1625,6 +1675,76 @@ mod tests {
                 .closed_forecasts("r2", 5_000)
                 .expect("read")
                 .is_empty()
+        );
+    }
+
+    /// The second call is a no-op: the first row stands, unchanged, and the
+    /// chain does not grow. A different coin, and a different round of the
+    /// same coin, are their own outcomes.
+    #[test]
+    fn record_outcome_once_writes_the_first_and_refuses_the_rest() {
+        let store = store();
+        assert!(
+            store
+                .record_outcome_once(
+                    "r1",
+                    "solana",
+                    "coinA",
+                    Outcome::Rugged,
+                    "v1",
+                    Some("e1"),
+                    10
+                )
+                .expect("first")
+        );
+        assert!(
+            !store
+                .record_outcome_once(
+                    "r1",
+                    "solana",
+                    "coinA",
+                    Outcome::Stood,
+                    "v2",
+                    Some("e2"),
+                    20
+                )
+                .expect("second")
+        );
+        assert_eq!(intact(store.verify().expect("verify")).0, 1);
+        let view = store
+            .outcome("r1", "solana", "coinA")
+            .expect("read")
+            .expect("present");
+        assert_eq!(view.outcome, Outcome::Rugged);
+        assert_eq!(view.rule_version, "v1");
+        assert_eq!(view.evidence_reference.as_deref(), Some("e1"));
+        assert_eq!(view.settled_at, 10);
+        for (round, chain_name, token) in [
+            ("r1", "solana", "coinB"),
+            ("r2", "solana", "coinA"),
+            ("r1", "base", "coinA"),
+        ] {
+            assert!(
+                store
+                    .record_outcome_once(round, chain_name, token, Outcome::Stood, "v1", None, 30)
+                    .expect("other key"),
+                "{round}/{chain_name}/{token} is its own outcome"
+            );
+        }
+        assert_eq!(intact(store.verify().expect("verify")).0, 4);
+    }
+
+    /// Only an outcome row counts as settled: a forecast on the same coin does
+    /// not stop the first outcome from being written.
+    #[test]
+    fn record_outcome_once_is_not_blocked_by_a_forecast() {
+        let store = store();
+        let ann = key(&store);
+        forecast_on(&store, &ann, "coinA", 100, 1_000).expect("forecast");
+        assert!(
+            store
+                .record_outcome_once("r1", "solana", "coinA", Outcome::Stood, "v1", None, 1_500)
+                .expect("outcome")
         );
     }
 

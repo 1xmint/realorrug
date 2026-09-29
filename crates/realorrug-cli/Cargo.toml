@@ -27,6 +27,8 @@ realorrug-pumpfun.workspace = true
 # The Robinhood Chain reader behind `realorrug launch-check`. Read-only: no key.
 realorrug-robinhood.workspace = true
 realorrug-model.workspace = true
+# The research store `realorrug settle` writes outcome rows into. Holds no key.
+realorrug-store.workspace = true
 realorrug-types.workspace = true
 # `Capture` (behind `realorrug capture`/`realorrug replay`) is the first type
 # in this crate serialized to disk rather than only printed, so this is the

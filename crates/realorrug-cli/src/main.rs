@@ -21,6 +21,7 @@ mod record_launches;
 mod replay;
 mod roast;
 mod rpc_arg;
+mod settle;
 mod treasury_solana;
 
 use std::process::ExitCode;
@@ -137,6 +138,17 @@ commands:
                                  from a stored cursor; an unreadable name
                                  still writes a row (rule 8). Read-only chain
                                  access, holds no key, posts nothing
+  settle [--rounds PATH] [--store PATH] [--memory PATH] [--dry-run | --verify]
+                                 gives every coin of a closed round its one
+                                 outcome row in the research store, from the
+                                 labels `label-outcomes` recorded and the
+                                 published settlement rule (design 0032 §12).
+                                 A coin with no evidence settles unresolved,
+                                 never guessed; nothing is written before a
+                                 round closes; a second run adds nothing.
+                                 `--verify` re-derives every stored outcome
+                                 from its own evidence. No model, no network,
+                                 holds no key, posts nothing
   model-prices <model> [--check] | --list
                                  what to paste into analyst.env for a model,
                                  read from models.dev rather than typed
@@ -222,6 +234,7 @@ fn main() -> ExitCode {
         "model-prices" => model_prices::run(&args),
         "narratives" => narratives::run(&args),
         "record-launches" => record_launches::run(&args),
+        "settle" => settle::run(&args),
         "-h" | "--help" | "help" => {
             print!("{}", usage());
             return ExitCode::SUCCESS;

@@ -280,6 +280,42 @@ analyst's cursor file changes after the start (`ls -l
 To go back before that: stop both, install the two kept units
 (`~/realorrug/realorrug-*.service`) where they came from, reload, start.
 
+## Settle closed rounds, daily
+
+`realorrug settle` gives every coin of a closed round its one outcome row in
+the research store ([design 0032](../docs/design/0032-the-research-store.md),
+section 12). It is code only: no model, no network, no key, nothing posted.
+`realorrug-settle.service` and `realorrug-settle.timer` are in this folder and
+are **not installed**. Installing them is Josh's gate: nothing here runs them,
+and an agent must not. Install only on his yes.
+
+Before installing, edit the two `Environment=` paths in the service so they
+equal the ones `realorrug-serve` runs with (`REALORRUG_STORE_PATH` and
+`REALORRUG_ROUNDS_FILE`), and the `ReadWritePaths=` line to the store's
+directory. A wrong path fails closed: settle refuses a store or a rounds file
+that is not there and never makes one.
+
+```bash
+# 1. First by hand, writing nothing: what would it settle?
+sudo -u guardian /usr/local/bin/realorrug settle --dry-run \
+  --rounds /home/guardian/realorrug/data/contest/rounds.json \
+  --store  /home/guardian/realorrug/data/store/research.sqlite3
+# 2. Then for real, then check every stored outcome re-derives from its own evidence
+#    (same flags; add --verify to check instead of settling)
+# 3. Only then install the units and start the timer
+sudo install -m 0644 deploy/realorrug-settle.service deploy/realorrug-settle.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now realorrug-settle.timer
+```
+
+To stop it: `sudo systemctl disable --now realorrug-settle.timer`. Rows already
+written stay, because the store is append-only, and a written `Unresolved` is
+permanent (see the design). The service is ordered
+`After=realorrug-record-launches.service` so a same-time run reads what that
+job just wrote; the two do not require each other. That job is not merged yet
+and records names only, so today settlement reads only the labels
+`realorrug label-outcomes` wrote.
+
 ## Install
 
 ```bash
