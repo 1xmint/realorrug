@@ -17,6 +17,7 @@ members = [
     "crates/realorrug-robinhood",
     "crates/realorrug-cli",
     "crates/realorrug-serve",
+    "crates/realorrug-store",
     "crates/repo-conformance",
 ]
 
@@ -43,6 +44,7 @@ realorrug-journal = { path = "crates/realorrug-journal", version = "0.0.1" }
 realorrug-analyst = { path = "crates/realorrug-analyst", version = "0.0.1" }
 realorrug-payout = { path = "crates/realorrug-payout", version = "0.0.1" }
 realorrug-robinhood = { path = "crates/realorrug-robinhood", version = "0.0.1" }
+realorrug-store = { path = "crates/realorrug-store", version = "0.0.1" }
 
 # Kept deliberately small. The payout binary holds a key, so every dependency
 # here is one more thing that can be compromised into a process that moves money.

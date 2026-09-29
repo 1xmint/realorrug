@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "realorrug-store"
+description = "The research store (design 0032): one SQLite connection holding append-only, hash-chained forecast, outcome and evidence rows, and a separate identity table a player can be unlinked from. No clock, no key, no HTTP."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+# `Outcome`, `Side` and `Odds` are reused from here, not copied (design 0032
+# §6: "Reuse realorrug-contest calls.rs scoring ... Do not copy them").
+realorrug-contest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The hash chain uses the same primitive `realorrug-journal` chains its own
+# events with (`crates/realorrug-journal/src/event.rs`, `Event::digest`).
+blake3.workspace = true
+# One SQLite connection (design 0032 §3), the same shape
+# `realorrug-onchain::memory::Memory` opens its own file with: no pool, no
+# async runtime, `bundled` so this box does not need a system SQLite.
+rusqlite = { version = "0.32", default-features = false, features = ["bundled"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -118,6 +118,13 @@ pub enum Outcome {
     Rugged,
     /// The window closed without that.
     Stood,
+    /// The settlement job could not produce a definitive `Rugged`/`Stood`
+    /// reading before the horizon closed (design 0032 §2, §9; ADR 0038
+    /// decision 5). Excluded from points, variance and `n` below --
+    /// a call this crate never read proves nothing about who called it
+    /// right, so it must not silently score as a `Stood` the way a missing
+    /// read defaulting to zero would (AGENTS.md §3 rule 8).
+    Unresolved,
 }
 
 /// One settled call, as the caller read it back from the log.
@@ -172,6 +179,11 @@ pub fn points(side: Side, q: Odds, outcome: Outcome) -> i64 {
         (Side::Rug, Outcome::Stood) => -q,
         (Side::Real, Outcome::Rugged) => -against_q,
         (Side::Real, Outcome::Stood) => q,
+        // An unread coin proves nothing about who read it correctly (design
+        // 0032 §2). Callers exclude `Unresolved` calls before summing a
+        // player's total (see `record_for`); this arm exists only so the
+        // match stays exhaustive without a wildcard hiding a future variant.
+        (Side::Rug | Side::Real, Outcome::Unresolved) => 0,
     }
 }
 
@@ -477,11 +489,17 @@ fn eligibility(calls: &[&SettledCall], min_account_age_days: u32) -> Option<Excl
         }
         Some(_) => {}
     }
-    let settled = u32::try_from(calls.len()).unwrap_or(u32::MAX);
+    // `Unresolved` calls do not count toward `n` here either (design 0032
+    // §2, §9) -- a player is not admitted on calls this crate never read.
+    let resolved: Vec<&&SettledCall> = calls
+        .iter()
+        .filter(|c| c.outcome != Outcome::Unresolved)
+        .collect();
+    let settled = u32::try_from(resolved.len()).unwrap_or(u32::MAX);
     if settled < MIN_SETTLED_CALLS {
         return Some(Excluded::TooFewCalls { settled });
     }
-    let creators: BTreeSet<&str> = calls.iter().map(|c| c.creator_id.as_str()).collect();
+    let creators: BTreeSet<&str> = resolved.iter().map(|c| c.creator_id.as_str()).collect();
     let creators_count = u32::try_from(creators.len()).unwrap_or(u32::MAX);
     if creators_count < MIN_DISTINCT_CREATORS {
         return Some(Excluded::TooFewCreators {
@@ -498,7 +516,15 @@ fn record_for(player: &str, calls: &[&SettledCall]) -> PlayerRecord {
     let mut variance: u128 = 0;
     let mut first_call_at = u64::MAX;
     let mut creators: BTreeSet<&str> = BTreeSet::new();
-    for call in calls {
+    // `Unresolved` calls are excluded from points, variance and `n` (design
+    // 0032 §2, §9): an unread coin proves nothing about who read it
+    // correctly, so it is skipped entirely rather than counted as a settled
+    // call worth zero points.
+    let resolved: Vec<&&SettledCall> = calls
+        .iter()
+        .filter(|c| c.outcome != Outcome::Unresolved)
+        .collect();
+    for call in &resolved {
         total += points(call.side, call.q, call.outcome);
         variance += u128::from(call_variance(call.q));
         first_call_at = first_call_at.min(call.called_at);
@@ -507,7 +533,7 @@ fn record_for(player: &str, calls: &[&SettledCall]) -> PlayerRecord {
     PlayerRecord {
         player: player.to_string(),
         total,
-        settled: u32::try_from(calls.len()).unwrap_or(u32::MAX),
+        settled: u32::try_from(resolved.len()).unwrap_or(u32::MAX),
         distinct_creators: u32::try_from(creators.len()).unwrap_or(u32::MAX),
         variance,
         z_hundredths: None,
