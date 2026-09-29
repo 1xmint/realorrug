@@ -94,6 +94,13 @@ committed. Use the test X app, not a live one.
 | `REALORRUG_OUTCOMES_FILE` | the settlement job's published outcomes file, ingested through the store's one write path (design 0032 section 12) | nothing is ingested |
 | `REALORRUG_TRUST_CLOUDFLARE` | key the rate limit on `CF-Connecting-IP` | the socket address is used |
 
+The site is pointed at this API by `VITE_GAME_API_BASE` (a build-time
+variable in Cloudflare Pages, `https` only, or `http` on loopback for a local
+try). It is a different variable from `VITE_API_BASE`, which is the public-read
+host above and must stay as it is. Leave `VITE_GAME_API_BASE` unset until the
+game is meant to be live: unset, the header has no Play or Board link and the
+game pages say the game is not running.
+
 The API must be served from the site's own registrable domain (for
 `cabalhunter.org`, `api.cabalhunter.org`): the session cookie is
 `SameSite=Lax`, so a different site such as `radar.heyvera.org` never receives
