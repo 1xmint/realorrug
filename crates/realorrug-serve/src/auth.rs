@@ -16,8 +16,9 @@
 //! - No store path, X client id or redirect URI: every route here answers 503
 //!   and nothing is opened.
 //! - No `REALORRUG_SERVE_MONTHLY_USD`, or one that does not parse to a positive
-//!   dollar figure: `/auth/x/start` and the callback answer 503 and make no
-//!   call to X. There is no default allowance, because a default is a
+//!   dollar figure that fits inside `REALORRUG_MONTHLY_USD` less
+//!   `REALORRUG_FIXED_MONTHLY_USD`: `/auth/x/start` and the callback answer 503
+//!   and make no call to X. There is no default allowance, because a default is a
 //!   spending decision made by whoever wrote the code.
 //! - No configured origin: no CORS header (`public.rs`'s existing rule).
 //!
@@ -54,6 +55,7 @@ use base64::Engine as _;
 use realorrug_provider::{Budget, Commitment, Ledger, Meter};
 use realorrug_store::{Identity, PlayerKey, Store, StoreError};
 use realorrug_types::MicroUsd;
+use realorrug_types::env::env_or_legacy;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -68,6 +70,14 @@ const OAUTH_TTL_SECS: i64 = 600;
 const START_LIMIT: usize = 10;
 /// The rate limit's window: an hour.
 const START_WINDOW_SECS: i64 = 3_600;
+/// Scanning public reads (`/v1/board`, a round's forecasts and outcomes) one
+/// client may make in [`READ_WINDOW_SECS`]. Each one walks the store, so an
+/// unmetered caller could keep the store's lock busy and starve sign-in and
+/// forecasts; the replies are cacheable for 30 s, so an honest page load makes
+/// far fewer.
+const READ_LIMIT: usize = 30;
+/// The public-read limiter's window: a minute.
+const READ_WINDOW_SECS: i64 = 60;
 /// Most sign-ins in flight at once. A full table refuses new starts rather
 /// than growing without bound, which is the direction a flood should fail in.
 const PENDING_CAP: usize = 4_096;
@@ -259,23 +269,79 @@ fn parse_utc(text: &str) -> Option<i64> {
 
 /// The serve-owned monthly allowance for `/2/users/me` reads, in dollars.
 ///
-/// Read with `monthly_allowance_from`'s discipline (unset, unparseable,
-/// non-finite or not above zero is `None`, which closes sign-in), from
-/// `REALORRUG_SERVE_MONTHLY_USD`. It is one small function so it can be
-/// swapped for the provider crate's own `serve_monthly_allowance_from` when
-/// that lands (PR #205); nothing else here parses the variable.
+/// Bounded by the same $90-ceiling rule as PR #205's provider functions
+/// (`monthly_allowance_from`, `cli_monthly_allowance_from`), so the three
+/// processes' slices cannot add up past one ceiling:
+///
+/// - `REALORRUG_MONTHLY_USD` is the whole ceiling and
+///   `REALORRUG_FIXED_MONTHLY_USD` the fixed part of it; what is left for
+///   metered spend is the difference, and a fixed figure at or above the
+///   ceiling leaves nothing.
+/// - `REALORRUG_SERVE_MONTHLY_USD` is serve's slice of what is left. It must
+///   parse to a positive, finite figure no larger than what is left.
+///
+/// Any of the three unset, unparseable, negative or non-finite, or a slice
+/// over what is left, is `None`, which closes sign-in (AGENTS.md rules 7 and
+/// 8). There is no default allowance: a default is a spending decision made by
+/// whoever wrote the code, and an unset slice is a slice nobody set aside.
+///
+/// This is serve-local only because #205 is not on `main` yet. When it lands,
+/// replace this body with the provider crate's own serve function; nothing
+/// else here parses these variables.
 pub(crate) fn serve_monthly_allowance_from(
     get: &impl Fn(&str) -> Option<String>,
 ) -> Option<MicroUsd> {
-    // `from_dollars` already answers zero for a non-finite or non-positive
-    // figure, and the filter refuses zero (which is also what a fraction of a
-    // micro-dollar rounds to): a second check before it would only repeat it.
-    get("REALORRUG_SERVE_MONTHLY_USD")?
+    let ceiling = dollars_var(get, "REALORRUG_MONTHLY_USD")?;
+    let fixed = dollars_var(get, "REALORRUG_FIXED_MONTHLY_USD")?;
+    if fixed >= ceiling {
+        return None;
+    }
+    let left = ceiling.get() - fixed.get();
+    let slice = dollars_var(get, "REALORRUG_SERVE_MONTHLY_USD")?;
+    // Zero is what a fraction of a micro-dollar rounds to, and a slice of
+    // nothing is a closed allowance, not a configured one.
+    (slice.get() > 0 && slice.get() <= left).then_some(slice)
+}
+
+/// One sliding-window limiter over a table of client keys, capped at
+/// [`LIMITER_CAP`] keys. A full table forgets keys with nothing left in their
+/// window before it refuses a new one, and never forgets a key it is asked
+/// about, so a flood of new keys cannot reset a known caller.
+fn within_limit(
+    table: &Mutex<HashMap<String, Vec<i64>>>,
+    key: &str,
+    now: i64,
+    limit: usize,
+    window: i64,
+) -> bool {
+    let Ok(mut table) = table.lock() else {
+        return false;
+    };
+    if table.len() >= LIMITER_CAP && !table.contains_key(key) {
+        table.retain(|_, stamps| stamps.iter().any(|t| now - t < window));
+        if table.len() >= LIMITER_CAP {
+            return false;
+        }
+    }
+    let stamps = table.entry(key.to_owned()).or_default();
+    stamps.retain(|t| now - t < window);
+    if stamps.len() >= limit {
+        return false;
+    }
+    stamps.push(now);
+    true
+}
+
+/// A dollar-figure variable, checked before conversion. `from_dollars` turns
+/// a negative or non-finite figure into zero, which is safe for a ceiling but
+/// would fail open for a figure subtracted from one.
+fn dollars_var(get: &impl Fn(&str) -> Option<String>, name: &str) -> Option<MicroUsd> {
+    get(name)?
         .trim()
         .parse::<f64>()
         .ok()
+        .filter(|v| v.is_finite() && *v >= 0.0)
         .map(MicroUsd::from_dollars)
-        .filter(|m| m.get() > 0)
 }
 
 /// The meter's day number for a unix time. One function, so the start-up
@@ -374,6 +440,8 @@ struct Live {
     spend: Option<Mutex<Spend>>,
     pending: Mutex<HashMap<String, Pending>>,
     starts: Mutex<HashMap<String, Vec<i64>>>,
+    /// Public scanning reads per client, by the same key as `starts`.
+    reads: Mutex<HashMap<String, Vec<i64>>>,
 }
 
 /// The auth module's shared state. Always constructible: an unconfigured box
@@ -465,8 +533,13 @@ impl AuthState {
                 }
             }
         });
+        // The same helper, names and exact-"1" rule as `check.rs`, so a box that
+        // still sets only the legacy `RADAR_TRUST_CLOUDFLARE` is trusted here
+        // too. Reading only the new name would key every sign-in start on the
+        // tunnel's loopback address and give the whole world one bucket.
         let trust_cloudflare =
-            nonempty(get, "REALORRUG_TRUST_CLOUDFLARE").is_some_and(|v| v == "1");
+            env_or_legacy("REALORRUG_TRUST_CLOUDFLARE", "RADAR_TRUST_CLOUDFLARE", get)
+                .is_some_and(|v| v == "1");
         Some(Live {
             store: Mutex::new(store),
             x,
@@ -480,6 +553,7 @@ impl AuthState {
             spend,
             pending: Mutex::new(HashMap::new()),
             starts: Mutex::new(HashMap::new()),
+            reads: Mutex::new(HashMap::new()),
         })
     }
 
@@ -516,6 +590,47 @@ impl AuthState {
                 "the store refused the request",
             ),
         })
+    }
+
+    /// The key a public read is counted under, taken from the request before
+    /// any `.await` (a `Request` body is not `Sync`, so the request itself
+    /// cannot be held across one).
+    pub(crate) fn client_key(&self, req: &Request) -> String {
+        match self.live() {
+            Ok(live) => live.client_key(req),
+            Err(_) => "unknown".to_owned(),
+        }
+    }
+
+    /// [`Self::with_store`] for an unauthenticated public read that walks the
+    /// store: counted against the caller's client key first (429 past
+    /// [`READ_LIMIT`] a minute), then run on the blocking pool so the store's
+    /// `std` mutex and the scan under it never sit on an async worker.
+    ///
+    /// The limiter is here rather than a cache because a cache needs a
+    /// watermark, which is itself a store read, and a time-keyed one would
+    /// serve a stale board to the very caller who just changed it.
+    pub(crate) async fn scan<T: Send + 'static>(
+        self: &Arc<Self>,
+        client: &str,
+        f: impl FnOnce(&Store) -> Result<T, StoreError> + Send + 'static,
+    ) -> Result<T, Response> {
+        let live = self.live()?;
+        if !live.allow_read(client, (self.clock)()) {
+            return Err(refuse(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many requests from this address; try again in a minute",
+            ));
+        }
+        let this = Arc::clone(self);
+        tokio::task::spawn_blocking(move || this.with_store(f))
+            .await
+            .unwrap_or_else(|_| {
+                Err(refuse(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "the store is unavailable",
+                ))
+            })
     }
 
     /// The caller behind a request's session cookie.
@@ -616,22 +731,23 @@ impl Live {
     /// Counts a sign-in start against `ip`. False once the IP has made
     /// [`START_LIMIT`] in the last hour, or when the table is full.
     fn allow_start(&self, ip: &str, now: i64) -> bool {
-        let Ok(mut starts) = self.starts.lock() else {
-            return false;
-        };
-        if starts.len() >= LIMITER_CAP && !starts.contains_key(ip) {
-            starts.retain(|_, stamps| stamps.iter().any(|t| now - t < START_WINDOW_SECS));
-            if starts.len() >= LIMITER_CAP {
-                return false;
-            }
-        }
-        let stamps = starts.entry(ip.to_owned()).or_default();
-        stamps.retain(|t| now - t < START_WINDOW_SECS);
-        if stamps.len() >= START_LIMIT {
-            return false;
-        }
-        stamps.push(now);
-        true
+        within_limit(&self.starts, ip, now, START_LIMIT, START_WINDOW_SECS)
+    }
+
+    /// Counts a scanning public read against `ip`. False once the client has
+    /// made [`READ_LIMIT`] in the last minute, or when the table is full.
+    fn allow_read(&self, ip: &str, now: i64) -> bool {
+        within_limit(&self.reads, ip, now, READ_LIMIT, READ_WINDOW_SECS)
+    }
+
+    /// The key a request is counted under: [`crate::check::client_ip_from`]
+    /// under this box's Cloudflare setting.
+    fn client_key(&self, req: &Request) -> String {
+        let connect_info = req
+            .extensions()
+            .get::<ConnectInfo<std::net::SocketAddr>>()
+            .copied();
+        crate::check::client_ip_from(self.trust_cloudflare, req.headers(), connect_info)
     }
 
     /// Stores a started sign-in. False when too many are in flight.
@@ -889,11 +1005,7 @@ async fn start(State(auth): State<Arc<AuthState>>, req: Request) -> Response {
         return closed();
     }
     let now = (auth.clock)();
-    let connect_info = req
-        .extensions()
-        .get::<ConnectInfo<std::net::SocketAddr>>()
-        .copied();
-    let ip = crate::check::client_ip_from(live.trust_cloudflare, req.headers(), connect_info);
+    let ip = live.client_key(&req);
     if !live.allow_start(&ip, now) {
         return refuse(
             StatusCode::TOO_MANY_REQUESTS,
@@ -1234,6 +1346,9 @@ mod tests {
                 ),
                 ("REALORRUG_APP_ORIGINS", "https://site.test".to_owned()),
             ]);
+            // The ceiling and the fixed part that serve's slice is bounded by.
+            vars.insert("REALORRUG_MONTHLY_USD", "90".to_owned());
+            vars.insert("REALORRUG_FIXED_MONTHLY_USD", "60".to_owned());
             if let Some(m) = monthly {
                 vars.insert("REALORRUG_SERVE_MONTHLY_USD", m.to_owned());
             }
@@ -1489,6 +1604,8 @@ mod tests {
             ),
             ("REALORRUG_X_CLIENT_ID", "test-client".to_owned()),
             ("REALORRUG_X_REDIRECT_URI", "https://api.test/cb".to_owned()),
+            ("REALORRUG_MONTHLY_USD", "90".to_owned()),
+            ("REALORRUG_FIXED_MONTHLY_USD", "60".to_owned()),
             ("REALORRUG_SERVE_MONTHLY_USD", "0.01".to_owned()),
         ]);
         let now = Arc::clone(&h.now);
@@ -1942,7 +2059,15 @@ mod tests {
 
     #[test]
     fn the_monthly_allowance_is_open_only_for_a_positive_finite_figure() {
-        let read = |v: &str| serve_monthly_allowance_from(&|_| Some(v.to_owned()));
+        // $90 ceiling, $60 fixed: $30 is left for the metered slices.
+        let read = |v: &str| {
+            serve_monthly_allowance_from(&|k| match k {
+                "REALORRUG_MONTHLY_USD" => Some("90".to_owned()),
+                "REALORRUG_FIXED_MONTHLY_USD" => Some("60".to_owned()),
+                "REALORRUG_SERVE_MONTHLY_USD" => Some(v.to_owned()),
+                _ => None,
+            })
+        };
         assert_eq!(
             read("5").map(realorrug_types::MicroUsd::get),
             Some(5_000_000)
@@ -1955,6 +2080,63 @@ mod tests {
             assert!(read(closed).is_none(), "{closed:?} opened the allowance");
         }
         assert!(serve_monthly_allowance_from(&|_| None).is_none());
+    }
+
+    /// The `get` for a ceiling, its fixed part and serve's slice, each optional.
+    fn allowance(
+        ceiling: Option<&'static str>,
+        fixed: Option<&'static str>,
+        slice: Option<&'static str>,
+    ) -> Option<u64> {
+        serve_monthly_allowance_from(&|k| match k {
+            "REALORRUG_MONTHLY_USD" => ceiling.map(str::to_owned),
+            "REALORRUG_FIXED_MONTHLY_USD" => fixed.map(str::to_owned),
+            "REALORRUG_SERVE_MONTHLY_USD" => slice.map(str::to_owned),
+            _ => None,
+        })
+        .map(realorrug_types::MicroUsd::get)
+    }
+
+    #[test]
+    fn a_slice_above_the_ceiling_less_fixed_costs_closes_the_allowance() {
+        // $30 is left. Re-applying the bug (returning the slice on its own)
+        // hands back $31 that no part of the ceiling was set aside for.
+        assert_eq!(allowance(Some("90"), Some("60"), Some("31")), None);
+        assert_eq!(allowance(Some("90"), Some("60"), Some("30.01")), None);
+        // A slice bigger than the whole ceiling closes as well.
+        assert_eq!(allowance(Some("90"), Some("0"), Some("91")), None);
+    }
+
+    #[test]
+    fn no_ceiling_or_a_bad_ceiling_closes_the_allowance() {
+        assert_eq!(allowance(None, Some("60"), Some("5")), None);
+        assert_eq!(allowance(Some("90"), None, Some("5")), None);
+        assert_eq!(allowance(Some("90"), Some("60"), None), None);
+        assert_eq!(allowance(Some("abc"), Some("60"), Some("5")), None);
+        assert_eq!(allowance(Some("-90"), Some("0"), Some("5")), None);
+        assert_eq!(allowance(Some("90"), Some("xyz"), Some("5")), None);
+        assert_eq!(allowance(Some("90"), Some("-1"), Some("5")), None);
+        // Fixed costs at or above the ceiling leave nothing to meter.
+        assert_eq!(allowance(Some("90"), Some("90"), Some("5")), None);
+        assert_eq!(allowance(Some("90"), Some("95"), Some("5")), None);
+    }
+
+    #[test]
+    fn a_slice_within_the_ceiling_less_fixed_costs_is_granted() {
+        assert_eq!(
+            allowance(Some("90"), Some("60"), Some("5")),
+            Some(5_000_000)
+        );
+        // Exactly what is left is still granted, and a hair under the ceiling
+        // with no fixed cost leaves room.
+        assert_eq!(
+            allowance(Some("90"), Some("60"), Some("30")),
+            Some(30_000_000)
+        );
+        assert_eq!(
+            allowance(Some("90"), Some("89.99"), Some("0.01")),
+            Some(10_000)
+        );
     }
 
     #[test]
@@ -1973,18 +2155,22 @@ mod tests {
 
     #[test]
     fn cloudflare_is_trusted_only_when_the_variable_is_exactly_one() {
-        let with = |v: Option<&str>| {
+        let with = |pairs: &[(&str, &str)]| {
             let dir = tempfile::tempdir().unwrap();
-            let vars: HashMap<&str, String> = HashMap::from([
+            let mut vars: HashMap<&str, String> = HashMap::from([
                 (
                     "REALORRUG_STORE_PATH",
                     dir.path().join("s.db").to_string_lossy().into_owned(),
                 ),
                 ("REALORRUG_X_CLIENT_ID", "c".to_owned()),
                 ("REALORRUG_X_REDIRECT_URI", "https://api.test/cb".to_owned()),
+                ("REALORRUG_MONTHLY_USD", "90".to_owned()),
+                ("REALORRUG_FIXED_MONTHLY_USD", "60".to_owned()),
                 ("REALORRUG_SERVE_MONTHLY_USD", "5".to_owned()),
-                ("REALORRUG_TRUST_CLOUDFLARE", v.unwrap_or("").to_owned()),
             ]);
+            for (k, v) in pairs {
+                vars.insert(k, (*v).to_owned());
+            }
             let state = AuthState::from_vars(
                 &|k| vars.get(k).cloned(),
                 Some(FakeX::new() as Arc<dyn XClient>),
@@ -1992,10 +2178,19 @@ mod tests {
             );
             state.live().unwrap().trust_cloudflare
         };
-        assert!(with(Some("1")));
-        assert!(!with(Some("0")));
-        assert!(!with(Some("true")));
-        assert!(!with(None));
+        assert!(with(&[("REALORRUG_TRUST_CLOUDFLARE", "1")]));
+        assert!(!with(&[("REALORRUG_TRUST_CLOUDFLARE", "0")]));
+        assert!(!with(&[("REALORRUG_TRUST_CLOUDFLARE", "true")]));
+        assert!(!with(&[("REALORRUG_TRUST_CLOUDFLARE", "")]));
+        assert!(!with(&[]));
+        // A box that still sets only the legacy name is trusted exactly as
+        // `check.rs` trusts it, and the new name wins when both are set.
+        assert!(with(&[("RADAR_TRUST_CLOUDFLARE", "1")]));
+        assert!(!with(&[("RADAR_TRUST_CLOUDFLARE", "yes")]));
+        assert!(!with(&[
+            ("REALORRUG_TRUST_CLOUDFLARE", "0"),
+            ("RADAR_TRUST_CLOUDFLARE", "1"),
+        ]));
     }
 
     #[test]
@@ -2018,15 +2213,27 @@ mod tests {
     #[tokio::test]
     async fn a_callback_with_an_error_or_an_empty_code_never_reaches_x() {
         let h = Harness::open();
-        let (state, cookie, _) = h.begin().await;
+        // A fresh start per case: the state is consumed by the first callback
+        // that reaches `take`, so sharing one would let the second case fail
+        // at the state guard and never test the code guard at all.
         for query in [
-            format!("code=abc&error=access_denied&state={state}"),
-            format!("code=&state={state}"),
+            "code=abc&error=access_denied&state={state}",
+            "code=&state={state}",
         ] {
-            let (status, _, _) = h
-                .get(&format!("/auth/x/callback?{query}"), Some(&cookie))
+            let (state, cookie, _) = h.begin().await;
+            let (status, _, body) = h
+                .get(
+                    &format!("/auth/x/callback?{}", query.replace("{state}", &state)),
+                    Some(&cookie),
+                )
                 .await;
-            assert_ne!(status, StatusCode::FOUND, "{query}");
+            // The code guard's own words, not the state guard's.
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+            assert!(
+                body.contains("X did not approve the sign-in"),
+                "{query} failed at the wrong guard: {body}"
+            );
+            assert!(!body.contains("did not match this browser"), "{body}");
         }
         assert_eq!(h.fake.calls(), 0, "a refused callback must not reach X");
         assert!(h.player_of("1001").is_none());

@@ -26,6 +26,12 @@
 //! prints the chain's row count or head -- a count before close tells a reader
 //! how many calls are hidden.
 //!
+//! The three reads that walk the store (`/v1/board` and a round's forecasts
+//! and outcomes) go through `AuthState::scan`: a per-client limit of 30 a
+//! minute, keyed like the sign-in limiter (an IPv6 client by its /64), and the
+//! scan runs on the blocking pool so it never holds the store's lock on an
+//! async worker.
+//!
 //! Every public read carries `read_at` (the server's clock) and `newest_at`
 //! (the newest row it shows), so a reader can see how old what they are
 //! looking at is (ADR 0039 decision 6).
@@ -34,14 +40,15 @@
 //!
 //! One JSON file, `REALORRUG_ROUNDS_FILE`, read on every request so the
 //! operator can open a round without a restart. It holds one close per round
-//! and the coins allowed in it. Absent, unparseable, or naming a round twice
-//! means every route that needs it refuses: an unread close is not a far-off
-//! one (AGENTS.md rules 7 and 8).
+//! and the coins allowed in it, each with its odds. Absent, unparseable,
+//! naming a round twice, or listing a coin without odds means every route
+//! that needs it refuses: an unread close is not a far-off one, and an
+//! unmeasured odds is not an even one (AGENTS.md rules 7 and 8).
 
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -56,9 +63,6 @@ use crate::auth::{AuthState, no_store, refuse, sha256_hex};
 
 /// The largest request body read. A forecast is four short strings.
 const MAX_BODY: usize = 1_024;
-/// The odds recorded for a coin the rounds file gives none for: even. It is a
-/// stated neutral, not a measurement (design 0032 §11).
-const NEUTRAL_Q: u16 = 5_000;
 /// The longest identifier (round, chain, token) accepted from a client.
 const MAX_ID: usize = 128;
 
@@ -69,7 +73,12 @@ struct Coin {
     chain: String,
     token: String,
     /// The bot's odds when the coin was listed, fixed then (design 0028 §3).
-    q_basis_points: Option<u16>,
+    ///
+    /// Required, not `Option`: a coin without odds fails to parse, so the
+    /// whole rounds file reads as invalid and every route answers 503. Any
+    /// default here would be written into the append-only forecast chain as
+    /// though the bot had measured it (AGENTS.md rule 8: absent is not zero).
+    q_basis_points: u16,
 }
 
 /// One round, with its single close.
@@ -216,7 +225,7 @@ async fn submit(State(auth): State<Arc<AuthState>>, headers: HeaderMap, body: By
     else {
         return refuse(StatusCode::BAD_REQUEST, "that coin is not in this round");
     };
-    let Ok(q) = Odds::new(coin.q_basis_points.unwrap_or(NEUTRAL_Q)) else {
+    let Ok(q) = Odds::new(coin.q_basis_points) else {
         return refuse(
             StatusCode::INTERNAL_SERVER_ERROR,
             "the round's odds are out of range",
@@ -238,7 +247,11 @@ async fn submit(State(auth): State<Arc<AuthState>>, headers: HeaderMap, body: By
             round.close,
         ) {
             Ok(()) => Ok(Ok(())),
-            Err(e @ (StoreError::WindowClosed { .. } | StoreError::Duplicate)) => Ok(Err(e)),
+            Err(
+                e @ (StoreError::WindowClosed { .. }
+                | StoreError::Duplicate
+                | StoreError::WindowMoved { .. }),
+            ) => Ok(Err(e)),
             Err(e) => Err(e),
         }
     });
@@ -265,6 +278,14 @@ async fn submit(State(auth): State<Arc<AuthState>>, headers: HeaderMap, body: By
         Ok(Err(StoreError::Duplicate)) => refuse(
             StatusCode::CONFLICT,
             "you already called this coin in this round; the first call stands",
+        ),
+        // The operator changed this round's close after calls were saved. That
+        // is a server-side inconsistency, not something the player did, so it is
+        // a 503 (deny by default, AGENTS.md rule 7) and never a 409, which
+        // means "you repeated yourself". Nothing was written.
+        Ok(Err(StoreError::WindowMoved { .. })) => refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this round's close changed after calls were saved; nothing was saved",
         ),
         Ok(Err(_)) => refuse(
             StatusCode::FORBIDDEN,
@@ -372,7 +393,13 @@ fn still_open(round: &Round, now: i64) -> Response {
 }
 
 /// `GET /v1/rounds/{round}/forecasts`.
-async fn round_forecasts(State(auth): State<Arc<AuthState>>, Path(id): Path<String>) -> Response {
+async fn round_forecasts(
+    State(auth): State<Arc<AuthState>>,
+    Path(id): Path<String>,
+    req: Request,
+) -> Response {
+    let client = auth.client_key(&req);
+    drop(req);
     let round = match find_round(&auth, &id) {
         Ok(round) => round,
         Err(refusal) => return refusal,
@@ -381,7 +408,11 @@ async fn round_forecasts(State(auth): State<Arc<AuthState>>, Path(id): Path<Stri
     if !closed(&round, now) {
         return still_open(&round, now);
     }
-    let shown = match auth.with_store(|store| store.closed_forecasts(&round.id, now)) {
+    let round_id = round.id.clone();
+    let shown = match auth
+        .scan(&client, move |store| store.closed_forecasts(&round_id, now))
+        .await
+    {
         Ok(shown) => shown,
         Err(refusal) => return refusal,
     };
@@ -409,7 +440,13 @@ async fn round_forecasts(State(auth): State<Arc<AuthState>>, Path(id): Path<Stri
 }
 
 /// `GET /v1/rounds/{round}/outcomes`.
-async fn round_outcomes(State(auth): State<Arc<AuthState>>, Path(id): Path<String>) -> Response {
+async fn round_outcomes(
+    State(auth): State<Arc<AuthState>>,
+    Path(id): Path<String>,
+    req: Request,
+) -> Response {
+    let client = auth.client_key(&req);
+    drop(req);
     let round = match find_round(&auth, &id) {
         Ok(round) => round,
         Err(refusal) => return refusal,
@@ -418,15 +455,18 @@ async fn round_outcomes(State(auth): State<Arc<AuthState>>, Path(id): Path<Strin
     if !closed(&round, now) {
         return still_open(&round, now);
     }
-    let settled = auth.with_store(|store| {
-        let mut out = Vec::new();
-        for coin in &round.coins {
-            if let Some(view) = store.outcome(&round.id, &coin.chain, &coin.token)? {
-                out.push((coin.clone(), view));
+    let (round_id, coins) = (round.id.clone(), round.coins.clone());
+    let settled = auth
+        .scan(&client, move |store| {
+            let mut out = Vec::new();
+            for coin in &coins {
+                if let Some(view) = store.outcome(&round_id, &coin.chain, &coin.token)? {
+                    out.push((coin.clone(), view));
+                }
             }
-        }
-        Ok(out)
-    });
+            Ok(out)
+        })
+        .await;
     let settled = match settled {
         Ok(settled) => settled,
         Err(refusal) => return refusal,
@@ -462,9 +502,14 @@ async fn round_outcomes(State(auth): State<Arc<AuthState>>, Path(id): Path<Strin
 /// lines are in board-id order, not ranked: a rank by a count is the first step
 /// to a winner, and the design ranks by nothing until the odds replay lands
 /// (design 0032 Q1).
-async fn board(State(auth): State<Arc<AuthState>>) -> Response {
+async fn board(State(auth): State<Arc<AuthState>>, req: Request) -> Response {
+    let client = auth.client_key(&req);
+    drop(req);
     let now = (auth.clock)();
-    let settled = match auth.with_store(|store| store.settled_forecasts(now)) {
+    let settled = match auth
+        .scan(&client, move |store| store.settled_forecasts(now))
+        .await
+    {
         Ok(settled) => settled,
         Err(refusal) => return refusal,
     };
@@ -520,6 +565,7 @@ async fn privacy() -> Response {
             {"field": "X account id", "why": "so a returning sign-in finds your player key", "ends": "deleted by account deletion"},
             {"field": "account creation date", "why": "read once at sign-in from X", "ends": "deleted by account deletion"},
             {"field": "session hash", "why": "a SHA-256 of your session token; the token itself is never stored", "ends": "replaced by your next sign-in, removed by sign-out or account deletion, and dead after 30 days"},
+            {"field": "signed_in_at", "why": "the time your current session was issued, kept so the session can be aged out after 30 days", "ends": "replaced by your next sign-in, deleted by account deletion"},
             {"field": "player key", "why": "a random key your forecasts are filed under, not derived from your X account", "ends": "deleted from the identity record with account deletion; the forecast rows that carry it stay, unlinked"}
         ],
         "not_kept": [

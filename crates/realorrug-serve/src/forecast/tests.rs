@@ -24,7 +24,7 @@ const T0: i64 = 1_800_000_000;
 const CLOSE: i64 = T0 + 1_000;
 const ROUNDS: &str = r#"{"rounds":[{"id":"r1","close":1800001000,"coins":[
     {"chain":"solana","token":"coinA","q_basis_points":6000},
-    {"chain":"solana","token":"coinB"}]}]}"#;
+    {"chain":"solana","token":"coinB","q_basis_points":4000}]}]}"#;
 /// The public routes, all of them: what an anonymous reader can fetch.
 const PUBLIC: [&str; 5] = [
     "/v1/rounds/r1",
@@ -47,7 +47,7 @@ impl Reply {
 }
 
 struct H {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     now: Arc<AtomicI64>,
     state: Arc<AuthState>,
 }
@@ -85,7 +85,7 @@ impl H {
         }
         let state = AuthState::from_vars(&|k| vars.get(k).cloned(), None, clock);
         Self {
-            _dir: dir,
+            dir,
             now,
             state: Arc::new(state),
         }
@@ -508,6 +508,7 @@ async fn the_privacy_notice_lists_every_kept_field_and_needs_no_configuration() 
         "X account id",
         "account creation date",
         "session hash",
+        "signed_in_at",
         "player key",
     ] {
         assert!(r.body.contains(field), "the notice omits {field}");
@@ -548,3 +549,116 @@ async fn a_body_of_exactly_the_limit_is_read_and_one_byte_more_is_a_413() {
     let at_limit = post(pad(MAX_BODY)).await;
     assert_eq!(at_limit.status, StatusCode::CREATED, "{}", at_limit.body);
 }
+
+#[tokio::test]
+async fn a_coin_without_odds_makes_the_rounds_file_invalid_and_writes_no_row() {
+    // The file is the only source of odds. A coin that lists none must not be
+    // given a stand-in: the row is append-only, so an invented figure would be
+    // permanent (AGENTS.md rule 8).
+    let no_odds = r#"{"rounds":[{"id":"r1","close":1800001000,"coins":[
+        {"chain":"solana","token":"coinA"}]}]}"#;
+    assert!(parse_rounds(no_odds).is_none());
+    let h = H::new(None, Some(no_odds));
+    let (a, _) = h.player(1);
+    let r = h.call(&a, "coinA", "rug").await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{}", r.body);
+    // Nothing reached the chain: the round shows no forecast row at all.
+    let rows = h.state.with_store(|s| {
+        let all = s.closed_forecasts("r1", CLOSE + 1)?;
+        Ok(all.len())
+    });
+    assert_eq!(rows.unwrap_or(usize::MAX), 0, "a row was written");
+}
+
+#[tokio::test]
+async fn a_close_moved_after_calls_were_saved_is_a_503_and_saves_nothing() {
+    let h = H::open();
+    let (a, _) = h.player(1);
+    let (b, _) = h.player(2);
+    assert_eq!(h.call(&a, "coinA", "rug").await.status, StatusCode::CREATED);
+    // The operator pushes the close later by editing the file.
+    let moved = ROUNDS.replace("1800001000", "1800009000");
+    std::fs::write(h.dir.path().join("rounds.json"), moved).unwrap();
+    let r = h.call(&b, "coinA", "real").await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{}", r.body);
+    let mine = h.get("/forecast/mine?round=r1", Some(&b)).await.json();
+    assert!(mine["forecasts"].as_array().unwrap().is_empty());
+}
+
+/// A GET that arrives from `peer`, the way the server's `ConnectInfo` layer
+/// would stamp it.
+async fn get_from(h: &H, path: &str, peer: &str) -> StatusCode {
+    let addr = std::net::SocketAddr::new(peer.parse().unwrap(), 4000);
+    let mut req = Request::builder().method(Method::GET).uri(path);
+    req.extensions_mut()
+        .unwrap()
+        .insert(axum::extract::ConnectInfo(addr));
+    let response = crate::session_routes(Arc::clone(&h.state))
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    response.status()
+}
+
+#[tokio::test]
+async fn the_reads_that_scan_the_store_are_limited_per_client_and_per_ipv6_slash_64() {
+    let h = H::open();
+    // Closed, so the per-round reads reach the store instead of stopping at "open".
+    h.set_time(CLOSE + 100);
+    // The three scanning reads share one allowance for a client.
+    let scans = [
+        "/v1/board",
+        "/v1/rounds/r1/forecasts",
+        "/v1/rounds/r1/outcomes",
+    ];
+    for i in 0..READ_LIMIT_FOR_TEST {
+        let status = get_from(&h, scans[i % 3], "203.0.113.7").await;
+        assert_eq!(status, StatusCode::OK, "read {i} was refused early");
+    }
+    for path in scans {
+        assert_eq!(
+            get_from(&h, path, "203.0.113.7").await,
+            StatusCode::TOO_MANY_REQUESTS,
+            "{path} was not limited"
+        );
+    }
+    // Another client is not affected.
+    assert_eq!(
+        get_from(&h, "/v1/board", "203.0.113.8").await,
+        StatusCode::OK
+    );
+    // Reads that do not walk the store are not counted.
+    assert_eq!(
+        get_from(&h, "/v1/privacy", "203.0.113.7").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get_from(&h, "/v1/rounds/r1", "203.0.113.7").await,
+        StatusCode::OK
+    );
+    // The window passes and the client may read again.
+    h.set_time(CLOSE + 160);
+    assert_eq!(
+        get_from(&h, "/v1/board", "203.0.113.7").await,
+        StatusCode::OK
+    );
+
+    // An IPv6 client hopping addresses inside its /64 stays in one bucket.
+    for i in 0..READ_LIMIT_FOR_TEST {
+        let peer = format!("2001:db8:9:9::{:x}", i + 1);
+        assert_eq!(get_from(&h, "/v1/board", &peer).await, StatusCode::OK);
+    }
+    assert_eq!(
+        get_from(&h, "/v1/board", "2001:db8:9:9:ffff::1").await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "a fresh address in the same /64 got a fresh allowance"
+    );
+    assert_eq!(
+        get_from(&h, "/v1/board", "2001:db8:9:a::1").await,
+        StatusCode::OK,
+        "a different /64 was counted with the first"
+    );
+}
+
+/// `READ_LIMIT`, restated here so a change to it is a change to this test.
+const READ_LIMIT_FOR_TEST: usize = 30;

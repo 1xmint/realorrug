@@ -330,12 +330,35 @@ pub(crate) fn client_ip_from(
         && let Ok(v) = v.to_str()
         && !v.trim().is_empty()
     {
-        return v.trim().to_owned();
+        return limiter_key(v.trim());
     }
     connect_info.map_or_else(
         || "unknown".to_owned(),
-        |ConnectInfo(addr)| addr.ip().to_string(),
+        |ConnectInfo(addr)| limiter_key(&addr.ip().to_string()),
     )
+}
+
+/// The key a client is counted under. An IPv4 address is its own key. An IPv6
+/// address is keyed by its /64, because a /64 is the smallest block an ISP
+/// hands to one subscriber, so a visitor who rotates through addresses inside
+/// their own /64 would otherwise get a fresh bucket per address and walk
+/// straight past every per-client limit (and the caps behind them). An
+/// IPv4-mapped IPv6 address is the IPv4 it wraps. Text that is not an address
+/// (a proxy header we cannot parse) is kept as it came: it can only share a
+/// bucket with itself.
+pub(crate) fn limiter_key(ip: &str) -> String {
+    use std::net::IpAddr;
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V6(v6)) => v6.to_ipv4_mapped().map_or_else(
+            || {
+                let s = v6.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            },
+            |v4| v4.to_string(),
+        ),
+        Ok(IpAddr::V4(v4)) => v4.to_string(),
+        Err(_) => ip.to_owned(),
+    }
 }
 
 /// The full route logic, taking the pieces `handle` extracts so it is
@@ -1064,6 +1087,67 @@ mod tests {
         let trusting =
             CheckState::from_vars(&|k| (k == "REALORRUG_TRUST_CLOUDFLARE").then(|| "1".to_owned()));
         assert_eq!(client_ip(&trusting, &headers, None), "9.9.9.9");
+    }
+
+    /// One visitor can hold a whole /64, so addresses inside one share a
+    /// bucket; a different /64 is a different visitor; IPv4 is unchanged.
+    #[test]
+    fn an_ipv6_address_is_counted_by_its_slash_64() {
+        // Two addresses in one /64 share a key, however the host part differs.
+        assert_eq!(
+            limiter_key("2001:db8:1:2:aaaa:bbbb:cccc:dddd"),
+            limiter_key("2001:db8:1:2::1")
+        );
+        assert_eq!(limiter_key("2001:db8:1:2::1"), "2001:db8:1:2::/64");
+        // The last network bit that differs, in each of the four groups.
+        for other in [
+            "2001:db8:1:3::1",
+            "2001:db8:2:2::1",
+            "2001:db9:1:2::1",
+            "2002:db8:1:2::1",
+        ] {
+            assert_ne!(
+                limiter_key(other),
+                limiter_key("2001:db8:1:2::1"),
+                "{other}"
+            );
+        }
+        // IPv4, and text that is not an address, are their own keys.
+        assert_eq!(limiter_key("9.9.9.9"), "9.9.9.9");
+        assert_ne!(limiter_key("9.9.9.9"), limiter_key("9.9.9.8"));
+        assert_eq!(limiter_key("unknown"), "unknown");
+        assert_eq!(limiter_key("not an ip"), "not an ip");
+        // An IPv4-mapped address is the IPv4 it wraps.
+        assert_eq!(limiter_key("::ffff:9.9.9.9"), "9.9.9.9");
+    }
+
+    /// The rule applies on both routes to an address: the socket peer and the
+    /// trusted Cloudflare header.
+    #[test]
+    fn the_client_key_masks_ipv6_from_the_socket_and_from_the_header() {
+        let peer = |ip: &str| {
+            Some(ConnectInfo(std::net::SocketAddr::new(
+                ip.parse().unwrap(),
+                4000,
+            )))
+        };
+        let none = HeaderMap::new();
+        assert_eq!(
+            client_ip_from(false, &none, peer("2001:db8:1:2::9")),
+            client_ip_from(false, &none, peer("2001:db8:1:2:f::1"))
+        );
+        assert_ne!(
+            client_ip_from(false, &none, peer("2001:db8:1:2::9")),
+            client_ip_from(false, &none, peer("2001:db8:1:3::9"))
+        );
+        assert_eq!(client_ip_from(false, &none, peer("10.1.2.3")), "10.1.2.3");
+        let mut headers = HeaderMap::new();
+        headers.insert("CF-Connecting-IP", "2001:db8:5:6::1".parse().unwrap());
+        let a = client_ip_from(true, &headers, None);
+        headers.insert("CF-Connecting-IP", "2001:db8:5:6:1:2:3:4".parse().unwrap());
+        assert_eq!(a, client_ip_from(true, &headers, None));
+        headers.insert("CF-Connecting-IP", "2001:db8:5:7::1".parse().unwrap());
+        assert_ne!(a, client_ip_from(true, &headers, None));
     }
 
     #[test]
