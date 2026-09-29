@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 [package]
 name = "realorrug-serve"
-description = "The public site's documents: population stats, the leaderboard, the weeks, the hunters and the pool. Reads published files, never a store."
+description = "The public site's documents and the sign-in behind the forecasts: population stats, the leaderboard, the weeks, the hunters and the pool read from published files; X sign-in, sessions and the forecast routes over the research store (design 0032)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -22,6 +22,18 @@ realorrug-contest.workspace = true
 realorrug-roast.workspace = true
 realorrug-types.workspace = true
 serde_json.workspace = true
+# Design 0032 (phase 4): X sign-in, sessions and the forecast routes. The
+# store is the only writer of the identity table and the forecast chain; the
+# provider crate is the spend meter that caps the paid /2/users/me reads.
+# Neither reaches `realorrug-payout`; `repo-conformance` holds that.
+realorrug-store.workspace = true
+realorrug-provider.workspace = true
+serde.workspace = true
+base64.workspace = true
+# Session and OAuth tokens: 256 random bits from the operating system, and the
+# SHA-256 the session hash and the PKCE challenge are made with.
+getrandom = "0.3"
+sha2 = "0.11"
 # design 0023's checker route (`check.rs`) only: a live, budget-metered
 # Robinhood Chain or Solana read for an address nobody has asked about
 # before. Neither reaches `realorrug-payout`; `repo-conformance` holds that.
@@ -39,6 +51,8 @@ ureq = { version = "3", default-features = false, features = ["rustls", "json"] 
 tempfile = "3"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 http-body-util = "0.1"
+# Only to build a `StoreError::Sqlite` in a test: a busy store must be a 503.
+rusqlite = { version = "0.32", default-features = false, features = ["bundled"] }
 
 [lints]
 workspace = true

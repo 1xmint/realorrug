@@ -45,8 +45,9 @@ mod identity;
 mod row;
 
 pub use identity::{Identity, PlayerKey};
-pub use row::{ForecastView, OutcomeView, RowPayload, Verified};
+pub use row::{ClosedForecast, ForecastView, OutcomeView, RowPayload, SettledForecast, Verified};
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use realorrug_contest::calls::{Odds, Outcome, Side};
@@ -82,6 +83,19 @@ pub enum StoreError {
     /// `409 Conflict`.
     #[error("a forecast for this round, coin and player already stands")]
     Duplicate,
+    /// A forecast named a close that differs from the one the round's first
+    /// forecast row already carries. A round has one close; moving it after
+    /// rows exist would reopen a round whose calls were already shown, or
+    /// leave two closes in one round. It is the operator's configuration that
+    /// changed, not the player's doing, so `realorrug-serve` maps this to
+    /// `503`, never to `409` (which tells a player they repeated themselves).
+    #[error("this round already holds forecasts with a window close of {existing}, not {given}")]
+    WindowMoved {
+        /// The close the round's first stored forecast carries.
+        existing: i64,
+        /// The close this submission named.
+        given: i64,
+    },
     /// A second identity for an X account that already has one. One X id has
     /// one player key (design 0032 §4); look it up with
     /// [`Store::player_for_x_id`] instead of minting another.
@@ -231,6 +245,23 @@ impl Store {
         identity::player_for_x_id(&self.conn, x_id)
     }
 
+    /// The player a session belongs to, with the time the session was issued
+    /// (the identity row's `signed_in_at`), or `None` for a hash no identity
+    /// holds. The caller decides expiry from the issue time and its own clock.
+    ///
+    /// An identity holds one `session_hash`, so a new sign-in replaces the old
+    /// session, and a deleted identity takes its session with it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Sqlite`] on a read failure.
+    pub fn player_for_session_hash(
+        &self,
+        session_hash: &str,
+    ) -> Result<Option<(PlayerKey, i64)>, StoreError> {
+        identity::player_for_session_hash(&self.conn, session_hash)
+    }
+
     /// Runs `f` inside `BEGIN IMMEDIATE` ... `COMMIT`, rolling back on error.
     ///
     /// `IMMEDIATE` takes SQLite's write lock at the start, so the tail read in
@@ -357,8 +388,8 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// See [`StoreError::WindowClosed`] and [`StoreError::Duplicate`], and
-    /// [`StoreError::Sqlite`] for any other failure.
+    /// See [`StoreError::WindowClosed`], [`StoreError::WindowMoved`] and
+    /// [`StoreError::Duplicate`], and [`StoreError::Sqlite`] for any other failure.
     #[expect(clippy::too_many_arguments, reason = "the forecast row's own fields")]
     pub fn submit_forecast(
         &self,
@@ -399,6 +430,35 @@ impl Store {
             )?;
             if exists {
                 return Err(StoreError::Duplicate);
+            }
+            // A round has one close. The round's first forecast row fixed it,
+            // and every later one must agree: by induction that one row speaks
+            // for all of them, so this reads one row, not the round.
+            let first: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT payload FROM rows WHERE kind = 'forecast' AND round = ?1 \
+                     ORDER BY seq ASC LIMIT 1",
+                    params![round],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(json) = first {
+                let RowPayload::Forecast {
+                    window_close: existing,
+                    ..
+                } = serde_json::from_str(&json)?
+                else {
+                    return Err(StoreError::Corrupt(format!(
+                        "a row of kind 'forecast' holds another kind's payload (round {round})"
+                    )));
+                };
+                if existing != window_close {
+                    return Err(StoreError::WindowMoved {
+                        existing,
+                        given: window_close,
+                    });
+                }
             }
             self.append_in_write(
                 "forecast",
@@ -542,6 +602,120 @@ impl Store {
             evidence_reference,
             settled_at: at,
         }))
+    }
+
+    /// Every forecast of a round that anyone may read at `now`: those whose
+    /// own recorded close has passed, with no player in them. A forecast still
+    /// open is not in the list, so the list's length before close is zero for a
+    /// round with a hundred hidden calls and for one with none.
+    ///
+    /// The close is the one each row carries (the server's, set at submit), not
+    /// a figure the caller supplies, so a caller asking with a wrong round
+    /// record cannot open a hidden call.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Sqlite`], [`StoreError::Serialise`] or
+    /// [`StoreError::Corrupt`] on a read failure.
+    pub fn closed_forecasts(
+        &self,
+        round: &str,
+        now: i64,
+    ) -> Result<Vec<ClosedForecast>, StoreError> {
+        let mut statement = self.conn.prepare(
+            "SELECT chain, token, payload, at FROM rows WHERE kind = 'forecast' \
+             AND round = ?1 ORDER BY seq ASC",
+        )?;
+        let mut rows = statement.query(params![round])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let payload_json: String = row.get(2)?;
+            let RowPayload::Forecast {
+                side,
+                q_basis_points,
+                window_close,
+            } = serde_json::from_str(&payload_json)?
+            else {
+                return Err(StoreError::Corrupt(
+                    "a row of kind 'forecast' holds another kind's payload".to_owned(),
+                ));
+            };
+            if now >= window_close {
+                out.push(ClosedForecast {
+                    chain: row.get(0)?,
+                    token: row.get(1)?,
+                    side,
+                    q_basis_points,
+                    submitted_at: row.get(3)?,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every closed forecast that has an outcome, joined to the latest outcome
+    /// recorded for its coin: the input to the board's hit/miss count. A
+    /// forecast whose close has not passed, or whose coin has no outcome yet,
+    /// is not in the result.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Sqlite`], [`StoreError::Serialise`] or
+    /// [`StoreError::Corrupt`] on a read failure.
+    pub fn settled_forecasts(&self, now: i64) -> Result<Vec<SettledForecast>, StoreError> {
+        let mut statement = self.conn.prepare(
+            "SELECT kind, round, chain, token, player_key, at, payload FROM rows \
+             WHERE kind IN ('forecast', 'outcome') ORDER BY seq ASC",
+        )?;
+        let mut rows = statement.query([])?;
+        // The latest outcome per coin wins, as `outcome` says: rows are read
+        // in `seq` order, so a later one overwrites an earlier one.
+        let mut latest: HashMap<(String, String, String), (Outcome, i64)> = HashMap::new();
+        let mut forecasts = Vec::new();
+        while let Some(row) = rows.next()? {
+            let kind: String = row.get(0)?;
+            let coin = (row.get(1)?, row.get(2)?, row.get(3)?);
+            let at: i64 = row.get(5)?;
+            let payload_json: String = row.get(6)?;
+            match serde_json::from_str(&payload_json)? {
+                RowPayload::Outcome { outcome, .. } if kind == "outcome" => {
+                    latest.insert(coin, (outcome, at));
+                }
+                RowPayload::Forecast {
+                    side,
+                    q_basis_points,
+                    window_close,
+                } if kind == "forecast" => {
+                    let player: Option<String> = row.get(4)?;
+                    if let (true, Some(player_key)) = (now >= window_close, player) {
+                        forecasts.push((coin, player_key, side, q_basis_points, at));
+                    }
+                }
+                _ => {
+                    return Err(StoreError::Corrupt(format!(
+                        "a row of kind '{kind}' holds another kind's payload"
+                    )));
+                }
+            }
+        }
+        Ok(forecasts
+            .into_iter()
+            .filter_map(|(coin, player_key, side, q_basis_points, submitted_at)| {
+                let (outcome, settled_at) = *latest.get(&coin)?;
+                let (round, chain, token) = coin;
+                Some(SettledForecast {
+                    player_key,
+                    round,
+                    chain,
+                    token,
+                    side,
+                    q_basis_points,
+                    outcome,
+                    submitted_at,
+                    settled_at,
+                })
+            })
+            .collect())
     }
 
     /// The public wording for an outcome (design 0032 §2, A4). `Stood` and
@@ -815,6 +989,49 @@ mod tests {
             "the first call stands, not the second"
         );
         assert_eq!(view.submitted_at, 10);
+    }
+
+    /// A round has one close: once a forecast row exists, a submission that
+    /// names another close is refused, later or earlier, and writes nothing.
+    #[test]
+    fn a_round_whose_close_moved_after_the_first_forecast_is_refused() {
+        let store = store();
+        let (p, q) = (key(&store), key(&store));
+        forecast_on(&store, &p, "coin-a", 10, 100).expect("first forecast");
+        for moved in [101, 99] {
+            let err = forecast_on(&store, &q, "coin-b", 20, moved).expect_err("moved close");
+            assert!(
+                matches!(
+                    err,
+                    StoreError::WindowMoved {
+                        existing: 100,
+                        given
+                    } if given == moved
+                ),
+                "{err:?}"
+            );
+        }
+        assert!(
+            store
+                .forecast("r1", "solana", "coin-b", q.as_str(), q.as_str(), 20)
+                .expect("read")
+                .is_none(),
+            "a refused forecast must not have been written"
+        );
+        // The same close is still accepted, and another round is its own.
+        forecast_on(&store, &q, "coin-b", 21, 100).expect("the round's own close");
+        store
+            .submit_forecast(
+                "r2",
+                "solana",
+                "coin-a",
+                &p,
+                Side::Rug,
+                odds(6_000),
+                22,
+                500,
+            )
+            .expect("another round has its own close");
     }
 
     /// A constraint other than the one-forecast rule is not a duplicate: a
@@ -1351,5 +1568,107 @@ mod tests {
             err.to_string().contains("UNIQUE"),
             "expected a unique-constraint failure, got {err}"
         );
+    }
+
+    /// A session maps to its player through the identity table alone, a new
+    /// sign-in replaces the old session, and deleting the identity ends it.
+    #[test]
+    fn a_session_hash_finds_its_player_and_dies_with_the_identity() {
+        let store = store();
+        let p = key(&store);
+        let mut id = identity_for(&p, "x-1", "alice");
+        id.session_hash = Some("hash-1".to_owned());
+        id.signed_in_at = 500;
+        store.upsert_identity(&id).expect("identity");
+        assert_eq!(
+            store.player_for_session_hash("hash-1").expect("lookup"),
+            Some((p.clone(), 500))
+        );
+        assert_eq!(
+            store.player_for_session_hash("other").expect("lookup"),
+            None
+        );
+
+        id.session_hash = Some("hash-2".to_owned());
+        store.upsert_identity(&id).expect("a second sign-in");
+        assert_eq!(
+            store.player_for_session_hash("hash-1").expect("lookup"),
+            None,
+            "one identity holds one session; the new sign-in replaced the old"
+        );
+
+        store.delete_identity(&p).expect("delete");
+        assert_eq!(
+            store.player_for_session_hash("hash-2").expect("lookup"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_public_list_holds_only_forecasts_whose_close_has_passed_and_names_no_player() {
+        let store = store();
+        let ann = key(&store);
+        forecast_on(&store, &ann, "coinA", 100, 1_000).expect("submitted");
+        assert!(
+            store.closed_forecasts("r1", 999).expect("read").is_empty(),
+            "one second before close a hidden call is in the public list"
+        );
+        let shown = store.closed_forecasts("r1", 1_000).expect("read");
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].token, "coinA");
+        assert!(
+            !format!("{shown:?}").contains(ann.as_str()),
+            "the public list names its player"
+        );
+        assert!(
+            store
+                .closed_forecasts("r2", 5_000)
+                .expect("read")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn settled_forecasts_join_the_latest_outcome_and_skip_open_and_unsettled_calls() {
+        let store = store();
+        let ann = key(&store);
+        forecast_on(&store, &ann, "coinA", 100, 1_000).expect("a");
+        forecast_on(&store, &ann, "coinB", 100, 1_000).expect("b");
+        store
+            .record_outcome("r1", "solana", "coinA", Outcome::Stood, "v1", None, 1_500)
+            .expect("outcome");
+        store
+            .record_outcome("r1", "solana", "coinA", Outcome::Rugged, "v1", None, 1_600)
+            .expect("correction");
+        assert!(store.settled_forecasts(999).expect("read").is_empty());
+        let settled = store.settled_forecasts(2_000).expect("read");
+        assert_eq!(settled.len(), 1, "coinB has no outcome and must not appear");
+        assert_eq!(settled[0].token, "coinA");
+        assert_eq!(settled[0].outcome, Outcome::Rugged);
+        assert_eq!(settled[0].settled_at, 1_600);
+    }
+
+    /// The settled read trusts a row's payload only under its own kind: a
+    /// forecast payload filed as an outcome, or the reverse, is `Corrupt`
+    /// rather than read as the other thing.
+    #[test]
+    fn settled_forecasts_refuse_a_payload_filed_under_the_wrong_kind() {
+        let forecast_payload = "{\"kind\":\"forecast\",\"side\":\"Rug\",                                \"q_basis_points\":5000,\"window_close\":1}";
+        let outcome_payload = "{\"kind\":\"outcome\",\"outcome\":\"Rugged\",                               \"rule_version\":\"v1\",\"evidence_reference\":null}";
+        for (kind, payload) in [("outcome", forecast_payload), ("forecast", outcome_payload)] {
+            let store = store();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO rows (kind, round, chain, token, player_key, at, payload,                      previous_hash, hash) VALUES (?1, 'r1', 'solana', 'coin-a', 'p', 1, ?2,                      'link-0', 'h')",
+                    params![kind, payload],
+                )
+                .expect("raw insert");
+            let read = store.settled_forecasts(1_000);
+            assert!(
+                matches!(read, Err(StoreError::Corrupt(_))),
+                "a '{kind}' row with the other payload was read as fine: {read:?}"
+            );
+        }
     }
 }

@@ -181,7 +181,9 @@ table, not the chain, is where deletion has to land.
 (`/2/users/me`), at X's published per-resource rate of $0.010 (research
 0051 §1, "each sign-in that calls it to learn handle+id costs about $0.01").
 `realorrug-serve` holds its own `realorrug-provider` Meter for this spend,
-capped by `REALORRUG_SERVE_MONTHLY_USD`; when that variable is unset,
+capped by `REALORRUG_SERVE_MONTHLY_USD`, which must also fit inside
+`REALORRUG_MONTHLY_USD` less `REALORRUG_FIXED_MONTHLY_USD`; when any of the
+three is unset or invalid, or the slice is larger than what is left,
 sign-in and the research assistant (below) both refuse rather than spend
 unmetered (AGENTS §3 rule 7, "no budget refuses spending"). The analyst's
 own fixed deduction against ADR 0039 decision 5's $90-a-month ceiling
@@ -518,3 +520,118 @@ handler that serialises one directly would print `Rugged` or `Stood`.
 
 **Not done in 4-2, deferred to 4-3+ per the packet's own scope:** HTTP,
 sign-in, and the `FORBIDDEN_CLAIMS` site edit.
+
+## 11. As built (4-3, `realorrug-serve`)
+
+Two files in `crates/realorrug-serve/src`: `auth.rs` (sign-in, sessions,
+CSRF, the meter, the rate limit, CORS) and `forecast.rs` (the forecast and
+read routes). `session_routes` in `lib.rs` merges both under one
+`Arc<AuthState>` and layers CORS over them, so the tests drive the layering
+the server runs.
+
+**Routes.** `GET /auth/x/start`, `GET /auth/x/callback`, `GET /auth/me`,
+`POST /auth/logout`, `POST /account/delete`; `POST /forecast` (session and
+CSRF; body `{round, chain, token, side}` and nothing else), `GET
+/forecast/mine?round=` (the caller's own calls, `no-store`); public reads
+`GET /v1/rounds/{round}`, `/v1/rounds/{round}/forecasts`,
+`/v1/rounds/{round}/outcomes`, `GET /v1/board`, `GET /v1/privacy`. Nothing
+here signs, spends or posts, and nothing asks for a wallet address.
+
+**Where a round's close comes from (chosen, not measured).** A JSON file named
+by `REALORRUG_ROUNDS_FILE`: `{"rounds":[{"id","close","coins":[{"chain",
+"token","q_basis_points"}]}]}`, re-read on each request so the operator can
+open the next round without a restart. Unknown fields are refused; a missing,
+unparseable or duplicate-id file is no file, and every round route answers
+503 (rule 7). An unknown round is 404; a coin outside the round is 400. The
+client never supplies the close or the odds; the close that reaches
+`Store::submit_forecast` is the file's, and the store refuses at `now >=
+window_close` on the server's clock. There is no operator route to edit the
+file and no job that writes outcomes yet; both are the next step, and
+until then settled outcomes come only from whoever writes them to the store.
+The alternative, a rounds table in the store, would have made the close a
+chain row the operator cannot correct; the file keeps the round definition
+where the operator can fix a typo before anyone has called.
+
+**Odds.** Required for every coin in the rounds file, as a `u16` in basis
+points. A coin without `q_basis_points` makes the whole file invalid, so every
+round route answers 503 and no row is written. There is no default: the odds
+are written into the append-only forecast chain, and a stand-in such as an
+even 5000 would sit there as though the bot had measured it (AGENTS §3 rule 8,
+"absent is not zero"). The operator states each coin's odds when listing it.
+The client never names it.
+
+**Status codes.** `WindowClosed` 403, `Duplicate` 409, `WindowMoved` 503
+(the rounds file's close for a round differs from the close its first saved
+forecast carried, so the operator edited a live round and nothing is saved;
+a 503 rather than a 409 because it is the server's inconsistency, not the
+player repeating themselves), unknown field or bad side 400, too many scanning
+public reads from one client (30 a minute, an IPv6 client counted by its /64)
+429, oversized body 413, a busy store 503 (a SQLite `BUSY` means the
+write did not happen, so it is safe to retry), no session or no CSRF 401/403.
+
+**What a stranger can read, and when.** Before a round's close the round
+routes answer `closed:false` with a note and no count, list or aggregate, so
+nothing derived from a hidden call is observable. The route checks the close
+from the round record, and the store filters each row by its own payload
+`window_close` as well (`Store::closed_forecasts`, `settled_forecasts`), so
+one wrong check does not leak. After close: forecasts carry chain, token,
+side, odds and submission time and no player identifier at all (no key, no
+handle); outcomes are the `Store::public_wording` phrases in a field named
+`reading`, never the enum; the board is plain hit and miss counts with the
+sample size `n` from `calls::hit_miss`, one line per opaque `board_id` (the
+first sixteen hex characters of a domain-separated SHA-256 of the player key,
+so two boards can be joined to each other but not to a key or a handle),
+ordered by that id and not ranked, with lines of `n == 0` omitted. An
+unresolved call is not in `n` (rule 8). No route serialises `winner()`,
+`score_calls`, `DailyFiveRanking` or `PlayerRecord.total`. Every public
+response states `read_at` (the server's clock) and `newest_at` (the newest
+row it draws on, or null), with `Cache-Control: public, max-age=30`;
+errors and `/forecast/mine` are `no-store`.
+
+**Head, not row count.** `Verified::Intact{rows, head}` is checked at start-up
+and the head is logged to stderr (journald) as `store head <hash>`, where the
+writer of the database file cannot reach it; a broken chain is logged loudly.
+The row count is never served, since before close it would reveal a hidden
+call. This is a weaker record than a signed or published head; publishing one
+is left open.
+
+**Sessions and identity.** One live session per player: a new sign-in
+replaces the old one, and the privacy notice says so. The session cookie's
+hash is stored in `identity.session_hash`, and the session resolves to a
+`PlayerKey` through a store method; no X-id map exists outside `identity`.
+The forecast route uses the session's key as the requester and never one from
+the request. The X access token is discarded after the one profile read.
+Identities are never logged. Deletion is `POST /account/delete` (§9).
+
+**CORS.** `Access-Control-Allow-Origin` is set only when the request's
+`Origin` is exactly one entry of `REALORRUG_APP_ORIGINS`, with credentials and
+`Vary: Origin`; never `*`, and no configured origin sends no CORS header
+(rule 7). A preflight answers 204 for GET, POST, OPTIONS and the headers
+`content-type` and `x-csrf-token`.
+
+**Serve-owned meter.** PR #205's `serve_monthly_allowance_from` had not
+merged when this was built, so `auth::serve_monthly_allowance_from` applies
+the same $90-ceiling rule itself and is the one function to swap. The
+allowance is `REALORRUG_SERVE_MONTHLY_USD` and is closed when
+`REALORRUG_MONTHLY_USD` is unset or invalid, when `REALORRUG_FIXED_MONTHLY_USD`
+is unset or invalid, when the fixed part is at or above the ceiling, when the
+slice is unset, invalid or zero, or when it is larger than the ceiling less
+the fixed part. Serve's slice is therefore checked against the same ceiling as
+the other processes' slices, so the three cannot add up past $90.
+
+**Serve the API from the site's own registrable domain.** The session cookie
+is `SameSite=Lax`, so a browser sends it on the site's `fetch` calls only when
+the API is same-site with the page. The API must be served from a subdomain of
+the site's own registrable domain (for `cabalhunter.org`, `api.cabalhunter.org`).
+A different site such as `radar.heyvera.org` is cross-site: the browser never
+attaches the cookie to the site's fetches, so every signed-in call would read
+as signed out. The cookie stays `Lax`, not `SameSite=None`: `None` would send
+it on any cross-site request and widen the CSRF surface the token exists to
+narrow. `REALORRUG_APP_ORIGINS` and `REALORRUG_X_REDIRECT_URI` name that same
+API host.
+
+**Site.** `FORBIDDEN_CLAIMS` gained "reward", "winnings", "you win", "redeem"
+and "airdrop". "winner" and "win" wait: `History.tsx` still renders the
+retired weekly prize's winner, and "win" is a substring of "window".
+
+**Env** names for the box are in `deploy/README.md`.

@@ -145,3 +145,21 @@ pub(crate) fn player_for_x_id(
     .optional()
     .map_err(StoreError::from)
 }
+
+/// The player a session hash belongs to, and when that session was issued.
+///
+/// The lookup lives in the `identity` table and nowhere else: a map kept
+/// outside it would outlive `delete_identity`, and a deleted account's
+/// session would keep working.
+pub(crate) fn player_for_session_hash(
+    conn: &Connection,
+    session_hash: &str,
+) -> Result<Option<(PlayerKey, i64)>, StoreError> {
+    conn.query_row(
+        "SELECT player_key, signed_in_at FROM identity WHERE session_hash = ?1",
+        params![session_hash],
+        |r| Ok((PlayerKey::from_stored(r.get(0)?), r.get(1)?)),
+    )
+    .optional()
+    .map_err(StoreError::from)
+}
