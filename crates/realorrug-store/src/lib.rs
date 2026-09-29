@@ -388,8 +388,8 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// See [`StoreError::WindowClosed`] and [`StoreError::Duplicate`], and
-    /// [`StoreError::Sqlite`] for any other failure.
+    /// See [`StoreError::WindowClosed`], [`StoreError::WindowMoved`] and
+    /// [`StoreError::Duplicate`], and [`StoreError::Sqlite`] for any other failure.
     #[expect(clippy::too_many_arguments, reason = "the forecast row's own fields")]
     pub fn submit_forecast(
         &self,

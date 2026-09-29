@@ -571,7 +571,7 @@ async fn privacy() -> Response {
         "not_kept": [
             "your X access token: it is used once to read your handle, id and account age, and thrown away",
             "any wallet address: sign-in is X only and nothing here asks for one",
-            "your IP address, beyond a short in-memory count that rate-limits sign-in and resets when the server restarts"
+            "your IP address, beyond a short in-memory count that rate-limits sign-in and the public reads, and resets when the server restarts"
         ],
         "sessions": "You have one session at a time. Signing in again replaces the old one, so a second browser is signed out.",
         "deletion": "POST /account/delete removes your identity record. Forecast and outcome rows are an append-only public record and are not rewritten; after deletion nothing in the store links them to your X account.",
