@@ -546,7 +546,8 @@ impl Memory {
         })
     }
 
-    /// Find the immutable assessment for a request rather than a newer dossier.
+    /// Find an assessment for the exact request, with recorded corrections applied
+    /// to its public projection. The original stays in append-only history.
     ///
     /// # Errors
     /// Invalid or unsupported input, exhausted bounds, unavailable data, or storage failure.
@@ -557,8 +558,9 @@ impl Memory {
         let mut stmt=self.conn.prepare("SELECT payload FROM case_events WHERE case_key=?1 AND kind='assessment' ORDER BY revision DESC")?;
         let rows = stmt.query_map([request.case.id()], |r| r.get::<_, String>(0))?;
         for row in rows {
-            let assessment: Assessment = serde_json::from_str(&row?)?;
+            let mut assessment: Assessment = serde_json::from_str(&row?)?;
             if assessment.request_id == request.id {
+                invalidate(&mut assessment, &self.case_invalidations(&request.case, 0)?);
                 return Ok(Some(assessment));
             }
         }
@@ -895,20 +897,7 @@ impl Memory {
             .map(|(_, p)| serde_json::from_str::<Assessment>(p))
             .transpose()?;
         if let (Some((_revision, _)), Some(a)) = (row, &mut assessment) {
-            let invalid = self.case_invalidations(case, 0)?;
-            for finding in &mut a.findings {
-                if finding.evidence.iter().any(|id| invalid.contains(id)) {
-                    finding.status = "needs_review".into();
-                    a.complete = false;
-                }
-            }
-            if a.findings
-                .iter()
-                .any(|finding| finding.status == "needs_review")
-            {
-                a.level = "CantTell".into();
-                a.reply = "Prior evidence was challenged; reassessment is required.".into();
-            }
+            invalidate(a, &self.case_invalidations(case, 0)?);
         }
         Ok(Some(Dossier {
             case: case.clone(),
@@ -1094,6 +1083,23 @@ impl Memory {
     }
 }
 
+fn invalidate(assessment: &mut Assessment, invalid: &[String]) {
+    for finding in &mut assessment.findings {
+        if finding.evidence.iter().any(|id| invalid.contains(id)) {
+            finding.status = "needs_review".into();
+            assessment.complete = false;
+        }
+    }
+    if assessment
+        .findings
+        .iter()
+        .any(|finding| finding.status == "needs_review")
+    {
+        assessment.level = "CantTell".into();
+        assessment.reply = "Prior evidence was challenged; reassessment is required.".into();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1109,6 +1115,162 @@ mod tests {
             source: None,
             thread: Some("thread-a".into()),
         }
+    }
+    #[test]
+    fn canonical_network_names_search_bounds_thread_collisions_and_daily_clarification_limits() {
+        for name in ["solana", "base", "ethereum", "robinhood"] {
+            let network: Network = name.parse().unwrap();
+            assert_eq!(network.name(), name);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Memory::open(&dir.path().join("cases.sqlite3")).unwrap();
+        let limits = Capacity {
+            daily: 5,
+            per_actor: 1,
+            pending: 5,
+        };
+        memory
+            .remember_case_clarification("one", "network?", "actor", 86_400, limits)
+            .unwrap();
+        memory
+            .remember_case_clarification("two", "network?", "actor", 86_401, limits)
+            .unwrap();
+        memory.begin_case_clarification("one").unwrap();
+        assert!(memory.next_case_clarification().unwrap().is_none());
+        let first = request(Network::Base, "first");
+        memory.enqueue_case(&first, "actor", 1, limits).unwrap();
+        let mut collision = first.clone();
+        collision.id = "different-case".into();
+        collision.case = CaseKey::new(Network::Ethereum, &first.case.address).unwrap();
+        assert!(
+            memory
+                .enqueue_case(&collision, "other", 2, limits)
+                .unwrap_err()
+                .to_string()
+                .contains("thread already")
+        );
+        assert!(
+            memory
+                .library_cases(None, &"q".repeat(128), u64::MAX, 50)
+                .unwrap()
+                .is_empty()
+        );
+        for count in [129, 130] {
+            assert!(
+                memory
+                    .library_cases(None, &"q".repeat(count), u64::MAX, 50)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("search too long")
+            );
+        }
+    }
+
+    #[test]
+    fn checkpoint_verification_refuses_either_link_or_payload_corruption() {
+        for field in ["previous_hash", "payload"] {
+            let dir = tempfile::tempdir().unwrap();
+            let memory = Memory::open(&dir.path().join("cases.sqlite3")).unwrap();
+            let req = request(Network::Base, "tamper");
+            memory
+                .enqueue_case(
+                    &req,
+                    "actor",
+                    1,
+                    Capacity {
+                        daily: 1,
+                        per_actor: 1,
+                        pending: 1,
+                    },
+                )
+                .unwrap();
+            memory.verify_cases().unwrap();
+            // Simulate an operator altering the database outside its append-only API.
+            memory
+                .conn
+                .execute_batch("DROP TRIGGER case_events_no_update")
+                .unwrap();
+            memory
+                .conn
+                .execute(
+                    &format!("UPDATE case_events SET {field}=?1"),
+                    [if field == "payload" {
+                        "{}"
+                    } else {
+                        "broken-link"
+                    }],
+                )
+                .unwrap();
+            assert!(matches!(
+                memory.verify_cases(),
+                Err(CaseError::Integrity(_))
+            ));
+        }
+    }
+    #[test]
+    fn related_cases_return_three_distinct_same_network_dossiers_not_just_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Memory::open(&dir.path().join("cases.sqlite3")).unwrap();
+        let shared = format!("0x{:040x}", 999);
+        let limits = Capacity {
+            daily: 10,
+            per_actor: 10,
+            pending: 10,
+        };
+        for i in 1..=4 {
+            let mut req = request(Network::Base, &format!("case-{i}"));
+            req.case = CaseKey::new(Network::Base, &format!("0x{i:040x}")).unwrap();
+            req.thread = None;
+            memory.enqueue_case(&req, "actor", i, limits).unwrap();
+            memory.next_case_job(i).unwrap();
+            let read = crate::investigation::Read {
+                tool: crate::investigation::Tool::Account,
+                subject: req.case.address.clone(),
+                why: "synthetic relationship".into(),
+            };
+            let observation = crate::investigation::observed(
+                &req.case,
+                &read,
+                i,
+                None,
+                json!({"related":[shared],"statements":[]}),
+                None,
+            );
+            let assessment = Assessment {
+                request_id: req.id.clone(),
+                level: "CantTell".into(),
+                reply: "partial".into(),
+                observations: vec![observation],
+                findings: vec![],
+                reused: vec![],
+                decisions: vec![],
+                rpc_calls: 1,
+                elapsed_ms: 1,
+                complete: false,
+            };
+            memory.finish_case(&req, &assessment, i).unwrap();
+        }
+        let target = CaseKey::new(Network::Base, &format!("0x{:040x}", 777)).unwrap();
+        let related = memory
+            .related_cases(&target, &[shared.clone(), shared])
+            .unwrap();
+        assert_eq!(related.len(), 3);
+        assert_eq!(
+            related
+                .iter()
+                .map(|d| d.case.id())
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3
+        );
+        assert!(related.iter().all(|d| d.case.chain == Network::Base));
+        let other_network = CaseKey::new(Network::Ethereum, &target.address).unwrap();
+        assert!(
+            memory
+                .related_cases(&other_network, &[format!("0x{:040x}", 999)])
+                .unwrap()
+                .is_empty()
+        );
     }
     #[test]
     fn bounded_requests_accept_the_limit_and_refuse_each_oversized_field() {
@@ -1394,6 +1556,32 @@ mod tests {
         };
         memory.finish_case(&a, &assessment, 3).unwrap();
         assert_eq!(
+            memory.case_assessment(&a).unwrap().unwrap().request_id,
+            a.id
+        );
+        let mut missing = a.clone();
+        missing.id = "not-recorded".into();
+        assert!(memory.case_assessment(&missing).unwrap().is_none());
+        assert_eq!(
+            memory
+                .case_dossier(&a.case)
+                .unwrap()
+                .unwrap()
+                .assessment
+                .unwrap()
+                .level,
+            "NothingUglyYet"
+        );
+        for reason in [String::new(), "r".repeat(4097), "r".repeat(4098)] {
+            assert!(
+                memory
+                    .correct_case(&a.case, 4, &observation.id, &reason)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("invalid correction")
+            );
+        }
+        assert_eq!(
             memory.library_cases(None, "", u64::MAX, 10).unwrap()[0]
                 .assessment
                 .as_ref()
@@ -1405,9 +1593,20 @@ mod tests {
         let subjects = vec!["0x2222222222222222222222222222222222222222".into()];
         assert_eq!(memory.related_cases(&other, &subjects).unwrap().len(), 1);
         let checkpoint = memory.verify_cases().unwrap();
+        assert_eq!(
+            memory
+                .related_cases(&other, &[subjects[0].clone(), subjects[0].clone()])
+                .unwrap()
+                .len(),
+            1
+        );
         memory
-            .correct_case(&a.case, 4, &observation.id, "decoder was challenged")
+            .correct_case(&a.case, 4, &observation.id, &"r".repeat(4096))
             .unwrap();
+        let queued = memory.case_assessment(&a).unwrap().unwrap();
+        assert_eq!(queued.findings[0].status, "needs_review");
+        assert_eq!(queued.level, "CantTell");
+        assert!(!queued.complete);
         let summary = memory
             .library_cases(None, "", u64::MAX, 10)
             .unwrap()

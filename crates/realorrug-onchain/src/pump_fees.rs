@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 /// # Errors
 /// Invalid or unsupported input, exhausted bounds, unavailable data, or storage failure.
 pub fn sharing(data: &[u8], mint: &Address) -> Result<Value, String> {
-    if data.len() < 80 || data[..8] != [216, 74, 9, 0, 56, 140, 93, 75] {
+    let header = data.get(..80).ok_or("not a SharingConfig account")?;
+    if header[..8] != [216, 74, 9, 0, 56, 140, 93, 75] {
         return Err("not a SharingConfig account".into());
     }
     if data[9] != 2 || data[10] > 1 || data[75] > 1 {
@@ -189,6 +190,134 @@ fn single_creator(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::investigation::tests::{account, rpc};
+    #[test]
+    fn pump_fee_routes_require_the_sharing_or_curve_program_and_distinguish_balances_from_receipts()
+    {
+        let mint = Address::new([3; 32]);
+        let case = CaseKey::new(crate::cases::Network::Solana, &mint.to_string()).unwrap();
+        let read = Read {
+            tool: crate::investigation::Tool::Fees,
+            subject: case.address.clone(),
+            why: "fees".into(),
+        };
+        let mut config = vec![0; 114];
+        config[..8].copy_from_slice(&[216, 74, 9, 0, 56, 140, 93, 75]);
+        config[9] = 2;
+        config[10] = 1;
+        config[11..43].copy_from_slice(mint.as_bytes());
+        config[75] = 1;
+        config[76..80].copy_from_slice(&1u32.to_le_bytes());
+        config[80..112].fill(5);
+        config[112..114].copy_from_slice(&10_000u16.to_le_bytes());
+        for owner in [
+            realorrug_pumpfun::pda::FEE_PROGRAM.to_string(),
+            mint.to_string(),
+        ] {
+            let client = rpc(vec![(
+                "getMultipleAccounts",
+                json!({"context":{"slot":42},"value":[account(&config,&owner)]}),
+            )]);
+            let result = super::read(&client, &case, &read, &mut Budget::default(), 1);
+            if owner != realorrug_pumpfun::pda::FEE_PROGRAM.to_string() {
+                assert!(result.unwrap_err().contains("program identity"));
+                continue;
+            }
+            let observation = result.unwrap();
+            assert_eq!(observation.value["shares"][0]["bps"], 10_000);
+            assert!(
+                observation
+                    .gap
+                    .unwrap()
+                    .contains("do not prove distributions")
+            );
+        }
+        let mut curve = vec![0; 81];
+        curve[..8].copy_from_slice(&realorrug_pumpfun::curve::DISCRIMINATOR);
+        curve[49..81].fill(6);
+        for owner in [
+            realorrug_pumpfun::pda::PROGRAM_ID.to_string(),
+            mint.to_string(),
+        ] {
+            let mut responses = vec![
+                (
+                    "getMultipleAccounts",
+                    json!({"context":{"slot":42},"value":[null]}),
+                ),
+                (
+                    "getMultipleAccounts",
+                    json!({"context":{"slot":43},"value":[account(&curve,&owner)]}),
+                ),
+            ];
+            if owner == realorrug_pumpfun::pda::PROGRAM_ID.to_string() {
+                responses.extend([("getAccountInfo",json!({"context":{"slot":44},"value":{"data":["","base64"],"lamports":500,"owner":"11111111111111111111111111111111"}})),("getSignaturesForAddress",json!([]))]);
+            }
+            let result = super::read(&rpc(responses), &case, &read, &mut Budget::default(), 1);
+            if owner != realorrug_pumpfun::pda::PROGRAM_ID.to_string() {
+                assert!(result.unwrap_err().contains("curve owner"));
+                continue;
+            }
+            let observation = result.unwrap();
+            assert_eq!(observation.value["protocol"], "pump_single_creator");
+            assert_eq!(observation.value["vault_decreases"], json!([]));
+            assert!(
+                observation.value["statements"][1]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("500 lamports at slot 44")
+            );
+            assert!(
+                observation
+                    .gap
+                    .unwrap()
+                    .contains("not per-token recipient receipts")
+            );
+        }
+    }
+    #[test]
+    fn sharing_status_and_vector_boundaries_preserve_configuration_without_claiming_receipts() {
+        let mint = Address::new([3; 32]);
+        let mut data = vec![0; 80 + 27 * 34];
+        data[..8].copy_from_slice(&[216, 74, 9, 0, 56, 140, 93, 75]);
+        data[9] = 2;
+        data[11..43].copy_from_slice(mint.as_bytes());
+        data[43..75].fill(9);
+        data[76..80].copy_from_slice(&27u32.to_le_bytes());
+        for (i, entry) in data[80..].as_chunks_mut::<34>().0.iter_mut().enumerate() {
+            entry[..32].fill(u8::try_from(i + 1).unwrap());
+            entry[32..].copy_from_slice(&(if i == 26 { 978 } else { 347u16 }).to_le_bytes());
+        }
+        for active in [0, 1] {
+            for revoked in [0, 1] {
+                data[10] = active;
+                data[75] = revoked;
+                let result = sharing(&data, &mint).unwrap();
+                assert_eq!(result["shares"].as_array().unwrap().len(), 27);
+                assert_eq!(result["shares"][26]["bps"], 978);
+                assert_eq!(result["active"], active == 1);
+                assert_eq!(result["admin_revoked"], revoked == 1);
+                assert_eq!(result["admin"], Address::new([9; 32]).to_string());
+            }
+        }
+        for (index, replacement) in [(0, 0), (9, 3), (10, 2), (75, 2)] {
+            let mut invalid = data.clone();
+            invalid[index] = replacement;
+            assert!(sharing(&invalid, &mint).is_err());
+        }
+        for count in [0u32, 28, 29] {
+            let mut invalid = data.clone();
+            invalid[76..80].copy_from_slice(&count.to_le_bytes());
+            assert!(
+                sharing(&invalid, &mint)
+                    .unwrap_err()
+                    .contains("shareholder vector")
+            );
+        }
+        assert!(sharing(&data[..79], &mint).is_err());
+        assert!(sharing(&data[..data.len() - 1], &mint).is_err());
+        data[114..146].fill(1);
+        assert!(sharing(&data, &mint).unwrap_err().contains("duplicate"));
+    }
     #[test]
     fn fee_shares_need_matching_mint_version_and_complete_denominator() {
         let mint = Address::new([3; 32]);

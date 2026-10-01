@@ -411,7 +411,11 @@ fn source(
         .limit(262_144)
         .read_to_string()
         .map_err(|e| e.to_string())?;
-    let value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    verified_source(&code, &url, &text)
+}
+
+fn verified_source(code: &Value, url: &str, text: &str) -> Result<(Value, Option<String>), String> {
+    let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let deployed = value["runtimeBytecode"]["onchainBytecode"]
         .as_str()
         .ok_or("verified deployed bytecode absent")?;
@@ -497,6 +501,185 @@ pub(crate) fn liquidity(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    fn abi_word(value: u128) -> Value {
+        json!(format!("0x{value:064x}"))
+    }
+
+    #[test]
+    fn token_reads_distinguish_getters_standard_slots_and_unavailable_contracts() {
+        let read = Read {
+            tool: Tool::Token,
+            subject: "0x1111111111111111111111111111111111111111".into(),
+            why: "controls".into(),
+        };
+        for decimals in [0, 36, 37] {
+            let mut responses = vec![
+                ("eth_getCode", json!("0x6000")),
+                ("eth_call", abi_word(900)),
+                ("eth_call", abi_word(decimals)),
+            ];
+            if decimals <= 36 {
+                responses.extend([
+                    ("eth_call", abi_word(5)),
+                    ("eth_getStorageAt", abi_word(6)),
+                    ("eth_getStorageAt", abi_word(0)),
+                    ("eth_getStorageAt", abi_word(7)),
+                ]);
+            }
+            let (rpc, server) = endpoint(responses);
+            let result = token(&rpc, &read, "0x10", &mut Budget::default());
+            server.join().unwrap();
+            if decimals == 37 {
+                assert!(result.unwrap_err().contains("decimals"));
+                continue;
+            }
+            let (value, gap) = result.unwrap();
+            assert_eq!(
+                value["related"],
+                json!([
+                    format!("0x{:040x}", 5),
+                    format!("0x{:040x}", 6),
+                    format!("0x{:040x}", 7)
+                ])
+            );
+            let statements = value["statements"].to_string();
+            assert!(statements.contains("900 base units"));
+            assert!(statements.contains(&format!("decimals() returned {decimals}")));
+            assert!(gap.unwrap().contains("do not prove absence"));
+        }
+        for code in [
+            "0x".to_owned(),
+            "6000".into(),
+            "0x6".into(),
+            "0xé".into(),
+            format!("0x{}", "00".repeat(50_000)),
+        ] {
+            let (rpc, server) = endpoint(vec![("eth_getCode", json!(code))]);
+            assert!(token(&rpc, &read, "0x10", &mut Budget::default()).is_err());
+            server.join().unwrap();
+        }
+        let code = format!("0x{}", "00".repeat(49_999));
+        assert_eq!(code.len(), 100_000);
+        let (rpc, server) = endpoint(vec![
+            ("eth_getCode", json!(code)),
+            ("eth_call", abi_word(0)),
+            ("eth_getStorageAt", abi_word(0)),
+            ("eth_getStorageAt", abi_word(0)),
+            ("eth_getStorageAt", abi_word(0)),
+        ]);
+        let mut account_read = read.clone();
+        account_read.tool = Tool::Account;
+        let (value, _) = token(&rpc, &account_read, "0x10", &mut Budget::default()).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            value["code_hash"],
+            blake3::hash(code.as_bytes()).to_hex().to_string()
+        );
+    }
+
+    #[test]
+    fn bounded_history_counts_only_this_tokens_valid_events_and_reports_truncation() {
+        let case = CaseKey::new(
+            crate::cases::Network::Base,
+            "0x1111111111111111111111111111111111111111",
+        )
+        .unwrap();
+        let read = Read {
+            tool: Tool::History,
+            subject: case.address.clone(),
+            why: "history".into(),
+        };
+        let good = json!({"address":case.address,"topics":[TRANSFER,abi_word(1),abi_word(2)],"data":abi_word(123),"transactionHash":"synthetic-tx"});
+        for count in [64, 65, 66] {
+            let (rpc, server) = endpoint(vec![
+                ("eth_getLogs", json!(vec![good.clone(); count])),
+                ("eth_getLogs", json!([])),
+            ]);
+            let (value, gap) =
+                history(&rpc, &case, &read, "0x1000", &mut Budget::default()).unwrap();
+            server.join().unwrap();
+            assert_eq!(value["transfers"].as_array().unwrap().len(), 64);
+            assert_eq!(value["signatures"].as_array().unwrap().len(), 64);
+            assert_eq!(value["truncated"], count > 64);
+            assert!(
+                value["statements"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("blocks 2096 through 4096")
+            );
+            assert!(gap.unwrap().contains("historical time coverage"));
+            assert_eq!(value["related"], json!([]));
+        }
+        let mut wrong_token = good.clone();
+        wrong_token["address"] = json!("0x2222222222222222222222222222222222222222");
+        let mut removed = good.clone();
+        removed["removed"] = json!(true);
+        let mut wrong_topic = good.clone();
+        wrong_topic["topics"][0] = json!("0xother-event");
+        let mut short = good.clone();
+        short["topics"] = json!([TRANSFER, abi_word(1)]);
+        let (rpc, server) = endpoint(vec![
+            (
+                "eth_getLogs",
+                json!([wrong_token, removed, wrong_topic, short, good]),
+            ),
+            ("eth_getLogs", json!([])),
+        ]);
+        let (value, _) = history(&rpc, &case, &read, "0x1", &mut Budget::default()).unwrap();
+        server.join().unwrap();
+        assert_eq!(value["transfers"].as_array().unwrap().len(), 1);
+        assert_eq!(value["transfers"][0]["amount"], "123");
+        assert!(
+            value["statements"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("blocks 0 through 1")
+        );
+    }
+
+    #[test]
+    fn v2_liquidity_verifies_factory_and_keeps_reserves_separate_from_withdrawal_rights() {
+        for chain in [crate::cases::Network::Base, crate::cases::Network::Ethereum] {
+            let case = CaseKey::new(chain, "0x1111111111111111111111111111111111111111").unwrap();
+            let factory = if chain == crate::cases::Network::Ethereum {
+                "5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f"
+            } else {
+                "8909dc15e40173ff4699343b6eb8132c65e18ec6"
+            };
+            let reserves = format!("0x{:064x}{:064x}{:064x}", 100, 200, 300);
+            let (rpc, server) = endpoint(vec![
+                ("eth_call", abi_word(8)),
+                ("eth_call", json!(format!("0x{factory:0>64}"))),
+                ("eth_call", json!(reserves)),
+                ("eth_call", abi_word(9)),
+                ("eth_call", abi_word(1000)),
+                ("eth_call", abi_word(10)),
+                ("eth_call", abi_word(20)),
+            ]);
+            let (value, gap) = liquidity(&rpc, &case, "0x10", &mut Budget::default()).unwrap();
+            server.join().unwrap();
+            assert_eq!(value["protocol"], "uniswap_v2");
+            assert_eq!(value["lp_supply"], "1000");
+            assert_eq!(value["lp_zero_balance"], "10");
+            assert_eq!(value["lp_dead_balance"], "20");
+            assert!(
+                value["statements"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reserve0 100 and reserve1 200")
+            );
+            assert!(gap.unwrap().contains("withdrawal rights"));
+            let (rpc, server) =
+                endpoint(vec![("eth_call", abi_word(8)), ("eth_call", abi_word(7))]);
+            assert!(
+                liquidity(&rpc, &case, "0x10", &mut Budget::default())
+                    .unwrap_err()
+                    .contains("factory identity")
+            );
+            server.join().unwrap();
+        }
+    }
+
     pub(crate) fn endpoint(
         responses: Vec<(&'static str, Value)>,
     ) -> (Rpc, std::thread::JoinHandle<()>) {
@@ -556,6 +739,34 @@ pub(super) mod tests {
         (Rpc::new(format!("http://{address}")), handle)
     }
     #[test]
+    fn verified_interface_requires_matching_runtime_and_cannot_imply_an_audit() {
+        let body=json!({"runtimeBytecode":{"onchainBytecode":"0x60Ab"},"abi":[{"name":"owner"}],"match":"exact_match"}).to_string();
+        let (value, gap) = verified_source(
+            &json!("0x60ab"),
+            "https://sourcify.dev/fixed-test-path",
+            &body,
+        )
+        .unwrap();
+        assert_eq!(value["interface_names"], json!(["owner"]));
+        assert_eq!(
+            value["source_response_hash"],
+            blake3::hash(body.as_bytes()).to_hex().to_string()
+        );
+        assert!(gap.unwrap().contains("not a safety audit"));
+        assert!(
+            verified_source(&json!("0x60ff"), "unused", &body)
+                .unwrap_err()
+                .contains("does not match")
+        );
+        assert!(verified_source(&Value::Null, "unused", &body).is_err());
+        for abi in [json!([]), Value::Null, json!("not ABI")] {
+            let invalid =
+                json!({"runtimeBytecode":{"onchainBytecode":"0x60Ab"},"abi":abi}).to_string();
+            assert!(verified_source(&json!("0x60ab"), "unused", &invalid).is_err());
+        }
+    }
+
+    #[test]
     fn malformed_transfer_words_never_become_zero_or_an_owner_claim() {
         let good = json!({"topics":[TRANSFER,format!("0x{:0>64}","1"),format!("0x{:0>64}","2")],
             "data":format!("0x{:0>64}","ff"),"transactionHash":"tx"});
@@ -568,6 +779,11 @@ pub(super) mod tests {
         assert!(transfer(&bad).is_err());
         assert!(hex_u64("0xnothex").is_err());
         assert!(address_word(&format!("0x{}", "é".repeat(32))).is_err());
+        assert!(
+            address_word(&format!("0x1{:0>63}", "2"))
+                .unwrap_err()
+                .contains("not an address word")
+        );
         bad = good;
         bad["removed"] = json!(true);
         assert!(transfer(&bad).is_err());
@@ -593,6 +809,48 @@ pub(super) mod tests {
         let receipt = json!({"transactionHash":hash,"blockHash":block_hash,"blockNumber":"0x10","status":"0x1","logs":[
             {"address":case.address,"topics":[TRANSFER,format!("0x{:0>64}",&sender[2..]),format!("0x{:0>64}",&receiver[2..])],"data":format!("0x{:064x}",500),"transactionHash":hash}
         ]});
+        for missing in [true, false] {
+            let (rpc, server) = endpoint(vec![
+                (
+                    "eth_getTransactionByHash",
+                    if missing { Value::Null } else { tx.clone() },
+                ),
+                (
+                    "eth_getTransactionReceipt",
+                    if missing {
+                        receipt.clone()
+                    } else {
+                        Value::Null
+                    },
+                ),
+            ]);
+            assert!(
+                transaction(&rpc, &case, &read, &mut Budget::default())
+                    .unwrap_err()
+                    .contains("not confirmed")
+            );
+            server.join().unwrap();
+        }
+        for field in ["hash", "transactionHash", "blockHash", "blockNumber"] {
+            let mut changed_tx = tx.clone();
+            let mut changed_receipt = receipt.clone();
+            match field {
+                "hash" => changed_tx[field] = json!("wrong-hash"),
+                "transactionHash" => changed_receipt[field] = json!("wrong-hash"),
+                "blockHash" => changed_receipt[field] = json!(format!("0x{:064x}", 999)),
+                _ => changed_receipt[field] = json!("0x11"),
+            }
+            let (rpc, server) = endpoint(vec![
+                ("eth_getTransactionByHash", changed_tx),
+                ("eth_getTransactionReceipt", changed_receipt),
+            ]);
+            assert!(
+                transaction(&rpc, &case, &read, &mut Budget::default())
+                    .unwrap_err()
+                    .contains("identities/checkpoints")
+            );
+            server.join().unwrap();
+        }
         for (status, successful) in [("0x1", true), ("0x0", false), ("0x2", false)] {
             let mut outcome = receipt.clone();
             outcome["status"] = json!(status);

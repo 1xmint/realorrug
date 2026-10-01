@@ -188,7 +188,7 @@ mod tests {
         let a = args(&["bio", "--preview", "--pool", "0.42"]);
         let state = sample_state(&a, 1_800_000_000).expect("a state");
         assert_eq!(state.pool.expect("a pool").pool, "0.42");
-        assert!(state.leaders.is_empty());
+        assert_eq!(state.leaders, [] as [realorrug_analyst::bio::Leader; 0]);
         assert_eq!(state.last_winner, None);
     }
 

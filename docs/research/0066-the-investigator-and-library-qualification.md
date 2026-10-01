@@ -112,10 +112,14 @@ Scoped all-target Clippy passes with warnings denied. The site passes its
 129 tests after reconciling the forecasting pages from main, type check and
 production build; browser review checks responsive
 Library layout. The first CI run passed 2329 Rust tests, build, MSRV,
-dependencies, formatting and the site. Newer Clippy findings were repaired.
-Mutation testing found uncovered behavior in all four shards; targeted recovery,
-input, selection, protocol and read-limit tests are being added. **CI acceptance
-remains open.** Full Rust suites and mutation checks belong to CI.
+dependencies, formatting and the site. The second run passed 2347 Rust tests
+and the ordinary build checks, but failed newer Clippy test-assertion rules and
+all four mutation shards. Survivors fell from 275 to 150; this is progress,
+not acceptance. The next revision adds boundary/refusal tests for model time,
+two-hop leads, replay custody, protocol quotes/receipts, Solana transfer/pool
+identity, EVM transactions and Library intake. No mutation gate is disabled or
+excluded to obtain a pass. **CI acceptance remains open.** Full Rust suites
+and mutation checks belong to CI.
 
 Free browsing requires configured existing case storage, not a session. New
 website work additionally needs authenticated identity/CSRF, shared daily
@@ -123,6 +127,11 @@ quotas, budget/prices and worker liveness. Browse/request rate limits are bounde
 Community contributions enter the same bounded investigation queue as unverified
 questions; there is no separate unchecked event-append capability. Operator
 corrections use the custody command and cannot be submitted as verified web facts.
+Corrections apply to the exact-request assessment used for queued publication
+as well as the latest dossier. Challenged findings therefore cannot be selected
+as measured clauses for a pending reply; original assessments remain in history.
+The mention poll advances its cursor after durable intake but does not count a
+queued investigation as an answered mention; the worker records that outcome.
 Unavailability never becomes an empty successful Library. The live publication
 gate is separate from worker enablement and retains existing X approval rules.
 Checkpoints detect changes to retained records; operator custody is not

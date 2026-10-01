@@ -401,6 +401,182 @@ mod tests {
                 .collect::<String>()
         ))
     }
+    fn numeric(values: &[u128]) -> Vec<String> {
+        values
+            .iter()
+            .map(|value| format!("0x{value:064x}"))
+            .collect()
+    }
+
+    #[test]
+    fn abi_bounds_accept_complete_vectors_at_the_limit_and_refuse_missing_bytes() {
+        assert_eq!(
+            words(&format!("0x{}", "0".repeat(65_536))).unwrap().len(),
+            1024
+        );
+        assert!(words(&format!("0x{}", "0".repeat(65_600))).is_err());
+        assert!(words(&format!("0x{}", "g".repeat(64))).is_err());
+        let mut tuple = numeric(&[0; 29]);
+        tuple[0] = numeric(&[32])[0].clone();
+        tuple[1] = numeric(&[352])[0].clone();
+        tuple[12] = numeric(&[16])[0].clone();
+        assert_eq!(dynamic(&tuple, 1, 0).unwrap().len(), 16);
+        tuple[12] = numeric(&[17])[0].clone();
+        assert!(dynamic(&tuple, 1, 0).is_err());
+        tuple[12] = numeric(&[16])[0].clone();
+        assert!(dynamic(&tuple[..28], 1, 0).is_err());
+    }
+
+    #[test]
+    fn flaunch_normal_quotes_exclude_referrals_and_do_not_claim_a_beneficiary_receipt() {
+        let case =
+            CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111").unwrap();
+        for (manager, previous) in [
+            ("0x23321f11a6d44fd1ab790044fdfde5758c902fdc", false),
+            ("0x588c683ecc450f8b2aadb13d7f63792b840425dc", true),
+        ] {
+            let key = vec![
+                format!("0x{}", arg(&case.address)),
+                numeric(&[0])[0].clone(),
+                numeric(&[3000])[0].clone(),
+                numeric(&[60])[0].clone(),
+                format!("0x{}", arg(manager)),
+            ];
+            for enabled in [0, 1, 2] {
+                let mut responses = Vec::new();
+                if previous {
+                    responses.push(("eth_call", json!("0x")));
+                }
+                responses.extend([
+                    ("eth_call", encoded(&key)),
+                    ("eth_call", encoded(&numeric(&[2500, 5000, 2500, enabled]))),
+                ]);
+                if enabled < 2 {
+                    responses.extend([
+                        ("eth_call", encoded(&numeric(&[2500, 5000, 2500]))),
+                        ("eth_call", json!(format!("0x{}", arg(&case.address)))),
+                        ("eth_call", json!(format!("0x{}", arg(ZERO)))),
+                        ("eth_call", json!(format!("0x{}", arg(ZERO)))),
+                        ("eth_getLogs", json!([])),
+                    ]);
+                }
+                let (rpc, server) = endpoint(responses);
+                let result = flaunch(&rpc, &case, "0x1000", &mut Budget::default());
+                server.join().unwrap();
+                if enabled == 2 {
+                    assert!(result.unwrap_err().contains("unsupported"));
+                    continue;
+                }
+                let (value, gap) = result.unwrap();
+                assert_eq!(value["protocol"], "flaunch_normal");
+                assert_eq!(value["hook"], manager);
+                assert_eq!(value["distributed_events"], json!([]));
+                assert!(
+                    value["statements"][0]["text"].as_str().unwrap().contains(
+                        "2500 bid-wall units, 5000 creator units and 2500 protocol units"
+                    )
+                );
+                assert!(gap.unwrap().contains("referral waterfall"));
+            }
+        }
+    }
+
+    #[test]
+    fn distribution_logs_require_the_requested_hook_pool_and_complete_nonremoved_layout() {
+        let manager = "0x23321f11a6d44fd1ab790044fdfde5758c902fdc";
+        let pool = "ab".repeat(32);
+        let topic = format!(
+            "0x{}",
+            encode_hex(&Keccak256::digest(
+                b"PoolFeesDistributed(bytes32,uint256,uint256,uint256,uint256,uint256)"
+            ))
+        );
+        let good = json!({"address":manager,"topics":[topic,format!("0x{pool}")],"data":encoded(&numeric(&[1,2,3,4,5])),"transactionHash":"synthetic-receipt","blockHash":"synthetic-block"});
+        let (rpc, server) = endpoint(vec![("eth_getLogs", json!(vec![good.clone(); 32]))]);
+        let receipts = distributed(&rpc, &mut Budget::default(), manager, &pool, "0x1000").unwrap();
+        server.join().unwrap();
+        assert_eq!(receipts.len(), 32);
+        assert_eq!(receipts[0]["transaction"], "synthetic-receipt");
+        assert_eq!(receipts[0]["amounts"], json!(numeric(&[1, 2, 3, 4, 5])));
+        for mutation in 0..6 {
+            let mut invalid = good.clone();
+            match mutation {
+                0 => invalid["address"] = json!(ZERO),
+                1 => invalid["topics"][0] = json!("wrong-event"),
+                2 => invalid["topics"][1] = json!("wrong-pool"),
+                3 => invalid["removed"] = json!(true),
+                4 => invalid["data"] = encoded(&numeric(&[1, 2, 3, 4])),
+                _ => invalid["data"] = encoded(&numeric(&[1, 2, 3, 4, 5, 6])),
+            }
+            let (rpc, server) = endpoint(vec![("eth_getLogs", json!([invalid]))]);
+            assert!(distributed(&rpc, &mut Budget::default(), manager, &pool, "0x1000").is_err());
+            server.join().unwrap();
+        }
+        let (rpc, server) = endpoint(vec![("eth_getLogs", json!(vec![good; 33]))]);
+        assert!(
+            distributed(&rpc, &mut Budget::default(), manager, &pool, "0x1000")
+                .unwrap_err()
+                .contains("bound")
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn v3_requires_factory_tier_and_slot_layout_and_does_not_equate_liquidity_with_locked_lp() {
+        for chain in [Network::Base, Network::Ethereum] {
+            let case = CaseKey::new(chain, "0x1111111111111111111111111111111111111111").unwrap();
+            let factory = if chain == Network::Base {
+                "0x33128a8fc17869897dce68ed026d694621f6fdfd"
+            } else {
+                "0x1f98431c8ad98523631ae4a59f267346ea31f984"
+            };
+            for mutation in 0..4 {
+                let mut responses = vec![
+                    ("eth_call", encoded(&numeric(&[0]))),
+                    ("eth_call", encoded(&numeric(&[8]))),
+                    (
+                        "eth_call",
+                        json!(format!(
+                            "0x{}",
+                            arg(if mutation == 1 { ZERO } else { factory })
+                        )),
+                    ),
+                ];
+                if mutation != 1 {
+                    responses.extend([
+                        ("eth_call", encoded(&numeric(&[700]))),
+                        (
+                            "eth_call",
+                            encoded(&numeric(&[if mutation == 2 { 500 } else { 3000 }])),
+                        ),
+                    ]);
+                }
+                if mutation == 0 || mutation == 3 {
+                    responses.push((
+                        "eth_call",
+                        encoded(&numeric(&vec![0; if mutation == 3 { 6 } else { 7 }])),
+                    ));
+                }
+                let (rpc, server) = endpoint(responses);
+                let result = v3(&rpc, &case, "0x10", &mut Budget::default());
+                server.join().unwrap();
+                if mutation != 0 {
+                    assert!(result.is_err());
+                    continue;
+                }
+                let (value, gap) = result.unwrap();
+                assert_eq!(value["protocol"], "uniswap_v3");
+                assert_eq!(value["fee_tier"], 3000);
+                assert!(
+                    value["statements"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("active liquidity 700")
+                );
+                assert!(gap.unwrap().contains("withdrawal rights"));
+            }
+        }
+    }
     fn rewards(token: &str) -> Vec<String> {
         let mut data = vec![format!("0x{:064x}", 0); 18];
         data[0] = format!("0x{:064x}", 32);

@@ -1291,7 +1291,8 @@ pub fn tick(
             match crate::case_worker::intake(mention, memory, gate, at, &env) {
                 Ok(true) => {
                     handled.push(&mention.id);
-                    answered += 1;
+                    // Durable intake advances the cursor; it is not a delivered
+                    // answer. The case worker records its separate outcome.
                     continue;
                 }
                 Ok(false) => {}

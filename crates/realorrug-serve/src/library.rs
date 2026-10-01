@@ -40,14 +40,16 @@ fn now() -> u64 {
 
 impl LibraryState {
     fn from_env(auth: Arc<AuthState>) -> Self {
-        let get = |key: &str| std::env::var(key).ok();
+        Self::from_vars(auth, &|key| std::env::var(key).ok())
+    }
+    fn from_vars(auth: Arc<AuthState>, get: &impl Fn(&str) -> Option<String>) -> Self {
         let path =
             realorrug_types::env::env_or_legacy("REALORRUG_ANALYST_DIR", "RADAR_ANALYST_DIR", get)
                 .map(|dir| PathBuf::from(dir).join("memory.sqlite3"));
         Self {
             auth,
             path,
-            capacity: realorrug_analyst::investigator::capacity_from(&get),
+            capacity: realorrug_analyst::investigator::capacity_from(get),
             clients: Mutex::new(HashMap::new()),
             trust_cloudflare: get("REALORRUG_TRUST_CLOUDFLARE").as_deref() == Some("1"),
             clock: Arc::new(now),
@@ -377,6 +379,24 @@ mod tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
     #[test]
+    fn library_config_requires_explicit_proxy_trust_and_uses_the_shared_case_path() {
+        for trust in [None, Some("0"), Some("1")] {
+            let auth = Arc::new(AuthState::from_vars(&|_| None, None, Arc::new(|| 1)));
+            let get = |key: &str| match key {
+                "REALORRUG_ANALYST_DIR" => Some("operator-data".into()),
+                "REALORRUG_TRUST_CLOUDFLARE" => trust.map(str::to_owned),
+                _ => None,
+            };
+            let state = LibraryState::from_vars(auth, &get);
+            assert_eq!(
+                state.path,
+                Some(PathBuf::from("operator-data").join("memory.sqlite3"))
+            );
+            assert_eq!(state.trust_cloudflare, trust == Some("1"));
+            assert!(state.capacity.is_none());
+        }
+    }
+    #[test]
     fn public_read_limits_expire_and_ignore_untrusted_proxy_headers() {
         use std::sync::atomic::{AtomicU64, Ordering};
         let time = Arc::new(AtomicU64::new(60));
@@ -488,6 +508,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one authenticated lifecycle covers admission, public status and duplicate recovery"
+    )]
     async fn authenticated_intake_requires_csrf_and_recovers_duplicates_without_a_live_worker() {
         use crate::auth::{SESSION_COOKIE, csrf_for, sha256_hex};
         use http_body_util::BodyExt as _;
@@ -540,9 +564,10 @@ mod tests {
         });
         let app = Router::new()
             .route("/v1/investigations", post(investigation))
+            .route("/v1/investigations/{id}", get(job))
             .with_state(state);
-        let input = json!({"chain":"base","address":"0x1111111111111111111111111111111111111111","question":"Trace the fee route", "wallets":[],"transactions":[],"window":null,"idempotency_key":"same"});
-        let request = |csrf: bool| {
+        let input = json!({"chain":"base","address":"0x1111111111111111111111111111111111111111","question":"Trace the fee route", "wallets":[],"transactions":[],"window":null,"idempotency_key":"a".repeat(128)});
+        let request = |csrf: bool, input: &serde_json::Value| {
             let mut request = Request::post("/v1/investigations")
                 .header("content-type", "application/json")
                 .header("cookie", format!("{SESSION_COOKIE}={token}"));
@@ -552,16 +577,71 @@ mod tests {
             request.body(Body::from(input.to_string())).unwrap()
         };
         assert_eq!(
-            app.clone().oneshot(request(false)).await.unwrap().status(),
+            app.clone()
+                .oneshot(request(false, &input))
+                .await
+                .unwrap()
+                .status(),
             StatusCode::FORBIDDEN
         );
-        let first = app.clone().oneshot(request(true)).await.unwrap();
+        for key in [String::new(), "a".repeat(129), "a".repeat(130)] {
+            let mut invalid = input.clone();
+            invalid["idempotency_key"] = json!(key);
+            assert_eq!(
+                app.clone()
+                    .oneshot(request(true, &invalid))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let first = app.clone().oneshot(request(true, &input)).await.unwrap();
         assert_eq!(first.status(), StatusCode::ACCEPTED);
         let first: serde_json::Value =
             serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        let id = first["job"]["request"]["id"].as_str().unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(
+                    Request::get(format!("/v1/investigations/{id}"))
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        for invalid in ["a".repeat(63), "a".repeat(65), "g".repeat(64)] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(
+                        Request::get(format!("/v1/investigations/{invalid}"))
+                            .body(Body::empty())
+                            .unwrap()
+                    )
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert_eq!(
+            app.clone()
+                .oneshot(
+                    Request::get(format!("/v1/investigations/{}", "f".repeat(64)))
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         // A duplicate that already reached disk is recoverable even after worker loss.
         memory.case_heartbeat(0).unwrap();
-        let retry = app.oneshot(request(true)).await.unwrap();
+        let retry = app.oneshot(request(true, &input)).await.unwrap();
         assert_eq!(retry.status(), StatusCode::ACCEPTED);
         let retry: serde_json::Value =
             serde_json::from_slice(&retry.into_body().collect().await.unwrap().to_bytes()).unwrap();

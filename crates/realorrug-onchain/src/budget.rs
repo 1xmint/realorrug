@@ -393,6 +393,24 @@ impl std::fmt::Display for Count {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn model_wait_is_accumulated_without_resetting_active_read_allowances() {
+        let mut budget = Budget::new(5, 3, Duration::from_secs(20));
+        budget.take_call().unwrap();
+        budget.take_cu(10).unwrap();
+        let returned = budget.without_read_time(|| {
+            std::thread::sleep(Duration::from_millis(2));
+            42
+        });
+        assert_eq!(returned, 42);
+        let first = budget.model_wait;
+        assert!(first >= Duration::from_millis(2));
+        budget.without_read_time(|| std::thread::sleep(Duration::from_millis(2)));
+        assert!(budget.model_wait >= first + Duration::from_millis(2));
+        assert_eq!(budget.calls_left(), 4);
+        assert_eq!(budget.calls_made(), 1);
+        assert_eq!(budget.cu_spent(), 10);
+    }
 
     #[test]
     fn a_budget_stops_at_its_call_allowance() {

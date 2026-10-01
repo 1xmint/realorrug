@@ -173,6 +173,20 @@ fn solana_account(
         .first()
         .and_then(Option::as_ref)
         .ok_or("account does not exist")?;
+    decoded_account(
+        read,
+        &address,
+        account,
+        accounts.slot.map(|s| s.to_string()),
+    )
+}
+
+fn decoded_account(
+    read: &Read,
+    address: &Address,
+    account: &crate::OwnedAccount,
+    point: Option<String>,
+) -> Result<ReadParts, String> {
     let mut facts = vec![statement(format!(
         "Account {} is owned by {}.",
         address,
@@ -204,11 +218,7 @@ fn solana_account(
             gap = Some("Token-2022 extension controls require separate decoding".into());
         }
     }
-    Ok((
-        accounts.slot.map(|s| s.to_string()),
-        json!({"statements":facts,"related":[]}),
-        gap,
-    ))
+    Ok((point, json!({"statements":facts,"related":[]}), gap))
 }
 
 fn solana_transaction(
@@ -221,6 +231,10 @@ fn solana_transaction(
         .transaction(budget, &read.subject)
         .map_err(|e| e.to_string())?
         .ok_or("transaction not available")?;
+    decoded_transaction(case, &tx)
+}
+
+fn decoded_transaction(case: &CaseKey, tx: &crate::rpc::Transaction) -> Result<ReadParts, String> {
     if !tx.meta_present {
         return Err("transaction outcome metadata missing".into());
     }
@@ -418,4 +432,276 @@ fn solana_pool(
         "no verified PumpSwap pool among five largest-account candidates; other pools may exist"
             .into(),
     )
+}
+
+#[cfg(test)]
+pub(super) mod tests {
+    use super::*;
+    use crate::rpc::{RawInstruction, Transaction};
+    const TOKEN: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+    pub(crate) fn rpc(responses: Vec<(&'static str, Value)>) -> RpcClient {
+        struct Canned(std::sync::Mutex<std::collections::VecDeque<(&'static str, Value)>>);
+        impl crate::rpc::Transport for Canned {
+            fn post(&self, _: &str, body: String) -> Result<String, String> {
+                let (method, value) = self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .ok_or("unexpected RPC call")?;
+                let request: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(request["method"], method);
+                Ok(json!({"jsonrpc":"2.0","id":1,"result":value}).to_string())
+            }
+        }
+        RpcClient::with_transport(
+            "http://test.invalid",
+            Box::new(Canned(std::sync::Mutex::new(responses.into()))),
+        )
+    }
+    pub(crate) fn account(data: &[u8], owner: &str) -> Value {
+        json!({"data":[realorrug_types::b64::encode(data),"base64"],"owner":owner})
+    }
+
+    #[test]
+    fn pump_curve_requires_its_program_and_carries_state_as_raw_quote_units() {
+        let case = CaseKey::new(Network::Solana, &Address::new([1; 32]).to_string()).unwrap();
+        let mut bytes = vec![0; 81];
+        bytes[..8].copy_from_slice(&realorrug_pumpfun::curve::DISCRIMINATOR);
+        bytes[49..81].fill(3);
+        bytes[24..32].copy_from_slice(&700u64.to_le_bytes());
+        bytes[32..40].copy_from_slice(&800u64.to_le_bytes());
+        for owner in [
+            realorrug_pumpfun::pda::PROGRAM_ID.to_string(),
+            Address::new([9; 32]).to_string(),
+        ] {
+            let client = rpc(vec![(
+                "getMultipleAccounts",
+                json!({"context":{"slot":42},"value":[account(&bytes,&owner)]}),
+            )]);
+            let result = solana_curve(&client, &case, &mut Budget::default());
+            if owner != realorrug_pumpfun::pda::PROGRAM_ID.to_string() {
+                assert!(result.unwrap_err().contains("program identity"));
+                continue;
+            }
+            let (point, value, gap) = result.unwrap();
+            assert_eq!(point.as_deref(), Some("42"));
+            assert!(
+                value["statements"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("complete: false")
+            );
+            assert!(
+                value["statements"][1]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("800 raw units; real token reserve: 700")
+            );
+            assert!(gap.unwrap().contains("historical liquidity"));
+        }
+    }
+
+    #[test]
+    fn pool_discovery_requires_the_requested_mint_in_both_candidate_account_and_verified_pool() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../realorrug-pumpfun/tests/fixtures/pumpswap_reserves.json"
+        ))
+        .unwrap();
+        let captured = &fixture["reads"][0];
+        let accounts = captured["accounts"].as_array().unwrap();
+        let find = |role: &str| accounts.iter().find(|a| a["role"] == role).unwrap();
+        let encoded = |row: &Value| json!({"data":[row["data_b64"],"base64"],"owner":row["owner"]});
+        let pool = find("pool");
+        for role in ["base_vault", "quote_vault"] {
+            let vault = find(role);
+            let mint = find(if role == "base_vault" {
+                "base_mint"
+            } else {
+                "quote_mint"
+            })["address"]
+                .as_str()
+                .unwrap()
+                .parse::<Address>()
+                .unwrap();
+            for mismatch in [0, 1, 2] {
+                let requested = if mismatch == 0 {
+                    mint
+                } else {
+                    Address::new([9; 32])
+                };
+                let mut candidate = encoded(vault);
+                if mismatch == 2 {
+                    let mut data =
+                        realorrug_types::b64::decode(vault["data_b64"].as_str().unwrap()).unwrap();
+                    data[..32].copy_from_slice(requested.as_bytes());
+                    candidate = account(&data, vault["owner"].as_str().unwrap());
+                }
+                let mut responses = vec![
+                    (
+                        "getTokenLargestAccounts",
+                        json!({"value":[{"address":vault["address"],"amount":"100"}]}),
+                    ),
+                    (
+                        "getMultipleAccounts",
+                        json!({"context":{"slot":42},"value":[candidate]}),
+                    ),
+                ];
+                if mismatch != 1 {
+                    responses.extend([("getAccountInfo",json!({"context":{"slot":43},"value":encoded(pool)})),("getMultipleAccounts",json!({"context":{"slot":44},"value":[encoded(pool),encoded(find("base_mint")),encoded(find("quote_mint")),encoded(find("base_vault")),encoded(find("quote_vault"))]}))]);
+                }
+                let result = solana_pool(&rpc(responses), &requested, &mut Budget::default());
+                if mismatch != 0 {
+                    assert!(result.unwrap_err().contains("no verified"));
+                    continue;
+                }
+                let (address, value) = result.unwrap();
+                assert_eq!(address.to_string(), captured["pool"].as_str().unwrap());
+                assert_eq!(value["slot"], 44);
+                assert!(
+                    value["statements"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("raw base reserve")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn solana_mints_need_a_supported_owner_and_initialized_authority_layout() {
+        let address = Address::new([1; 32]);
+        let mut read = Read {
+            tool: Tool::Token,
+            subject: address.to_string(),
+            why: "controls".into(),
+        };
+        let mut account = crate::OwnedAccount {
+            data: vec![0; 82],
+            owner: Some(TOKEN.into()),
+        };
+        account.data[45] = 1;
+        let (point, value, gap) =
+            decoded_account(&read, &address, &account, Some("42".into())).unwrap();
+        assert_eq!(point.as_deref(), Some("42"));
+        assert!(
+            value["statements"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Mint authority: revoked. Freeze authority: revoked.")
+        );
+        assert_eq!(gap, None);
+        account.data[..4].copy_from_slice(&1u32.to_le_bytes());
+        account.data[4..36].fill(2);
+        account.data[46..50].copy_from_slice(&1u32.to_le_bytes());
+        account.data[50..82].fill(3);
+        account.owner = Some("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb".into());
+        let (_, value, gap) = decoded_account(&read, &address, &account, None).unwrap();
+        let words = value["statements"][1]["text"].as_str().unwrap();
+        assert!(words.contains(&Address::new([2; 32]).to_string()));
+        assert!(words.contains(&Address::new([3; 32]).to_string()));
+        assert!(gap.unwrap().contains("extension controls"));
+        for owner in [None, Some("11111111111111111111111111111111".into())] {
+            account.owner = owner;
+            assert!(decoded_account(&read, &address, &account, None).is_err());
+        }
+        account.owner = Some(TOKEN.into());
+        account.data[45] = 0;
+        assert!(decoded_account(&read, &address, &account, None).is_err());
+        account.data.truncate(81);
+        assert!(decoded_account(&read, &address, &account, None).is_err());
+        read.tool = Tool::Account;
+        let (_, value, _) = decoded_account(&read, &address, &account, None).unwrap();
+        assert_eq!(value["statements"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn solana_payment_claims_require_success_and_matching_instruction_program_mint_and_shape() {
+        let case = CaseKey::new(Network::Solana, &Address::new([1; 32]).to_string()).unwrap();
+        let mut native = RawInstruction {
+            program: "11111111111111111111111111111111".into(),
+            data: 2u32.to_le_bytes().to_vec(),
+            accounts: vec!["sender".into(), "recipient".into()],
+            top_level: true,
+        };
+        native.data.extend_from_slice(&500u64.to_le_bytes());
+        let mut token = RawInstruction {
+            program: TOKEN.into(),
+            data: vec![12],
+            accounts: vec![
+                "source-account".into(),
+                case.address.clone(),
+                "destination-account".into(),
+                "authority".into(),
+            ],
+            top_level: false,
+        };
+        token.data.extend_from_slice(&900u64.to_le_bytes());
+        token.data.push(6);
+        let mut tx = Transaction {
+            slot: realorrug_types::Slot(42),
+            accounts: vec![],
+            instructions: vec![native.clone(), token.clone()],
+            pre_token_balances: vec![],
+            post_token_balances: vec![],
+            pre_balances: vec![],
+            post_balances: vec![],
+            failed: false,
+            meta_present: true,
+        };
+        let (point, value, gap) = decoded_transaction(&case, &tx).unwrap();
+        assert_eq!(point.as_deref(), Some("42"));
+        assert_eq!(value["transfers"][0]["lamports"], "500");
+        assert_eq!(value["token_transfers"][0]["amount"], "900");
+        assert_eq!(value["related"], json!(["sender", "recipient"]));
+        assert!(gap.unwrap().contains("unchecked/extension"));
+        tx.failed = true;
+        let (_, value, _) = decoded_transaction(&case, &tx).unwrap();
+        assert!(
+            value["statements"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("failed")
+        );
+        assert!(value.get("transfers").is_none());
+        tx.meta_present = false;
+        assert!(
+            decoded_transaction(&case, &tx)
+                .unwrap_err()
+                .contains("metadata")
+        );
+        tx.meta_present = true;
+        tx.failed = false;
+        for mutation in 0..5 {
+            let mut wrong_native = native.clone();
+            let mut wrong_token = token.clone();
+            match mutation {
+                0 => {
+                    wrong_native.program = "wrong-program".into();
+                    wrong_token.program = "wrong-program".into();
+                }
+                1 => {
+                    wrong_native.data.push(0);
+                    wrong_token.data.push(0);
+                }
+                2 => {
+                    wrong_native.data[0] = 3;
+                    wrong_token.data[0] = 3;
+                }
+                3 => {
+                    wrong_native.accounts.truncate(1);
+                    wrong_token.accounts.truncate(3);
+                }
+                _ => {
+                    wrong_native.data.truncate(11);
+                    wrong_token.accounts[1] = Address::new([9; 32]).to_string();
+                }
+            }
+            tx.instructions = vec![wrong_native, wrong_token];
+            let (_, value, _) = decoded_transaction(&case, &tx).unwrap();
+            assert_eq!(value["transfers"], json!([]));
+            assert_eq!(value["token_transfers"], json!([]));
+            assert_eq!(value["statements"], json!([]));
+        }
+    }
 }

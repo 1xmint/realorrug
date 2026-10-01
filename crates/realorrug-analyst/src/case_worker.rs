@@ -421,6 +421,93 @@ mod tests {
         }
     }
     #[test]
+    fn worker_uses_only_nonblank_endpoints_for_the_requested_network() {
+        for chain in [Network::Base, Network::Ethereum] {
+            for endpoint in ["  ", "http://127.0.0.1:1"] {
+                let dir = tempfile::tempdir().unwrap();
+                let paths = Paths::under(dir.path().to_str().unwrap());
+                let memory = Memory::open(Path::new(&paths.memory)).unwrap();
+                let ready = mention(
+                    "endpoint",
+                    &format!("{chain} 0x1111111111111111111111111111111111111111 controls?"),
+                );
+                let mut gate = Gate::new(crate::daemon::limits_from(&config), vec![]);
+                let at = crate::daemon::now();
+                intake(&ready, &memory, &mut gate, at, &config).unwrap();
+                let mut spend = Spend::open(
+                    crate::daemon::budget_from(&config),
+                    crate::spend::Prices::from_vars(&config).unwrap(),
+                    paths.ledger.clone(),
+                    at / 86_400,
+                );
+                let get = |key: &str| {
+                    if key == "REALORRUG_BASE_RPC" || key == "REALORRUG_ETHEREUM_RPC" {
+                        Some(endpoint.into())
+                    } else {
+                        config(key)
+                    }
+                };
+                tick(
+                    &paths,
+                    &RpcClient::new("http://127.0.0.1:1"),
+                    None,
+                    None,
+                    &mut spend,
+                    &Published::default(),
+                    &get,
+                )
+                .unwrap();
+                let Resolved::Ready(request) = resolve(&ready, None) else {
+                    panic!("ready")
+                };
+                let assessment = memory.case_assessment(&request).unwrap().unwrap();
+                assert_eq!(assessment.observations.len(), 2);
+                for observation in assessment.observations {
+                    assert_eq!(
+                        observation.gap.as_deref()
+                            == Some("no endpoint configured for this network"),
+                        endpoint.trim().is_empty()
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn clarification_delivery_charges_the_current_day_once_and_records_its_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path().to_str().unwrap());
+        let memory = Memory::open(Path::new(&paths.memory)).unwrap();
+        let at = 86_400 * 100 + 99;
+        memory
+            .remember_case_clarification(
+                "mention",
+                "Please name the network",
+                "actor",
+                at,
+                capacity_from(&config).unwrap(),
+            )
+            .unwrap();
+        let mut spend = Spend::open(
+            crate::daemon::budget_from(&config),
+            crate::spend::Prices::from_vars(&config).unwrap(),
+            paths.ledger.clone(),
+            100,
+        );
+        let publisher = Published::default();
+        deliver_clarification(&memory, &paths, &mut spend, &publisher, at).unwrap();
+        deliver_clarification(&memory, &paths, &mut spend, &publisher, at + 1).unwrap();
+        assert_eq!(publisher.0.borrow().as_slice(), ["Please name the network"]);
+        let ledger: realorrug_provider::Ledger =
+            serde_json::from_str(&std::fs::read_to_string(&paths.ledger).unwrap()).unwrap();
+        assert_eq!(ledger.day, 100);
+        assert_eq!(ledger.spent, 1);
+        assert!(
+            std::fs::read_to_string(&paths.log)
+                .unwrap()
+                .contains("synthetic-reply-id")
+        );
+    }
+    #[test]
     fn worker_lease_and_recovery_refuse_overlap_or_a_corrupt_spend_ledger() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path().to_str().unwrap());
@@ -606,6 +693,10 @@ mod tests {
         assert!(memory.next_case_delivery().unwrap().is_some());
         deliver(&memory, &paths, &mut spend, &publisher, at, &publish).unwrap();
         assert_eq!(publisher.0.borrow().len(), 1);
+        let ledger: realorrug_provider::Ledger =
+            serde_json::from_str(&std::fs::read_to_string(&paths.ledger).unwrap()).unwrap();
+        assert_eq!(ledger.day, at / 86_400);
+        assert_eq!(ledger.spent, 1);
         assert!(publisher.0.borrow()[0].contains("/library/base/"));
         assert!(publisher.0.borrow()[0].chars().count() <= 280);
         assert!(memory.next_case_delivery().unwrap().is_none());

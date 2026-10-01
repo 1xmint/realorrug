@@ -306,6 +306,129 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn replay_requires_the_exact_tool_subject_source_and_version() {
+        let case =
+            CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111").unwrap();
+        let read = Read {
+            tool: Tool::Token,
+            subject: case.address.clone(),
+            why: "fixture".into(),
+        };
+        let observation = observed(&case, &read, 1, None, json!({"statements":[]}), None);
+        let mut capture = Capture {
+            provenance: "synthetic".into(),
+            at: 1,
+            request: Investigation {
+                id: "replay-boundaries".into(),
+                case: case.clone(),
+                question: "controls?".into(),
+                wallets: vec![],
+                transactions: vec![],
+                window: None,
+                source: None,
+                thread: None,
+            },
+            reads: vec![CapturedRead {
+                read: read.clone(),
+                observation: Some(observation.clone()),
+                error: None,
+            }],
+            plans: vec![],
+        };
+        let replay = |capture: &Capture, case: &CaseKey, read: &Read| {
+            Replay { capture }.read(case, read, None, &mut Budget::default(), 1)
+        };
+        assert_eq!(replay(&capture, &case, &read).unwrap().id, observation.id);
+        let other_chain = CaseKey::new(Network::Ethereum, &case.address).unwrap();
+        assert!(
+            replay(&capture, &other_chain, &read)
+                .unwrap_err()
+                .contains("network/target")
+        );
+        let mut wrong = read.clone();
+        wrong.tool = Tool::Account;
+        assert!(
+            replay(&capture, &case, &wrong)
+                .unwrap_err()
+                .contains("not present")
+        );
+        wrong = read.clone();
+        wrong.subject = "0x2222222222222222222222222222222222222222".into();
+        assert!(
+            replay(&capture, &case, &wrong)
+                .unwrap_err()
+                .contains("not present")
+        );
+        for field in ["source", "version"] {
+            let mut tampered = observation.clone();
+            if field == "source" {
+                tampered.source = "different-reader".into();
+            } else {
+                tampered.version = "future-unsupported-version".into();
+            }
+            capture.reads[0].observation = Some(tampered);
+            assert!(
+                replay(&capture, &case, &read)
+                    .unwrap_err()
+                    .contains("identity/version")
+            );
+        }
+    }
+
+    #[test]
+    fn review_accepts_its_size_boundary_and_store_verify_never_creates_a_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let capture = Capture {
+            provenance: "synthetic boundary fixture".into(),
+            at: 1,
+            request: Investigation {
+                id: "size-boundary".into(),
+                case: CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111")
+                    .unwrap(),
+                question: "controls?".into(),
+                wallets: vec![],
+                transactions: vec![],
+                window: None,
+                source: None,
+                thread: None,
+            },
+            reads: vec![],
+            plans: vec![],
+        };
+        let mut text = serde_json::to_string(&capture).unwrap();
+        text.extend(std::iter::repeat_n(' ', 1_048_576 - text.len()));
+        let file = dir.path().join("capture.json");
+        fs::write(&file, &text).unwrap();
+        let memory = dir.path().join("memory.sqlite3");
+        let out = dir.path().join("review");
+        let args = vec![
+            file.to_string_lossy().into_owned(),
+            "--memory".into(),
+            memory.to_string_lossy().into_owned(),
+            "--out".into(),
+            out.to_string_lossy().into_owned(),
+        ];
+        review(&args).unwrap();
+        text.push(' ');
+        fs::write(&file, text).unwrap();
+        assert!(review(&args).unwrap_err().contains("exceeds review bound"));
+        let absent = dir.path().join("absent.sqlite3");
+        assert!(
+            store(&[
+                "verify".into(),
+                "--memory".into(),
+                absent.to_string_lossy().into_owned()
+            ])
+            .is_err()
+        );
+        assert!(!absent.exists());
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one capture-to-correction lifecycle verifies custody and refuses replay tampering"
+    )]
     fn offline_review_retains_provenance_and_refuses_tampering_and_duplicate_work() {
         let dir = tempfile::tempdir().unwrap();
         let request = Investigation {
@@ -393,5 +516,33 @@ mod tests {
         let mut traversal = capture.request.clone();
         traversal.id = "../escape".into();
         assert!(traversal.validate().is_err());
+        store(&[
+            "correct".into(),
+            "--memory".into(),
+            memory_path.to_string_lossy().into_owned(),
+            "--chain".into(),
+            "ethereum".into(),
+            "--address".into(),
+            capture.request.case.address.clone(),
+            "--observation".into(),
+            assessment.observations[0].id.clone(),
+            "--reason".into(),
+            "Synthetic observation withdrawn after review".into(),
+        ])
+        .unwrap();
+        let events = memory
+            .case_history(&capture.request.case, u64::MAX, 100)
+            .unwrap();
+        assert_eq!(events[0].kind, "correction");
+        assert_eq!(
+            events[0].payload["observation_id"],
+            assessment.observations[0].id
+        );
+        store(&[
+            "verify".into(),
+            "--memory".into(),
+            memory_path.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
     }
 }

@@ -179,7 +179,7 @@ pub fn investigate(
         at,
         &started,
     );
-    for _ in (0..2).take_while(|_| started.elapsed() < Duration::from_secs(135)) {
+    for _ in (0..2).take_while(|_| before_deadline(started.elapsed(), 135)) {
         let Some(model) = model.as_deref_mut() else {
             break;
         };
@@ -264,14 +264,17 @@ fn initial_reads(request: &Investigation, memory_leads: &[String]) -> Vec<Read> 
     {
         initial.push(Read{tool:Tool::Account,subject:lead.clone(),why:"re-read a prior case relationship as an investigative lead; do not assume old state or common control".into()});
     }
-    if initial.len() < 6 {
-        initial.push(Read {
-            tool: Tool::Liquidity,
-            subject: request.case.address.clone(),
-            why: "inspect supported liquidity without treating graduation as a drain".into(),
-        });
-    }
+    initial.push(Read {
+        tool: Tool::Liquidity,
+        subject: request.case.address.clone(),
+        why: "inspect supported liquidity without treating graduation as a drain".into(),
+    });
+    initial.truncate(6);
     initial
+}
+
+fn before_deadline(elapsed: Duration, seconds: u64) -> bool {
+    elapsed < Duration::from_secs(seconds)
 }
 
 fn summarize(
@@ -391,7 +394,7 @@ fn execute_reads(
     started: &Instant,
 ) {
     for read in reads.into_iter().take(6) {
-        if started.elapsed() >= Duration::from_secs(180) {
+        if !before_deadline(started.elapsed(), 180) {
             decisions.push("whole-request deadline exhausted".into());
             break;
         }
@@ -466,7 +469,7 @@ fn select_statements(
             .map(|o| o.id.clone())
             .collect()
     };
-    if started.elapsed() >= Duration::from_secs(135) {
+    if !before_deadline(started.elapsed(), 135) {
         return fallback();
     }
     let Some(model) = model else {
@@ -516,6 +519,134 @@ pub fn mechanisms() -> Value {
 mod tests {
     use super::*;
     use realorrug_onchain::cases::{CaseKey, Network};
+    #[test]
+    fn deadlines_and_initial_reads_have_explicit_boundaries_and_prioritize_supplied_claims() {
+        for seconds in [135, 180] {
+            let boundary = Duration::from_secs(seconds);
+            assert!(before_deadline(
+                boundary.checked_sub(Duration::from_nanos(1)).unwrap(),
+                seconds
+            ));
+            assert!(!before_deadline(boundary, seconds));
+            assert!(!before_deadline(
+                boundary + Duration::from_nanos(1),
+                seconds
+            ));
+        }
+        let mut request = Investigation {
+            id: "initial".into(),
+            case: CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111")
+                .unwrap(),
+            question: "fees?".into(),
+            wallets: vec![],
+            transactions: vec![],
+            window: None,
+            source: None,
+            thread: None,
+        };
+        let initial = initial_reads(&request, &[]);
+        assert_eq!(
+            initial.iter().map(|r| r.tool).collect::<Vec<_>>(),
+            [Tool::Fees, Tool::Token, Tool::Liquidity]
+        );
+        request.transactions = (1..=5).map(|i| format!("0x{i:064x}")).collect();
+        request.wallets = vec!["0x2222222222222222222222222222222222222222".into()];
+        let initial = initial_reads(&request, &[]);
+        assert_eq!(initial.len(), 6);
+        assert_eq!(initial[3].subject, request.transactions[3]);
+        assert_eq!(initial[4].tool, Tool::Fees);
+        assert_eq!(initial[5].tool, Tool::Token);
+    }
+
+    #[test]
+    fn planner_reads_stop_at_two_hops_and_refuse_oversized_reasons_without_spending() {
+        struct Graph;
+        impl Reader for Graph {
+            fn read(
+                &mut self,
+                case: &CaseKey,
+                read: &Read,
+                _: Option<&realorrug_onchain::cases::TimeWindow>,
+                budget: &mut Budget,
+                at: u64,
+            ) -> Result<Observation, String> {
+                budget.take_call().map_err(|e| format!("{e:?}"))?;
+                let tail = u8::from_str_radix(&read.subject[40..], 16).unwrap();
+                Ok(observed(
+                    case,
+                    read,
+                    at,
+                    None,
+                    json!({"related":[format!("0x{:040x}",tail+1)],"statements":[]}),
+                    None,
+                ))
+            }
+        }
+        let request = Investigation {
+            id: "depth".into(),
+            case: CaseKey::new(Network::Base, &format!("0x{:040x}", 1)).unwrap(),
+            question: "routes?".into(),
+            wallets: vec![],
+            transactions: vec![],
+            window: None,
+            source: None,
+            thread: None,
+        };
+        let mut addresses = HashMap::from([(request.case.address.clone(), 0)]);
+        let mut transactions = HashSet::new();
+        let mut done = HashSet::new();
+        let mut observations = vec![];
+        let mut decisions = vec![];
+        let mut budget = Budget::default();
+        let started = Instant::now();
+        let reads = (1..=4)
+            .map(|i| Read {
+                tool: Tool::Account,
+                subject: format!("0x{i:040x}"),
+                why: "r".repeat(512),
+            })
+            .collect();
+        execute_reads(
+            &request,
+            &mut Graph,
+            reads,
+            &mut budget,
+            &mut observations,
+            &mut decisions,
+            &mut done,
+            &mut addresses,
+            &mut transactions,
+            1,
+            &started,
+        );
+        assert_eq!(budget.calls_made(), 3);
+        assert_eq!(observations.len(), 3);
+        assert_eq!(addresses.get(&format!("0x{:040x}", 2)), Some(&1));
+        assert_eq!(addresses.get(&format!("0x{:040x}", 3)), Some(&2));
+        assert!(!addresses.contains_key(&format!("0x{:040x}", 4)));
+        let wallet = format!("0x{:040x}", 5);
+        addresses.insert(wallet.clone(), 0);
+        let read = Read {
+            tool: Tool::History,
+            subject: wallet,
+            why: "r".repeat(513),
+        };
+        execute_reads(
+            &request,
+            &mut Graph,
+            vec![read],
+            &mut budget,
+            &mut observations,
+            &mut decisions,
+            &mut done,
+            &mut addresses,
+            &mut transactions,
+            1,
+            &started,
+        );
+        assert_eq!(budget.calls_made(), 3);
+        assert!(decisions.last().unwrap().contains("oversized"));
+    }
     struct FakeReader;
     impl Reader for FakeReader {
         fn read(
