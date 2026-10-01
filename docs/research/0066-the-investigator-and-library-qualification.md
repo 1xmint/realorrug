@@ -133,7 +133,13 @@ checks. Its four mutation shards tested 684 mutations with zero survivors
 on legacy assertion style. Those updates and additional sites were checked
 locally with CI's
 Rust 1.99 Clippy, scoped to individual crates, without changing runtime behavior
-or the default local toolchain. Latest commit-specific full check results are
+or the default local toolchain. The fifth run passed all ordinary checks,
+including strict Clippy, but shard 2 hit the 30-minute runner limit. Its retry
+reported all 171 mutations tested (112 caught, 59 unable to compile), then was
+cancelled at the deadline; that cancelled check is not acceptance. CI now splits
+the same full set over eight runners, retaining the 30-minute limit and all
+survivor/aggregate gates. No mutation is sampled or newly excluded.
+Latest commit-specific full check results are
 recorded on [PR 210](https://github.com/1xmint/realorrug/pull/210).
 Full Rust suites and mutation checks belong to CI. Passing engineering checks
 does not close the live protocol or owner reply-quality qualification gates.
