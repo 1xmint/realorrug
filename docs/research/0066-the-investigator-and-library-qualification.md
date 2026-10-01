@@ -99,7 +99,8 @@ malformed ABI/fee shares, instruction injection, invented leads, stale memory,
 unknown costs, accounting failure, missing configuration, authentication/CSRF,
 lost-response recovery, offline provenance/tamper refusal and unsafe filenames.
 Scoped all-target Clippy passes with warnings denied. The site passes its
-90 tests, type check and production build; browser review checks responsive
+129 tests after reconciling the forecasting pages from main, type check and
+production build; browser review checks responsive
 Library layout. Full Rust suites and mutation checks belong to CI.
 
 Free browsing requires configured existing case storage, not a session. New

@@ -4,12 +4,16 @@
 import { Link, Redirect, Route, Switch, useLocation } from "wouter";
 
 import { About } from "./About";
+import { Board } from "./Board";
 import { Contact } from "./Contact";
+import { GamePrivacy } from "./GamePrivacy";
 import { account, handleHref } from "./honesty";
 import { History } from "./History";
 import { Home } from "./Home";
 import { Library, TokenDossier } from "./Library";
 import { HowItWorks } from "./HowItWorks";
+import { MyCalls } from "./MyCalls";
+import { Play, Round } from "./Play";
 import { Check } from "./Check";
 import { Privacy } from "./Privacy";
 import { footer as footerRoutes, MOVED, nav } from "./routes";
@@ -34,7 +38,7 @@ function Header() {
               <Link
                 key={r.path}
                 href={r.path}
-                className={`rounded px-2 py-1.5 whitespace-nowrap transition-colors sm:px-3 ${
+                className={`rounded px-1.5 py-1.5 whitespace-nowrap transition-colors sm:px-3 ${
                   location === r.path
                     ? "bg-[var(--color-raised)] text-[var(--color-text)]"
                     : "text-[var(--color-dim)] hover:text-[var(--color-text)]"
@@ -119,6 +123,13 @@ export function App() {
           <Route path="/how-it-works" component={HowItWorks} />
           <Route path="/tokenomics" component={Token} />
           <Route path="/about" component={About} />
+          {/* The forecasting game. Every page of it says "not running" when the
+              build has no API base and draws nothing else (design 0032 §13). */}
+          <Route path="/play" component={Play} />
+          <Route path="/play/:round" component={Round} />
+          <Route path="/board" component={Board} />
+          <Route path="/my-calls/:round?" component={MyCalls} />
+          <Route path="/game-privacy" component={GamePrivacy} />
           {/* Not in ROUTES on purpose: a check is reached from the paste box or a
               shared link, never from the header, and ROUTES is the header and
               the footer. routes.test.tsx holds that table to exactly those. */}

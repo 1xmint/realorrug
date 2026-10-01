@@ -39,13 +39,13 @@ export function Privacy() {
         <Card className="mb-10 border-[var(--color-edge)]">
           <p className="text-[var(--color-text)]">
             <strong>Library browsing is public; contributions use X sign-in.</strong> The API receives searches, token addresses and submitted questions. Investigation content becomes public. The code describing these flows is{" "}
-            <Out href={SOURCE}>public</Out>.
+            <Out href={SOURCE}>public</Out>. The forecasting game also uses X sign-in; its account records and deletion controls are described on <Here href="/game-privacy">the game's privacy page</Here>.
           </p>
         </Card>
 
         <Block title="Session cookies and no advertising analytics">
           <p>
-            X sign-in uses secure session and short-lived OAuth cookies. The server stores an X identity and a hash of the session token; the browser uses that session for authenticated submissions. Library forms keep their drafts in memory. The site has no advertising pixel, tag manager or session recorder.
+            X sign-in uses secure session and short-lived OAuth cookies. The server stores an X identity and a hash of the session token; the browser uses that session for authenticated submissions and the forecasting game. Library forms keep their drafts in memory. The site has no advertising pixel, tag manager or session recorder. Game account controls are on <Here href="/game-privacy">its privacy page</Here>.
           </p>
           <p>
             The typeface is served from this site's own address rather than from

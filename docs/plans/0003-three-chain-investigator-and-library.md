@@ -30,7 +30,8 @@ Ethereum observations produce offline review dossiers in its capture directory;
 the reviewed database snapshot restores with a matching checkpoint. Tests cover
 restart/idempotency, corrections and relationship reuse, reorg/network mismatch,
 injection/tamper refusal, accounting failure, authenticated CSRF intake and
-duplicate recovery. The site passes 90 tests, type checking and build. Browser
+duplicate recovery. After reconciling the forecasting pages from main, the site
+passes 129 tests, type checking and build. Browser
 review verified the populated Library and mobile dossier wrapping. Scoped
 all-target Clippy passes; full suites/mutation checks run in CI.
 
