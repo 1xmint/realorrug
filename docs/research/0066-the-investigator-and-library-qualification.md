@@ -126,8 +126,17 @@ Queued publication also has a correction-before-delivery regression. Earlier
 revisions added boundary/refusal tests for model time,
 two-hop leads, replay custody, protocol quotes/receipts, Solana transfer/pool
 identity, EVM transactions and Library intake. No mutation gate is disabled or
-excluded to obtain a pass. **CI acceptance remains open.** Full Rust suites
-and mutation checks belong to CI.
+excluded to obtain a pass. **Those three runs did not establish CI acceptance.**
+The fourth run passed 2378 Rust tests, all 129 site tests and ordinary build
+checks. Its four mutation shards tested 684 mutations with zero survivors
+(473 caught, 211 unable to compile), with no new exclusions. Lint still failed
+on legacy assertion style. Those updates and additional sites were checked
+locally with CI's
+Rust 1.99 Clippy, scoped to individual crates, without changing runtime behavior
+or the default local toolchain. Latest commit-specific full check results are
+recorded on [PR 210](https://github.com/1xmint/realorrug/pull/210).
+Full Rust suites and mutation checks belong to CI. Passing engineering checks
+does not close the live protocol or owner reply-quality qualification gates.
 
 Free browsing requires configured existing case storage, not a session. New
 website work additionally needs authenticated identity/CSRF, shared daily

@@ -381,7 +381,7 @@ mod tests {
     /// An empty window has no themes and no division by zero.
     #[test]
     fn an_empty_window_has_no_themes() {
-        assert!(themes(&[], 2).is_empty());
+        assert_eq!(themes(&[], 2), [] as [crate::narrative::Theme; 0]);
         assert_eq!(share_bps(1, 0), 0);
     }
 
@@ -415,6 +415,6 @@ mod tests {
             text("0x1", Some(&long), None),
             text("0x2", Some(&long), None),
         ];
-        assert!(themes(&texts, 2).is_empty());
+        assert_eq!(themes(&texts, 2), [] as [crate::narrative::Theme; 0]);
     }
 }

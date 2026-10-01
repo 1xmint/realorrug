@@ -916,8 +916,8 @@ mod tests {
         }
 
         let ranking = score_calls(&calls, 30);
-        assert!(ranking.above_line.is_empty());
-        assert!(ranking.within_luck.is_empty());
+        assert_eq!(ranking.above_line, [] as [crate::calls::PlayerRecord; 0]);
+        assert_eq!(ranking.within_luck, [] as [crate::calls::PlayerRecord; 0]);
         assert_eq!(
             ranking.excluded,
             vec![("mystery".to_string(), Excluded::AccountAgeUnknown)]

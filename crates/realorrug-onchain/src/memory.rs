@@ -2715,10 +2715,9 @@ mod tests {
         assert!(matches!(err, Error::Ledger { .. }), "{err}");
         // Atomic: the mint that preceded the bad debit was not kept either,
         // and no checkpoint claims the range is covered.
-        assert!(
-            mem.token_balances(CHAIN, TOKEN)
-                .expect("balances")
-                .is_empty()
+        assert_eq!(
+            mem.token_balances(CHAIN, TOKEN).expect("balances"),
+            [] as [(std::string::String, u128); 0]
         );
         assert_eq!(
             mem.token_checkpoint(CHAIN, TOKEN).expect("checkpoint"),
@@ -2815,7 +2814,10 @@ mod tests {
             ..an_outcome(OutcomeLabel::Alive, 2_000)
         })
         .expect("record");
-        assert!(mem.labelled_verdicts(CHAIN).expect("pairs").is_empty());
+        assert_eq!(
+            mem.labelled_verdicts(CHAIN).expect("pairs"),
+            [] as [(crate::memory::VerdictRecord, crate::memory::Outcome); 0]
+        );
     }
 
     /// A label observed later supersedes the earlier one, and every verdict
@@ -2960,7 +2962,10 @@ mod tests {
         assert_eq!(back, first.to_vec());
         assert!(back[0].material && !back[1].material);
         // Scoped to the token asked about.
-        assert!(mem.funding_edges(CHAIN, "other").expect("read").is_empty());
+        assert_eq!(
+            mem.funding_edges(CHAIN, "other").expect("read"),
+            [] as [crate::memory::FundingEdge; 0]
+        );
     }
 
     #[test]
@@ -2988,7 +2993,10 @@ mod tests {
         let back = mem.creator_trades(CHAIN, TOKEN).expect("read");
         assert_eq!(back, first.to_vec());
         // Scoped to the token asked about.
-        assert!(mem.creator_trades(CHAIN, "other").expect("read").is_empty());
+        assert_eq!(
+            mem.creator_trades(CHAIN, "other").expect("read"),
+            [] as [crate::memory::CreatorTradeEvent; 0]
+        );
     }
 
     #[test]
@@ -3025,10 +3033,9 @@ mod tests {
         // A wallet never recorded gets an empty list, not an error --
         // "never bought" and "unread" both settle to nothing here, and the
         // list length is the count S8's recurrence factor needs.
-        assert!(
-            mem.launches_bought_by(CHAIN, "nobody")
-                .expect("read")
-                .is_empty()
+        assert_eq!(
+            mem.launches_bought_by(CHAIN, "nobody").expect("read"),
+            [] as [crate::memory::BuyerLaunch; 0]
         );
     }
 
@@ -3394,10 +3401,10 @@ mod tests {
         // Labelled, so done.
         mem.record_outcome(&an_outcome(OutcomeLabel::Rug, 6_000))
             .expect("record");
-        assert!(
+        assert_eq!(
             mem.tokens_awaiting_outcome(CHAIN, secs(5_000), 10)
-                .expect("read")
-                .is_empty()
+                .expect("read"),
+            [] as [std::string::String; 0]
         );
     }
 

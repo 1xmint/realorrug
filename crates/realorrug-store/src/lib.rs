@@ -1620,11 +1620,9 @@ mod tests {
             !format!("{shown:?}").contains(ann.as_str()),
             "the public list names its player"
         );
-        assert!(
-            store
-                .closed_forecasts("r2", 5_000)
-                .expect("read")
-                .is_empty()
+        assert_eq!(
+            store.closed_forecasts("r2", 5_000).expect("read"),
+            [] as [crate::row::ClosedForecast; 0]
         );
     }
 
@@ -1640,7 +1638,10 @@ mod tests {
         store
             .record_outcome("r1", "solana", "coinA", Outcome::Rugged, "v1", None, 1_600)
             .expect("correction");
-        assert!(store.settled_forecasts(999).expect("read").is_empty());
+        assert_eq!(
+            store.settled_forecasts(999).expect("read"),
+            [] as [crate::row::SettledForecast; 0]
+        );
         let settled = store.settled_forecasts(2_000).expect("read");
         assert_eq!(settled.len(), 1, "coinB has no outcome and must not appear");
         assert_eq!(settled[0].token, "coinA");
