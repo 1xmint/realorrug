@@ -16,16 +16,15 @@ use realorrug_onchain::{
 };
 use std::path::Path;
 
-fn env(key: &str) -> Option<String> {
-    std::env::var(key).ok()
-}
-
 /// OS lock releases after a crash; overlapping workers must not share a meter.
 ///
 /// # Errors
 /// Another worker holds the file, or local storage is unavailable.
-pub(crate) fn lease(paths: &Paths) -> Result<Option<std::fs::File>, String> {
-    if capacity_from(&env).is_none() {
+pub(crate) fn lease(
+    paths: &Paths,
+    get: &impl Fn(&str) -> Option<String>,
+) -> Result<Option<std::fs::File>, String> {
+    if capacity_from(get).is_none() {
         return Ok(None);
     }
     // Legacy startup tolerates a corrupt ledger. The new worker must not gain
@@ -54,8 +53,8 @@ pub(crate) fn lease(paths: &Paths) -> Result<Option<std::fs::File>, String> {
 ///
 /// # Errors
 /// Invalid or unsupported input, exhausted bounds, unavailable data, or storage failure.
-pub fn initialize(paths: &Paths) -> Result<(), String> {
-    if capacity_from(&env).is_none() {
+pub fn initialize(paths: &Paths, get: &impl Fn(&str) -> Option<String>) -> Result<(), String> {
+    if capacity_from(get).is_none() {
         return Ok(());
     }
     let memory = Memory::open(Path::new(&paths.memory)).map_err(|e| e.to_string())?;
@@ -75,8 +74,9 @@ pub fn intake(
     memory: &Memory,
     gate: &mut Gate,
     at: u64,
+    get: &impl Fn(&str) -> Option<String>,
 ) -> Result<bool, String> {
-    let Some(capacity) = capacity_from(&env) else {
+    let Some(capacity) = capacity_from(get) else {
         return Ok(false);
     };
     let standing = mention
@@ -170,18 +170,19 @@ pub fn tick(
     provider: Option<&dyn Provider>,
     spend: &mut Spend,
     publisher: &dyn Publisher,
+    get: &impl Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
-    if capacity_from(&env).is_none() {
+    if capacity_from(get).is_none() {
         return Ok(());
     }
     let memory = Memory::open(Path::new(&paths.memory)).map_err(|e| e.to_string())?;
     let at = crate::daemon::now();
     memory.case_heartbeat(at).map_err(|e| e.to_string())?;
     if let Some(job) = memory.next_case_job(at).map_err(|e| e.to_string())? {
-        let base = env("REALORRUG_BASE_RPC")
+        let base = get("REALORRUG_BASE_RPC")
             .filter(|v| !v.trim().is_empty())
             .map(realorrug_robinhood::Rpc::new);
-        let ethereum = env("REALORRUG_ETHEREUM_RPC")
+        let ethereum = get("REALORRUG_ETHEREUM_RPC")
             .filter(|v| !v.trim().is_empty())
             .map(realorrug_robinhood::Rpc::new);
         let mut reader = LiveReader {
@@ -217,7 +218,7 @@ pub fn tick(
             .finish_case(&job.request, &result, crate::daemon::now())
             .map_err(|e| e.to_string())?;
     }
-    deliver(&memory, paths, spend, publisher, at)
+    deliver(&memory, paths, spend, publisher, at, get)
 }
 
 fn deliver(
@@ -226,8 +227,9 @@ fn deliver(
     spend: &mut Spend,
     publisher: &dyn Publisher,
     at: u64,
+    get: &impl Fn(&str) -> Option<String>,
 ) -> Result<(), String> {
-    if env("REALORRUG_INVESTIGATOR_PUBLISH").as_deref() != Some("1")
+    if get("REALORRUG_INVESTIGATOR_PUBLISH").as_deref() != Some("1")
         || publisher.name() == "dry-run"
     {
         return Ok(());
@@ -244,7 +246,7 @@ fn deliver(
         .case_assessment(&job.request)
         .map_err(|e| e.to_string())?
         .ok_or("delivery has no assessment")?;
-    let origin = env("REALORRUG_PUBLIC_ORIGIN").ok_or("public dossier origin is missing")?;
+    let origin = get("REALORRUG_PUBLIC_ORIGIN").ok_or("public dossier origin is missing")?;
     if !valid_origin(&origin) {
         return Err(
             "public dossier origin must be an HTTPS origin without path, credentials or query"
@@ -372,6 +374,286 @@ fn valid_origin(origin: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    fn config(key: &str) -> Option<String> {
+        Some(
+            match key {
+                "REALORRUG_ANALYST_GLOBAL_DAILY" => "10",
+                "REALORRUG_ANALYST_PER_SUMMONER_DAILY" => "2",
+                "REALORRUG_ANALYST_PER_CALL_USD" => "0.10",
+                "REALORRUG_MONTHLY_USD" => "90",
+                "REALORRUG_FIXED_MONTHLY_USD" => "60",
+                "REALORRUG_INVESTIGATOR"
+                | "REALORRUG_ANALYST_DAILY_USD"
+                | "REALORRUG_X_PRICE_MENTION_READ"
+                | "REALORRUG_X_PRICE_POST_READ"
+                | "REALORRUG_X_PRICE_REPLY"
+                | "REALORRUG_X_PRICE_POST"
+                | "REALORRUG_X_PRICE_USER_READ"
+                | "REALORRUG_MODEL_PER_CALL_USD_MICRO" => "1",
+                _ => return None,
+            }
+            .into(),
+        )
+    }
+    fn mention(id: &str, text: &str) -> Mention {
+        Mention {
+            id: id.into(),
+            author: "user".into(),
+            text: text.into(),
+            parent: None,
+            conversation: None,
+        }
+    }
+    #[derive(Debug, Default)]
+    struct Published(RefCell<Vec<String>>);
+    impl Publisher for Published {
+        fn name(&self) -> &'static str {
+            "synthetic publisher"
+        }
+        fn reply(&self, _: &str, text: &str) -> Result<String, crate::publish::Undeliverable> {
+            self.0.borrow_mut().push(text.into());
+            Ok("synthetic-reply-id".into())
+        }
+        fn post(&self, _: &str) -> Result<String, crate::publish::Undeliverable> {
+            panic!("case worker must never post to the timeline")
+        }
+    }
+    #[test]
+    fn worker_lease_and_recovery_refuse_overlap_or_a_corrupt_spend_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path().to_str().unwrap());
+        assert!(lease(&paths, &|_| None).unwrap().is_none());
+        let held = lease(&paths, &config).unwrap().unwrap();
+        assert!(lease(&paths, &config).is_err());
+        drop(held);
+        let held = lease(&paths, &config).unwrap().unwrap();
+        drop(held);
+        std::fs::write(&paths.ledger, b"not a ledger").unwrap();
+        assert!(lease(&paths, &config).unwrap_err().contains("invalid"));
+        let memory = Memory::open(Path::new(&paths.memory)).unwrap();
+        let Resolved::Ready(request) = resolve(
+            &mention(
+                "one",
+                "base 0x1111111111111111111111111111111111111111 fees",
+            ),
+            None,
+        ) else {
+            panic!("valid request")
+        };
+        memory
+            .enqueue_case(&request, "actor", 1, capacity_from(&config).unwrap())
+            .unwrap();
+        memory.next_case_job(2).unwrap();
+        initialize(&paths, &|_| None).unwrap();
+        assert_eq!(
+            memory.case_job(&request.id).unwrap().unwrap().status,
+            "running"
+        );
+        initialize(&paths, &config).unwrap();
+        assert_eq!(
+            memory.case_job(&request.id).unwrap().unwrap().status,
+            "failed"
+        );
+        memory.verify_cases().unwrap();
+    }
+    #[test]
+    fn mention_intake_preserves_claims_and_keeps_ambiguity_out_of_cases() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Memory::open(&dir.path().join("cases.sqlite3")).unwrap();
+        let mut gate = Gate::new(crate::daemon::limits_from(&config), vec!["self".into()]);
+        let ready = mention(
+            "one",
+            "base 0x1111111111111111111111111111111111111111 where did fees go?",
+        );
+        assert!(!intake(&ready, &memory, &mut gate, 1, &|_| None).unwrap());
+        assert!(
+            memory
+                .library_cases(None, "", u64::MAX, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !intake(
+                &mention("normal", "ordinary conversation"),
+                &memory,
+                &mut gate,
+                1,
+                &config
+            )
+            .unwrap()
+        );
+        assert!(
+            !intake(
+                &mention(
+                    "legacy",
+                    "robinhood 0x1111111111111111111111111111111111111111"
+                ),
+                &memory,
+                &mut gate,
+                1,
+                &config
+            )
+            .unwrap()
+        );
+        let mut ignored = ready.clone();
+        ignored.author = "self".into();
+        assert!(intake(&ignored, &memory, &mut gate, 1, &config).unwrap());
+        assert!(
+            memory
+                .library_cases(None, "", u64::MAX, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(intake(&ready, &memory, &mut gate, 2, &config).unwrap());
+        assert!(intake(&ready, &memory, &mut gate, 3, &config).unwrap());
+        assert_eq!(
+            memory.library_cases(None, "", u64::MAX, 10).unwrap().len(),
+            1
+        );
+        let job = memory.next_case_job(4).unwrap().unwrap();
+        assert_eq!(job.request.question, ready.text);
+        assert_eq!(job.request.case.chain, Network::Base);
+        assert!(memory.next_case_delivery().unwrap().is_none());
+        assert!(
+            intake(
+                &mention("ambiguous", "0x2222222222222222222222222222222222222222"),
+                &memory,
+                &mut gate,
+                5,
+                &config
+            )
+            .unwrap()
+        );
+        assert!(
+            memory
+                .next_case_clarification()
+                .unwrap()
+                .unwrap()
+                .1
+                .contains("network")
+        );
+        assert_eq!(
+            memory.library_cases(None, "", u64::MAX, 10).unwrap().len(),
+            1
+        );
+    }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one durable result-to-publication lifecycle covers gates, recovery and statement selection"
+    )]
+    fn worker_results_precede_publication_and_each_delivery_is_attempted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path().to_str().unwrap());
+        let memory = Memory::open(Path::new(&paths.memory)).unwrap();
+        let mut gate = Gate::new(crate::daemon::limits_from(&config), vec![]);
+        let at = crate::daemon::now();
+        let ready = mention(
+            "one",
+            "base 0x1111111111111111111111111111111111111111 fees",
+        );
+        intake(&ready, &memory, &mut gate, at, &config).unwrap();
+        let Resolved::Ready(request) = resolve(&ready, None) else {
+            panic!("valid request")
+        };
+        let mut spend = Spend::open(
+            crate::daemon::budget_from(&config),
+            crate::spend::Prices::from_vars(&config).unwrap(),
+            paths.ledger.clone(),
+            at / 86_400,
+        );
+        let publisher = Published::default();
+        let rpc = RpcClient::new("http://127.0.0.1:1");
+        tick(&paths, &rpc, None, None, &mut spend, &publisher, &|_| None).unwrap();
+        assert_eq!(
+            memory.case_job(&request.id).unwrap().unwrap().status,
+            "pending"
+        );
+        tick(&paths, &rpc, None, None, &mut spend, &publisher, &config).unwrap();
+        assert_eq!(
+            memory.case_job(&request.id).unwrap().unwrap().status,
+            "partial"
+        );
+        assert!(publisher.0.borrow().is_empty());
+        let publish = |key: &str| match key {
+            "REALORRUG_INVESTIGATOR_PUBLISH" => Some("1".into()),
+            "REALORRUG_PUBLIC_ORIGIN" => Some("https://realorrug.example".into()),
+            _ => config(key),
+        };
+        deliver(
+            &memory,
+            &paths,
+            &mut spend,
+            &crate::publish::DryRun,
+            at,
+            &publish,
+        )
+        .unwrap();
+        assert!(memory.next_case_delivery().unwrap().is_some());
+        assert!(
+            deliver(&memory, &paths, &mut spend, &publisher, at, &|key| if key
+                == "REALORRUG_PUBLIC_ORIGIN"
+            {
+                None
+            } else {
+                publish(key)
+            })
+            .unwrap_err()
+            .contains("origin")
+        );
+        assert!(memory.next_case_delivery().unwrap().is_some());
+        deliver(&memory, &paths, &mut spend, &publisher, at, &publish).unwrap();
+        assert_eq!(publisher.0.borrow().len(), 1);
+        assert!(publisher.0.borrow()[0].contains("/library/base/"));
+        assert!(publisher.0.borrow()[0].chars().count() <= 280);
+        assert!(memory.next_case_delivery().unwrap().is_none());
+        deliver(&memory, &paths, &mut spend, &publisher, at, &publish).unwrap();
+        assert_eq!(publisher.0.borrow().len(), 1);
+        let records = std::fs::read_to_string(&paths.log).unwrap();
+        assert!(records.contains("synthetic-reply-id"));
+        assert!(records.contains("\"mint\":null"));
+        let second = mention(
+            "two",
+            "base 0x1111111111111111111111111111111111111111 follow-up fees",
+        );
+        intake(&second, &memory, &mut gate, at, &config).unwrap();
+        let next = memory.next_case_job(at).unwrap().unwrap();
+        let mut result = memory.case_assessment(&request).unwrap().unwrap();
+        result.request_id = next.request.id.clone();
+        result.findings = vec![
+            realorrug_onchain::cases::Finding {
+                kind: "synthetic".into(),
+                text: "UNVERIFIED ALLEGATION".into(),
+                evidence: vec![],
+                counterevidence: vec![],
+                status: "unresolved".into(),
+            },
+            realorrug_onchain::cases::Finding {
+                kind: "synthetic".into(),
+                text: "Long measured clause. ".repeat(30),
+                evidence: vec![],
+                counterevidence: vec![],
+                status: "measured".into(),
+            },
+            realorrug_onchain::cases::Finding {
+                kind: "synthetic".into(),
+                text: "Reader measured a configured route.".into(),
+                evidence: vec![],
+                counterevidence: vec![],
+                status: "measured".into(),
+            },
+        ];
+        memory.finish_case(&next.request, &result, at).unwrap();
+        deliver(&memory, &paths, &mut spend, &publisher, at, &publish).unwrap();
+        let posted = publisher.0.borrow();
+        assert_eq!(posted.len(), 2);
+        assert!(posted[1].contains("Reader measured a configured route."));
+        assert!(!posted[1].contains("UNVERIFIED"));
+        assert!(!posted[1].contains("Long measured clause"));
+        assert!(posted[1].chars().count() <= 280);
+    }
     #[test]
     fn public_origin_cannot_smuggle_a_path_credentials_or_invalid_port() {
         assert!(super::valid_origin("https://realorrug.example"));

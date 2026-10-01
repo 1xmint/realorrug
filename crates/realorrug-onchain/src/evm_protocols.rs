@@ -52,7 +52,9 @@ fn words(hex: &str) -> Result<Vec<String>, String> {
     }
     Ok(digits
         .as_bytes()
-        .chunks_exact(64)
+        .as_chunks::<64>()
+        .0
+        .iter()
         .map(|part| format!("0x{}", String::from_utf8_lossy(part)))
         .collect())
 }
@@ -144,10 +146,10 @@ fn clanker(
     let mut facts = Vec::new();
     let mut related = vec![locker.clone(), hook];
     for share in value["shares"].as_array().ok_or("shares missing")? {
-        facts.push(statement(format!("Clanker v4 configured LP-reward share: {} basis points out of 10000 to {}; reward administrator {}.",share["bps"],share["recipient"].as_str().unwrap_or(""),share["admin"].as_str().unwrap_or(""))));
+        facts.push(statement(format!("Clanker v4 configured LP-reward share: {} basis points out of 10000 to {}; reward administrator {}.",share["bps"].as_str().ok_or("allocation absent")?,share["recipient"].as_str().ok_or("recipient absent")?,share["admin"].as_str().ok_or("administrator absent")?)));
         related.push(share["recipient"].as_str().unwrap_or("").to_owned());
     }
-    facts.push(statement(format!("Registered LP locker {locker} reports {} position(s); this does not establish permanent liquidity.",value["num_positions"])));
+    facts.push(statement(format!("Registered LP locker {locker} reports {} position(s); this does not establish permanent liquidity.",value["num_positions"].as_str().ok_or("position count absent")?)));
     Ok((json!({"protocol":"clanker_v4_0","registry":CLANKER,"locker":locker,"configuration":value,"related":related,"statements":facts}),
         Some("configured LP-reward shares exclude factory/other fee bases; paid receipts, administrator changes, extensions, current hook fees and position withdrawal rights remain separate checks".into())))
 }
@@ -233,11 +235,7 @@ fn flaunch(
             &format!("{pool_id}{:064x}", 10_000u32),
             block,
         )?;
-        if split.len() != 3
-            || number(&split, 0)? + number(&split, 1)? + number(&split, 2)? != 10_000
-        {
-            return Err("Flaunch split is not a complete quoted allocation".into());
-        }
+        quoted_split(&split)?;
         let creator = query(rpc, budget, &case.address, "creator()", "", block)
             .and_then(|v| address(&v, 0))?;
         let owner =
@@ -289,6 +287,14 @@ fn distributed(
     }
     let mut values = Vec::new();
     for log in logs {
+        if log["address"]
+            .as_str()
+            .is_none_or(|address| !address.eq_ignore_ascii_case(manager))
+            || log["topics"][0].as_str() != Some(topic.as_str())
+            || log["topics"][1].as_str() != Some(format!("0x{pool_id}").as_str())
+        {
+            return Err("distribution log does not match the requested pool and hook".into());
+        }
         if log["removed"].as_bool() == Some(true) {
             return Err("distribution log was removed".into());
         }
@@ -299,6 +305,18 @@ fn distributed(
         values.push(json!({"transaction":log["transactionHash"],"block_hash":log["blockHash"],"amounts":amounts}));
     }
     Ok(values)
+}
+
+fn quoted_split(split: &[String]) -> Result<(), String> {
+    if split.len() != 3 {
+        return Err("Flaunch split is not a complete quoted allocation".into());
+    }
+    let amounts = [number(split, 0)?, number(split, 1)?, number(split, 2)?];
+    // Bound each untrusted ABI word before summing, including in debug builds.
+    if amounts.iter().any(|amount| *amount > 10_000) || amounts.iter().sum::<u128>() != 10_000 {
+        return Err("Flaunch split is not a complete quoted allocation".into());
+    }
+    Ok(())
 }
 
 fn hex_bytes(digits: &str) -> Result<Vec<u8>, String> {
@@ -374,6 +392,132 @@ pub(crate) fn v3(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evm_investigation::tests::endpoint;
+    fn encoded(data: &[String]) -> Value {
+        json!(format!(
+            "0x{}",
+            data.iter()
+                .map(|word| word.trim_start_matches("0x"))
+                .collect::<String>()
+        ))
+    }
+    fn rewards(token: &str) -> Vec<String> {
+        let mut data = vec![format!("0x{:064x}", 0); 18];
+        data[0] = format!("0x{:064x}", 32);
+        data[1] = format!("0x{}", arg(token));
+        for (slot, offset) in [(9, 352), (10, 416), (11, 480)] {
+            data[slot] = format!("0x{offset:064x}");
+        }
+        for slot in [8, 12, 14, 16] {
+            data[slot] = format!("0x{:064x}", 1);
+        }
+        data[13] = format!("0x{:064x}", 10_000);
+        data[15] = format!("0x{}", arg(token));
+        data[17] = data[15].clone();
+        data
+    }
+    #[test]
+    fn registered_clanker_routes_are_configuration_and_unknown_lockers_are_refused() {
+        let case =
+            CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111").unwrap();
+        let deployment = vec![
+            format!("0x{:064x}", 32),
+            format!("0x{}", arg(&case.address)),
+            format!("0x{}", arg(ZERO)),
+            format!("0x{}", arg(LOCKERS[1])),
+        ];
+        let (rpc, server) = endpoint(vec![
+            ("eth_call", encoded(&deployment)),
+            ("eth_call", encoded(&rewards(&case.address))),
+        ]);
+        let mut budget = Budget::default();
+        let (value, gap) = clanker(&rpc, &case, "0x1", &mut budget).unwrap();
+        server.join().unwrap();
+        assert_eq!(budget.calls_made(), 2);
+        assert_eq!(value["protocol"], "clanker_v4_0");
+        assert_eq!(value["configuration"]["shares"][0]["bps"], "10000");
+        assert_eq!(
+            value["configuration"]["shares"][0]["recipient"],
+            case.address
+        );
+        assert!(
+            value["statements"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("10000 basis points")
+        );
+        assert!(gap.unwrap().contains("paid receipts"));
+        for (index, replacement, reason) in [
+            (0, format!("0x{:064x}", 0), "registered"),
+            (1, format!("0x{}", arg(ZERO)), "registered"),
+            (3, format!("0x{}", arg(ZERO)), "locker"),
+        ] {
+            let mut invalid = deployment.clone();
+            invalid[index] = replacement;
+            let (rpc, server) = endpoint(vec![("eth_call", encoded(&invalid))]);
+            let mut budget = Budget::default();
+            assert!(
+                clanker(&rpc, &case, "0x1", &mut budget)
+                    .unwrap_err()
+                    .contains(reason)
+            );
+            assert_eq!(budget.calls_made(), 1);
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn reward_vectors_require_aligned_bounded_offsets_and_matching_recipients() {
+        let token = "0x1111111111111111111111111111111111111111";
+        let valid = rewards(token);
+        for offset in [0, 31, 33, 320, usize::MAX] {
+            let mut invalid = valid.clone();
+            invalid[9] = format!("0x{offset:064x}");
+            assert!(clanker_rewards(&invalid, token).is_err());
+        }
+        for count in [0, 17, 18] {
+            let mut invalid = valid.clone();
+            invalid[12] = format!("0x{count:064x}");
+            assert!(clanker_rewards(&invalid, token).is_err());
+        }
+        assert!(clanker_rewards(&valid, ZERO).is_err());
+        let mut invalid = valid.clone();
+        invalid[14] = format!("0x{:064x}", 2);
+        assert!(clanker_rewards(&invalid, token).is_err());
+        let mut invalid = valid;
+        invalid[13] = format!("0x{:064x}", 10_001);
+        assert!(clanker_rewards(&invalid, token).is_err());
+        assert_eq!(dynamic(&rewards(token), 1, 8).unwrap().len(), 1);
+    }
+    #[test]
+    fn quoted_allocations_refuse_overflow_and_incomplete_or_excess_shares() {
+        let split = |amounts: &[u128]| {
+            amounts
+                .iter()
+                .map(|amount| format!("0x{amount:064x}"))
+                .collect::<Vec<_>>()
+        };
+        quoted_split(&split(&[2500, 7000, 500])).unwrap();
+        quoted_split(&split(&[10_000, 0, 0])).unwrap();
+        for amounts in [
+            vec![],
+            vec![10_000],
+            vec![2500, 7000, 499],
+            vec![2500, 7000, 501],
+            vec![u128::MAX, u128::MAX, 2],
+        ] {
+            assert!(quoted_split(&split(&amounts)).is_err());
+        }
+        assert_eq!(
+            words(&format!("0x{}{}", "01".repeat(32), "ff".repeat(32)))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(words("0x").is_err());
+        assert!(words("0x0").is_err());
+        assert!(words(&format!("0x{}", "ab".repeat(32_800))).is_err());
+    }
+
     #[test]
     fn dynamic_protocol_tuples_reject_truncation_wrong_target_and_denominators() {
         let token = "0x1111111111111111111111111111111111111111";

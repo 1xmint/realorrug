@@ -27,6 +27,8 @@ pub(crate) struct LibraryState {
     path: Option<PathBuf>,
     capacity: Option<Capacity>,
     clients: Mutex<HashMap<String, (u64, u32)>>,
+    trust_cloudflare: bool,
+    clock: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
 fn now() -> u64 {
@@ -47,6 +49,8 @@ impl LibraryState {
             path,
             capacity: realorrug_analyst::investigator::capacity_from(&get),
             clients: Mutex::new(HashMap::new()),
+            trust_cloudflare: get("REALORRUG_TRUST_CLOUDFLARE").as_deref() == Some("1"),
+            clock: Arc::new(now),
         }
     }
     fn allow(&self, headers: &HeaderMap, request: &Request) -> bool {
@@ -56,7 +60,7 @@ impl LibraryState {
             .extensions()
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
             .map_or_else(|| "unknown".into(), |p| p.0.ip().to_string());
-        let key = if std::env::var("REALORRUG_TRUST_CLOUDFLARE").as_deref() == Ok("1") {
+        let key = if self.trust_cloudflare {
             headers
                 .get("cf-connecting-ip")
                 .and_then(|v| v.to_str().ok())
@@ -65,7 +69,7 @@ impl LibraryState {
         } else {
             peer
         };
-        let at = now();
+        let at = (self.clock)();
         let Ok(mut clients) = self.clients.lock() else {
             return false;
         };
@@ -372,6 +376,95 @@ mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+    #[test]
+    fn public_read_limits_expire_and_ignore_untrusted_proxy_headers() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let time = Arc::new(AtomicU64::new(60));
+        let clock = Arc::clone(&time);
+        let auth = Arc::new(AuthState::from_vars(&|_| None, None, Arc::new(|| 1)));
+        let mut state = LibraryState {
+            auth,
+            path: None,
+            capacity: None,
+            clients: Mutex::new(HashMap::new()),
+            trust_cloudflare: false,
+            clock: Arc::new(move || clock.load(Ordering::SeqCst)),
+        };
+        let request = Request::get("/v1/library")
+            .header("cf-connecting-ip", "192.0.2.1")
+            .body(Body::empty())
+            .unwrap();
+        for _ in 0..30 {
+            assert!(state.allow(request.headers(), &request));
+        }
+        assert!(!state.allow(request.headers(), &request));
+        let other = Request::get("/v1/library")
+            .header("cf-connecting-ip", "192.0.2.2")
+            .body(Body::empty())
+            .unwrap();
+        assert!(!state.allow(other.headers(), &other));
+        time.store(120, Ordering::SeqCst);
+        assert!(state.allow(other.headers(), &other));
+        assert_eq!(state.clients.lock().unwrap()["unknown"].1, 1);
+        state.trust_cloudflare = true;
+        assert!(state.allow(request.headers(), &request));
+        assert_eq!(state.clients.lock().unwrap()["192.0.2.1"].1, 1);
+        assert!(state.allow(other.headers(), &other));
+        let mut clients = state.clients.lock().unwrap();
+        for i in 0..1024 {
+            clients.insert(format!("cardinality-{i}"), (2, 1));
+        }
+        drop(clients);
+        let new = Request::get("/v1/library")
+            .header("cf-connecting-ip", "192.0.2.3")
+            .body(Body::empty())
+            .unwrap();
+        assert!(!state.allow(new.headers(), &new));
+        assert!(state.allow(other.headers(), &other));
+    }
+    #[tokio::test]
+    async fn every_public_case_route_refuses_exhausted_read_capacity() {
+        let auth = Arc::new(AuthState::from_vars(&|_| None, None, Arc::new(|| 1)));
+        let state = Arc::new(LibraryState {
+            auth,
+            path: None,
+            capacity: None,
+            clients: Mutex::new(HashMap::from([("unknown".into(), (0, 30))])),
+            trust_cloudflare: false,
+            clock: Arc::new(|| 1),
+        });
+        let app = Router::new()
+            .route("/v1/library", get(index))
+            .route("/v1/cases/{chain}/{address}", get(dossier))
+            .route("/v1/cases/{chain}/{address}/history", get(history))
+            .route("/v1/investigations/{id}", get(job))
+            .with_state(state);
+        for path in [
+            "/v1/library".into(),
+            "/v1/cases/base/0x1111111111111111111111111111111111111111".into(),
+            "/v1/cases/base/0x1111111111111111111111111111111111111111/history".into(),
+            format!("/v1/investigations/{}", "a".repeat(64)),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        }
+        assert_eq!(
+            case_error(CaseError::Capacity).status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            case_error(CaseError::Conflict).status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            case_error(CaseError::Invalid("invalid".into())).status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
     #[tokio::test]
     async fn library_browsing_needs_no_session_and_unconfigured_intake_cannot_accept_work() {
         let vars = |_: &str| None;
@@ -381,6 +474,8 @@ mod tests {
             path: None,
             capacity: None,
             clients: Mutex::new(HashMap::new()),
+            trust_cloudflare: false,
+            clock: Arc::new(now),
         });
         let app = Router::new()
             .route("/v1/library", get(index))
@@ -440,6 +535,8 @@ mod tests {
                 pending: 1,
             }),
             clients: Mutex::new(HashMap::new()),
+            trust_cloudflare: false,
+            clock: Arc::new(now),
         });
         let app = Router::new()
             .route("/v1/investigations", post(investigation))

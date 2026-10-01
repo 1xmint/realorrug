@@ -162,6 +162,10 @@ fn token(
     if code.len() > 100_000 {
         return Err("contract code exceeds read bound".into());
     }
+    let digits = code.strip_prefix("0x").ok_or("bytecode lacks hex prefix")?;
+    if !digits.len().is_multiple_of(2) || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("malformed contract bytecode".into());
+    }
     let mut facts = vec![statement(format!(
         "Contract code was observed at {}.",
         read.subject
@@ -248,12 +252,22 @@ fn transaction(
     let block = receipt["blockNumber"]
         .as_str()
         .ok_or("transaction block missing")?;
+    hex_u64(block)?;
+    receipt["blockHash"]
+        .as_str()
+        .ok_or("transaction block hash missing")?
+        .parse::<realorrug_robinhood::Hash32>()
+        .map_err(|e| e.to_string())?;
     let canonical = call(rpc, budget, "eth_getBlockByNumber", json!([block, false]))?;
     if canonical["hash"] != receipt["blockHash"] || canonical["hash"].is_null() {
         return Err("receipt block is no longer canonical".into());
     }
     let status = receipt["status"].as_str().ok_or("receipt outcome absent")?;
-    if hex_u64(status)? != 1 {
+    let status = hex_u64(status)?;
+    if status > 1 {
+        return Err("unsupported transaction receipt status".into());
+    }
+    if status == 0 {
         return Ok((
             json!({"statements":[statement("The transaction failed; attempted payments are not executed transfers.")],"related":[]}),
             None,
@@ -453,7 +467,7 @@ pub(crate) fn liquidity(
     let digits = reserves
         .strip_prefix("0x")
         .ok_or("reserves missing prefix")?;
-    if digits.len() != 192 {
+    if digits.len() != 192 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("malformed pool reserves".into());
     }
     let a = word(&format!("0x{}", &digits[..64]))?;
@@ -481,9 +495,11 @@ pub(crate) fn liquidity(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
-    fn endpoint(responses: Vec<(&'static str, Value)>) -> (Rpc, std::thread::JoinHandle<()>) {
+    pub(crate) fn endpoint(
+        responses: Vec<(&'static str, Value)>,
+    ) -> (Rpc, std::thread::JoinHandle<()>) {
         use std::io::{Read as _, Write as _};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -555,6 +571,77 @@ mod tests {
         bad = good;
         bad["removed"] = json!(true);
         assert!(transfer(&bad).is_err());
+    }
+
+    #[test]
+    fn only_successful_canonical_transactions_authorize_payment_statements() {
+        let case = CaseKey::new(
+            crate::cases::Network::Base,
+            "0x1111111111111111111111111111111111111111",
+        )
+        .unwrap();
+        let hash = format!("0x{:064x}", 123);
+        let block_hash = format!("0x{:064x}", 456);
+        let sender = "0x2222222222222222222222222222222222222222";
+        let receiver = "0x3333333333333333333333333333333333333333";
+        let read = Read {
+            tool: Tool::Transaction,
+            subject: hash.clone(),
+            why: "verify alleged payment".into(),
+        };
+        let tx = json!({"hash":hash,"blockHash":block_hash,"blockNumber":"0x10","from":sender,"to":receiver,"value":"0x20"});
+        let receipt = json!({"transactionHash":hash,"blockHash":block_hash,"blockNumber":"0x10","status":"0x1","logs":[
+            {"address":case.address,"topics":[TRANSFER,format!("0x{:0>64}",&sender[2..]),format!("0x{:0>64}",&receiver[2..])],"data":format!("0x{:064x}",500),"transactionHash":hash}
+        ]});
+        for (status, successful) in [("0x1", true), ("0x0", false), ("0x2", false)] {
+            let mut outcome = receipt.clone();
+            outcome["status"] = json!(status);
+            let (rpc, server) = endpoint(vec![
+                ("eth_getTransactionByHash", tx.clone()),
+                ("eth_getTransactionReceipt", outcome),
+                ("eth_getBlockByNumber", json!({"hash":block_hash})),
+            ]);
+            let result = transaction(&rpc, &case, &read, &mut Budget::default());
+            server.join().unwrap();
+            if status == "0x2" {
+                assert!(result.unwrap_err().contains("unsupported"));
+                continue;
+            }
+            let (value, _) = result.unwrap();
+            if successful {
+                assert_eq!(value["transfers"][0]["amount"], "500");
+                assert!(
+                    value["statements"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("Successful")
+                );
+                assert_eq!(value["transaction_block_hash"], block_hash);
+            } else {
+                assert!(
+                    value["statements"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("failed")
+                );
+                assert!(value.get("transfers").is_none());
+                assert_eq!(value["related"], json!([]));
+            }
+        }
+        let (rpc, server) = endpoint(vec![
+            ("eth_getTransactionByHash", tx),
+            ("eth_getTransactionReceipt", receipt),
+            (
+                "eth_getBlockByNumber",
+                json!({"hash":format!("0x{:064x}",999)}),
+            ),
+        ]);
+        assert!(
+            transaction(&rpc, &case, &read, &mut Budget::default())
+                .unwrap_err()
+                .contains("no longer canonical")
+        );
+        server.join().unwrap();
     }
 
     #[test]

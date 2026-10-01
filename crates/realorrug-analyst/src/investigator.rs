@@ -544,6 +544,124 @@ mod tests {
         }
     }
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "accepted and refused writer responses share one evidence set"
+    )]
+    fn writer_only_ranks_existing_evidence_and_falls_back_on_invalid_selections() {
+        struct Select(String);
+        impl Model for Select {
+            fn ask(&mut self, request: &Request) -> Result<Answer, String> {
+                assert_eq!(request.timeout_seconds, 45);
+                Ok(Answer {
+                    text: self.0.clone(),
+                    cost: None,
+                })
+            }
+        }
+        let case =
+            CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111").unwrap();
+        let mut evidence = Vec::new();
+        for (index, tool) in [Tool::Fees, Tool::Token, Tool::Account, Tool::History]
+            .into_iter()
+            .enumerate()
+        {
+            evidence.push(observed(
+                &case,
+                &Read {
+                    tool,
+                    subject: case.address.clone(),
+                    why: "synthetic".into(),
+                },
+                1,
+                None,
+                json!({"statements":[{"text":format!("Reader statement {index}.")}]}),
+                None,
+            ));
+        }
+        let mut empty = evidence[0].clone();
+        empty.id = "empty".into();
+        empty.value = json!({"statements":[]});
+        evidence.insert(0, empty);
+        let fallback: Vec<_> = evidence
+            .iter()
+            .skip(1)
+            .take(3)
+            .map(|o| o.id.clone())
+            .collect();
+        let ranked = vec![
+            evidence[3].id.clone(),
+            evidence[1].id.clone(),
+            evidence[2].id.clone(),
+        ];
+        let mut decisions = Vec::new();
+        assert_eq!(
+            select_statements(&evidence, None, &Instant::now(), &mut decisions),
+            fallback
+        );
+        let mut model = Select(json!({"selected":ranked}).to_string());
+        assert_eq!(
+            select_statements(&evidence, Some(&mut model), &Instant::now(), &mut decisions),
+            ranked
+        );
+        assert!(decisions.is_empty());
+        for selected in [
+            vec!["invented".to_owned()],
+            evidence.iter().skip(1).map(|o| o.id.clone()).collect(),
+        ] {
+            let mut model = Select(json!({"selected":selected}).to_string());
+            decisions.clear();
+            assert_eq!(
+                select_statements(&evidence, Some(&mut model), &Instant::now(), &mut decisions),
+                fallback
+            );
+            assert!(decisions[0].contains("refused"));
+        }
+        let mut model = Select("95% is stolen".into());
+        decisions.clear();
+        assert_eq!(
+            select_statements(&evidence, Some(&mut model), &Instant::now(), &mut decisions),
+            fallback
+        );
+        assert!(decisions[0].contains("unavailable"));
+        let request = Investigation {
+            id: "selection".into(),
+            case,
+            question: "an allegation".into(),
+            wallets: vec![],
+            transactions: vec![],
+            window: None,
+            source: None,
+            thread: None,
+        };
+        let result = summarize(
+            &request,
+            evidence,
+            &ranked,
+            vec![],
+            vec![],
+            &Budget::default(),
+            &Instant::now(),
+        );
+        assert!(
+            result.reply.find("Reader statement 2.").unwrap()
+                < result.reply.find("Reader statement 0.").unwrap()
+        );
+        assert!(!result.reply.contains("95%"));
+        assert!(!result.complete);
+        assert_eq!(result.level, "CantTell");
+    }
+
+    #[test]
+    fn mechanism_playbooks_include_checks_and_legitimate_lookalikes() {
+        for entry in mechanisms().as_array().unwrap() {
+            assert!(entry["check"].as_str().unwrap().len() > 20);
+            assert!(entry["lookalike"].as_str().unwrap().len() > 20);
+        }
+        assert!(!mechanisms().as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn planner_cannot_invent_leads_or_promote_the_allegation_to_a_fact() {
         let request = Investigation {
             id: "test".into(),
@@ -664,8 +782,27 @@ mod tests {
             ("REALORRUG_MODEL_PER_CALL_USD_MICRO", "1"),
         ]);
         assert!(capacity_from(&|key| vars.get(key).map(|v| (*v).into())).is_some());
-        vars.remove("REALORRUG_ANALYST_DAILY_USD");
-        assert!(capacity_from(&|key| vars.get(key).map(|v| (*v).into())).is_none());
+        for key in vars.clone().keys() {
+            let value = vars.remove(key).unwrap();
+            assert!(
+                capacity_from(&|key| vars.get(key).map(|v| (*v).into())).is_none(),
+                "missing {key}"
+            );
+            vars.insert(key, value);
+        }
+        for key in [
+            "REALORRUG_ANALYST_DAILY_USD",
+            "REALORRUG_ANALYST_PER_CALL_USD",
+            "REALORRUG_ANALYST_GLOBAL_DAILY",
+            "REALORRUG_ANALYST_PER_SUMMONER_DAILY",
+        ] {
+            let old = vars.insert(key, "0").unwrap();
+            assert!(
+                capacity_from(&|key| vars.get(key).map(|v| (*v).into())).is_none(),
+                "zero {key}"
+            );
+            vars.insert(key, old);
+        }
     }
 
     #[test]

@@ -31,7 +31,7 @@ pub fn sharing(data: &[u8], mint: &Address) -> Result<Value, String> {
     }
     let mut shares = Vec::new();
     let mut total = 0u32;
-    for entry in data[80..80 + n * 34].chunks_exact(34) {
+    for entry in data[80..80 + n * 34].as_chunks::<34>().0 {
         let address = Address::new(entry[..32].try_into().unwrap());
         let bps = u16::from_le_bytes(entry[32..34].try_into().unwrap());
         total += u32::from(bps);

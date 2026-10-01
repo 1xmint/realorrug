@@ -657,7 +657,7 @@ pub fn run() -> ! {
             gate.answered_recently()
         );
     }
-    let _case_lease = match crate::case_worker::lease(&paths) {
+    let _case_lease = match crate::case_worker::lease(&paths, &env) {
         Ok(lease) => lease,
         Err(e) => {
             eprintln!("realorrug-investigator: {e}");
@@ -719,7 +719,7 @@ pub fn run() -> ! {
     );
 
     let mut wait = poll::BUSY;
-    if let Err(e) = crate::case_worker::initialize(&paths) {
+    if let Err(e) = crate::case_worker::initialize(&paths, &env) {
         eprintln!("realorrug-investigator: startup refused: {e}");
         idle_forever();
     }
@@ -731,6 +731,7 @@ pub fn run() -> ! {
             provider.as_deref(),
             &mut spend,
             publisher.as_ref(),
+            &env,
         ) {
             eprintln!("realorrug-investigator: worker stopped: {e}");
             idle_forever();
@@ -1287,7 +1288,7 @@ pub fn tick(
     let mut handled: Vec<&str> = Vec::new();
     for mention in &mentions {
         if let Some(memory) = memory.as_ref() {
-            match crate::case_worker::intake(mention, memory, gate, at) {
+            match crate::case_worker::intake(mention, memory, gate, at, &env) {
                 Ok(true) => {
                     handled.push(&mention.id);
                     answered += 1;

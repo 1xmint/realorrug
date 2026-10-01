@@ -85,6 +85,16 @@ balance, mint authorities and current curve state. Base reports token getters
 with liquidity rate-limit gaps. Ethereum reports token getters and a verified
 v2 pool, reserves and LP balances. A newly discovered Clanker token registers
 with a newer locker outside the two supported addresses; it remains unresolved.
+An established Clanker token discovered through the public API produced a
+positive registered-locker configuration capture and an offline review:
+[fee capture](data/0066-investigator/base-clanker-fees.capture.json),
+[review](data/0066-investigator/review/base-clanker-fees.review.md).
+Its configuration reports a 10000-basis-point LP reward share and one position;
+realized payment and withdrawal rights remain unresolved. An earlier request
+without an explicit fee allegation captured only generic reads; the subsequent
+fee-specific request is retained separately. The capture stores quoted JSON
+numeric strings in its text; later formatting removes those quotes without
+rewriting this historical evidence.
 The documented Flaunch discovery API returned HTTP 521, so no positive Flaunch
 runtime qualification is claimed. These observations do not accept the full
 representative quality set. Current Pump curves can use a quote asset; the new
@@ -101,11 +111,18 @@ lost-response recovery, offline provenance/tamper refusal and unsafe filenames.
 Scoped all-target Clippy passes with warnings denied. The site passes its
 129 tests after reconciling the forecasting pages from main, type check and
 production build; browser review checks responsive
-Library layout. Full Rust suites and mutation checks belong to CI.
+Library layout. The first CI run passed 2329 Rust tests, build, MSRV,
+dependencies, formatting and the site. Newer Clippy findings were repaired.
+Mutation testing found uncovered behavior in all four shards; targeted recovery,
+input, selection, protocol and read-limit tests are being added. **CI acceptance
+remains open.** Full Rust suites and mutation checks belong to CI.
 
 Free browsing requires configured existing case storage, not a session. New
 website work additionally needs authenticated identity/CSRF, shared daily
 quotas, budget/prices and worker liveness. Browse/request rate limits are bounded.
+Community contributions enter the same bounded investigation queue as unverified
+questions; there is no separate unchecked event-append capability. Operator
+corrections use the custody command and cannot be submitted as verified web facts.
 Unavailability never becomes an empty successful Library. The live publication
 gate is separate from worker enablement and retains existing X approval rules.
 Checkpoints detect changes to retained records; operator custody is not

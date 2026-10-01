@@ -137,6 +137,63 @@ mod tests {
         }
     }
     #[test]
+    fn unresolved_inputs_never_choose_a_target_or_network_by_guessing() {
+        for text in [
+            "$TOKEN",
+            "wallet 0x1111111111111111111111111111111111111111",
+            "base ethereum 0x1111111111111111111111111111111111111111",
+            "base 0x1111111111111111111111111111111111111111 0x2222222222222222222222222222222222222222",
+        ] {
+            assert!(
+                matches!(resolve(&mention(text.into()), None), Resolved::Clarify(_)),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            resolve(&mention(format!("transaction 0x{:064x}", 123)), None),
+            Resolved::Clarify(_)
+        ));
+        assert_eq!(resolve(&mention("hello".into()), None), Resolved::Nothing);
+        let standing =
+            CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111").unwrap();
+        let Resolved::Ready(followup) = resolve(
+            &mention("please inspect the fees further".into()),
+            Some(&standing),
+        ) else {
+            panic!("thread identity is known")
+        };
+        assert_eq!(followup.case, standing);
+        assert!(matches!(
+            resolve(
+                &mention("0x2222222222222222222222222222222222222222".into()),
+                Some(&standing)
+            ),
+            Resolved::Clarify(_)
+        ));
+        let Resolved::Ready(solana) =
+            resolve(&mention("11111111111111111111111111111111".into()), None)
+        else {
+            panic!("mint family is unambiguous")
+        };
+        assert_eq!(solana.case.chain, Network::Solana);
+    }
+
+    #[test]
+    fn question_size_boundary_preserves_the_entire_allowed_question() {
+        let mut text = "base 0x1111111111111111111111111111111111111111 fees".to_owned();
+        text.extend(std::iter::repeat_n(' ', 4096 - text.len()));
+        let Resolved::Ready(request) = resolve(&mention(text.clone()), None) else {
+            panic!("exactly bounded question")
+        };
+        assert_eq!(request.question, text);
+        text.push(' ');
+        assert!(matches!(
+            resolve(&mention(text), None),
+            Resolved::Clarify(_)
+        ));
+    }
+
+    #[test]
     fn hex_needs_network_and_wallet_leads_never_replace_the_token() {
         let a = "0x1111111111111111111111111111111111111111";
         let b = "0x2222222222222222222222222222222222222222";

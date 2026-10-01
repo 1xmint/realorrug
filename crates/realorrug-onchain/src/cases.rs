@@ -936,26 +936,6 @@ impl Memory {
         Ok(ids)
     }
 
-    /// Public contribution remains unverified. Operator-verified corrections use
-    /// `correct_case`; website callers cannot invalidate measured evidence.
-    ///
-    /// # Errors
-    /// Invalid or unsupported input, exhausted bounds, unavailable data, or storage failure.
-    pub fn contribute_case(&self, case: &CaseKey, at: u64, note: &str) -> Result<(), CaseError> {
-        if note.trim().is_empty() || note.len() > 4096 {
-            return Err(CaseError::Invalid("invalid contribution".into()));
-        }
-        self.case_transaction(|conn| {
-            append(
-                conn,
-                case,
-                "contribution",
-                at,
-                &serde_json::json!({"note":note,"status":"unverified"}),
-            )
-        })
-    }
-
     /// Operator/verified-reader path only: append invalidation, never edit history.
     ///
     /// # Errors
@@ -1117,6 +1097,7 @@ impl Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     fn request(chain: Network, id: &str) -> Investigation {
         Investigation {
             id: id.into(),
@@ -1129,6 +1110,193 @@ mod tests {
             thread: Some("thread-a".into()),
         }
     }
+    #[test]
+    fn bounded_requests_accept_the_limit_and_refuse_each_oversized_field() {
+        let mut valid = request(Network::Base, &"a".repeat(128));
+        valid.question = "q".repeat(4096);
+        valid.wallets = vec![valid.case.address.clone(); 16];
+        valid.transactions = vec![format!("0x{:064x}", 1); 16];
+        valid.source = Some("s".repeat(512));
+        valid.thread = Some("t".repeat(128));
+        valid.validate().unwrap();
+        for field in [
+            "id",
+            "question",
+            "wallets",
+            "transactions",
+            "source",
+            "thread",
+        ] {
+            let mut too_big = valid.clone();
+            match field {
+                "id" => too_big.id.push('a'),
+                "question" => too_big.question.push('q'),
+                "wallets" => too_big.wallets.push(valid.case.address.clone()),
+                "transactions" => too_big.transactions.push(format!("0x{:064x}", 1)),
+                "source" => too_big.source.as_mut().unwrap().push('s'),
+                "thread" => too_big.thread.as_mut().unwrap().push('t'),
+                _ => unreachable!(),
+            }
+            assert!(too_big.validate().is_err(), "{field}");
+        }
+        valid.question = " \t".into();
+        assert!(valid.validate().is_err());
+    }
+    #[test]
+    fn clarification_limits_roll_over_without_repeating_attempts_and_liveness_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Memory::open(&dir.path().join("cases.sqlite3")).unwrap();
+        let limits = Capacity {
+            daily: 2,
+            per_actor: 1,
+            pending: 2,
+        };
+        assert!(memory.next_case_clarification().unwrap().is_none());
+        memory
+            .remember_case_clarification("one", "need network", "first", 86_401, limits)
+            .unwrap();
+        memory
+            .remember_case_clarification("two", "duplicate actor", "first", 86_402, limits)
+            .unwrap();
+        assert_eq!(
+            memory.next_case_clarification().unwrap().unwrap(),
+            ("one".into(), "need network".into(), "first".into())
+        );
+        memory.begin_case_clarification("one").unwrap();
+        assert!(memory.begin_case_clarification("one").is_err());
+        memory
+            .remember_case_clarification("two", "second actor", "second", 86_403, limits)
+            .unwrap();
+        memory.begin_case_clarification("two").unwrap();
+        memory
+            .remember_case_clarification("three", "daily full", "third", 86_404, limits)
+            .unwrap();
+        assert!(memory.next_case_clarification().unwrap().is_none());
+        memory
+            .remember_case_clarification("three", "new day", "first", 172_801, limits)
+            .unwrap();
+        assert_eq!(
+            memory.next_case_clarification().unwrap().unwrap().1,
+            "new day"
+        );
+        assert!(!memory.case_worker_live(1).unwrap());
+        memory.case_heartbeat(1000).unwrap();
+        assert!(!memory.case_worker_live(999).unwrap());
+        assert!(memory.case_worker_live(1000).unwrap());
+        assert!(memory.case_worker_live(1239).unwrap());
+        assert!(!memory.case_worker_live(1240).unwrap());
+        assert!(!memory.case_worker_live(2000).unwrap());
+    }
+    #[test]
+    fn event_size_refusal_does_not_append_a_partial_history_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Memory::open(&dir.path().join("cases.sqlite3")).unwrap();
+        let case = request(Network::Base, "a").case;
+        append(
+            &memory.conn,
+            &case,
+            "synthetic",
+            1,
+            &json!("x".repeat(1_048_574)),
+        )
+        .unwrap();
+        let head = memory.verify_cases().unwrap();
+        assert!(
+            append(
+                &memory.conn,
+                &case,
+                "synthetic",
+                2,
+                &json!("x".repeat(1_048_575))
+            )
+            .is_err()
+        );
+        assert_eq!(memory.verify_cases().unwrap(), head);
+        assert_eq!(memory.case_history(&case, u64::MAX, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn admission_limits_isolate_actors_and_days_without_recharging_duplicates() {
+        let directory = tempfile::tempdir().unwrap();
+        let memory = Memory::open(&directory.path().join("cases.sqlite3")).unwrap();
+        let limits = Capacity {
+            daily: 2,
+            per_actor: 1,
+            pending: 2,
+        };
+        let mut a = request(Network::Base, "a");
+        a.thread = None;
+        let mut b = a.clone();
+        b.id = "b".into();
+        let mut c = a.clone();
+        c.id = "c".into();
+        memory.enqueue_case(&a, "first", 1, limits).unwrap();
+        assert!(matches!(
+            memory.enqueue_case(&b, "first", 2, limits),
+            Err(CaseError::Capacity)
+        ));
+        memory.enqueue_case(&b, "second", 2, limits).unwrap();
+        assert!(matches!(
+            memory.enqueue_case(&c, "third", 3, limits),
+            Err(CaseError::Capacity)
+        ));
+        assert_eq!(
+            memory.enqueue_case(&a, "first", 4, limits).unwrap().status,
+            "pending"
+        );
+        // A new day restores daily admission, but never bypasses a full queue.
+        assert!(matches!(
+            memory.enqueue_case(&c, "third", 86_401, limits),
+            Err(CaseError::Capacity)
+        ));
+        assert_eq!(
+            memory.next_case_job(86_402).unwrap().unwrap().request.id,
+            "a"
+        );
+        assert_eq!(memory.recover_cases(86_403).unwrap(), 1);
+        memory.enqueue_case(&c, "first", 86_404, limits).unwrap();
+        assert_eq!(
+            memory.next_case_job(86_405).unwrap().unwrap().request.id,
+            "b"
+        );
+        assert_eq!(memory.recover_cases(86_406).unwrap(), 1);
+        assert_eq!(
+            memory.next_case_job(86_407).unwrap().unwrap().request.id,
+            "c"
+        );
+        assert!(memory.next_case_job(86_408).unwrap().is_none());
+        assert_eq!(memory.recover_cases(86_409).unwrap(), 1);
+        assert_eq!(memory.recover_cases(86_410).unwrap(), 0);
+    }
+
+    #[test]
+    fn public_requests_reject_cross_chain_leads_and_unsafe_artifact_names() {
+        let valid = request(Network::Base, "safe-request_1");
+        valid.validate().unwrap();
+        for id in ["", "../escape", "absolute/path", "quoted\"name", "é"] {
+            let mut bad = valid.clone();
+            bad.id = id.into();
+            assert!(bad.validate().is_err(), "{id}");
+        }
+        let mut bad = valid.clone();
+        bad.wallets.push("11111111111111111111111111111111".into());
+        assert!(bad.validate().is_err());
+        bad = valid.clone();
+        bad.transactions.push("not-a-transaction".into());
+        assert!(bad.validate().is_err());
+        bad = valid.clone();
+        bad.window = Some(TimeWindow { from: 2, to: 1 });
+        assert!(bad.validate().is_err());
+        bad.window = Some(TimeWindow { from: 1, to: 1 });
+        bad.validate().unwrap();
+        assert_eq!(Network::Solana.evm_id(), None);
+        assert_eq!(Network::Base.evm_id(), Some(8453));
+        assert_eq!(Network::Ethereum.evm_id(), Some(1));
+        assert_eq!(Network::Robinhood.evm_id(), None);
+        assert!("unspecified".parse::<Network>().is_err());
+        assert_ne!(valid.case.id(), request(Network::Ethereum, "e").case.id());
+    }
+
     #[test]
     fn cases_survive_restart_isolate_networks_and_do_not_repeat_interrupted_work() {
         let dir = tempfile::tempdir().unwrap();
