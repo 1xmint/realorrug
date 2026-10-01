@@ -614,6 +614,30 @@ impl Rpc {
         method: &str,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        Self::call_one_with_timeout(endpoint, method, params, None)
+    }
+
+    /// A single request to the first configured endpoint; no hidden failover.
+    /// The outer investigation reserves one call and supplies its remaining time.
+    ///
+    /// # Errors
+    /// Missing endpoint, timeout, transport failure or malformed RPC response.
+    pub fn call_bounded(
+        &self,
+        method: &str,
+        params: &serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> Result<serde_json::Value, String> {
+        let endpoint = self.endpoints.first().ok_or("no endpoint configured")?;
+        Self::call_one_with_timeout(endpoint, method, params, Some(timeout))
+    }
+
+    fn call_one_with_timeout(
+        endpoint: &str,
+        method: &str,
+        params: &serde_json::Value,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<serde_json::Value, String> {
         let body =
             serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
         // Read the body whatever the status says. Measured 2026-09-17 against
@@ -626,6 +650,7 @@ impl Rpc {
         // exactly how every busy token's holders became unreadable.
         let mut response = ureq::post(endpoint)
             .config()
+            .timeout_global(timeout)
             .http_status_as_error(false)
             .build()
             .content_type("application/json")
@@ -634,6 +659,12 @@ impl Rpc {
         let status = response.status();
         let text = response
             .body_mut()
+            .with_config()
+            .limit(if timeout.is_some() {
+                1_048_576
+            } else {
+                10_485_760
+            })
             .read_to_string()
             .map_err(|e| e.to_string())?;
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {

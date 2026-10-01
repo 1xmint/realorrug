@@ -657,6 +657,13 @@ pub fn run() -> ! {
             gate.answered_recently()
         );
     }
+    let _case_lease = match crate::case_worker::lease(&paths) {
+        Ok(lease) => lease,
+        Err(e) => {
+            eprintln!("realorrug-investigator: {e}");
+            idle_forever();
+        }
+    };
     let mut spend = Spend::open(budget, prices, paths.ledger.clone(), day_of(now()));
 
     let client = realorrug_onchain::RpcClient::from_vars(&env);
@@ -712,7 +719,22 @@ pub fn run() -> ! {
     );
 
     let mut wait = poll::BUSY;
+    if let Err(e) = crate::case_worker::initialize(&paths) {
+        eprintln!("realorrug-investigator: startup refused: {e}");
+        idle_forever();
+    }
     loop {
+        if let Err(e) = crate::case_worker::tick(
+            &paths,
+            &client,
+            robinhood_client.as_ref(),
+            provider.as_deref(),
+            &mut spend,
+            publisher.as_ref(),
+        ) {
+            eprintln!("realorrug-investigator: worker stopped: {e}");
+            idle_forever();
+        }
         let found = tick(
             x.as_ref(),
             publisher.as_ref(),
@@ -1264,6 +1286,20 @@ pub fn tick(
     // is the other half of the same failure, and it was silent.
     let mut handled: Vec<&str> = Vec::new();
     for mention in &mentions {
+        if let Some(memory) = memory.as_ref() {
+            match crate::case_worker::intake(mention, memory, gate, at) {
+                Ok(true) => {
+                    handled.push(&mention.id);
+                    answered += 1;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("realorrug-investigator: intake stopped: {e}");
+                    break;
+                }
+            }
+        }
         // A winner naming an address inside the claim window is claiming, not
         // summoning. Checked first, and at the cost of a directory listing
         // only: the claim is written into the record and the mention is not

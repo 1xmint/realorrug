@@ -1,7 +1,24 @@
-# realorrug: intent
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# realorrug: historical intent
 
-The one place for what Josh wants and why. Code and voice read this before deciding
-on his behalf; anything not covered here is a question for Josh, not a guess.
+**Status:** historical notes, retained. Current product direction is
+[VISION.md](VISION.md), delivery is [ROADMAP.md](ROADMAP.md), and engineering
+rules are [AGENTS.md](AGENTS.md). [ADR 0043](docs/adr/0043-the-public-library-and-compounding-intelligence.md)
+records Josh's approved direction of 2026-09-30.
+
+The investigator and token now launch with a free public Library; forecasts
+and reputation are outside the critical launch path, and the paid portal
+comes later. Startup funding is $100–$200, capped at $200 total, free-first;
+current runtime limits remain enforced until explicitly changed. Buybacks
+and permanent liquidity are reopened proposals, not launch promises. Existing
+owner signing, deployment, spending, review and X gates are retained.
+
+The notes below preserve the earlier decisions and status as recorded at the
+time. Their phase-4 launch prerequisite, permanent buyback exclusion and
+funding framing do not override the current documents. Old milestones and
+commit references are historical snapshots, not current implementation status.
+
+## Historical intent through 2026-09-26
 
 ## Status
 

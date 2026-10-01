@@ -2,7 +2,9 @@
 # ADR 0036 — a paid, facts-only endpoint, priced in USDC on Base
 
 **Date:** 2026-09-19
-**Status:** accepted. Josh's decision, recorded, 2026-09-19, after reading
+**Status:** accepted implementation record; future product scope clarified by
+[ADR 0043](0043-the-public-library-and-compounding-intelligence.md), 2026-09-30.
+Josh's decision, recorded, 2026-09-19, after reading
 research 0054: build a paid, facts-only endpoint, $0.05 per call, paid in
 USDC on Base via x402. Buyers are both agents/bots and people. The X bot
 stays free as the shop window.
@@ -12,6 +14,13 @@ stays free as the shop window.
 `docs/design/0028-the-daily-five.md` §7 (the legal question).
 
 ## Context
+
+**Scope clarified 2026-09-30 by [ADR 0043](0043-the-public-library-and-compounding-intelligence.md):**
+this remains the record of the implemented facts-only endpoint and its
+Base USDC price. It does not set future investigation-tier prices or rails,
+establish live payment readiness, or require the paid portal at launch.
+Current product/delivery direction is [VISION.md](../../VISION.md) and
+[ROADMAP.md](../../ROADMAP.md); the original decision below is preserved.
 
 Research 0054 (`docs/research/0054-paid-api-x402-and-postgres.md`) measured
 what a paid API on this tree would cost and what it could sell. Two findings

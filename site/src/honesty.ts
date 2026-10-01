@@ -97,7 +97,7 @@ export function safeHref(url: string, hosts: readonly string[]): string | null {
  * **no email address anywhere in this repository**, which is why `/contact`
  * says so rather than inventing one.
  */
-export const SOURCE = "https://github.com/hey-vera/radar";
+export const SOURCE = "https://github.com/1xmint/realorrug";
 
 /** Where to report something wrong with the site or a number on it. */
 export const ISSUES = `${SOURCE}/issues`;

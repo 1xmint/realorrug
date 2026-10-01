@@ -81,7 +81,7 @@ describe("the checker page", () => {
         measured_at: "2026-09-16T12:00:00Z",
       }),
     );
-    renderAt(`/check/${ADDR}`);
+    renderAt(`/check/${ADDR}?chain=robinhood`);
     await waitFor(() => expect(screen.getByText("Sketchy")).toBeTruthy());
     expect(screen.getByText(/creator holds 41%/)).toBeTruthy();
     expect(screen.getByText(/fund work/)).toBeTruthy();
@@ -92,14 +92,14 @@ describe("the checker page", () => {
     // Rule 8: unknown is not safe. The server sends no level with cant_read,
     // and the page must fall to the grey rung, not the green one.
     serverSays(200, body({ state: "cant_read" }));
-    renderAt(`/check/${ADDR}`);
+    renderAt(`/check/${ADDR}?chain=robinhood`);
     await waitFor(() => expect(screen.getByText("Can't tell")).toBeTruthy());
     expect(screen.queryByText("Nothing ugly yet")).toBeNull();
   });
 
   it("draws a level it does not know as can't tell", async () => {
     serverSays(200, body({ level: "BrandNewLevel" }));
-    renderAt(`/check/${ADDR}`);
+    renderAt(`/check/${ADDR}?chain=robinhood`);
     await waitFor(() => expect(screen.getByText("Can't tell")).toBeTruthy());
   });
 
@@ -108,7 +108,7 @@ describe("the checker page", () => {
       "fetch",
       vi.fn(() => Promise.reject(new Error("no server"))),
     );
-    renderAt(`/check/${ADDR}`);
+    renderAt(`/check/${ADDR}?chain=robinhood`);
     await waitFor(() =>
       expect(screen.getByText(/could not be reached/i)).toBeTruthy(),
     );
@@ -129,7 +129,7 @@ describe("the checker page", () => {
     [200, "not_a_token", /no token at that address/i],
   ])("explains a %i %s in words", async (status, state, words) => {
     serverSays(status, body({ state }));
-    renderAt(`/check/${ADDR}`);
+    renderAt(`/check/${ADDR}?chain=robinhood`);
     await waitFor(() => expect(screen.getByText(words)).toBeTruthy());
   });
 
@@ -156,8 +156,9 @@ describe("the paste box", () => {
     fireEvent.change(screen.getByLabelText(/contract address/i), {
       target: { value: `  ${ADDR}  ` },
     });
+    fireEvent.change(screen.getByLabelText(/^network/i), { target: { value: "base" } });
     fireEvent.click(screen.getByRole("button", { name: /check it/i }));
-    expect(history.at(-1)).toBe(`/check/${ADDR}`);
+    expect(history.at(-1)).toBe(`/library/base/${ADDR}`);
   });
 
   it("stays put and says why for something that is not one", () => {
@@ -169,9 +170,10 @@ describe("the paste box", () => {
     fireEvent.change(screen.getByLabelText(/contract address/i), {
       target: { value: "pepe" },
     });
+    fireEvent.change(screen.getByLabelText(/^network/i), { target: { value: "base" } });
     fireEvent.click(screen.getByRole("button", { name: /check it/i }));
     expect(history.at(-1)).toBe("/");
-    expect(screen.getByText(/not a contract address/i)).toBeTruthy();
+    expect(screen.getByText(/check the address and selected network/i)).toBeTruthy();
   });
 
   it("takes a Solana mint to the checker too, not only an 0x one", () => {
@@ -189,8 +191,9 @@ describe("the paste box", () => {
     fireEvent.change(screen.getByLabelText(/contract address/i), {
       target: { value: mint },
     });
+    fireEvent.change(screen.getByLabelText(/^network/i), { target: { value: "solana" } });
     fireEvent.click(screen.getByRole("button", { name: /check it/i }));
-    expect(history.at(-1)).toBe(`/check/${mint}`);
+    expect(history.at(-1)).toBe(`/library/solana/${mint}`);
   });
 });
 

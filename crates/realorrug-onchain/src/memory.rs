@@ -194,10 +194,20 @@ pub enum Recorded {
 /// 0021 §4). No connection pool, no async runtime — a single [`Connection`]
 /// behind `&self`, because SQLite serialises writes on one file anyway.
 pub struct Memory {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl Memory {
+    /// Open existing shared history for public browsing without creating or
+    /// migrating a file. Intake and worker initialization use `open` instead.
+    ///
+    /// # Errors
+    /// Returns a SQLite error when the existing file cannot be opened.
+    pub fn read_only(path: &Path) -> Result<Self, Error> {
+        Ok(Self {
+            conn: Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?,
+        })
+    }
     /// Opens (creating if absent) the memory file at `path`.
     ///
     /// # Errors
@@ -230,6 +240,7 @@ impl Memory {
              );",
         )?;
         Self::init_events(&conn)?;
+        crate::cases::init(&conn)?;
         Ok(Self { conn })
     }
 

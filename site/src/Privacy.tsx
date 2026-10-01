@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What this site collects, and the parts it cannot speak for.
 //!
-//! # Why a privacy policy on a site with no accounts
+//! # Privacy includes the optional authenticated contribution workflow
 //!
 //! Two reasons, and the first is the smaller one. A young domain using crypto
 //! vocabulary, with a leaderboard, a prize and a token, and with no privacy
@@ -15,16 +15,14 @@
 //!
 //! # The hard part is the second half, not the first
 //!
-//! "We collect nothing" is easy to write and easy to get wrong. It was checked:
-//! nothing under `site/` reads a cookie, `localStorage`, `sessionStorage` or
-//! `navigator.sendBeacon`, and no analytics script is loaded anywhere in the
-//! bundle or in `index.html`. The typeface is a bundled dependency served from
-//! this site's own origin, so opening the page does not announce the reader to
-//! a font CDN either.
+//! Earlier browsing-only copy claimed no collection. The Library now submits
+//! public research and uses the existing authenticated session for contributions.
+//! The page must describe both workflows and provider processing. Fonts remain
+//! bundled and no advertising analytics are added.
 //!
 //! What could not be established from the repository is which switches are on
 //! in the operator's Cloudflare account, because a dashboard setting is not a
-//! file. AGENTS.md rule 9: that is recorded on the page as unknown rather than
+//! file. That is recorded on the page as unknown rather than
 //! guessed in the flattering direction.
 
 import { ISSUES, SOURCE } from "./honesty";
@@ -40,20 +38,14 @@ export function Privacy() {
       <div className="max-w-2xl">
         <Card className="mb-10 border-[var(--color-edge)]">
           <p className="text-[var(--color-text)]">
-            <strong>This site collects nothing about you.</strong> There is no
-            account, no login, no cookie, no analytics and no form that sends
-            anything anywhere. It is a folder of static files. That is a claim
-            about code anybody can read, and the code is{" "}
+            <strong>Library browsing is public; contributions use X sign-in.</strong> The API receives searches, token addresses and submitted questions. Investigation content becomes public. The code describing these flows is{" "}
             <Out href={SOURCE}>public</Out>.
           </p>
         </Card>
 
-        <Block title="No cookies, no analytics, no tracking">
+        <Block title="Session cookies and no advertising analytics">
           <p>
-            The pages set no cookies. They store nothing in your browser — no
-            local storage, no session storage, nothing to clear afterwards.
-            There is no analytics script, no tag manager, no advertising pixel
-            and no session recorder. Nothing measures you.
+            X sign-in uses secure session and short-lived OAuth cookies. The server stores an X identity and a hash of the session token; the browser uses that session for authenticated submissions. Library forms keep their drafts in memory. The site has no advertising pixel, tag manager or session recorder.
           </p>
           <p>
             The typeface is served from this site's own address rather than from
@@ -88,21 +80,13 @@ export function Privacy() {
             same way any web server sees one.
           </p>
           <p>
-            Nothing about you travels with it. No cookie, no identifier, no
-            query string, and nothing about which coin you were reading —
-            because the site never sends that anywhere at all. If the request
-            fails, the page falls back to a snapshot committed to the repository
-            and tells you it is showing an older measurement.
+            Library requests include the selected network, address or search terms. The API sees them and may receive an existing session cookie. It uses transient address-based rate limits. Historic statistics can show a labeled committed snapshot; the Library reports unavailable data instead of substituting invented cases.
           </p>
         </Block>
 
-        <Block title="Pasting an address here sends it nowhere">
+        <Block title="Token questions and contributions are public">
           <p>
-            The box on the front page checks the shape of a mint address in your
-            own browser and then builds a link to X with the post already
-            written. It is your post, sent from your account, when you press
-            send. The address you pasted never reaches this site's host, and
-            there is no endpoint here for it to reach.
+            Opening a dossier sends its token address and network to the API. Submitting an investigation sends your question, wallet and transaction leads. These become part of a durable public case history, including corrections. Do not include secrets or private personal information. Private admission records use a derived X-account identifier to enforce quotas across X and the website; that identifier is excluded from public case responses.
           </p>
         </Block>
 
@@ -124,11 +108,9 @@ export function Privacy() {
           </p>
         </Block>
 
-        <Block title="Nothing is sold or shared">
+        <Block title="Account records and public history">
           <p>
-            There is no data to sell, no advertising, no third-party analytics
-            provider, no mailing list and no data broker. Nothing is shared with
-            anybody, because nothing is gathered in the first place.
+            Sign-in uses X OAuth. Investigations may send public questions and chain evidence to the configured model provider. The operator retains case history and local backups; session/account deletion does not retract an already public case or X post. There is no mailing list or data-broker integration in this website. Contact the operator about account records or accidental disclosure.
           </p>
         </Block>
 
@@ -152,7 +134,7 @@ export function Privacy() {
         </Block>
 
         <p className="mt-12 text-sm text-[var(--color-faint)]">
-          Last reviewed 2026-09-08, against the source in this repository. This
+          Last reviewed 2026-10-01, against the source in this repository. This
           page changes by a public commit, so every version of it can be read
           alongside every other.
         </p>

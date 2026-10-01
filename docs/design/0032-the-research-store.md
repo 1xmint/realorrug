@@ -7,13 +7,13 @@ returned BUILD AFTER AMENDMENTS. Every amendment below is folded into the
 sections it touches; §7 and §9 record what the audit added as build
 requirements and open questions.
 
-**Status:** Proposed. Recommending, until Josh reads it — plan 0002's
-decision log entry of 2026-09-25 moved phase 4 (research, forecasts,
-reputation) before the launch and requires "a design document and an ADR"
-before any code, because phase 4 changes a recorded property of
-`realorrug-serve`. The decision this design rests on is
-[ADR 0041](../adr/0041-the-serve-crate-may-hold-one-store.md), marked
-recommending until Josh rules on it.
+**Status:** historical design reasoning and audited technical requirements,
+retained alongside the implementation. Its launch sequencing is superseded
+by [ADR 0043](../adr/0043-the-public-library-and-compounding-intelligence.md):
+the free Library is required at launch; forecasts/reputation are not.
+[VISION.md](../../VISION.md) and [ROADMAP.md](../../ROADMAP.md) carry current
+product and delivery direction. Inspect code before treating a design detail
+as built. Its store boundary decision is [ADR 0041](../adr/0041-the-serve-crate-may-hold-one-store.md).
 **Adds to:** [design 0028](0028-the-daily-five.md) §2–§10 (the game, the
 odds, the insider hole, and build steps G1–G9) and
 [design 0029](0029-bot-quality-then-a-solana-launch.md) §4 ("the community,

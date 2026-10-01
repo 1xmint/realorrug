@@ -1,0 +1,15 @@
+{
+  "source": "operator read-only qualification capture",
+  "id": "base-usdc-read",
+  "question": "Inspect token controls, liquidity and bounded transfers. Treat missing data as unknown.",
+  "case": {
+    "chain": "base",
+    "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  },
+  "window": null,
+  "transactions": [],
+  "wallets": [
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  ],
+  "thread": null
+}

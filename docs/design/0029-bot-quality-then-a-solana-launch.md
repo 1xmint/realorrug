@@ -1,7 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Design 0029 — bot quality, then a Solana launch, then a research community
 
-**Status:** accepted. Records the reasoning behind the plan Josh wrote on
+**Status:** historical reasoning, partly superseded 2026-09-30 by
+[design 0033](0033-the-library-and-connected-flywheels.md) and
+[ADR 0043](../adr/0043-the-public-library-and-compounding-intelligence.md).
+Current product direction is [VISION.md](../../VISION.md); delivery is
+[ROADMAP.md](../../ROADMAP.md). The original reasoning below is retained.
+Records the reasoning behind the plan Josh wrote on
 2026-09-21. The decisions are [ADR 0037](../adr/0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md),
 [ADR 0038](../adr/0038-no-prizes-buybacks-or-holder-benefits.md) and
 [ADR 0039](../adr/0039-the-launch-gates-and-the-monthly-ceiling.md); the order

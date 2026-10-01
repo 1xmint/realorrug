@@ -2,12 +2,23 @@
 # ADR 0039 — the launch gates, and a $90 monthly ceiling
 
 **Date:** 2026-09-21
-**Status:** accepted. **Josh's decisions, recorded**, from his plan of
+**Status:** accepted, partially amended by
+[ADR 0043](0043-the-public-library-and-compounding-intelligence.md), 2026-09-30;
+see the amendment in Decision. **Josh's original decisions, recorded**, from his plan of
 2026-09-21.
 **Reasoning:** [design 0029](../design/0029-bot-quality-then-a-solana-launch.md).
 **Order of work:** [plan 0002](../plans/0002-bot-quality-then-a-solana-launch.md).
 
 ## Decision
+
+**Partially amended 2026-09-30 by [ADR 0043](0043-the-public-library-and-compounding-intelligence.md):**
+decision 5's enduring funding framing is replaced by $100–$200 startup
+funding, capped at $200 total, free-first, without a recurring commitment.
+The implemented $90 monthly stop remains enforced until explicitly changed.
+Quality, review (as amended by ADR 0042), X and owner-signing gates remain;
+Library/claim-investigation readiness replaces the later phase-4 prerequisite.
+[ROADMAP.md](../../ROADMAP.md) is current delivery direction. The original
+table and implementation description below remain historical evidence.
 
 | # | decision |
 |---|---|

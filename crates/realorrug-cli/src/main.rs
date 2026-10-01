@@ -9,6 +9,7 @@ mod analyst;
 mod audit;
 mod bio;
 mod capture;
+mod cases;
 mod contest;
 mod creator_index;
 mod dossier;
@@ -33,6 +34,16 @@ use std::process::ExitCode;
 const USAGE: &str = "realorrug <command>
 
 commands:
+  investigation-capture --request JSON --out NEWFILE
+                [--solana-rpc URL | --base-rpc URL | --ethereum-rpc URL]
+                                 bounded live reads for a chain-qualified claim;
+                                 freezes observations, no model call or post
+  case-review CAPTURE --memory DEDICATEDPATH --out DIR
+                                 offline replay with gaps and owner-review lines
+  case-store <verify|backup|correct> --memory PATH
+                [--out NEWFILE | --chain NETWORK --address TOKEN
+                 --observation ID --reason TEXT]
+                                 verify/backup history, or append a correction
   dossier <mint> [--rpc URL] [--seconds N]
                                  everything the bot can say about one token,
                                  read from the chain on demand. Read-only,
@@ -197,6 +208,9 @@ fn main() -> ExitCode {
         "contest" => contest::run(&args),
         "dossier" => dossier::run(&args),
         "replay" => replay::run(&args),
+        "investigation-capture" => cases::capture(&args[1..]),
+        "case-review" => cases::review(&args[1..]),
+        "case-store" => cases::store(&args[1..]),
         "roast" => roast::run(&args),
         "analyst" => analyst::run(&args),
         "audit" => audit::run(&args),

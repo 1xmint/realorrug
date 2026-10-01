@@ -2,7 +2,9 @@
 # ADR 0037 — the token launches on pump.fun, and its fees pay for operations
 
 **Date:** 2026-09-21
-**Status:** accepted. **Josh's decisions, recorded**, from the plan he wrote
+**Status:** accepted, partially amended by
+[ADR 0043](0043-the-public-library-and-compounding-intelligence.md), 2026-09-30;
+see the amendment in Context. **Josh's original decisions, recorded**, from the plan he wrote
 on 2026-09-21 ("bot quality → Solana launch → research community"). Nothing
 is launched, bought or signed by this ADR.
 **Reasoning:** [design 0029](../design/0029-bot-quality-then-a-solana-launch.md).
@@ -18,6 +20,14 @@ ADR 0023 decision 6 (the repository) and the Robinhood readers, which stay as
 a chain the bot answers about.
 
 ## Context
+
+**Partially amended 2026-09-30 by [ADR 0043](0043-the-public-library-and-compounding-intelligence.md):**
+the selected Solana/pump.fun/SOL route, current manual treasury, disclosures
+and launch checks remain. Operations/reserve is the launch default; the
+permanent exclusion of evaluating buybacks/liquidity is reopened, without
+adopting a split or automated execution. The joint launch now includes the
+free Library. Read [VISION.md](../../VISION.md) and [ROADMAP.md](../../ROADMAP.md)
+for current direction; the original table remains a dated decision record.
 
 The Robinhood plan tied three things together: the token's home, a weekly
 prize paid from its creator fees, and a signer that paid the winner. The prize

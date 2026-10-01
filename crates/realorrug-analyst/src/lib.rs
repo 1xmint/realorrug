@@ -47,10 +47,13 @@
 pub mod admission;
 pub mod answer;
 pub mod bio;
+pub mod case_request;
+pub mod case_worker;
 pub mod contest;
 pub mod daemon;
 pub mod daily;
 pub mod followup;
+pub mod investigator;
 pub mod lane2;
 pub mod log;
 pub mod mention;

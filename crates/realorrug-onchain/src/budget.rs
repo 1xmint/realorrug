@@ -105,6 +105,7 @@ pub struct Budget {
     cu_spent: u32,
     retries: u32,
     paused: Duration,
+    model_wait: Duration,
 }
 
 impl Default for Budget {
@@ -134,6 +135,7 @@ impl Budget {
             cu_spent: 0,
             retries: 0,
             paused: Duration::ZERO,
+            model_wait: Duration::ZERO,
         }
     }
 
@@ -180,7 +182,7 @@ impl Budget {
     ///
     /// [`Exhausted`] when the deadline has passed or no call allowance remains.
     pub fn take_call(&mut self) -> Result<(), Exhausted> {
-        if self.started.elapsed() >= self.deadline {
+        if self.elapsed() >= self.deadline {
             return Err(Exhausted::Deadline);
         }
         if self.calls_left == 0 {
@@ -294,10 +296,25 @@ impl Budget {
         self.calls_left
     }
 
+    /// Remaining active read time, excluding explicitly paused model work.
+    #[must_use]
+    pub fn time_left(&self) -> Duration {
+        self.deadline.saturating_sub(self.elapsed())
+    }
+
     /// How long the read has been running.
     #[must_use]
     pub fn elapsed(&self) -> Duration {
-        self.started.elapsed()
+        self.started.elapsed().saturating_sub(self.model_wait)
+    }
+
+    /// Model deliberation uses the outer request deadline, not the active RPC
+    /// deadline. Call/page/CU allowances are never reset while waiting.
+    pub fn without_read_time<T>(&mut self, wait: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        let result = wait();
+        self.model_wait += started.elapsed();
+        result
     }
 
     /// Records one HTTP 429 retry and the time slept waiting for it, so a

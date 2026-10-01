@@ -135,7 +135,7 @@ describe("the three trust pages", () => {
 
   it("says what it collects, in words, on the privacy page", () => {
     renderAt("/privacy");
-    expect(screen.getByText(/collects nothing about you/i)).toBeTruthy();
+    expect(screen.getByText(/Library browsing is public/i)).toBeTruthy();
     // The unknown is recorded as unknown -- rule 9 in prose. Which switches
     // are on in the operator's Cloudflare account is not a fact this
     // repository holds, and the page must not fill the gap with a comfortable

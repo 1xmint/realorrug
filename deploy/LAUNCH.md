@@ -1,6 +1,16 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Launch day
 
+**Current direction:** [VISION.md](../VISION.md) and [ROADMAP.md](../ROADMAP.md),
+recorded by [ADR 0043](../docs/adr/0043-the-public-library-and-compounding-intelligence.md).
+The joint investigator/token launch requires the free public Library and
+claim-specific investigation readiness. Forecasts and the paid portal are
+not launch prerequisites. Startup funding is capped at $200 total; current
+runtime limits and manual signing remain. The 25% burn / 25% liquidity idea
+is proposed, not an instruction or launch promise. This runbook's commands
+describe the existing operator-managed launch; recheck them against the
+chosen configuration before use, including any shared-fee routing.
+
 The steps for launching the token on pump.fun, in order. Each says who does it
 and how to tell it worked. The rules behind them are
 [ADR 0037](../docs/adr/0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md)
@@ -15,7 +25,9 @@ Nothing here is automatic. Signing, spending and launching are Josh's.
 ## Gates, before anything below
 
 1. **Josh has accepted the bot's Solana replies** from the replay set, and
-   the three checks pass on every accepted case (plan 0002 phase 2).
+   the three checks pass on every accepted case. The claim-specific
+   investigator, durable cases and free public Library meet ROADMAP
+   milestones 1–2, and financial transparency meets milestone 3.
 2. **Claude's legal and tax review has checked the review packet**
    ([design 0030](../docs/design/0030-launch-review-packet.md)) against the
    launch copy (research 0065, not counsel — [ADR

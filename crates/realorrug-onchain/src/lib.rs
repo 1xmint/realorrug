@@ -53,15 +53,20 @@
 #![forbid(unsafe_code)]
 
 pub mod budget;
+pub mod cases;
 pub mod dispatch;
 pub mod dossier;
+pub mod evm_investigation;
+mod evm_protocols;
 pub mod exchange_wallets;
+pub mod investigation;
 pub mod launch;
 pub mod market;
 pub mod memory;
 pub mod mint;
 pub mod narrative;
 pub mod outcome;
+pub mod pump_fees;
 pub mod pumpfun_launch_check;
 pub mod reserves;
 pub mod robinhood;

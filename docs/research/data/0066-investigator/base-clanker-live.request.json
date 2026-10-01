@@ -1,0 +1,13 @@
+{
+  "id": "base-clanker-live",
+  "thread": null,
+  "source": "public Clanker API target discovery; chain qualification required",
+  "case": {
+    "address": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+    "chain": "base"
+  },
+  "transactions": [],
+  "question": "Inspect configured fees, recipients and administrative powers; distinguish configuration from realized payment and beneficial ownership.",
+  "window": null,
+  "wallets": []
+}

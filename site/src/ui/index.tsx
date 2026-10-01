@@ -497,6 +497,7 @@ export function CheckBox() {
   const [, navigate] = useLocation();
   const [text, setText] = useState("");
   const [wrong, setWrong] = useState(false);
+  const [network, setNetwork] = useState("");
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     const address = text.trim();
@@ -504,7 +505,8 @@ export function CheckBox() {
       setWrong(true);
       return;
     }
-    navigate(`/check/${address}`);
+    if (!network || (network === "solana") !== mintShaped(address)) { setWrong(true); return; }
+    navigate(network === "robinhood" ? `/check/${address}?chain=robinhood` : `/library/${network}/${encodeURIComponent(address)}`);
   };
   return (
     <form onSubmit={submit} className="mt-8 max-w-2xl" role="search">
@@ -514,6 +516,9 @@ export function CheckBox() {
       >
         Paste a token&apos;s contract address
       </label>
+      <label className="mb-2 block text-sm">Network <select required value={network} onChange={event => { setNetwork(event.target.value); setWrong(false); }} className="ml-2 bg-[var(--color-raised)] px-3 py-2">
+        <option value="">Choose network</option><option value="solana">Solana</option><option value="base">Base</option><option value="ethereum">Ethereum</option><option value="robinhood">Robinhood</option>
+      </select></label>
       <div className="flex flex-col gap-2 border-2 border-[var(--color-gold)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[#f0c95a] sm:flex-row">
         <input
           id="check-address"
@@ -545,7 +550,7 @@ export function CheckBox() {
           id="check-address-error"
           className="mt-2 text-sm text-[var(--color-danger)]"
         >
-          That is not a contract address. A Robinhood Chain one starts with 0x
+          Check the address and selected network. An EVM contract starts with 0x
           and is 42 characters long; a Solana mint is 32 to 44 letters and
           digits with no 0, O, I or l in it.
         </p>

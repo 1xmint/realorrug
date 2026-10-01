@@ -136,7 +136,7 @@ function JustChecked() {
                       {rung?.stamp ?? v.level}
                     </span>
                     <Link
-                      href={`/check/${encodeURIComponent(v.address)}`}
+                      href={`/check/${encodeURIComponent(v.address)}${v.chain === "robinhood" ? "?chain=robinhood" : ""}`}
                       className="font-mono text-[var(--color-text)] underline underline-offset-4 hover:text-[var(--color-signal)]"
                     >
                       {shortAddress(v.address)}
