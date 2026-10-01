@@ -2065,7 +2065,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join("refusals.jsonl").to_string_lossy().into_owned();
-        assert!(read_refusals(&path).is_empty());
+        assert_eq!(read_refusals(&path), [] as [crate::contest::RefusalLine; 0]);
         let line = RefusalLine {
             at: 7,
             summoner: "mallory".to_owned(),

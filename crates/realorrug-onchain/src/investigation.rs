@@ -436,6 +436,51 @@ fn solana_pool(
 
 #[cfg(test)]
 pub(super) mod tests {
+    #[test]
+    fn live_reader_routes_base_and_ethereum_to_their_explicit_clients() {
+        let header = json!({"number":"0x10","hash":format!("0x{}", "ab".repeat(32))});
+        let responses = |chain_id: &str| {
+            vec![
+                ("eth_chainId", json!(chain_id)),
+                ("eth_getBlockByNumber", header.clone()),
+                ("eth_getLogs", json!([])),
+                ("eth_getLogs", json!([])),
+                ("eth_getBlockByNumber", header.clone()),
+            ]
+        };
+        let (base, base_server) = crate::evm_investigation::tests::endpoint(responses("0x2105"));
+        let (ethereum, ethereum_server) =
+            crate::evm_investigation::tests::endpoint(responses("0x1"));
+        let solana = RpcClient::new("http://127.0.0.1:1");
+        let mut reader = LiveReader {
+            solana: &solana,
+            base: Some(&base),
+            ethereum: Some(&ethereum),
+            robinhood: None,
+        };
+        for chain in [Network::Base, Network::Ethereum] {
+            let case = CaseKey::new(chain, "0x1111111111111111111111111111111111111111").unwrap();
+            let read = Read {
+                tool: Tool::History,
+                subject: case.address.clone(),
+                why: "explicit network".into(),
+            };
+            let mut budget = Budget::default();
+            let observation = reader.read(&case, &read, None, &mut budget, 123).unwrap();
+            assert_eq!(budget.calls_made(), 5);
+            assert_eq!(observation.at, 123);
+            assert!(observation.source.starts_with(&format!("{chain}:")));
+            assert!(
+                observation
+                    .read_point
+                    .unwrap()
+                    .starts_with(&format!("{chain} block 16"))
+            );
+            assert_eq!(observation.value["transfers"], json!([]));
+        }
+        base_server.join().unwrap();
+        ethereum_server.join().unwrap();
+    }
     use super::*;
     use crate::rpc::{RawInstruction, Transaction};
     const TOKEN: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -596,6 +641,8 @@ pub(super) mod tests {
         account.data[46..50].copy_from_slice(&1u32.to_le_bytes());
         account.data[50..82].fill(3);
         account.owner = Some("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb".into());
+        account.data.resize(166, 0);
+        account.data[165] = 1; // Token-2022 mint type; extensions stay unresolved.
         let (_, value, gap) = decoded_account(&read, &address, &account, None).unwrap();
         let words = value["statements"][1]["text"].as_str().unwrap();
         assert!(words.contains(&Address::new([2; 32]).to_string()));

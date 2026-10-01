@@ -555,7 +555,14 @@ pub(super) mod tests {
             format!("0x{}", "00".repeat(50_000)),
         ] {
             let (rpc, server) = endpoint(vec![("eth_getCode", json!(code))]);
-            assert!(token(&rpc, &read, "0x10", &mut Budget::default()).is_err());
+            let error = token(&rpc, &read, "0x10", &mut Budget::default()).unwrap_err();
+            let expected = match code.as_str() {
+                "0x" => "address has no deployed contract code at this block",
+                "6000" => "bytecode lacks hex prefix",
+                _ if code.len() > 100_000 => "contract code exceeds read bound",
+                _ => "malformed contract bytecode",
+            };
+            assert_eq!(error, expected);
             server.join().unwrap();
         }
         let code = format!("0x{}", "00".repeat(49_999));
@@ -680,6 +687,34 @@ pub(super) mod tests {
         }
     }
 
+    #[test]
+    fn v2_reserve_layout_requires_a_prefix_three_words_and_hex_bytes() {
+        let case = CaseKey::new(
+            crate::cases::Network::Ethereum,
+            "0x1111111111111111111111111111111111111111",
+        )
+        .unwrap();
+        let factory = "5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f";
+        for (reserves, reason) in [
+            ("00".repeat(96), "reserves missing prefix"),
+            (format!("0x{}", "00".repeat(95)), "malformed pool reserves"),
+            (format!("0x{}", "00".repeat(97)), "malformed pool reserves"),
+            (
+                format!("0x{}gg", "00".repeat(95)),
+                "malformed pool reserves",
+            ),
+        ] {
+            let (rpc, server) = endpoint(vec![
+                ("eth_call", abi_word(8)),
+                ("eth_call", json!(format!("0x{factory:0>64}"))),
+                ("eth_call", json!(reserves)),
+            ]);
+            let error = liquidity(&rpc, &case, "0x10", &mut Budget::default()).unwrap_err();
+            server.join().unwrap();
+            assert_eq!(error, reason);
+        }
+    }
+
     pub(crate) fn endpoint(
         responses: Vec<(&'static str, Value)>,
     ) -> (Rpc, std::thread::JoinHandle<()>) {
@@ -790,6 +825,10 @@ pub(super) mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one canonical-transaction fixture exercises payment, failure and identity refusal"
+    )]
     fn only_successful_canonical_transactions_authorize_payment_statements() {
         let case = CaseKey::new(
             crate::cases::Network::Base,

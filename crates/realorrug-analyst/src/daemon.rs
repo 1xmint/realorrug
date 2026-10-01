@@ -536,6 +536,9 @@ pub fn provider_notice(why: &realorrug_model::Selection) -> String {
 }
 
 /// Runs the loop. Never returns.
+///
+/// # Panics
+/// If the operating system cannot represent the next bounded polling deadline.
 #[allow(
     clippy::too_many_lines,
     reason = "the daemon's start-up, read once top to bottom"
@@ -719,6 +722,8 @@ pub fn run() -> ! {
     );
 
     let mut wait = poll::BUSY;
+    let mut next_poll = std::time::Instant::now();
+    let worker_enabled = crate::investigator::capacity_from(&env).is_some();
     if let Err(e) = crate::case_worker::initialize(&paths, &env) {
         eprintln!("realorrug-investigator: startup refused: {e}");
         idle_forever();
@@ -735,6 +740,15 @@ pub fn run() -> ! {
         ) {
             eprintln!("realorrug-investigator: worker stopped: {e}");
             idle_forever();
+        }
+        // Queue liveness must not inherit a quiet X lane's five-minute backoff.
+        // The deadline preserves that lane's paid API cadence.
+        if let Some(pause) = crate::case_worker::poll_pause(
+            next_poll.saturating_duration_since(std::time::Instant::now()),
+            worker_enabled,
+        ) {
+            std::thread::sleep(pause);
+            continue;
         }
         let found = tick(
             x.as_ref(),
@@ -790,7 +804,9 @@ pub fn run() -> ! {
             &paths,
         );
         wait = next_wait(found, found_telegram, wait);
-        std::thread::sleep(wait);
+        next_poll = std::time::Instant::now()
+            .checked_add(wait)
+            .expect("bounded poll interval fits Instant");
     }
 }
 
@@ -2510,7 +2526,7 @@ mod tests {
         // No credential is nothing to poll, so there is nobody to ignore. A
         // placeholder here would be a list that matches nobody, which is what
         // the bug was.
-        assert!(ignored(None).is_empty());
+        assert_eq!(ignored(None), [] as [std::string::String; 0]);
     }
 
     #[test]

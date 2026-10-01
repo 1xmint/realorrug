@@ -1189,7 +1189,10 @@ mod tests {
         );
         // And the ranking is still published: voiding pays nobody, it does not
         // erase what happened.
-        assert!(!doc["entries"].as_array().expect("entries").is_empty());
+        assert_ne!(
+            doc["entries"].as_array().expect("entries").as_slice(),
+            [] as [serde_json::Value; 0]
+        );
     }
 
     #[test]

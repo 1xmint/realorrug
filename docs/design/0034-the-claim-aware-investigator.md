@@ -31,3 +31,11 @@ checks without posting. Live model evaluation is explicit and metered. Library
 projections and authenticated submissions share cases and quotas. Interrupted
 work cannot repeat model calls or publication silently. Compact case history
 survives raw retention; backups/checkpoints remain under operator custody.
+
+The serialized worker checks queued work and refreshes its heartbeat between
+mention polls. An idle enabled worker waits at most ten seconds, preserving
+the paid X/Telegram polling deadline instead of polling those lanes again.
+Active investigations remain bounded and can delay a due poll. A disabled
+worker retains the existing polling sleep. Pending publication uses the
+correction-aware assessment for its exact request, so a withdrawn clause
+cannot survive merely because its delivery was already queued.

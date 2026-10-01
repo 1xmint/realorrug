@@ -800,7 +800,10 @@ mod tests {
                 ..
             }]
         ));
-        assert!(super::check(&blank_mint_fragments(draft, mint), &sheet).is_empty());
+        assert_eq!(
+            super::check(&blank_mint_fragments(draft, mint), &sheet),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -837,8 +840,14 @@ mod tests {
     #[test]
     fn a_day_of_month_cannot_back_an_invented_age() {
         let moment = || [Authorised::anywhere(20_250_916.052)];
-        assert!(super::check("It was read 2025-09-16 05:20 UTC.", &moment()).is_empty());
-        assert!(!super::check("It launched 16 hours ago.", &moment()).is_empty());
+        assert_eq!(
+            super::check("It was read 2025-09-16 05:20 UTC.", &moment()),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
+        assert_ne!(
+            super::check("It launched 16 hours ago.", &moment()),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     /// The membership rule on its own, with no subject attached to anything.
@@ -869,7 +878,10 @@ mod tests {
 
     #[test]
     fn an_authorised_figure_passes() {
-        assert!(check("The round trip is 850 bps.", &[850.0, 456.0]).is_empty());
+        assert_eq!(
+            check("The round trip is 850 bps.", &[850.0, 456.0]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -880,14 +892,20 @@ mod tests {
             check("about 25%", &[25.1]).is_empty(),
             "25 rounds from 25.1"
         );
-        assert!(check("25.1%", &[25.1]).is_empty());
+        assert_eq!(
+            check("25.1%", &[25.1]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
         assert!(
             !check("25.4%", &[25.1]).is_empty(),
             "not a rounding of 25.1"
         );
         assert!(!check("68%", &[25.1]).is_empty(), "0008's dead number");
         // Rounding does not licence a different order of magnitude.
-        assert!(!check("250", &[25.1]).is_empty());
+        assert_ne!(
+            check("250", &[25.1]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -898,7 +916,10 @@ mod tests {
         // did not catch it because its full stop was not the final byte.
         //
         // Both of these end exactly at the character after the digits.
-        assert!(check("the figure is 25.", &[25.0]).is_empty());
+        assert_eq!(
+            check("the figure is 25.", &[25.0]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
         assert_eq!(literals("ends on 6").len(), 1);
 
         // And the *text* of the literal, not only how many there are. The guard
@@ -985,7 +1006,10 @@ mod tests {
             "exactly the epsilon is outside it"
         );
         // And a step under it is inside.
-        assert!(check("0.000000001", &[0.000_000_000_1]).is_empty());
+        assert_eq!(
+            check("0.000000001", &[0.000_000_000_1]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -996,7 +1020,10 @@ mod tests {
             literals("17,497 launches"),
             vec![("17497".to_owned(), 17_497.0)]
         );
-        assert!(check("17,497 launches", &[17_497.0]).is_empty());
+        assert_eq!(
+            check("17,497 launches", &[17_497.0]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -1030,7 +1057,10 @@ mod tests {
         // grind one containing the figure they wanted published.
         let mint = "82U9hMTJP9WzBAG5852mRoQ4Qbwa48nWudPyGEpHpump";
         assert!(literals(mint).is_empty(), "{:?}", literals(mint));
-        assert!(check(&format!("Real or Rug on {mint}: 6 recipients."), &[6.0]).is_empty());
+        assert_eq!(
+            check(&format!("Real or Rug on {mint}: 6 recipients."), &[6.0]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -1039,12 +1069,18 @@ mod tests {
         // gluing a unit to it. "4200bps" is nowhere near address length.
         let found = literals("the round trip is 4200bps");
         assert_eq!(found, vec![("4200".to_owned(), 4200.0)]);
-        assert!(!check("4200bps", &[850.0]).is_empty());
+        assert_ne!(
+            check("4200bps", &[850.0]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
     fn a_reply_with_no_numbers_passes_trivially() {
-        assert!(check("Real or Rug has no record of this token.", &[]).is_empty());
+        assert_eq!(
+            check("Real or Rug has no record of this token.", &[]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -1063,7 +1099,10 @@ mod tests {
         // measurement, and it is exactly the kind of helpfulness that would
         // otherwise put an unmeasured figure under a name that promises
         // measurement.
-        assert!(!check("850 plus 456 is 1306 bps", &[850.0, 456.0]).is_empty());
+        assert_ne!(
+            check("850 plus 456 is 1306 bps", &[850.0, 456.0]),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     /// A sheet that measured one thing at 41%.
@@ -1100,15 +1139,18 @@ mod tests {
     fn the_subject_rule_stays_out_of_an_ambiguous_sentence() {
         // Two subjects named: either could own the figure, and refusing would
         // cost a true reply. Falls back to plain membership, which passes.
-        assert!(
+        assert_eq!(
             super::check(
                 "The creator is also the largest holder at 41%.",
                 &holders_at_41()
-            )
-            .is_empty()
+            ),
+            [] as [crate::fidelity::Fabricated; 0]
         );
         // And none named at all.
-        assert!(super::check("41% sits in one place.", &holders_at_41()).is_empty());
+        assert_eq!(
+            super::check("41% sits in one place.", &holders_at_41()),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -1192,12 +1234,12 @@ mod tests {
         // sheet rather than measurements of a subject on it, so a sentence
         // naming an actor may still cite them.
         let authorised = vec![Authorised::anywhere(444_007_820.0)];
-        assert!(
+        assert_eq!(
             super::check(
                 "The creator's side of this was read at slot 444007820.",
                 &authorised
-            )
-            .is_empty()
+            ),
+            [] as [crate::fidelity::Fabricated; 0]
         );
     }
 
@@ -1213,7 +1255,10 @@ mod tests {
             subject: Subject::Holders,
             value: 25.1,
         }];
-        assert!(super::check("The top holder has 25.1%.", &authorised).is_empty());
+        assert_eq!(
+            super::check("The top holder has 25.1%.", &authorised),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]

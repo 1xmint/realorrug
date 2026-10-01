@@ -815,7 +815,7 @@ mod tests {
 
         let doc = facts_doc(a_token(), &sheet);
         let signals = doc["signals"].as_array().expect("a signals array");
-        assert!(!signals.is_empty());
+        assert_ne!(signals.as_slice(), [] as [serde_json::Value; 0]);
         for signal in signals {
             let keys: Vec<&str> = signal
                 .as_object()

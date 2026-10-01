@@ -51,7 +51,9 @@ after reviewing [coverage and capture evidence](docs/research/0066-the-investiga
 and [the environment example](deploy/analyst.env.example). Missing storage,
 budget, prices or a live worker refuses new website work. Interrupted jobs and
 uncertain publication attempts never retry silently. Production delivery has
-an additional opt-in gate. No paid portal or financial automation is added.
+an additional opt-in gate. Idle queue checks run at most ten seconds apart,
+independently of X polling backoff; this does not increase paid mention reads.
+No paid portal or financial automation is added.
 
 Operator commands: `investigation-capture` freezes bounded live observations
 without a model call; `case-review` produces offline owner-review reports;

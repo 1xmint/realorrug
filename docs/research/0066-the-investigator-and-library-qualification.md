@@ -115,7 +115,15 @@ Library layout. The first CI run passed 2329 Rust tests, build, MSRV,
 dependencies, formatting and the site. The second run passed 2347 Rust tests
 and the ordinary build checks, but failed newer Clippy test-assertion rules and
 all four mutation shards. Survivors fell from 275 to 150; this is progress,
-not acceptance. The next revision adds boundary/refusal tests for model time,
+not acceptance. The third run passed 2372 Rust tests and the ordinary build
+checks; its newer Clippy rule required further assertion updates, and mutation
+survivors fell to 14. The current revision adds exact refusal/role tests for
+protocol tuples, malformed bytecode/reserves, explicit Base/Ethereum routing,
+extended Token-2022 mint layouts and clarification quotas at the day boundary.
+The clarification spending regression was verified by reapplying CI's wrong
+day calculation: the named test failed, then passed with the original restored.
+Queued publication also has a correction-before-delivery regression. Earlier
+revisions added boundary/refusal tests for model time,
 two-hop leads, replay custody, protocol quotes/receipts, Solana transfer/pool
 identity, EVM transactions and Library intake. No mutation gate is disabled or
 excluded to obtain a pass. **CI acceptance remains open.** Full Rust suites
@@ -132,6 +140,10 @@ as well as the latest dossier. Challenged findings therefore cannot be selected
 as measured clauses for a pending reply; original assessments remain in history.
 The mention poll advances its cursor after durable intake but does not count a
 queued investigation as an answered mention; the worker records that outcome.
+An enabled worker checks the queue at most ten seconds apart while idle,
+refreshing its heartbeat independently of the mention lane's backoff. Paid X
+polls retain their original deadlines; an active bounded investigation can delay
+the next poll. A disabled worker retains the legacy sleep.
 Unavailability never becomes an empty successful Library. The live publication
 gate is separate from worker enablement and retains existing X approval rules.
 Checkpoints detect changes to retained records; operator custody is not

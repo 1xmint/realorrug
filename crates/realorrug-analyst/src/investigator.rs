@@ -735,7 +735,7 @@ mod tests {
             select_statements(&evidence, Some(&mut model), &Instant::now(), &mut decisions),
             ranked
         );
-        assert!(decisions.is_empty());
+        assert_eq!(decisions, [] as [std::string::String; 0]);
         for selected in [
             vec!["invented".to_owned()],
             evidence.iter().skip(1).map(|o| o.id.clone()).collect(),
@@ -789,7 +789,10 @@ mod tests {
             assert!(entry["check"].as_str().unwrap().len() > 20);
             assert!(entry["lookalike"].as_str().unwrap().len() > 20);
         }
-        assert!(!mechanisms().as_array().unwrap().is_empty());
+        assert_ne!(
+            mechanisms().as_array().unwrap().as_slice(),
+            [] as [serde_json::Value; 0]
+        );
     }
 
     #[test]

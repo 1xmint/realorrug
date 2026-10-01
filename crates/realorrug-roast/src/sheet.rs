@@ -4291,7 +4291,7 @@ mod tests {
             twins: Vec::new(),
             skipped: Vec::new(),
         };
-        assert!(sheet.authorised().is_empty());
+        assert_eq!(sheet.authorised(), [] as [crate::fidelity::Authorised; 0]);
         assert!(!sheet.render().contains("99999"));
     }
 
@@ -5226,10 +5226,10 @@ mod tests {
         // Same launch, but a snapshot whose strongest band this recipient
         // count misses: no signal, so no twin heading at all.
         let quiet = FactSheet::build(&dossier, Some(&rates_strongest(50, 60)), None, None, None);
-        assert!(quiet.signals.is_empty());
+        assert_eq!(quiet.signals, [] as [crate::sheet::Signal; 0]);
         let rendered = quiet.render();
         assert!(!rendered.contains("INNOCENT EXPLANATIONS"), "{rendered}");
-        assert!(quiet.twins.is_empty());
+        assert_eq!(quiet.twins, [] as [std::string::String; 0]);
     }
 
     /// An index with `filler_count` creators at exactly `floor_value`

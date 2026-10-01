@@ -391,6 +391,59 @@ pub(crate) fn v3(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pool_key_hex_preserves_every_byte_and_refuses_malformed_input() {
+        let bytes = (0..=255u8).collect::<Vec<_>>();
+        let hex = encode_hex(&bytes);
+        assert_eq!(hex_bytes(&hex).unwrap(), bytes);
+        assert_eq!(hex_bytes(&hex.to_uppercase()).unwrap(), bytes);
+        assert_eq!(hex_bytes("").unwrap(), [] as [u8; 0]);
+        for invalid in ["0", "000", "gg", "00gg", "é", "0x00"] {
+            assert_eq!(hex_bytes(invalid).unwrap_err(), "malformed bytes");
+        }
+    }
+
+    #[test]
+    fn flaunch_pool_identity_and_fee_tuple_layout_must_match_before_a_quote() {
+        let case =
+            CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111").unwrap();
+        let manager = "0x23321f11a6d44fd1ab790044fdfde5758c902fdc";
+        let valid = vec![
+            format!("0x{}", arg(&case.address)),
+            numeric(&[0])[0].clone(),
+            numeric(&[3000])[0].clone(),
+            numeric(&[60])[0].clone(),
+            format!("0x{}", arg(manager)),
+        ];
+        for change in 0..3 {
+            let mut key = valid.clone();
+            match change {
+                0 => key.truncate(4),
+                1 => key[4] = format!("0x{}", arg(ZERO)),
+                _ => key[0] = format!("0x{}", arg(ZERO)),
+            }
+            let (rpc, server) =
+                endpoint(vec![("eth_call", encoded(&key)), ("eth_call", json!("0x"))]);
+            let result = flaunch(&rpc, &case, "0x1000", &mut Budget::default());
+            server.join().unwrap();
+            assert_eq!(
+                result.unwrap_err(),
+                "no supported normal Flaunch pool identified"
+            );
+        }
+        for tuple in [
+            numeric(&[2500, 5000, 2500]),
+            numeric(&[2500, 5000, 2500, 0, 0]),
+        ] {
+            let (rpc, server) = endpoint(vec![
+                ("eth_call", encoded(&valid)),
+                ("eth_call", encoded(&tuple)),
+            ]);
+            let result = flaunch(&rpc, &case, "0x1000", &mut Budget::default());
+            server.join().unwrap();
+            assert_eq!(result.unwrap_err(), "unsupported Flaunch fee tuple");
+        }
+    }
     use super::*;
     use crate::evm_investigation::tests::endpoint;
     fn encoded(data: &[String]) -> Value {
@@ -425,6 +478,20 @@ mod tests {
         assert!(dynamic(&tuple, 1, 0).is_err());
         tuple[12] = numeric(&[16])[0].clone();
         assert!(dynamic(&tuple[..28], 1, 0).is_err());
+        for count in [0, 17, 18] {
+            tuple[12] = numeric(&[count])[0].clone();
+            assert_eq!(
+                dynamic(&tuple, 1, 0).unwrap_err(),
+                "recipient count exceeds decoder bound"
+            );
+        }
+        for offset in [0, 32, 320, 353] {
+            tuple[1] = numeric(&[offset])[0].clone();
+            assert_eq!(
+                dynamic(&tuple, 1, 0).unwrap_err(),
+                "invalid dynamic tuple offset"
+            );
+        }
     }
 
     #[test]
@@ -607,7 +674,7 @@ mod tests {
             ("eth_call", encoded(&rewards(&case.address))),
         ]);
         let mut budget = Budget::default();
-        let (value, gap) = clanker(&rpc, &case, "0x1", &mut budget).unwrap();
+        let (value, gap) = fees(&rpc, &case, "0x1", &mut budget).unwrap();
         server.join().unwrap();
         assert_eq!(budget.calls_made(), 2);
         assert_eq!(value["protocol"], "clanker_v4_0");
@@ -717,5 +784,40 @@ mod tests {
         data[13] = format!("0x{:064x}", 9500);
         assert!(clanker_rewards(&data, token).is_err());
         assert!(words("0xé").is_err());
+    }
+
+    #[test]
+    fn clanker_multiple_reward_shares_preserve_roles_and_require_the_total_denominator() {
+        let token = "0x1111111111111111111111111111111111111111";
+        let mut data = numeric(&[0; 21]);
+        data[0] = numeric(&[32])[0].clone();
+        data[1] = format!("0x{}", arg(token));
+        for (slot, offset) in [(9, 352), (10, 448), (11, 544)] {
+            data[slot] = numeric(&[offset])[0].clone();
+        }
+        for slot in [12, 15, 18] {
+            data[slot] = numeric(&[2])[0].clone();
+        }
+        data[16] = format!("0x{}", arg(token));
+        data[17] = format!("0x{}", arg(ZERO));
+        data[19] = format!("0x{}", arg(ZERO));
+        data[20] = format!("0x{}", arg(token));
+        for allocations in [[5000, 5000], [0, 10_000], [10_000, 0]] {
+            data[13] = numeric(&[allocations[0]])[0].clone();
+            data[14] = numeric(&[allocations[1]])[0].clone();
+            let value = clanker_rewards(&data, token).unwrap();
+            assert_eq!(value["shares"].as_array().unwrap().len(), 2);
+            assert_eq!(value["shares"][0]["bps"], allocations[0].to_string());
+            assert_eq!(value["shares"][1]["bps"], allocations[1].to_string());
+            assert_eq!(value["shares"][0]["admin"], token);
+            assert_eq!(value["shares"][0]["recipient"], ZERO);
+            assert_eq!(value["shares"][1]["admin"], ZERO);
+            assert_eq!(value["shares"][1]["recipient"], token);
+        }
+        data[13] = numeric(&[10_001])[0].clone();
+        assert_eq!(
+            clanker_rewards(&data, token).unwrap_err(),
+            "invalid reward allocation"
+        );
     }
 }

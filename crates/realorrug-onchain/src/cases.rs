@@ -1315,7 +1315,7 @@ mod tests {
         };
         assert!(memory.next_case_clarification().unwrap().is_none());
         memory
-            .remember_case_clarification("one", "need network", "first", 86_401, limits)
+            .remember_case_clarification("one", "need network", "first", 86_400, limits)
             .unwrap();
         memory
             .remember_case_clarification("two", "duplicate actor", "first", 86_402, limits)

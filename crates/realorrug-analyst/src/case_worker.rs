@@ -16,6 +16,23 @@ use realorrug_onchain::{
 };
 use std::path::Path;
 
+/// Check queued work and refresh its heartbeat between paid mention polls.
+/// A disabled worker retains the legacy sleep; a due poll needs no delay.
+pub(crate) fn poll_pause(
+    remaining: std::time::Duration,
+    enabled: bool,
+) -> Option<std::time::Duration> {
+    if remaining.is_zero() {
+        None
+    } else {
+        Some(if enabled {
+            remaining.min(std::time::Duration::from_secs(10))
+        } else {
+            remaining
+        })
+    }
+}
+
 /// OS lock releases after a crash; overlapping workers must not share a meter.
 ///
 /// # Errors
@@ -374,6 +391,21 @@ fn valid_origin(origin: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn queue_cadence_preserves_paid_poll_deadlines_and_disabled_sleep() {
+        use std::time::Duration;
+        for enabled in [false, true] {
+            assert_eq!(super::poll_pause(Duration::ZERO, enabled), None);
+        }
+        for seconds in [1, 3, 10, 60, 300] {
+            let remaining = Duration::from_secs(seconds);
+            assert_eq!(super::poll_pause(remaining, false), Some(remaining));
+            assert_eq!(
+                super::poll_pause(remaining, true),
+                Some(Duration::from_secs(seconds.min(10)))
+            );
+        }
+    }
     use super::*;
     use std::cell::RefCell;
     fn config(key: &str) -> Option<String> {
@@ -491,7 +523,7 @@ mod tests {
             crate::daemon::budget_from(&config),
             crate::spend::Prices::from_vars(&config).unwrap(),
             paths.ledger.clone(),
-            100,
+            99,
         );
         let publisher = Published::default();
         deliver_clarification(&memory, &paths, &mut spend, &publisher, at).unwrap();
@@ -744,6 +776,50 @@ mod tests {
         assert!(!posted[1].contains("UNVERIFIED"));
         assert!(!posted[1].contains("Long measured clause"));
         assert!(posted[1].chars().count() <= 280);
+        drop(posted);
+        let mut third = mention(
+            "three",
+            "base 0x1111111111111111111111111111111111111111 corrected fees",
+        );
+        third.author = "another-user".into();
+        intake(&third, &memory, &mut gate, at, &config).unwrap();
+        let next = memory.next_case_job(at).unwrap().unwrap();
+        result.request_id = next.request.id.clone();
+        let observation = realorrug_onchain::investigation::observed(
+            &next.request.case,
+            &realorrug_onchain::investigation::Read {
+                tool: realorrug_onchain::investigation::Tool::Fees,
+                subject: next.request.case.address.clone(),
+                why: "synthetic correction regression".into(),
+            },
+            at,
+            None,
+            serde_json::json!({"statements":[{"text":"WITHDRAWN clause"}]}),
+            None,
+        );
+        result.observations = vec![observation.clone()];
+        result.findings = vec![realorrug_onchain::cases::Finding {
+            kind: "synthetic".into(),
+            text: "WITHDRAWN clause".into(),
+            evidence: vec![observation.id.clone()],
+            counterevidence: vec![],
+            status: "measured".into(),
+        }];
+        memory.finish_case(&next.request, &result, at).unwrap();
+        memory
+            .correct_case(
+                &next.request.case,
+                at,
+                &observation.id,
+                "route was challenged",
+            )
+            .unwrap();
+        deliver(&memory, &paths, &mut spend, &publisher, at, &publish).unwrap();
+        let posted = publisher.0.borrow();
+        assert_eq!(posted.len(), 3);
+        assert!(!posted[2].contains("WITHDRAWN"));
+        assert!(posted[2].contains("Measured evidence and missing checks:"));
+        assert!(memory.next_case_delivery().unwrap().is_none());
     }
     #[test]
     fn public_origin_cannot_smuggle_a_path_credentials_or_invalid_port() {
