@@ -58,13 +58,24 @@ Pinned source references: [Flaunch contracts at 77d7d23](https://github.com/flay
 and [Clanker SDK at 4f4d2bb](https://github.com/clanker-devco/clanker-sdk/tree/4f4d2bbf41c7f10543559dc043c85f443a6d452e).
 Source state is not deployed-bytecode equivalence or an independent audit.
 
+**Deployment follow-up, 2026-10-02:** [research 0068](0068-base-fee-routing-and-retained-controls.md)
+now has a positive current-hook Flaunch capture, runtime/source comparisons and
+read-only simulations. The measured NFT owner can change creator allocation
+and disable the bid wall at the captured block. The general documentation's
+fixed-allocation description must not become an immutability claim for this
+deployment. The live current hook also resolves escrow per pool, unlike the
+legacy getter. These findings strengthen the qualification requirement; they
+do not select a provider or adopt a split.
+
 ## Repository fit and qualification gate
 
 The bounded readers recognize two normal Flaunch hooks, including the current
 Base hook listed in the pinned source. Recognition is not complete fee/control
 or liquidity-rights coverage. [Research 0066](0066-the-investigator-and-library-qualification.md)
-has no positive Flaunch live qualification and records an unsupported newer
-Clanker locker. Generic Base token reads cannot close either gap. The existing
+records the earlier failed Flaunch discovery and an unsupported newer Clanker
+locker. Research 0068 closes the positive Flaunch snapshot gap and refreshes
+the supported older Clanker case; broader receipts/powers and newer-generation
+qualification remain open. Generic Base token reads cannot close them. The existing
 Base-USDC facts endpoint records unverified live facilitator interoperability.
 The Solana launch checker is not a Base launch checker.
 

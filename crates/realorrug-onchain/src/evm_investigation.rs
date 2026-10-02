@@ -718,12 +718,23 @@ pub(super) mod tests {
     pub(crate) fn endpoint(
         responses: Vec<(&'static str, Value)>,
     ) -> (Rpc, std::thread::JoinHandle<()>) {
+        endpoint_checked(
+            responses
+                .into_iter()
+                .map(|(method, value)| (method, value, None))
+                .collect(),
+        )
+    }
+
+    pub(crate) fn endpoint_checked(
+        responses: Vec<(&'static str, Value, Option<Value>)>,
+    ) -> (Rpc, std::thread::JoinHandle<()>) {
         use std::io::{Read as _, Write as _};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         listener.set_nonblocking(true).unwrap();
         let handle = std::thread::spawn(move || {
-            for (method, response) in responses {
+            for (method, response, params) in responses {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 let mut stream = loop {
                     match listener.accept() {
@@ -763,6 +774,9 @@ pub(super) mod tests {
                             let body: Value =
                                 serde_json::from_slice(&bytes[end + 4..end + 4 + length]).unwrap();
                             assert_eq!(body["method"], method);
+                            if let Some(params) = &params {
+                                assert_eq!(&body["params"], params);
+                            }
                             break;
                         }
                     }

@@ -230,3 +230,10 @@ resolution where bounded observations cannot yet settle a claim. Use
 Flaunch and Clanker before selecting the treasury/readback implementation.
 Live qualification and owner reply acceptance remain open; the financial
 ledger follows measured routing, rather than an assumed platform configuration.
+
+[Research 0068](docs/research/0068-base-fee-routing-and-retained-controls.md)
+now qualifies a current Flaunch fee/escrow/NFT snapshot and demonstrates retained
+allocation/disable powers through read-only simulations, alongside a supported
+Clanker refresh. Next: beneficiary receipts, newer Clanker generation, custody/
+withdrawal powers and measured launch costs. No provider, pairing or financial
+allocation is selected by this evidence.

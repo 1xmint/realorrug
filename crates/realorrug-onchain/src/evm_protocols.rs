@@ -209,13 +209,7 @@ fn flaunch(
         {
             continue;
         }
-        let raw = key
-            .iter()
-            .map(|s| s.trim_start_matches("0x"))
-            .collect::<String>();
-        let bytes = hex_bytes(&raw)?;
-        let hash = Keccak256::digest(&bytes);
-        let pool_id = encode_hex(&hash);
+        let pool_id = flaunch_pool_id(&key)?;
         let config = query(
             rpc,
             budget,
@@ -242,7 +236,7 @@ fn flaunch(
             query(rpc, budget, manager, "owner()", "", block).and_then(|v| address(&v, 0))?;
         let calculator = query(rpc, budget, manager, "feeCalculator()", "", block)
             .and_then(|v| address(&v, 0))?;
-        let facts = vec![
+        let mut facts = vec![
             statement(format!(
                 "Flaunch feeSplit() on a 10000-unit post-referral fee input quotes {} bid-wall units, {} creator units and {} protocol units; this is configuration, not receipts.",
                 number(&split, 0)?,
@@ -253,15 +247,153 @@ fn flaunch(
                 "Flaunch creator() returns {creator}; hook owner() returns {owner}; fee calculator is {calculator}."
             )),
         ];
+        let (route, route_gap) = match flaunch_route(
+            rpc,
+            budget,
+            manager,
+            &case.address,
+            &creator,
+            &pool_id,
+            block,
+        ) {
+            Ok(route) => {
+                facts.push(statement(format!("Flaunch revenue NFT {} token id {} reports owner {}; token, NFT and hook registration agree at this read.",route["nft"].as_str().ok_or("NFT absent")?,route["token_id"].as_str().ok_or("NFT id absent")?,creator)));
+                facts.push(statement(format!("Flaunch hook reports fee escrow {} and bid wall {}; isBidWallEnabled() returns {} for this pool. Enabled state does not establish a purchase, burn or permanent liquidity.",route["fee_escrow"].as_str().ok_or("escrow absent")?,route["bid_wall"].as_str().ok_or("bid wall absent")?,route["bid_wall_enabled"].as_bool().ok_or("bid wall state absent")?)));
+                (route, None)
+            }
+            Err(error) => (Value::Null, Some(error)),
+        };
+        let currencies = [address(&key, 0)?, address(&key, 1)?];
+        facts.push(statement(format!("Registered Flaunch pool currencies are {} and {}; asset addresses alone do not establish quote value or backing.",currencies[0],currencies[1])));
+        let mut related = vec![manager.to_owned(), creator, owner, calculator];
+        related.extend(currencies.iter().cloned());
+        for field in ["nft", "fee_escrow", "bid_wall"] {
+            if let Some(address) = route[field].as_str() {
+                related.push(address.to_owned());
+            }
+        }
         let (receipts, receipt_gap) = match distributed(rpc, budget, manager, &pool_id, block) {
             Ok(v) => (v, None),
             Err(e) => (Vec::new(), Some(e)),
         };
-        return Ok((json!({"protocol":"flaunch_normal","hook":manager,"pool_id":format!("0x{pool_id}"),"fee_distribution_words":config,
-            "quoted_split":split,"distributed_events":receipts,"receipt_gap":receipt_gap,"related":[creator,owner,calculator],"statements":facts}),
-            Some("feeSplit excludes referral waterfall and is not total trade fees; distribution events can accrue to escrow rather than reach a beneficiary; custom managers, dynamic fees, bid-wall liquidity, administrative changes and full historical receipts remain unresolved".into())));
+        let gap = flaunch_gap(route_gap.as_deref(), receipt_gap.as_deref());
+        return Ok((
+            json!({"protocol":"flaunch_normal","hook":manager,"pool_id":format!("0x{pool_id}"),"fee_distribution_words":config,
+            "currencies":currencies,"route":route,"route_gap":route_gap,
+            "quoted_split":split,"distributed_events":receipts,"receipt_gap":receipt_gap,"related":related,"statements":facts}),
+            Some(gap),
+        ));
     }
     Err("no supported normal Flaunch pool identified".into())
+}
+
+fn flaunch_pool_id(key: &[String]) -> Result<String, String> {
+    let raw = key
+        .iter()
+        .map(|s| s.trim_start_matches("0x"))
+        .collect::<String>();
+    Ok(encode_hex(&Keccak256::digest(hex_bytes(&raw)?)))
+}
+
+fn flaunch_gap(route_gap: Option<&str>, receipt_gap: Option<&str>) -> String {
+    let mut gap = "feeSplit excludes referral waterfall and is not total trade fees; distribution events can accrue to escrow rather than reach a beneficiary; custom managers, dynamic fees, bid-wall liquidity, administrative changes and full historical receipts remain unresolved".to_owned();
+    if let Some(error) = route_gap {
+        write!(gap, "; route read unavailable: {error}").expect("writing a String cannot fail");
+    }
+    if let Some(error) = receipt_gap {
+        write!(gap, "; distribution read unavailable: {error}")
+            .expect("writing a String cannot fail");
+    }
+    gap
+}
+
+// These getters identify current custody and routing, not the access-control
+// semantics of arbitrary managers or proof that the observed route is immutable.
+fn flaunch_route(
+    rpc: &Rpc,
+    budget: &mut Budget,
+    hook: &str,
+    token: &str,
+    creator: &str,
+    pool_id: &str,
+    block: &str,
+) -> Result<Value, String> {
+    let nft = scalar(rpc, budget, hook, "flaunchContract()", "", block)?;
+    let nft = address_word(&nft)?;
+    let token_nft = scalar(rpc, budget, token, "flaunch()", "", block)?;
+    if nft == ZERO || address_word(&token_nft)? != nft {
+        return Err("token and hook revenue NFT disagree or are absent".into());
+    }
+    let token_id = scalar(rpc, budget, &nft, "tokenId(address)", &arg(token), block)?;
+    let id = word(&token_id)?;
+    let owner = scalar(
+        rpc,
+        budget,
+        &nft,
+        "ownerOf(uint256)",
+        &format!("{id:064x}"),
+        block,
+    )?;
+    if address_word(&owner)? != creator {
+        return Err("revenue NFT owner does not match creator()".into());
+    }
+    let registered = scalar(
+        rpc,
+        budget,
+        &nft,
+        "memecoin(uint256)",
+        &format!("{id:064x}"),
+        block,
+    )?;
+    if address_word(&registered)? != token {
+        return Err("revenue NFT token registration does not match the case".into());
+    }
+    let (escrow_getter, escrow_args) = if hook == "0x588c683ecc450f8b2aadb13d7f63792b840425dc" {
+        ("pairedTokenFeeEscrow(bytes32)", pool_id)
+    } else {
+        ("feeEscrow()", "")
+    };
+    let escrow = address_word(&scalar(
+        rpc,
+        budget,
+        hook,
+        escrow_getter,
+        escrow_args,
+        block,
+    )?)?;
+    let bid_wall = address_word(&scalar(rpc, budget, hook, "bidWall()", "", block)?)?;
+    if escrow == ZERO || bid_wall == ZERO {
+        return Err("fee escrow or bid wall is absent".into());
+    }
+    let enabled = word(&scalar(
+        rpc,
+        budget,
+        &bid_wall,
+        "isBidWallEnabled(bytes32)",
+        pool_id,
+        block,
+    )?)?;
+    if enabled > 1 {
+        return Err("bid wall returned a malformed enabled state".into());
+    }
+    Ok(
+        json!({"nft":nft,"token_id":id.to_string(),"owner":creator,"fee_escrow":escrow,"bid_wall":bid_wall,"bid_wall_enabled":enabled == 1}),
+    )
+}
+
+fn scalar(
+    rpc: &Rpc,
+    budget: &mut Budget,
+    contract: &str,
+    signature: &str,
+    args: &str,
+    block: &str,
+) -> Result<String, String> {
+    let data = query(rpc, budget, contract, signature, args, block)?;
+    if data.len() != 1 {
+        return Err("route getter did not return exactly one ABI word".into());
+    }
+    Ok(data[0].clone())
 }
 
 fn distributed(
@@ -524,8 +656,9 @@ mod tests {
                         ("eth_call", json!(format!("0x{}", arg(&case.address)))),
                         ("eth_call", json!(format!("0x{}", arg(ZERO)))),
                         ("eth_call", json!(format!("0x{}", arg(ZERO)))),
-                        ("eth_getLogs", json!([])),
                     ]);
+                    responses.extend(route_responses(&case.address, &case.address, 1));
+                    responses.push(("eth_getLogs", json!([])));
                 }
                 let (rpc, server) = endpoint(responses);
                 let result = flaunch(&rpc, &case, "0x1000", &mut Budget::default());
@@ -537,7 +670,33 @@ mod tests {
                 let (value, gap) = result.unwrap();
                 assert_eq!(value["protocol"], "flaunch_normal");
                 assert_eq!(value["hook"], manager);
+                assert_eq!(
+                    value["pool_id"],
+                    if previous {
+                        "0x2c909d3c79e44a317fda913534a963b179a06319c76211f3f8812fd6d40c4c78"
+                    } else {
+                        "0x11228e6f6c3484147b8a623637089377d9317ccd8daed797414b2c4b2ebb4131"
+                    }
+                );
                 assert_eq!(value["distributed_events"], json!([]));
+                assert_eq!(value["route"]["owner"], case.address);
+                assert_eq!(value["route"]["bid_wall_enabled"], true);
+                assert_eq!(value["route_gap"], Value::Null);
+                assert_eq!(value["currencies"], json!([case.address, ZERO]));
+                assert_eq!(
+                    value["related"],
+                    json!([
+                        manager,
+                        case.address,
+                        ZERO,
+                        ZERO,
+                        case.address,
+                        ZERO,
+                        LOCKERS[0],
+                        LOCKERS[1],
+                        CLANKER
+                    ])
+                );
                 assert!(
                     value["statements"][0]["text"].as_str().unwrap().contains(
                         "2500 bid-wall units, 5000 creator units and 2500 protocol units"
@@ -546,6 +705,197 @@ mod tests {
                 assert!(gap.unwrap().contains("referral waterfall"));
             }
         }
+    }
+
+    fn route_responses(token: &str, creator: &str, enabled: u128) -> Vec<(&'static str, Value)> {
+        let address = |address| json!(format!("0x{}", arg(address)));
+        vec![
+            ("eth_call", address(LOCKERS[0])),
+            ("eth_call", address(LOCKERS[0])),
+            ("eth_call", encoded(&numeric(&[2010]))),
+            ("eth_call", address(creator)),
+            ("eth_call", address(token)),
+            ("eth_call", address(LOCKERS[1])),
+            ("eth_call", address(CLANKER)),
+            ("eth_call", encoded(&numeric(&[enabled]))),
+        ]
+    }
+
+    #[test]
+    fn flaunch_route_checks_registration_custody_and_boolean_without_claiming_execution() {
+        let token = "0x1111111111111111111111111111111111111111";
+        let creator = "0x2222222222222222222222222222222222222222";
+        let hook = "0x588c683ecc450f8b2aadb13d7f63792b840425dc";
+        for (hook, escrow_call) in [
+            (hook, format!("0x15200ca1{}", "ab".repeat(32))),
+            (
+                "0x23321f11a6d44fd1ab790044fdfde5758c902fdc",
+                "0xc4b7de97".into(),
+            ),
+        ] {
+            for enabled in [0, 1] {
+                let params = [
+                    (hook, "0x84aa1da0".to_owned()),
+                    (token, "0x87211ceb".to_owned()),
+                    (LOCKERS[0], format!("0x7ca31724{}", arg(token))),
+                    (LOCKERS[0], format!("0x6352211e{:064x}", 2010)),
+                    (LOCKERS[0], format!("0xe49c1854{:064x}", 2010)),
+                    (hook, escrow_call.clone()),
+                    (hook, "0xba3e69b7".to_owned()),
+                    (CLANKER, format!("0x4e944d57{}", "ab".repeat(32))),
+                ];
+                let responses = route_responses(token, creator, enabled)
+                    .into_iter()
+                    .zip(params)
+                    .map(|((method, result), (to, data))| {
+                        (method, result, Some(json!([{"to":to,"data":data},"0x10"])))
+                    })
+                    .collect();
+                let (rpc, server) = crate::evm_investigation::tests::endpoint_checked(responses);
+                let mut budget = Budget::default();
+                let value = flaunch_route(
+                    &rpc,
+                    &mut budget,
+                    hook,
+                    token,
+                    creator,
+                    &"ab".repeat(32),
+                    "0x10",
+                )
+                .unwrap();
+                server.join().unwrap();
+                assert_eq!(budget.calls_made(), 8);
+                assert_eq!(
+                    value,
+                    json!({"nft":LOCKERS[0],"token_id":"2010","owner":creator,"fee_escrow":LOCKERS[1],"bid_wall":CLANKER,"bid_wall_enabled":enabled == 1})
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flaunch_route_refuses_mismatched_registration_roles_missing_contracts_and_bad_words() {
+        let token = "0x1111111111111111111111111111111111111111";
+        let creator = "0x2222222222222222222222222222222222222222";
+        let hook = "0x588c683ecc450f8b2aadb13d7f63792b840425dc";
+        for (index, result, calls, reason) in [
+            (
+                0,
+                encoded(&numeric(&[0])),
+                2,
+                "token and hook revenue NFT disagree or are absent",
+            ),
+            (
+                1,
+                json!(format!("0x{}", arg(ZERO))),
+                2,
+                "token and hook revenue NFT disagree or are absent",
+            ),
+            (
+                2,
+                encoded(&numeric(&[1, 2])),
+                3,
+                "route getter did not return exactly one ABI word",
+            ),
+            (
+                3,
+                json!(format!("0x{}", arg(token))),
+                4,
+                "revenue NFT owner does not match creator()",
+            ),
+            (
+                4,
+                json!(format!("0x{}", arg(creator))),
+                5,
+                "revenue NFT token registration does not match the case",
+            ),
+            (
+                5,
+                encoded(&numeric(&[0])),
+                7,
+                "fee escrow or bid wall is absent",
+            ),
+            (
+                6,
+                encoded(&numeric(&[0])),
+                7,
+                "fee escrow or bid wall is absent",
+            ),
+            (
+                7,
+                encoded(&numeric(&[2])),
+                8,
+                "bid wall returned a malformed enabled state",
+            ),
+        ] {
+            let mut responses = route_responses(token, creator, 1);
+            responses[index].1 = result;
+            responses.truncate(calls);
+            let (rpc, server) = endpoint(responses);
+            let mut budget = Budget::default();
+            assert_eq!(
+                flaunch_route(
+                    &rpc,
+                    &mut budget,
+                    hook,
+                    token,
+                    creator,
+                    &"ab".repeat(32),
+                    "0x10"
+                )
+                .unwrap_err(),
+                reason
+            );
+            server.join().unwrap();
+            assert_eq!(budget.calls_made(), u32::try_from(calls).unwrap());
+        }
+    }
+
+    #[test]
+    fn unavailable_flaunch_route_and_receipts_preserve_quote_and_surface_public_gaps() {
+        let token = "0x1111111111111111111111111111111111111111";
+        let creator = "0x2222222222222222222222222222222222222222";
+        let hook = "0x588c683ecc450f8b2aadb13d7f63792b840425dc";
+        // An unavailable optional route must preserve the measured quote and
+        // reach the public gap, without inventing a recipient or empty receipt.
+        let key = vec![
+            format!("0x{}", arg(token)),
+            numeric(&[0])[0].clone(),
+            numeric(&[3000])[0].clone(),
+            numeric(&[60])[0].clone(),
+            format!("0x{}", arg(hook)),
+        ];
+        let (rpc, server) = endpoint(vec![
+            ("eth_call", json!("0x")),
+            ("eth_call", encoded(&key)),
+            ("eth_call", encoded(&numeric(&[2500, 5000, 2500, 1]))),
+            ("eth_call", encoded(&numeric(&[2500, 5000, 2500]))),
+            ("eth_call", json!(format!("0x{}", arg(creator)))),
+            ("eth_call", json!(format!("0x{}", arg(ZERO)))),
+            ("eth_call", json!(format!("0x{}", arg(ZERO)))),
+            ("eth_call", json!("0x")),
+            ("eth_getLogs", Value::Null),
+        ]);
+        let (value, gap) = flaunch(
+            &rpc,
+            &CaseKey::new(Network::Base, token).unwrap(),
+            "0x10",
+            &mut Budget::default(),
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(value["route"], Value::Null);
+        assert_eq!(value["route_gap"], "bounded ABI words missing or malformed");
+        assert_eq!(value["receipt_gap"], "distribution logs absent");
+        assert_eq!(value["quoted_split"], json!(numeric(&[2500, 5000, 2500])));
+        assert_eq!(
+            value["related"],
+            json!([hook, creator, ZERO, ZERO, token, ZERO])
+        );
+        assert_eq!(value["statements"].as_array().unwrap().len(), 3);
+        let gap = gap.unwrap();
+        assert!(gap.contains("route read unavailable: bounded ABI words missing or malformed"));
+        assert!(gap.contains("distribution read unavailable: distribution logs absent"));
     }
 
     #[test]

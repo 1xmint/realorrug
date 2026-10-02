@@ -100,6 +100,13 @@ runtime qualification is claimed. These observations do not accept the full
 representative quality set. Current Pump curves can use a quote asset; the new
 reader labels reserve quantities as raw quote units rather than assuming SOL.
 
+**Follow-up, 2026-10-02:** [research 0068](0068-base-fee-routing-and-retained-controls.md)
+retains a positive current-hook Flaunch quote/route capture and a refreshed
+supported Clanker case. Flaunch NFT-owner allocation/disable powers were tested
+with read-only simulations. This amends the discovery limitation above without
+rewriting its failed evidence; receipts, broader powers/LP rights, newer Clanker
+generation and representative reply acceptance remain open.
+
 ## Verification and release boundary
 
 Named tests exercise restart recovery, network isolation, idempotent admission,

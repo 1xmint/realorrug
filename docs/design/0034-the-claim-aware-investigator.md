@@ -26,6 +26,15 @@ Clanker v4/Flaunch and Uniswap v2/v3 are initial specialist families, gated by
 verified deployment/version. Sourcify v2 source lookup remains untrusted data.
 Generic reads do not advertise universal protocol comprehension.
 
+Normal Flaunch fee observations also record pool currencies and a route snapshot
+after token/hook/NFT registration and current ownership agree. The legacy hook
+uses its global escrow getter; the current Base hook resolves escrow per pool.
+Bid-wall enabled state is a boolean observation, never proof of execution or
+permanent liquidity. Optional route/distribution failures retain their quote
+and surface in the public gap. [Research 0068](../research/0068-base-fee-routing-and-retained-controls.md)
+records the live version/control qualification; arbitrary manager powers and
+historical receipts remain unresolved.
+
 Offline replay produces drafts, chosen reads, evidence, gaps, accounting and
 checks without posting. Live model evaluation is explicit and metered. Library
 projections and authenticated submissions share cases and quotas. Interrupted

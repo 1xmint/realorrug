@@ -1,0 +1,16 @@
+{
+  "response_sha256": "004676b7ad515491429e287c3416a349a525beb53ba4139fd7f2b91bee92c816",
+  "review": "Manual source review, not a simulated authorization test or an independent audit",
+  "sources": [
+    {
+      "content_sha256": "7414c51849ed3dbaa4b2479e3557109da0cd2b431da8f20be3d80e6b8b307968",
+      "path": "src/contracts/hooks/FeeDistributor.sol"
+    },
+    {
+      "content_sha256": "21532dd8a17ed8c78644ed056955deaaa94b4d60b964d128683bb3300506d9a7",
+      "path": "src/contracts/PositionManager.sol"
+    }
+  ],
+  "runtime_match_record": "flaunch-paired-identities.json",
+  "source_url": "https://sourcify.dev/server/v2/contract/8453/0x588c683ecc450f8b2aadb13d7f63792b840425dc?fields=sources"
+}

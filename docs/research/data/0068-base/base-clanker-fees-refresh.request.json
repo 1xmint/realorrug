@@ -1,0 +1,13 @@
+{
+  "id": "base-clanker-fees-refresh",
+  "case": {
+    "chain": "base",
+    "address": "0x1bbf51f3742c13d67fa89c56d09a979d40c891f1"
+  },
+  "question": "Inspect configured Clanker fees, LP reward recipients and administrators. Distinguish allocation configuration from realized payments and permanent liquidity.",
+  "wallets": [],
+  "transactions": [],
+  "window": null,
+  "source": "https://www.clanker.world/api/tokens?chainId=8453&limit=20&sortBy=market-cap",
+  "thread": null
+}

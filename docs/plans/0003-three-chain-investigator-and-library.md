@@ -35,9 +35,14 @@ passes 129 tests, type checking and build. Browser
 review verified the populated Library and mobile dossier wrapping. Scoped
 all-target Clippy passes; full suites/mutation checks run in CI.
 
+[Research 0068](../research/0068-base-fee-routing-and-retained-controls.md)
+adds current Flaunch pool/escrow/NFT snapshots, retained-control simulations
+and a supported Clanker refresh. Actual beneficiary receipts, newer locker
+qualification and owner reply acceptance remain subsequent work.
+
 **Do not equate delivery with launch readiness.** Summaries are intentionally
 partial `CantTell`. Complete claim resolution, historical interval coverage,
-broader LP/control semantics and representative deployed Clanker/Flaunch cases
+broader LP/control semantics and representative deployed Clanker/Flaunch coverage
 remain qualification/development work. Current public endpoint failures and an
 unsupported newer Clanker locker are recorded as gaps. The final live quality
 set and owner acceptance remain open; ROADMAP milestones 1/2 are not accepted
