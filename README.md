@@ -13,10 +13,14 @@ Start with [VISION.md](VISION.md), the product source of truth, then
 [ADR 0043](docs/adr/0043-the-public-library-and-compounding-intelligence.md)
 records the product direction; [ADR 0044](docs/adr/0044-three-chain-investigations-and-shared-cases.md)
 and [plan 0003](docs/plans/0003-three-chain-investigator-and-library.md) track
-three-chain investigation delivery. Earlier plans remain history.
+three-chain investigation delivery. [ADR 0045](docs/adr/0045-base-is-the-preferred-launch-chain.md)
+records the preferred Base launch chain and open launchpad comparison. Earlier
+plans remain history.
 
 The investigator and community token will launch together with the free
-Library. The selected token route is pump.fun on Solana, paired with SOL.
+Library. Base is the preferred token launch chain; launchpad and pairing
+remain open. [The comparison](docs/research/0067-base-launch-platform-comparison.md)
+recommends qualifying Flaunch first and comparing Clanker for funding simplicity.
 The paid investigation portal follows launch. Treasury spending remains
 operator-managed for disclosed operations and a bounded reserve; 25%
 buy-and-burn plus 25% permanent liquidity is a proposal, not an adopted split.

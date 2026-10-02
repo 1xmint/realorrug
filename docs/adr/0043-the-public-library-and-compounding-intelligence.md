@@ -9,6 +9,11 @@
 
 ## Decision
 
+**Partially amended 2026-10-02 by [ADR 0045](0045-base-is-the-preferred-launch-chain.md):**
+the Solana/pump.fun/SOL choice in decisions 2/6 is replaced by a preferred
+Base launch with launchpad and pairing open. The original decisions below
+remain dated history; other product, funding and evidence rules remain.
+
 1. VISION is the source of truth for product intent; ROADMAP derives delivery
    order and acceptance evidence. AGENTS governs engineering and evidence.
    Earlier intent and plan documents remain history with explicit pointers.

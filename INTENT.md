@@ -5,6 +5,9 @@
 [VISION.md](VISION.md), delivery is [ROADMAP.md](ROADMAP.md), and engineering
 rules are [AGENTS.md](AGENTS.md). [ADR 0043](docs/adr/0043-the-public-library-and-compounding-intelligence.md)
 records Josh's approved direction of 2026-09-30.
+[ADR 0045](docs/adr/0045-base-is-the-preferred-launch-chain.md) records the
+2026-10-02 preference for Base with launchpad/pairing open. The Solana launch
+choice in the historical entries below is superseded; reader coverage remains.
 
 The investigator and token now launch with a free public Library; forecasts
 and reputation are outside the critical launch path, and the paid portal

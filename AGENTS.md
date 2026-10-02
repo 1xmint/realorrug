@@ -30,7 +30,10 @@ engineering and evidence. [ADR 0043](docs/adr/0043-the-public-library-and-compou
 records the 2026-09-30 change; [ADR 0044](docs/adr/0044-three-chain-investigations-and-shared-cases.md)
 and [plan 0003](docs/plans/0003-three-chain-investigator-and-library.md) record
 the three-chain investigation slice. INTENT and plan 0002 retain history and must
-not override it. Distinguish accepted direction, implemented behavior,
+not override it. [ADR 0045](docs/adr/0045-base-is-the-preferred-launch-chain.md)
+records Base as the preferred token launch chain, with launchpad/pairing open;
+the three-chain investigator requirement remains. Distinguish accepted direction,
+implemented behavior,
 proposals and future ideas. A roadmap item is not evidence that it runs.
 
 When the owner asks what the product should be, stop the implementation, have
@@ -46,6 +49,8 @@ at $200 total, with free options first and no recurring commitment. Current
 runtime limits remain until a reviewed implementation changes them; neither
 demand nor revenue silently increases a budget. Financial allocations under
 evaluation are not promises or authorization to execute them.
+Launchpad-native financial automation requires an explicit configuration and
+control/cost review too; a platform default is not our adopted allocation.
 
 ## 3. Rules that are not negotiable
 

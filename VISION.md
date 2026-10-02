@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # RealOrRug: vision
 
-**Updated:** 2026-09-30. **Status:** accepted product direction, recorded from
+**Updated:** 2026-10-02. **Status:** accepted product direction, recorded from
 Josh's instructions; proposed economics and future ideas are labelled below.
 
 This is the source of truth for what we are building and why. [ROADMAP.md](ROADMAP.md)
@@ -17,7 +17,9 @@ turn an intended feature into an implemented one.
 Base and Ethereum before joint launch, with comparable fee, control, liquidity
 and historical-transfer coverage within explicitly supported protocols. New
 EVM requests specify their network. [ADR 0044](docs/adr/0044-three-chain-investigations-and-shared-cases.md)
-records this expansion; the token still launches on Solana/pump.fun with SOL.
+records this expansion. [ADR 0045](docs/adr/0045-base-is-the-preferred-launch-chain.md)
+records Josh's 2026-10-02 preference for a Base token launch; launchpad and
+pairing remain open for comparison. Investigation coverage is unchanged.
 
 RealOrRug is a public forensic investigator for tokens. A person can ask a
 specific question, supply a wallet or transaction lead, and receive an
@@ -51,11 +53,11 @@ mechanism; its effect on sustained participation needs evidence.
 
 | ID and name | How it works | Dependencies and failure points | Measurements | Current position |
 |---|---|---|---|---|
-| **F1: Attention and Participation** | Useful public investigations are shared, attracting questions and relevant leads that produce further investigations. | Clear answers, shareable case links and a useful follow-up path. Spam, sensational unsupported claims and poor responses can consume attention without creating value. | Returning contributors; useful leads per case; requests producing verified additions; time to useful response. | Mention/reply infrastructure exists; claim-specific investigation and durable collaboration need completion. |
-| **F2: Compounding Intelligence** | Investigations enrich living dossiers; verified relationships, patterns and outcomes improve retrieval, checks and subsequent investigations. | Provenance, corrections, freshness and actual reuse by the agent. Duplicate allegations, mistaken attribution, sampling bias and unused archives weaken the loop. | Evidence reused; new useful relationships; unresolved questions resolved; false positives corrected; quality and cost on comparable evaluation cases. | Read memory, dossier checks and research storage provide foundations; the public case-to-next-investigation loop is not connected end to end. |
+| **F1: Attention and Participation** | Useful public investigations are shared, attracting questions and relevant leads that produce further investigations. | Clear answers, shareable case links and a useful follow-up path. Spam, sensational unsupported claims and poor responses can consume attention without creating value. | Returning contributors; useful leads per case; requests producing verified additions; time to useful response. | Bounded claim-preserving intake, shared cases and Library contribution paths are implemented behind opt-in configuration; useful public replies still need quality acceptance. |
+| **F2: Compounding Intelligence** | Investigations enrich living dossiers; verified relationships, patterns and outcomes improve retrieval, checks and subsequent investigations. | Provenance, corrections, freshness and actual reuse by the agent. Duplicate allegations, mistaken attribution, sampling bias and unused archives weaken the loop. | Evidence reused; new useful relationships; unresolved questions resolved; false positives corrected; quality and cost on comparable evaluation cases. | Durable cases, corrections and historical-lead retrieval are implemented; representative evidence reuse and richer mechanism/outcome learning remain to be accepted. |
 | **F3: Sustainable Funding** | Useful investigations create paid data/API demand and may attract token participation; collected revenue funds continued service and research. | Genuine demand, affordable fulfillment, controlled costs and spendable runway. Trading fees fluctuate; purchases that cost more to fulfill than they earn drain the service. | Net service margin; revenue by source; operating coverage; runway; cost per fulfilled investigation. | Creator-fee readers, spend limits and a paid facts endpoint exist; production payment interoperability and recovery remain unverified. |
 | **F4: Token Participation** | Disclosed participation produces creator fees; verifiable allocations support operations and, if adopted, burns or permanent liquidity; credible execution may encourage continuing participation. | Actual receipts, executable rules, useful product and trading depth. Buybacks cannot guarantee demand or price; excessive allocation can starve operations. | Allocation compliance; executed burns; quote-asset depth and slippage; disclosed holdings; dependence on trading fees. | Token is unlaunched. Treasury defaults to operator-managed operations/reserve; buy-and-burn and liquidity allocations are proposals. |
-| **F5: Trust** | Reproducible findings, visible corrections, disclosed powers and financial receipts encourage people to return, contribute and use the service. | Accessible evidence, honest uncertainty and enforceable controls where promised. A ledger alone cannot prevent misuse; a hash chain alone cannot establish independent custody or prevent operator rewriting. | Reproducibility; correction handling; verified receipts; unexplained reconciliation gaps; returning users and customers. | Evidence checks, journals and launch/treasury readers exist; unified public case and financial ledgers need completion. |
+| **F5: Trust** | Reproducible findings, visible corrections, disclosed powers and financial receipts encourage people to return, contribute and use the service. | Accessible evidence, honest uncertainty and enforceable controls where promised. A ledger alone cannot prevent misuse; a hash chain alone cannot establish independent custody or prevent operator rewriting. | Reproducibility; correction handling; verified receipts; unexplained reconciliation gaps; returning users and customers. | Public case history, correction-aware publication, custody/replay and backup tooling are implemented; live qualification and the financial ledger remain open. |
 
 ```mermaid
 flowchart TD
@@ -192,20 +194,27 @@ intelligence. Prioritize useful new observations and changes.
 
 ## 5. Launch platform
 
-**Selected: pump.fun on Solana, paired with SOL.** Existing launch, dossier,
-graduation and treasury readers reduce integration work for a solo builder.
-The token and investigator share the launch ecosystem without requiring a new
-agent runtime or financial execution system. This is a practical selection,
-not a claim that Solana or pump.fun eliminates trust dependencies.
+**Preferred launch chain: Base, recorded 2026-10-02. Launchpad and pairing
+remain open.** Josh chose Base as the preference and asked us to compare
+launchpads. This replaces the earlier selected Solana/pump.fun/SOL route;
+existing Solana tooling and investigation coverage are retained.
 
-Comparison below is documentation-based research checked 2026-09-30, not a
-capture proving any particular launch or contract configuration.
+Base lets us consider token receipts, treasury accounting and a future
+Base-USDC service on one chain. That can reduce cross-chain reconciliation
+work, but existing payment and investigation code does not qualify a launch.
+Keep our Rust/React/SQLite investigator; a hosted agent runtime or agent-held
+spending key is not required. [Research 0067](docs/research/0067-base-launch-platform-comparison.md)
+compares the routes and identifies remaining control/readback work.
+
+Base options were rechecked against primary documentation/source on
+2026-10-02; earlier pump.fun research was checked 2026-09-30. These are
+comparisons, not captures proving our launch configuration or affordability.
 
 | Platform | Useful strengths | Costs and control tradeoffs | Decision |
 |---|---|---|---|
-| **Solana / pump.fun** | Best existing reader fit; curve-to-PumpSwap path; creator-fee infrastructure. Documented V2 fee sharing supports final shares with its configuration admin revoked and permissionless distribution. | Final shares are not an automatic buyback executor. A shared configuration changes fee routing and must be supported by our readers. Platform/program powers and current fee schedules remain dependencies. | Selected; verify actual launch and fee configuration before signing. |
-| **Base / Flaunch** | Native fee-funded Progressive Bid Wall and creator/community fee mechanisms are useful references for automated token support. | Integrating another launch protocol adds work. Royalty NFT ownership carries management rights, including documented buyback control; disclose who retains them. Automatic buying is not a price guarantee or automatically a token burn. | Strong alternative if verified execution benefits outweigh the existing Solana integration advantage. |
-| **Base / Clanker** | Fee-funded agent compute and visible runtime runway are directly relevant to service sustainability. | The documented Droid funding path uses a Base USDC pair and runtime wallet. Fee-slot, liquidity and runtime dependencies are additional choices; buying that runtime is unnecessary for our current stack. | Borrow funding/runway ideas; keep our own investigator foundation. |
+| **Solana / pump.fun** | Existing launch/readback fit; curve-to-PumpSwap path; creator-fee infrastructure. | Final fee shares are not a buyback executor. Platform/program powers and shared routing remain dependencies. | Previous route, retained as historical tooling and investigator coverage. |
+| **Base / Flaunch** | Native fee-funded bid wall connects to F4; creator revenue can fund F3. | Qualify hook/escrow versions, fee waterfall, thresholds, NFT custody and disable/management powers. Buying does not automatically prove burning or permanent liquidity. | First candidate to qualify; recommendation, not selected launchpad. |
+| **Base / Clanker** | LP rewards and visible runway connect to F3; a stable paired asset may simplify operating accounting. | Qualify current locker/hook, administrators, recipients and both reward assets. Hosted Droid compute is optional; initial-pool rewards are not all-market fees. | Alternative if its funding/control path is simpler and better qualified. |
 | **Virtuals** | Agent-token ecosystem and agent commerce offer distribution and service-integration possibilities. | Pairing, launch, liquidity and protocol requirements add economic dependencies and implementation scope. Agent branding does not establish autonomous custody. | Revisit for demonstrated commerce demand; not a launch prerequisite. |
 | **Ethereum mainnet** | EVM contracts and a broad established liquidity ecosystem provide alternatives. | Execution fees, deployment and monitoring add variable costs. Base and mainnet Ethereum are separate operational choices; adopting EVM execution would require new verification work. | Later option if demand and a concrete mechanism justify its cost. |
 
@@ -214,6 +223,12 @@ upgrade authority, pause/withdraw powers and migration behavior. A final fee
 split does not make every underlying program immutable. The Library must
 describe our own token's powers as candidly as those of another token.
 Recheck terms, fees, source and deployed state at implementation and launch.
+
+Choose platform, pairing, custody and allocation only after a deployed case
+trace and funded cost comparison. Native financial mechanisms pass the same
+decision/control review as custom automation. Fixed allocation parameters do
+not remove transferable revenue rights, rescue powers or disable controls.
+The historical Solana launch checker/runbook does not authorize a Base launch.
 
 ## 6. Funding and healthy tokenomics
 

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # RealOrRug: development roadmap
 
-**Updated:** 2026-10-01. **Status:** active delivery direction derived from
+**Updated:** 2026-10-02. **Status:** active delivery direction derived from
 [VISION.md](VISION.md), recorded by [ADR 0043](docs/adr/0043-the-public-library-and-compounding-intelligence.md).
 
 This replaces [plan 0002](docs/plans/0002-bot-quality-then-a-solana-launch.md)
@@ -35,7 +35,9 @@ has bounded work and follows [AGENTS.md](AGENTS.md).
 required, including fee routing, controls, liquidity and historical transfers
 within disclosed protocol coverage. [ADR 0044](docs/adr/0044-three-chain-investigations-and-shared-cases.md)
 records the decision; [plan 0003](docs/plans/0003-three-chain-investigator-and-library.md)
-tracks the ordered implementation. The token's Solana launch route is unchanged.
+tracks the ordered implementation. [ADR 0045](docs/adr/0045-base-is-the-preferred-launch-chain.md)
+changes the preferred token launch chain to Base; launchpad and pairing remain
+open. This does not narrow the investigator's three-chain coverage.
 
 **Strengthens F1, F2 and F5. Required for launch.**
 
@@ -100,10 +102,14 @@ case as evidence rather than treating a user allegation as fact.
   purpose/cap/excess rules and operating budgets within available funding.
   The initial $200 maximum is not a monthly allowance. Existing runtime
   ceilings remain until explicit implementation changes them.
-- Verify the actual pump.fun/SOL launch and fee configuration. If final fee
-  sharing is selected, extend verification and receipt readers for its
-  routing before relying on it. Publish mint/freeze authorities, fee powers,
-  program dependencies, holdings and compensation.
+- Compare Base/Flaunch and Base/Clanker using deployed fee/control traces
+  and launch/operating costs within funded resources; select the platform,
+  pairing, custody and allocation through a specific decision. Research 0067
+  recommends Flaunch-first qualification, not an adopted provider or split.
+- Implement the selected Base route's launch readback and receipt/claim
+  reconciliation before relying on it. Publish supply/issuance and upgrade
+  powers, fee and liquidity rights, revenue custody, holdings and compensation.
+  Existing Solana launch tooling is historical coverage, not a Base verifier.
 - Use operator-managed operations/reserve spending as the launch default.
   The 25% burn / 25% liquidity idea remains a proposal. Do not advertise a
   split, automated execution or immutable controls that are not adopted,
@@ -198,6 +204,8 @@ recipients, both liquidity legs, venue availability, execution bounds,
 slippage/manipulation safeguards, authority/upgrade/pause powers and recovery.
 Use separately constrained execution; model judgment remains without keys or
 money-movement authority, and the retired payout signer is not repurposed.
+Protocol-native automation passes this gate too; choosing a launchpad does
+not silently adopt its defaults or prove that its controls are immutable.
 
 **Acceptance:** captures prove receipt → allocation → execution → effect for
 every leg, including supply burn and LP ownership separately. Duplicate
@@ -214,6 +222,11 @@ ADRs for decisions and research notes for measured findings. Each completed
 slice names its capture, review or test evidence. Full suites run in CI;
 local checks follow AGENTS and avoid heavy workspace builds.
 
-The next implementation planning task is **milestone 1**: trace the current
-mention-to-answer path and design the smallest claim-preserving investigation
-and durable-case slice. Library presentation then builds on that shared state.
+The claim-preserving investigator and Library foundation in plan 0003 is
+delivered for review. Next: qualify useful fee-routing investigations and
+candidate Base launch deployments, then improve code-authorized claim
+resolution where bounded observations cannot yet settle a claim. Use
+[research 0067](docs/research/0067-base-launch-platform-comparison.md) to compare
+Flaunch and Clanker before selecting the treasury/readback implementation.
+Live qualification and owner reply acceptance remain open; the financial
+ledger follows measured routing, rather than an assumed platform configuration.

@@ -5,6 +5,11 @@
 **Reasoning:** [design 0034](../design/0034-the-claim-aware-investigator.md).
 **Delivery:** [plan 0003](../plans/0003-three-chain-investigator-and-library.md).
 
+**Launch-chain sentence amended 2026-10-02 by [ADR 0045](0045-base-is-the-preferred-launch-chain.md):**
+Base is the preferred token launch chain with launchpad/pairing open. The
+retained Solana launch sentence below is historical; three-chain investigation
+coverage and the rest of this decision remain unchanged.
+
 Josh requires Solana, Base and Ethereum investigations before the joint launch,
 including comparable fee, contract-control, liquidity and transfer coverage.
 The token still launches on Solana/pump.fun with SOL pairing. Unknown protocol

@@ -21,6 +21,11 @@ a chain the bot answers about.
 
 ## Context
 
+**Chain/platform/pair choice amended 2026-10-02 by [ADR 0045](0045-base-is-the-preferred-launch-chain.md):**
+Base is now the preferred launch chain; launchpad and pairing remain open.
+The earlier Solana/pump.fun/SOL selection below is historical. Manual custody,
+disclosures, quality/review/signing gates and existing reader tooling remain.
+
 **Partially amended 2026-09-30 by [ADR 0043](0043-the-public-library-and-compounding-intelligence.md):**
 the selected Solana/pump.fun/SOL route, current manual treasury, disclosures
 and launch checks remain. Operations/reserve is the launch default; the
