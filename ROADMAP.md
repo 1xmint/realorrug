@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # RealOrRug: development roadmap
 
-**Updated:** 2026-10-02. **Status:** active delivery direction derived from
+**Updated:** 2026-10-03. **Status:** active delivery direction derived from
 [VISION.md](VISION.md), recorded by [ADR 0043](docs/adr/0043-the-public-library-and-compounding-intelligence.md).
 
 This replaces [plan 0002](docs/plans/0002-bot-quality-then-a-solana-launch.md)
@@ -110,6 +110,12 @@ case as evidence rather than treating a user allegation as fact.
   reconciliation before relying on it. Publish supply/issuance and upgrade
   powers, fee and liquidity rights, revenue custody, holdings and compensation.
   Existing Solana launch tooling is historical coverage, not a Base verifier.
+  [Research 0069](docs/research/0069-clanker-current-locker-and-wallet-receipts.md)
+  adds current Clanker locker coverage and an actual wallet-level claim trace.
+  The next reader slice must verify delivered fee assets separately from the
+  case token, protect against duplicate/ambiguous receipt matches and preserve
+  unresolved per-token attribution of pooled withdrawals. This evidence does
+  not establish a completed ledger or select the launchpad.
 - Use operator-managed operations/reserve spending as the launch default.
   The 25% burn / 25% liquidity idea remains a proposal. Do not advertise a
   split, automated execution or immutable controls that are not adopted,

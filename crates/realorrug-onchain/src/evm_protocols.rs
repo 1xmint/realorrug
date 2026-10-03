@@ -13,9 +13,10 @@ use std::fmt::Write as _;
 
 const ZERO: &str = "0x0000000000000000000000000000000000000000";
 const CLANKER: &str = "0xe85a59c628f7d27878aceb4bf3b35733630083a9";
-const LOCKERS: [&str; 2] = [
+const LOCKERS: [&str; 3] = [
     "0x29d17c1a8d851d7d4ca97fae97acadb398d9cce0",
     "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
+    "0xffa37784d619f228d8b379d287a4d7282e500762",
 ];
 
 fn selector(signature: &str) -> String {
@@ -142,15 +143,21 @@ fn clanker(
         &arg(&case.address),
         block,
     )?;
+    let currencies = [address(&rewards, 2)?, address(&rewards, 3)?];
+    if !currencies.contains(&case.address) || address(&rewards, 6)? != hook {
+        return Err("reward pool token or registered hook mismatch".into());
+    }
     let value = clanker_rewards(&rewards, &case.address)?;
     let mut facts = Vec::new();
     let mut related = vec![locker.clone(), hook];
+    related.extend(currencies.iter().cloned());
     for share in value["shares"].as_array().ok_or("shares missing")? {
         facts.push(statement(format!("Clanker v4 configured LP-reward share: {} basis points out of 10000 to {}; reward administrator {}.",share["bps"].as_str().ok_or("allocation absent")?,share["recipient"].as_str().ok_or("recipient absent")?,share["admin"].as_str().ok_or("administrator absent")?)));
         related.push(share["recipient"].as_str().unwrap_or("").to_owned());
     }
     facts.push(statement(format!("Registered LP locker {locker} reports {} position(s); this does not establish permanent liquidity.",value["num_positions"].as_str().ok_or("position count absent")?)));
-    Ok((json!({"protocol":"clanker_v4_0","registry":CLANKER,"locker":locker,"configuration":value,"related":related,"statements":facts}),
+    facts.push(statement(format!("Registered Clanker reward pool currencies are {} and {}; asset denomination, realized fees and conversion preferences require separate checks.", currencies[0], currencies[1])));
+    Ok((json!({"protocol":"clanker_v4_0","registry":CLANKER,"locker":locker,"currencies":currencies,"configuration":value,"related":related,"statements":facts}),
         Some("configured LP-reward shares exclude factory/other fee bases; paid receipts, administrator changes, extensions, current hook fees and position withdrawal rights remain separate checks".into())))
 }
 
@@ -998,6 +1005,7 @@ mod tests {
         let mut data = vec![format!("0x{:064x}", 0); 18];
         data[0] = format!("0x{:064x}", 32);
         data[1] = format!("0x{}", arg(token));
+        data[2] = data[1].clone();
         for (slot, offset) in [(9, 352), (10, 416), (11, 480)] {
             data[slot] = format!("0x{offset:064x}");
         }
@@ -1056,6 +1064,70 @@ mod tests {
             );
             assert_eq!(budget.calls_made(), 1);
             server.join().unwrap();
+        }
+    }
+    #[test]
+    fn clanker_lockers_require_registered_pool_identity_at_the_requested_block() {
+        let case =
+            CaseKey::new(Network::Base, "0x1111111111111111111111111111111111111111").unwrap();
+        for locker in LOCKERS {
+            for (currency_slot, mismatch) in [(2, None), (3, None), (2, Some(2)), (2, Some(6))] {
+                let deployment = vec![
+                    numeric(&[32])[0].clone(),
+                    format!("0x{}", arg(&case.address)),
+                    format!("0x{}", arg(CLANKER)),
+                    format!("0x{}", arg(locker)),
+                ];
+                let mut reward = rewards(&case.address);
+                reward[2] = format!("0x{}", arg(ZERO));
+                reward[currency_slot] = format!("0x{}", arg(&case.address));
+                reward[6] = format!("0x{}", arg(CLANKER));
+                if let Some(slot) = mismatch {
+                    reward[slot] = format!("0x{}", arg(ZERO));
+                }
+                let (rpc, server) = crate::evm_investigation::tests::endpoint_checked(vec![
+                    (
+                        "eth_call",
+                        encoded(&deployment),
+                        Some(
+                            json!([{"to":CLANKER,"data":format!("0x22adcdb1{}",arg(&case.address))},"0x123"]),
+                        ),
+                    ),
+                    (
+                        "eth_call",
+                        encoded(&reward),
+                        Some(
+                            json!([{"to":locker,"data":format!("0x30bd3eeb{}",arg(&case.address))},"0x123"]),
+                        ),
+                    ),
+                ]);
+                let result = clanker(&rpc, &case, "0x123", &mut Budget::default());
+                server.join().unwrap();
+                if mismatch.is_some() {
+                    assert_eq!(
+                        result.unwrap_err(),
+                        "reward pool token or registered hook mismatch"
+                    );
+                } else {
+                    let (value, _) = result.unwrap();
+                    assert_eq!(value["locker"], locker);
+                    assert_eq!(value["currencies"][currency_slot - 2], case.address);
+                    assert_eq!(value["currencies"][3 - currency_slot], ZERO);
+                    assert!(
+                        value["related"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&json!(case.address))
+                    );
+                    assert!(value["related"].as_array().unwrap().contains(&json!(ZERO)));
+                    assert!(
+                        value["statements"][2]["text"]
+                            .as_str()
+                            .unwrap()
+                            .contains("conversion preferences require separate checks")
+                    );
+                }
+            }
         }
     }
     #[test]

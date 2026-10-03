@@ -1,0 +1,13 @@
+{
+  "id": "base-clanker-current-route",
+  "case": {
+    "chain": "base",
+    "address": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07"
+  },
+  "question": "Inspect Clanker configured fees, both reward pool assets, recipients and administrators. Distinguish configured allocations from paid fees and permanent liquidity.",
+  "wallets": [],
+  "transactions": [],
+  "window": null,
+  "source": "https://github.com/clanker-devco/clanker-sdk/blob/4f4d2bbf41c7f10543559dc043c85f443a6d452e/src/utils/clankers.ts",
+  "thread": null
+}

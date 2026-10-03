@@ -91,6 +91,10 @@ That is the LP-reward denominator, not total trading fees. Claims, both reward
 assets, recipient/admin change history and liquidity withdrawal rights remain
 unresolved. This supported older case does not qualify the newer locker
 refused in [research 0066](0066-the-investigator-and-library-qualification.md).
+[Research 0069](0069-clanker-current-locker-and-wallet-receipts.md) subsequently
+qualifies that additional locker, checks current administrator powers and
+retains a separate wallet-level claim/delivery trace. It does not establish
+complete per-token revenue attribution or permanent liquidity.
 
 ## Implication and next acceptance work
 

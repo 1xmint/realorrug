@@ -26,6 +26,12 @@ Clanker v4/Flaunch and Uniswap v2/v3 are initial specialist families, gated by
 verified deployment/version. Sourcify v2 source lookup remains untrusted data.
 Generic reads do not advertise universal protocol comprehension.
 
+Clanker reward reads require the pool's case token and hook to agree with the
+factory registration. Both currencies are observed without assuming conversion
+preferences or realized payments. [Research 0069](../research/0069-clanker-current-locker-and-wallet-receipts.md)
+qualifies the additional current Base locker and documents why pooled wallet
+claims require separate asset delivery and per-token attribution checks.
+
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook
 uses its global escrow getter; the current Base hook resolves escrow per pool.
