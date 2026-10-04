@@ -44,8 +44,15 @@ Clanker's requested amount and new cumulative balance remain separate;
 Flaunch's reported pool label remains untrusted attribution. No received delta,
 backing or treasury receipt is inferred from a deposit alone.
 [Research 0071](../research/0071-base-fee-credits-and-balance-windows.md) records
-the live credit and measured research windows. Automated window reconciliation
-is still a subsequent bounded read, not an existing ledger capability.
+the live credit and measured research windows. Its subsequent
+[research 0072](../research/0072-clanker-transaction-balance-windows.md) implements
+a one-block wallet/asset window for submitted Clanker transactions. Opening and
+closing getter observations, ordered credit/claim events, receipt anchors and
+parent-linked canonical checkpoints must agree. At most one key and 128 events
+are admitted; eight additional RPC calls share the existing budget and reserve
+the outer checkpoint call. Reconciliation remains provider evidence, separate
+from receipt delivery and token revenue attribution. Wider windows, Flaunch
+balance reconciliation and the treasury ledger remain subsequent work.
 
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook

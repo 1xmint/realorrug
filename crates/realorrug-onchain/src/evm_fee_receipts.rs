@@ -8,6 +8,8 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
+pub(crate) mod window;
+
 const CLANKER: &str = "0xf3622742b1e446d92e45e22923ef11c2fcd55d68";
 const FLAUNCH: &str = "0x17fbf54d6d15ebff82eee77e616f701952d08bb4";
 const CLAIM: &str = "0xf98eaa9c1f790e5c18b1f227bd5bade62600f9f3e3587c7644b90c50b9bf13c5";

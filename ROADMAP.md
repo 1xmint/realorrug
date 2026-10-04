@@ -117,8 +117,10 @@ case as evidence rather than treating a user allegation as fact.
   ambiguity refusal. [Research 0071](docs/research/0071-base-fee-credits-and-balance-windows.md)
   adds bounded credit-event observations and two reconciled research windows;
   requested amounts, cumulative balances and untrusted pool labels retain their
-  separate roles. Automated window reconciliation, native/conversion delivery,
-  backing and per-token attribution remain the next boundaries.
+  separate roles. [Research 0072](docs/research/0072-clanker-transaction-balance-windows.md)
+  adds automated one-block wallet/asset reconciliation inside the transaction
+  reader, with retained live credit and claim captures. Wider historical windows,
+  native/conversion delivery, backing and per-token attribution remain open.
   These readers do not establish a completed ledger or select the launchpad.
 - Use operator-managed operations/reserve spending as the launch default.
   The 25% burn / 25% liquidity idea remains a proposal. Do not advertise a
@@ -246,6 +248,10 @@ now qualifies a current Flaunch fee/escrow/NFT snapshot and demonstrates retaine
 allocation/disable powers through read-only simulations, alongside a supported
 Clanker refresh. Research 0069–0071 subsequently add the current Clanker locker,
 direct claim delivery, credit observations and measured wallet/asset windows.
-Next: automate bounded window reconciliation, establish funding provenance,
-qualify backing/native/conversion delivery and remaining custody powers, and
-measure launch costs. No provider, pairing or financial allocation is selected.
+[Research 0072](docs/research/0072-clanker-transaction-balance-windows.md) adds
+one-block Clanker reconciliation within the submitted transaction read, with
+live credit/claim captures and canonical balance checkpoints. Next: establish
+deposit funding provenance and attribution limits ahead of the ledger, qualify
+backing/native/conversion delivery and remaining custody powers, and measure
+launch costs. Wider windows and Flaunch balance reconciliation remain open.
+No provider, pairing or financial allocation is selected.

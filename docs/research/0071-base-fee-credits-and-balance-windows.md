@@ -4,6 +4,9 @@
 **Date:** 2026-10-04. **Status:** bounded credit-event reader implemented;
 positive Clanker capture and two research balance windows reconciled. Automated
 window reconciliation, backing, token attribution and owner acceptance remain open.
+**Subsequent implementation:** [research 0072](0072-clanker-transaction-balance-windows.md)
+automates a one-block Clanker scope; this document retains the original wider
+research windows and their historical non-automated status.
 **Direction:** [VISION](../../VISION.md), [ROADMAP](../../ROADMAP.md).
 **Previous evidence:** [research 0070](0070-bounded-base-fee-delivery-matching.md).
 

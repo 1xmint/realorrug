@@ -49,6 +49,13 @@ origin, backing, native/conversion delivery and the treasury ledger remain open.
 The current Clanker locker is now supported as recorded in research 0069;
 the unsupported-locker observation below describes the original qualification.
 
+[Research 0072](../research/0072-clanker-transaction-balance-windows.md) records
+the next continuation: the transaction reader now automatically reconciles a
+single Clanker wallet/asset key over the submitted transaction's block. Two
+live captures and offline reviews retain balance checkpoints and credit/claim
+linkage. This supersedes the previous paragraph's non-automated status for this
+one-block scope; wider windows and the other attribution/ledger gaps remain open.
+
 The credit slice is committed as `0bf05a3`. Named tests
 `credit_events_preserve_requested_cumulative_and_caller_supplied_roles`,
 `malformed_credit_events_and_incomplete_receipts_cannot_verify_payments` and

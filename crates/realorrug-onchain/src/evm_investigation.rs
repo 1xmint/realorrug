@@ -297,6 +297,31 @@ fn transaction(
     if let Some(to) = to {
         related.push(to.to_owned());
     }
+    let transfers = case_transfers(case, &receipt, &mut facts, &mut related);
+    let fees = crate::evm_fee_receipts::read(case.chain, &receipt);
+    let windows =
+        crate::evm_fee_receipts::window::read(rpc, case.chain, &receipt, &canonical, &fees, budget);
+    if windows.iter().any(|window| window["reconciled"] == true) {
+        facts.push(statement("The submitted transaction's Clanker wallet/asset balance reconciles across its block against provider observations. This is not new treasury income, asset backing, full wallet history or evidence of this token's fee revenue."));
+    }
+    facts.extend(fees.statements);
+    related.extend(fees.related);
+    Ok((json!({"statements":facts,"related":related,"transfers":transfers,
+        "fee_claims":fees.claims,
+        "fee_credits":fees.credits,
+        "fee_balance_windows":windows,
+        "fee_claim_receipt_coverage_complete":fees.coverage_complete,
+        "transaction_block":receipt["blockNumber"],"transaction_block_hash":receipt["blockHash"],
+        "receipt_logs_present":receipt["logs"].is_array(),"receipt_logs_truncated":receipt["logs"].as_array().is_some_and(|logs|logs.len()>128)}),
+        Some("only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; credit events do not establish prior balances, credited deltas, backing or treasury receipts; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification".into())))
+}
+
+fn case_transfers(
+    case: &CaseKey,
+    receipt: &Value,
+    facts: &mut Vec<Value>,
+    related: &mut Vec<String>,
+) -> Vec<Value> {
     let mut transfers = Vec::new();
     if let Some(logs) = receipt["logs"].as_array() {
         for log in logs.iter().take(128) {
@@ -316,16 +341,7 @@ fn transaction(
             }
         }
     }
-    let fees = crate::evm_fee_receipts::read(case.chain, &receipt);
-    facts.extend(fees.statements);
-    related.extend(fees.related);
-    Ok((json!({"statements":facts,"related":related,"transfers":transfers,
-        "fee_claims":fees.claims,
-        "fee_credits":fees.credits,
-        "fee_claim_receipt_coverage_complete":fees.coverage_complete,
-        "transaction_block":receipt["blockNumber"],"transaction_block_hash":receipt["blockHash"],
-        "receipt_logs_present":receipt["logs"].is_array(),"receipt_logs_truncated":receipt["logs"].as_array().is_some_and(|logs|logs.len()>128)}),
-        Some("only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; credit events do not establish prior balances, credited deltas, backing or treasury receipts; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification".into())))
+    transfers
 }
 
 pub(crate) const TRANSFER: &str =
@@ -850,7 +866,7 @@ pub(super) mod tests {
                 ("eth_getTransactionReceipt", outcome),
                 ("eth_getBlockByNumber", retained["block"]["result"].clone()),
             ]);
-            let mut budget = Budget::default();
+            let mut budget = Budget::new(8, 3, std::time::Duration::from_secs(20));
             let (value, gap) = transaction(&rpc, &case, &read, &mut budget).unwrap();
             server.join().unwrap();
             assert_eq!(budget.calls_made(), 3);
@@ -874,6 +890,7 @@ pub(super) mod tests {
             assert_eq!(claim["pool_attribution"], "unresolved");
             assert_eq!(claim["delivery"]["log_index"], 325);
             assert_eq!(value["fee_claim_receipt_coverage_complete"], true);
+            assert_eq!(value["fee_balance_windows"][0]["reconciled"], false);
             assert!(
                 value["related"]
                     .as_array()
@@ -911,11 +928,12 @@ pub(super) mod tests {
             ("eth_getTransactionReceipt", retained["receipt"].clone()),
             ("eth_getBlockByNumber", retained["canonical_block"].clone()),
         ]);
-        let mut budget = Budget::default();
+        let mut budget = Budget::new(8, 3, std::time::Duration::from_secs(20));
         let (value, gap) = transaction(&rpc, &case, &read, &mut budget).unwrap();
         server.join().unwrap();
         assert_eq!(budget.calls_made(), 3);
         assert_eq!(value["fee_claim_receipt_coverage_complete"], true);
+        assert_eq!(value["fee_balance_windows"][0]["reconciled"], false);
         assert_eq!(value["fee_claims"], json!([]));
         assert_eq!(value["fee_credits"].as_array().unwrap().len(), 1);
         let credit = &value["fee_credits"][0];
@@ -951,6 +969,103 @@ pub(super) mod tests {
                 .contains("prior balance reconciliation")
         }));
         assert!(gap.unwrap().contains("credit events do not establish"));
+    }
+
+    #[test]
+    fn retained_base_transactions_reconcile_credit_and_claim_windows_without_token_attribution() {
+        let raw: Value = serde_json::from_str(include_str!(
+            "../../../docs/research/data/0072-base/clanker-block-window-rpc.json"
+        ))
+        .unwrap();
+        let methods = [
+            "eth_chainId",
+            "eth_getBlockByNumber",
+            "eth_getTransactionByHash",
+            "eth_getTransactionReceipt",
+            "eth_getBlockByNumber",
+            "eth_getBlockByNumber",
+            "eth_call",
+            "eth_call",
+            "eth_getLogs",
+            "eth_getLogs",
+            "eth_getLogs",
+            "eth_getBlockByNumber",
+            "eth_getBlockByNumber",
+            "eth_getBlockByNumber",
+        ];
+        for text in [
+            include_str!(
+                "../../../docs/research/data/0072-base/base-clanker-credit-balance-window.capture.json"
+            ),
+            include_str!(
+                "../../../docs/research/data/0072-base/base-clanker-claim-balance-window.capture.json"
+            ),
+        ] {
+            let capture: Value = serde_json::from_str(text).unwrap();
+            let request: crate::cases::Investigation =
+                serde_json::from_value(capture["request"].clone()).unwrap();
+            let recorded = &capture["reads"][0];
+            let selected: Read = serde_json::from_value(recorded["read"].clone()).unwrap();
+            let rows = raw["records"].as_array().unwrap();
+            let offset = rows
+                .iter()
+                .position(|row| {
+                    row["method"] == "eth_getTransactionByHash"
+                        && row["params"][0] == selected.subject
+                })
+                .unwrap()
+                - 2;
+            let responses = methods
+                .iter()
+                .zip(&rows[offset..offset + methods.len()])
+                .map(|(&method, row)| {
+                    assert_eq!(row["method"], method);
+                    (
+                        method,
+                        row["response"]["result"].clone(),
+                        Some(row["params"].clone()),
+                    )
+                })
+                .collect();
+            let (rpc, server) = endpoint_checked(responses);
+            let mut budget = Budget::default();
+            let result = read(
+                &rpc,
+                &request.case,
+                &selected,
+                None,
+                &mut budget,
+                capture["at"].as_u64().unwrap(),
+            )
+            .unwrap();
+            server.join().unwrap();
+            assert_eq!(budget.calls_made(), 14);
+            assert_eq!(
+                serde_json::to_value(&result).unwrap(),
+                recorded["observation"]
+            );
+            let window = &result.value["fee_balance_windows"][0];
+            assert_eq!(window["reconciled"], true);
+            assert_eq!(window["pool_attribution"], "unresolved");
+            assert_eq!(window["events"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                window["balance_asset"],
+                "0x4200000000000000000000000000000000000006"
+            );
+            if selected.subject
+                == "0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f"
+            {
+                assert_eq!(window["events"][0]["credited_delta"], "29478578528827");
+                assert!(result.value["fee_credits"][0]["credited_delta"].is_null());
+                assert_eq!(result.value["fee_claims"], json!([]));
+            } else {
+                assert_eq!(window["events"][0]["claimed_amount"], "3440630801955");
+                assert_eq!(window["closing_balance"], "0");
+                assert_eq!(result.value["fee_claims"][0]["financial_state"], "verified");
+                assert_eq!(result.value["fee_claims"][0]["delivery"]["log_index"], 325);
+                assert_eq!(result.value["fee_credits"], json!([]));
+            }
+        }
     }
 
     #[test]
