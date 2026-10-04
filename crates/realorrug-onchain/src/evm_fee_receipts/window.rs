@@ -229,9 +229,10 @@ fn roll_forward(
         let index = super::hex_u64(anchor["logIndex"].as_str().ok_or("anchor index absent")?)?;
         let claim = decode(anchor, index)?;
         let credit = credit(anchor, index)?;
-        if (claim.is_some_and(|c| c.owner == key.owner && c.balance_asset == key.asset)
-            || credit
-                .is_some_and(|c| c["fee_owner"] == key.owner && c["balance_asset"] == key.asset))
+        // Admission already requires a complete receipt with exactly one
+        // Clanker key. Every decoded Clanker anchor must therefore be present;
+        // repeating the key filter here could hide a missing submitted claim.
+        if (claim.is_some() || credit.is_some())
             && !logs.iter().any(|log| {
                 [
                     "address",
@@ -479,6 +480,32 @@ mod tests {
             .unwrap_err()
             .contains("decreased")
         );
+        for is_credit in [false, true] {
+            for role in [0, 1] {
+                let mut foreign = event(1, is_credit, if is_credit { 15 } else { 10 });
+                let topic = if is_credit { 2 } else { 1 } + role;
+                foreign["topics"][topic] = json!(format!("0x{:064x}", 9));
+                let foreign_receipt = receipt(vec![foreign.clone()]);
+                assert!(
+                    roll_forward(
+                        &window(),
+                        &key(),
+                        &foreign_receipt,
+                        &[foreign],
+                        10,
+                        if is_credit { 15 } else { 0 }
+                    )
+                    .unwrap_err()
+                    .contains("owner or asset disagrees")
+                );
+            }
+        }
+        let missing_claim = receipt(vec![event(1, false, 10)]);
+        assert!(
+            roll_forward(&window(), &key(), &missing_claim, &[], 10, 10)
+                .unwrap_err()
+                .contains("absent or changed")
+        );
     }
 
     #[test]
@@ -584,13 +611,14 @@ mod tests {
                 }
             }
             let (rpc, server) = endpoint_checked(rows);
+            let mut budget = Budget::default();
             let result = read(
                 &rpc,
                 Network::Base,
                 &receipt,
                 &canonical,
                 &fees,
-                &mut Budget::default(),
+                &mut budget,
             );
             server.join().unwrap();
             assert_eq!(result[0]["reconciled"], false, "{scenario}");
@@ -599,6 +627,10 @@ mod tests {
                 "unavailable_balance_window"
             );
             assert!(result[0]["events"].is_null());
+            if matches!(scenario, 0 | 8) {
+                assert_eq!(result[0]["gap"], "balance window event bound exceeded");
+                assert_eq!(budget.calls_made(), if scenario == 0 { 4 } else { 5 });
+            }
         }
     }
 

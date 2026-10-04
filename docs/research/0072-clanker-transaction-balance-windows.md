@@ -115,6 +115,18 @@ Manually replacing the measured delta with the requested amount caused the
 arithmetic regression to fail with 99 versus 5. Restoring the source made that
 named test pass. No full suite or mutation runner was run on the workstation.
 
+The initial `1cf0a2a` CI run passed 2397 Rust tests and 129 frontend tests but
+found six mutation survivors. Cap refusals now assert the exact reason and
+call count so a later transport failure cannot impersonate an event-limit
+check. Valid claim/credit fixtures with independently wrong owners and assets
+now constrain key matching. The receipt-anchor pass was simplified: complete
+one-key admission already establishes its key, so every decoded Clanker anchor
+must be present without a second key filter that could hide a missing claim.
+These changes add no mutation exclusions or weakened gates. Manually replaying
+the surviving cap multiplication and loose claim-key mutations now fails the
+named regressions; restored source passes. Retained live observations remain
+identical after the anchor simplification.
+
 Next: establish deposit funding provenance and the limits of per-token
 attribution, then define the ledger projection from qualified evidence. Wider
 history, native/conversion delivery, backing and Flaunch reconciliation remain
