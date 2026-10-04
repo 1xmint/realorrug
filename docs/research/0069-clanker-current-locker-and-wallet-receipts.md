@@ -97,13 +97,18 @@ individual token only after reconciling contributing credits and balances;
 otherwise display wallet-level revenue with attribution unresolved. Native
 delivery needs additional supported evidence, not an ERC-20 assumption.
 
-The current investigator transaction reader retains case-token Transfer
+At this research checkpoint, the investigator transaction reader retains case-token Transfer
 events, so this paired-asset receipt research is **not yet an automated
 production ledger or protocol-claim decoder**. The next bounded slice should
 recognize allowlisted claim layouts and their delivered assets, match exact
 recipient/amount/asset/receipt identities, refuse removed, malformed,
 duplicate or ambiguous logs, and retain missing/truncated coverage as unknown.
 Then reconcile accrual, claims, custody and balances across explicit windows.
+
+[Research 0070](0070-bounded-base-fee-delivery-matching.md) subsequently
+implements the bounded direct-delivery matcher and captures this actual
+Clanker receipt through the investigator. Pool attribution and full financial
+reconciliation remain unresolved; this historical research is not a ledger.
 
 Named regressions check all three allowlisted lockers, exact target/calldata/
 block, both token currency positions and refusal of wrong pool/hook identities.

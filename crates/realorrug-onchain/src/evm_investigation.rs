@@ -316,14 +316,20 @@ fn transaction(
             }
         }
     }
+    let fees = crate::evm_fee_receipts::read(case.chain, &receipt);
+    facts.extend(fees.statements);
+    related.extend(fees.related);
     Ok((json!({"statements":facts,"related":related,"transfers":transfers,
+        "fee_claims":fees.claims,
+        "fee_claim_receipt_coverage_complete":fees.coverage_complete,
         "transaction_block":receipt["blockNumber"],"transaction_block_hash":receipt["blockHash"],
         "receipt_logs_present":receipt["logs"].is_array(),"receipt_logs_truncated":receipt["logs"].as_array().is_some_and(|logs|logs.len()>128)}),
-        Some("only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; internal native transfers, custom token semantics and beneficiary identity require separate verification".into())))
+        Some("only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification".into())))
 }
 
-const TRANSFER: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-fn transfer(log: &Value) -> Result<Value, String> {
+pub(crate) const TRANSFER: &str =
+    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+pub(crate) fn transfer(log: &Value) -> Result<Value, String> {
     if log["removed"].as_bool() == Some(true) {
         return Err("removed Transfer event".into());
     }
@@ -815,6 +821,73 @@ pub(super) mod tests {
         }
     }
 
+    #[test]
+    fn retained_clanker_claim_matches_paired_asset_without_attributing_case_revenue() {
+        let retained: Value = serde_json::from_str(include_str!(
+            "../../../docs/research/data/0069-base/clanker-wallet-claim.json"
+        ))
+        .unwrap();
+        let tx = retained["transaction"]["result"].clone();
+        let receipt = retained["receipt"]["result"].clone();
+        let case = CaseKey::new(
+            crate::cases::Network::Base,
+            "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        )
+        .unwrap();
+        let read = Read {
+            tool: Tool::Transaction,
+            subject: tx["hash"].as_str().unwrap().to_owned(),
+            why: "verify submitted fee claim".into(),
+        };
+        for successful in [true, false] {
+            let mut outcome = receipt.clone();
+            if !successful {
+                outcome["status"] = json!("0x0");
+            }
+            let (rpc, server) = endpoint(vec![
+                ("eth_getTransactionByHash", tx.clone()),
+                ("eth_getTransactionReceipt", outcome),
+                ("eth_getBlockByNumber", retained["block"]["result"].clone()),
+            ]);
+            let mut budget = Budget::default();
+            let (value, gap) = transaction(&rpc, &case, &read, &mut budget).unwrap();
+            server.join().unwrap();
+            assert_eq!(budget.calls_made(), 3);
+            if !successful {
+                assert!(value["fee_claims"].is_null());
+                continue;
+            }
+            assert_eq!(value["transfers"], json!([]));
+            assert_eq!(value["fee_claims"].as_array().unwrap().len(), 1);
+            let claim = &value["fee_claims"][0];
+            assert_eq!(claim["financial_state"], "verified");
+            assert_eq!(claim["amount"], "3440630801955");
+            assert_eq!(
+                claim["recipient"],
+                "0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa"
+            );
+            assert_eq!(
+                claim["delivered_asset"],
+                "0x4200000000000000000000000000000000000006"
+            );
+            assert_eq!(claim["pool_attribution"], "unresolved");
+            assert_eq!(claim["delivery"]["log_index"], 325);
+            assert_eq!(value["fee_claim_receipt_coverage_complete"], true);
+            assert!(
+                value["related"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&claim["delivered_asset"])
+            );
+            assert!(value["statements"].as_array().unwrap().iter().any(|s| {
+                s["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("wallet-level evidence")
+            }));
+            assert!(gap.unwrap().contains("individual-pool revenue attribution"));
+        }
+    }
     #[test]
     fn malformed_transfer_words_never_become_zero_or_an_owner_claim() {
         let good = json!({"topics":[TRANSFER,format!("0x{:0>64}","1"),format!("0x{:0>64}","2")],

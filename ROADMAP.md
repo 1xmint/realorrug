@@ -112,10 +112,11 @@ case as evidence rather than treating a user allegation as fact.
   Existing Solana launch tooling is historical coverage, not a Base verifier.
   [Research 0069](docs/research/0069-clanker-current-locker-and-wallet-receipts.md)
   adds current Clanker locker coverage and an actual wallet-level claim trace.
-  The next reader slice must verify delivered fee assets separately from the
-  case token, protect against duplicate/ambiguous receipt matches and preserve
-  unresolved per-token attribution of pooled withdrawals. This evidence does
-  not establish a completed ledger or select the launchpad.
+  [Research 0070](docs/research/0070-bounded-base-fee-delivery-matching.md)
+  delivers bounded direct ERC-20 claim/receipt matching with duplicate and
+  ambiguity refusal. Native/conversion delivery, contributing credits,
+  balance reconciliation and per-token attribution remain the next boundaries.
+  These readers do not establish a completed ledger or select the launchpad.
 - Use operator-managed operations/reserve spending as the launch default.
   The 25% burn / 25% liquidity idea remains a proposal. Do not advertise a
   split, automated execution or immutable controls that are not adopted,

@@ -1,0 +1,532 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Wallet-level claims from reviewed Base deployments, never pool attribution.
+use crate::{
+    cases::Network,
+    evm_investigation::{address_word, hex_u64, transfer, word},
+    investigation::statement,
+};
+use serde_json::{Value, json};
+use std::collections::HashSet;
+
+const CLANKER: &str = "0xf3622742b1e446d92e45e22923ef11c2fcd55d68";
+const FLAUNCH: &str = "0x17fbf54d6d15ebff82eee77e616f701952d08bb4";
+const CLAIM: &str = "0xf98eaa9c1f790e5c18b1f227bd5bade62600f9f3e3587c7644b90c50b9bf13c5";
+const WITHDRAWAL: &str = "0x87a38faaa35605e96a58e83a8fb6e2e1c7a77407ee979d73edef64461fa1756d";
+const ZERO: &str = "0x0000000000000000000000000000000000000000";
+const LIMIT: usize = 128;
+
+#[derive(Default)]
+pub(crate) struct FeeReceipts {
+    pub claims: Vec<Value>,
+    pub statements: Vec<Value>,
+    pub related: Vec<String>,
+    pub coverage_complete: bool,
+}
+
+struct Claim {
+    index: u64,
+    protocol: &'static str,
+    escrow: &'static str,
+    owner: String,
+    recipient: String,
+    balance_asset: String,
+    delivered_asset: String,
+    amount: u128,
+}
+
+fn checkpoint(log: &Value, receipt: &Value) -> Result<u64, String> {
+    if log["removed"].as_bool() != Some(false)
+        || ["transactionHash", "blockHash", "blockNumber"]
+            .iter()
+            .any(|key| log[key].is_null() || log[key] != receipt[key])
+    {
+        return Err("log checkpoint absent, removed or inconsistent".into());
+    }
+    hex_u64(log["logIndex"].as_str().ok_or("log index absent")?)
+}
+
+fn decode(log: &Value, index: u64) -> Result<Option<Claim>, String> {
+    let emitter = log["address"].as_str().unwrap_or("");
+    let signature = log["topics"][0].as_str().unwrap_or("");
+    let is_clanker = emitter.eq_ignore_ascii_case(CLANKER) && signature == CLAIM;
+    let is_flaunch = emitter.eq_ignore_ascii_case(FLAUNCH) && signature == WITHDRAWAL;
+    if !is_clanker && !is_flaunch {
+        return Ok(None);
+    }
+    let topics = log["topics"].as_array().ok_or("claim topics absent")?;
+    let data = log["data"].as_str().ok_or("claim data absent")?;
+    let digits = data.strip_prefix("0x").ok_or("claim ABI prefix absent")?;
+    let count = if is_clanker { 1 } else { 5 };
+    if topics.len() != if is_clanker { 3 } else { 1 } || digits.len() != count * 64 {
+        return Err("unsupported claim ABI layout".into());
+    }
+    let words: Vec<String> = digits
+        .as_bytes()
+        .as_chunks::<64>()
+        .0
+        .iter()
+        .map(|part| format!("0x{}", String::from_utf8_lossy(part)))
+        .collect();
+    let (protocol, escrow, owner, recipient, balance_asset, delivered_asset) = if is_clanker {
+        let owner = address_word(topics[1].as_str().ok_or("claim owner absent")?)?;
+        let asset = address_word(topics[2].as_str().ok_or("claim asset absent")?)?;
+        (
+            "clanker_fee_locker",
+            CLANKER,
+            owner.clone(),
+            owner,
+            asset.clone(),
+            asset,
+        )
+    } else {
+        (
+            "flaunch_paired_escrow",
+            FLAUNCH,
+            address_word(&words[0])?,
+            address_word(&words[1])?,
+            address_word(&words[2])?,
+            address_word(&words[3])?,
+        )
+    };
+    let amount = word(words.last().ok_or("claim amount absent")?)?;
+    if amount == 0 {
+        return Err("zero claim does not establish a payment".into());
+    }
+    Ok(Some(Claim {
+        index,
+        protocol,
+        escrow,
+        owner,
+        recipient,
+        balance_asset,
+        delivered_asset,
+        amount,
+    }))
+}
+
+fn payment(claim: &Claim, log: &Value) -> bool {
+    if !log["address"]
+        .as_str()
+        .is_some_and(|s| s.eq_ignore_ascii_case(&claim.delivered_asset))
+    {
+        return false;
+    }
+    let Ok(value) = transfer(log) else {
+        return false;
+    };
+    value["from"] == claim.escrow
+        && value["to"] == claim.recipient
+        && value["amount"] == claim.amount.to_string()
+}
+
+fn delivery<'a>(
+    claim: &Claim,
+    claims: &[Claim],
+    logs: &'a [(u64, &Value)],
+    complete: bool,
+) -> Result<(u64, &'a Value), &'static str> {
+    if !complete {
+        return Err("receipt log coverage is missing, truncated or inconsistent");
+    }
+    if claim.delivered_asset == ZERO {
+        return Err("native delivery needs separate supported evidence");
+    }
+    if claim.balance_asset != claim.delivered_asset {
+        return Err("wrapped-asset conversion needs separate supported evidence");
+    }
+    if logs.iter().any(|(_, log)| {
+        log["address"]
+            .as_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case(&claim.delivered_asset))
+            && log["topics"][0].as_str() == Some(crate::evm_investigation::TRANSFER)
+            && transfer(log).is_err()
+    }) {
+        return Err("malformed transfer of the delivered asset prevents verification");
+    }
+    let candidates: Vec<_> = logs.iter().filter(|(_, log)| payment(claim, log)).collect();
+    if candidates.len() != 1 {
+        return Err("no unique matching asset transfer in this receipt");
+    }
+    let (index, log) = *candidates[0];
+    // One transfer cannot verify several claims, even when amounts happen to agree.
+    if claims.iter().filter(|other| payment(other, log)).count() != 1 {
+        return Err("the matching transfer is ambiguous across fee claims");
+    }
+    Ok((index, log))
+}
+
+fn report(claim: &Claim, proof: Result<(u64, &Value), &str>, out: &mut FeeReceipts) {
+    let (state, scope, delivery, gap) = match proof {
+        Ok((index, log)) => (
+            "verified",
+            "receipt_event_match",
+            json!({"log_index":index,"asset":claim.delivered_asset,"transfer":transfer(log).ok()}),
+            None,
+        ),
+        Err(gap) => ("executed", "claim_event_only", Value::Null, Some(gap)),
+    };
+    out.claims.push(json!({"protocol":claim.protocol,"escrow":claim.escrow,"log_index":claim.index,
+        "fee_owner":claim.owner,"recipient":claim.recipient,"balance_asset":claim.balance_asset,
+        "delivered_asset":claim.delivered_asset,"amount":claim.amount.to_string(),"financial_state":state,
+        "verification_scope":scope,"pool_attribution":"unresolved","delivery":delivery,"gap":gap}));
+    let evidence = gap.unwrap_or("one matching ERC-20 Transfer event from the escrow");
+    out.statements.push(statement(format!("{} claim event reports {} base units of asset {} for recipient {}; delivery check: {evidence}. This is wallet-level evidence with individual-token revenue attribution unresolved.", claim.protocol, claim.amount, claim.delivered_asset, claim.recipient)));
+    out.related.extend([
+        claim.owner.clone(),
+        claim.recipient.clone(),
+        claim.balance_asset.clone(),
+        claim.delivered_asset.clone(),
+    ]);
+}
+
+/// Caller has already checked canonical transaction/receipt identity. No RPC calls.
+pub(crate) fn read(chain: Network, receipt: &Value) -> FeeReceipts {
+    let mut out = FeeReceipts::default();
+    if chain != Network::Base || receipt["status"].as_str().and_then(|s| hex_u64(s).ok()) != Some(1)
+    {
+        return out;
+    }
+    let Some(logs) = receipt["logs"].as_array() else {
+        return out;
+    };
+    let mut complete = logs.len() <= LIMIT;
+    let mut indices = HashSet::new();
+    let mut claims = Vec::new();
+    let mut observed = Vec::new();
+    let mut refused = 0;
+    for log in logs.iter().take(LIMIT) {
+        let Ok(index) = checkpoint(log, receipt) else {
+            complete = false;
+            continue;
+        };
+        if !indices.insert(index) {
+            complete = false;
+            continue;
+        }
+        observed.push((index, log));
+        match decode(log, index) {
+            Ok(Some(claim)) => claims.push(claim),
+            Err(_) => {
+                complete = false;
+                refused += 1;
+            }
+            Ok(None) => {}
+        }
+    }
+    for claim in &claims {
+        report(
+            claim,
+            delivery(claim, &claims, &observed, complete),
+            &mut out,
+        );
+    }
+    out.coverage_complete = complete;
+    if refused > 0 {
+        out.statements.push(statement(format!("{refused} allowlisted fee-claim log(s) could not be decoded; they do not establish payments.")));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const OWNER: &str = "0x1111111111111111111111111111111111111111";
+    const RECIPIENT: &str = "0x2222222222222222222222222222222222222222";
+    const ASSET: &str = "0x4200000000000000000000000000000000000006";
+    const TRANSFER: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    fn addr(address: &str) -> String {
+        format!("{:0>64}", &address[2..])
+    }
+    fn log(index: u64, address: &str, topics: Value, data: String) -> Value {
+        let mut value = json!({"address":address,"removed":false,
+            "logIndex":format!("0x{index:x}"),"transactionHash":format!("0x{:064x}",1),
+            "blockHash":format!("0x{:064x}",2),"blockNumber":"0x10"});
+        value["topics"] = topics;
+        value["data"] = Value::String(data);
+        value
+    }
+    fn claim(flaunch: bool) -> Value {
+        if flaunch {
+            log(
+                1,
+                FLAUNCH,
+                json!([WITHDRAWAL]),
+                format!(
+                    "0x{}{}{}{}{:064x}",
+                    addr(OWNER),
+                    addr(RECIPIENT),
+                    addr(ASSET),
+                    addr(ASSET),
+                    42
+                ),
+            )
+        } else {
+            log(
+                1,
+                CLANKER,
+                json!([
+                    CLAIM,
+                    format!("0x{}", addr(OWNER)),
+                    format!("0x{}", addr(ASSET))
+                ]),
+                format!("0x{:064x}", 42),
+            )
+        }
+    }
+    fn paid(flaunch: bool) -> Value {
+        log(
+            0,
+            ASSET,
+            json!([
+                TRANSFER,
+                format!("0x{}", addr(if flaunch { FLAUNCH } else { CLANKER })),
+                format!("0x{}", addr(if flaunch { RECIPIENT } else { OWNER }))
+            ]),
+            format!("0x{:064x}", 42),
+        )
+    }
+    fn receipt(logs: Vec<Value>) -> Value {
+        let mut value = json!({"transactionHash":format!("0x{:064x}",1),"blockHash":format!("0x{:064x}",2),"blockNumber":"0x10","status":"0x1"});
+        value["logs"] = Value::Array(logs);
+        value
+    }
+
+    #[test]
+    fn direct_claims_match_exact_asset_sender_recipient_amount_without_pool_attribution() {
+        for flaunch in [true, false] {
+            let result = read(Network::Base, &receipt(vec![paid(flaunch), claim(flaunch)]));
+            let c = &result.claims[0];
+            assert_eq!(result.claims.len(), 1);
+            assert_eq!(result.statements.len(), 1);
+            assert!(result.coverage_complete);
+            assert_eq!(c["financial_state"], "verified");
+            assert_eq!(c["pool_attribution"], "unresolved");
+            assert_eq!(c["verification_scope"], "receipt_event_match");
+            assert_eq!(c["delivery"]["log_index"], 0);
+            assert_eq!(c["amount"], "42");
+            assert_eq!(c["fee_owner"], OWNER);
+            assert_eq!(c["balance_asset"], ASSET);
+            assert_eq!(c["delivered_asset"], ASSET);
+            assert_eq!(c["recipient"], if flaunch { RECIPIENT } else { OWNER });
+            assert_eq!(c["escrow"], if flaunch { FLAUNCH } else { CLANKER });
+            assert_eq!(
+                c["protocol"],
+                if flaunch {
+                    "flaunch_paired_escrow"
+                } else {
+                    "clanker_fee_locker"
+                }
+            );
+            assert!(c["gap"].is_null());
+            assert_eq!(c["delivery"]["transfer"]["amount"], "42");
+            assert!(result.related.contains(&OWNER.to_owned()));
+            assert!(result.related.contains(&ASSET.to_owned()));
+            assert!(
+                result
+                    .related
+                    .contains(&if flaunch { RECIPIENT } else { OWNER }.to_owned())
+            );
+            assert!(
+                result.statements[0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("individual-token revenue attribution unresolved")
+            );
+            for mutation in 0..4 {
+                let mut wrong = paid(flaunch);
+                match mutation {
+                    0 => wrong["address"] = json!(OWNER),
+                    1 => wrong["topics"][1] = json!(format!("0x{}", addr(ZERO))),
+                    2 => wrong["topics"][2] = json!(format!("0x{}", addr(ZERO))),
+                    _ => wrong["data"] = json!(format!("0x{:064x}", 41)),
+                }
+                let result = read(Network::Base, &receipt(vec![wrong, claim(flaunch)]));
+                assert_eq!(result.claims[0]["financial_state"], "executed");
+                assert_eq!(result.claims[0]["verification_scope"], "claim_event_only");
+                assert!(result.claims[0]["delivery"].is_null());
+            }
+        }
+    }
+
+    #[test]
+    fn log_checkpoints_and_unique_indices_are_required_before_delivery_verification() {
+        for field in [
+            "transactionHash",
+            "blockHash",
+            "blockNumber",
+            "logIndex",
+            "removed",
+        ] {
+            for value in [Value::Null, json!("wrong"), json!(true)] {
+                let mut wrong = paid(false);
+                wrong[field] = value;
+                let result = read(Network::Base, &receipt(vec![wrong, claim(false)]));
+                assert_eq!(result.claims[0]["financial_state"], "executed");
+                assert!(
+                    result.claims[0]["gap"]
+                        .as_str()
+                        .unwrap()
+                        .contains("inconsistent")
+                );
+                assert!(!result.coverage_complete);
+                let mut wrong = claim(false);
+                wrong[field] = Value::Null;
+                assert_eq!(
+                    read(Network::Base, &receipt(vec![paid(false), wrong])).claims,
+                    Vec::<Value>::new()
+                );
+            }
+        }
+        let mut duplicate = paid(false);
+        duplicate["logIndex"] = json!("0x01");
+        let result = read(Network::Base, &receipt(vec![claim(false), duplicate]));
+        assert_eq!(result.claims.len(), 1);
+        assert_eq!(result.claims[0]["financial_state"], "executed");
+        let result = read(
+            Network::Base,
+            &receipt(vec![paid(false), claim(false), claim(false)]),
+        );
+        assert_eq!(result.claims.len(), 1);
+        assert_eq!(result.claims[0]["financial_state"], "executed");
+    }
+
+    #[test]
+    fn ambiguous_reused_transfers_and_incomplete_coverage_never_verify_claims() {
+        let mut duplicate = paid(false);
+        duplicate["logIndex"] = json!("0x2");
+        let result = read(
+            Network::Base,
+            &receipt(vec![paid(false), duplicate, claim(false)]),
+        );
+        assert_eq!(result.claims[0]["financial_state"], "executed");
+        let mut second_claim = claim(false);
+        second_claim["logIndex"] = json!("0x2");
+        let result = read(
+            Network::Base,
+            &receipt(vec![paid(false), claim(false), second_claim]),
+        );
+        assert_eq!(result.claims.len(), 2);
+        for c in result.claims {
+            assert_eq!(c["financial_state"], "executed");
+            assert!(c["gap"].as_str().unwrap().contains("ambiguous"));
+        }
+        for n in [128, 129] {
+            let mut logs = vec![paid(false), claim(false)];
+            logs.extend((2..n).map(|index| log(index, OWNER, json!([]), "0x".into())));
+            let result = read(Network::Base, &receipt(logs));
+            assert_eq!(
+                result.claims[0]["financial_state"],
+                if n == 128 { "verified" } else { "executed" }
+            );
+        }
+        let result = read(Network::Base, &receipt(vec![claim(false)]));
+        assert_eq!(result.claims[0]["financial_state"], "executed");
+        for (asset, event) in [(OWNER, TRANSFER), (ASSET, "0xother-event")] {
+            let unrelated = log(2, asset, json!([event]), "0x".into());
+            let result = read(
+                Network::Base,
+                &receipt(vec![paid(false), claim(false), unrelated]),
+            );
+            assert_eq!(result.claims[0]["financial_state"], "verified");
+        }
+        let mut malformed = paid(false);
+        malformed["logIndex"] = json!("0x2");
+        malformed["data"] = json!("0x");
+        let result = read(
+            Network::Base,
+            &receipt(vec![paid(false), claim(false), malformed]),
+        );
+        assert!(
+            result.claims[0]["gap"]
+                .as_str()
+                .unwrap()
+                .contains("malformed transfer")
+        );
+        let mut malformed = claim(false);
+        malformed["logIndex"] = json!("0x2");
+        malformed["data"] = json!("0x");
+        let result = read(
+            Network::Base,
+            &receipt(vec![paid(false), claim(false), malformed]),
+        );
+        assert_eq!(result.claims[0]["financial_state"], "executed");
+        assert!(!result.coverage_complete);
+        let mut tail: Vec<Value> = (0..127)
+            .map(|index| log(index, OWNER, json!([]), "0x".into()))
+            .collect();
+        let mut last_payment = paid(false);
+        last_payment["logIndex"] = json!("0x7f");
+        let mut late_claim = claim(false);
+        late_claim["logIndex"] = json!("0x80");
+        tail.push(last_payment);
+        tail.push(late_claim);
+        let result = read(Network::Base, &receipt(tail));
+        assert_eq!(result.claims, Vec::<Value>::new());
+        assert!(!result.coverage_complete);
+    }
+
+    #[test]
+    fn unsupported_chain_native_conversion_and_malformed_claims_remain_unverified() {
+        let good = receipt(vec![paid(true), claim(true)]);
+        for chain in [Network::Ethereum, Network::Solana, Network::Robinhood] {
+            assert_eq!(read(chain, &good).claims, Vec::<Value>::new());
+        }
+        for status in [Value::Null, json!("0x0"), json!("0x2"), json!("bad")] {
+            let mut failed = good.clone();
+            failed["status"] = status;
+            assert_eq!(read(Network::Base, &failed).claims, Vec::<Value>::new());
+        }
+        let mut missing = good.clone();
+        missing["logs"] = Value::Null;
+        assert_eq!(read(Network::Base, &missing).claims, Vec::<Value>::new());
+        for asset in [ZERO, OWNER] {
+            let mut converted = claim(true);
+            converted["data"] = json!(format!(
+                "0x{}{}{}{}{:064x}",
+                addr(OWNER),
+                addr(RECIPIENT),
+                addr(ASSET),
+                addr(asset),
+                42
+            ));
+            let result = read(Network::Base, &receipt(vec![converted]));
+            assert_eq!(result.claims[0]["financial_state"], "executed");
+            assert!(
+                result.claims[0]["gap"]
+                    .as_str()
+                    .unwrap()
+                    .contains(if asset == ZERO {
+                        "native"
+                    } else {
+                        "conversion"
+                    })
+            );
+        }
+        for flaunch in [false, true] {
+            for data in [
+                "0x".to_owned(),
+                "0xgg".to_owned(),
+                format!("0x{}", "0".repeat(if flaunch { 320 } else { 64 })),
+                format!("0x{}", "f".repeat(if flaunch { 320 } else { 64 })),
+            ] {
+                let mut malformed = claim(flaunch);
+                malformed["data"] = json!(data);
+                let result = read(Network::Base, &receipt(vec![malformed]));
+                assert_eq!(result.claims, Vec::<Value>::new());
+                assert_eq!(result.statements.len(), 1);
+            }
+            let mut foreign = claim(flaunch);
+            foreign["address"] = json!(OWNER);
+            assert_eq!(
+                read(Network::Base, &receipt(vec![foreign])).claims,
+                Vec::<Value>::new()
+            );
+            let mut other_event = claim(flaunch);
+            other_event["topics"][0] = json!(TRANSFER);
+            assert_eq!(
+                read(Network::Base, &receipt(vec![other_event])).claims,
+                Vec::<Value>::new()
+            );
+        }
+    }
+}

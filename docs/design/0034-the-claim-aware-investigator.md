@@ -32,6 +32,13 @@ preferences or realized payments. [Research 0069](../research/0069-clanker-curre
 qualifies the additional current Base locker and documents why pooled wallet
 claims require separate asset delivery and per-token attribution checks.
 
+The transaction reader now matches reviewed Base fee-claim events to exact
+direct ERC-20 deliveries within a successful canonical receipt. Unique log
+identities and unambiguous claim/transfer matches are required; native and
+conversion delivery remain gaps. [Research 0070](../research/0070-bounded-base-fee-delivery-matching.md)
+records the scope and live evidence. Wallet-level receipt verification never
+implicitly attributes pooled revenue to the case token or implements a ledger.
+
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook
 uses its global escrow getter; the current Base hook resolves escrow per pool.

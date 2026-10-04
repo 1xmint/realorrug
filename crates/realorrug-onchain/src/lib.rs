@@ -56,6 +56,7 @@ pub mod budget;
 pub mod cases;
 pub mod dispatch;
 pub mod dossier;
+mod evm_fee_receipts;
 pub mod evm_investigation;
 mod evm_protocols;
 pub mod exchange_wallets;
