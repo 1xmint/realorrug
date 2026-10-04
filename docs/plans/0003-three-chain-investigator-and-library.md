@@ -49,6 +49,12 @@ origin, backing, native/conversion delivery and the treasury ledger remain open.
 The current Clanker locker is now supported as recorded in research 0069;
 the unsupported-locker observation below describes the original qualification.
 
+The credit slice is committed as `0bf05a3`. Named tests
+`credit_events_preserve_requested_cumulative_and_caller_supplied_roles`,
+`malformed_credit_events_and_incomplete_receipts_cannot_verify_payments` and
+`retained_clanker_credit_is_an_accrual_observation_not_a_treasury_receipt` prove
+the new behavior; the first also rejects a manually introduced false delta.
+
 **Do not equate delivery with launch readiness.** Summaries are intentionally
 partial `CantTell`. Complete claim resolution, historical interval coverage,
 broader LP/control semantics and representative deployed Clanker/Flaunch coverage

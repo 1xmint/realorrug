@@ -123,6 +123,13 @@ named credit-role regression fail at its unknown-delta assertion. Restoring
 the source made it pass. This checks the tempting wrong inference directly;
 no local full suite or mutation runner was used.
 
+The initial `0bf05a3` CI run passed 2391 Rust tests and 129 frontend tests.
+All eight mutation shards and their aggregate gate passed: 775 tested,
+544 caught, 231 unviable and zero survivors.
+Its newer Clippy required equality assertions for empty vectors so failures
+print their contents; the local toolchain had not reported that lint. The
+assertions were adapted without changing production behavior or weakening gates.
+
 Next, turn measured reconciliation into a bounded typed read with explicit
 opening/closing checkpoints, all supported balance-changing events, deduplicated
 receipt linkage and historical-coverage gaps. Resolve funding provenance before

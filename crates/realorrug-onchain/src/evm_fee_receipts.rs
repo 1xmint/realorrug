@@ -417,7 +417,7 @@ mod tests {
         for flaunch in [false, true] {
             let out = read(Network::Base, &receipt(vec![stored(flaunch)]));
             assert!(out.coverage_complete);
-            assert!(out.claims.is_empty());
+            assert_eq!(out.claims, [] as [Value; 0]);
             assert_eq!(out.credits.len(), 1);
             let value = &out.credits[0];
             assert_eq!(value["log_index"], 2);
@@ -533,29 +533,27 @@ mod tests {
                 let mut event = stored(flaunch);
                 event[field] = Value::Null;
                 let out = read(Network::Base, &receipt(vec![event]));
-                assert!(out.credits.is_empty());
+                assert_eq!(out.credits, [] as [Value; 0]);
                 assert!(!out.coverage_complete);
             }
             let mut wrong = stored(flaunch);
             wrong["address"] = json!(OWNER);
-            assert!(
-                read(Network::Base, &receipt(vec![wrong]))
-                    .credits
-                    .is_empty()
+            assert_eq!(
+                read(Network::Base, &receipt(vec![wrong])).credits,
+                [] as [Value; 0]
             );
             let mut failed = receipt(vec![stored(flaunch)]);
             failed["status"] = json!("0x0");
-            assert!(read(Network::Base, &failed).credits.is_empty());
-            assert!(
-                read(Network::Ethereum, &receipt(vec![stored(flaunch)]))
-                    .credits
-                    .is_empty()
+            assert_eq!(read(Network::Base, &failed).credits, [] as [Value; 0]);
+            assert_eq!(
+                read(Network::Ethereum, &receipt(vec![stored(flaunch)])).credits,
+                [] as [Value; 0]
             );
         }
         let mut logs = vec![json!({}); LIMIT];
         logs.push(stored(false));
         let out = read(Network::Base, &receipt(logs));
-        assert!(out.credits.is_empty());
+        assert_eq!(out.credits, [] as [Value; 0]);
         assert!(!out.coverage_complete);
     }
 
