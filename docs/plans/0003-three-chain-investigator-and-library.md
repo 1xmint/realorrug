@@ -56,6 +56,15 @@ live captures and offline reviews retain balance checkpoints and credit/claim
 linkage. This supersedes the previous paragraph's non-automated status for this
 one-block scope; wider windows and the other attribution/ledger gaps remain open.
 
+[Research 0073](../research/0073-clanker-deposit-funding-provenance.md) records
+the next slice: receipt-level funding evidence matches one preceding requested
+Clanker deposit transfer, refusing ambiguous or incomplete evidence. A live
+capture, retained provider failures, historical depositor/source/pool-key
+qualification and an offline dossier preserve attribution limits. Received
+credit remains independently measured, and the inspected collection concerns
+a different token. Automatic historical pool attribution and deposit-specific
+short reply prioritization remain the next boundary ahead of the ledger.
+
 The credit slice is committed as `0bf05a3`. Named tests
 `credit_events_preserve_requested_cumulative_and_caller_supplied_roles`,
 `malformed_credit_events_and_incomplete_receipts_cannot_verify_payments` and

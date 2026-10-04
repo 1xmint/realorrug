@@ -54,6 +54,16 @@ the outer checkpoint call. Reconciliation remains provider evidence, separate
 from receipt delivery and token revenue attribution. Wider windows, Flaunch
 balance reconciliation and the treasury ledger remain subsequent work.
 
+[Research 0073](../research/0073-clanker-deposit-funding-provenance.md) adds
+receipt-level Clanker ingress evidence to the same transaction caller, without
+additional RPC calls. One preceding transfer must match the requested asset,
+depositor, escrow and amount, with complete coverage and no ambiguous reuse.
+Its proof remains separate from received credit, backing and token/pool origin;
+the credit's financial state is not upgraded. Live historical upstream
+qualification demonstrates a different-token collection context. The dossier
+retains this proof; deposit-specific short reply prioritization and automated
+historical collection attribution remain subsequent work before the ledger.
+
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook
 uses its global escrow getter; the current Base hook resolves escrow per pool.

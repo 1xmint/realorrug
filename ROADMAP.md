@@ -250,8 +250,13 @@ Clanker refresh. Research 0069–0071 subsequently add the current Clanker locke
 direct claim delivery, credit observations and measured wallet/asset windows.
 [Research 0072](docs/research/0072-clanker-transaction-balance-windows.md) adds
 one-block Clanker reconciliation within the submitted transaction read, with
-live credit/claim captures and canonical balance checkpoints. Next: establish
-deposit funding provenance and attribution limits ahead of the ledger, qualify
+live credit/claim captures and canonical balance checkpoints.
+[Research 0073](docs/research/0073-clanker-deposit-funding-provenance.md) now adds
+unique preceding Clanker deposit-transfer matches and a historical upstream
+qualification showing why this live deposit cannot be assigned to the case
+token. The proof is retained in the dossier; short reply prioritization remains
+open. Next: qualify bounded pool/collection attribution and surface the
+deposit-specific proof in replies ahead of the ledger, qualify
 backing/native/conversion delivery and remaining custody powers, and measure
-launch costs. Wider windows and Flaunch balance reconciliation remain open.
+launch costs. Wider windows and Flaunch balance/funding reconciliation remain open.
 No provider, pairing or financial allocation is selected.

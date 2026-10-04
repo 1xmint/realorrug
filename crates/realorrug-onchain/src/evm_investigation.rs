@@ -971,36 +971,42 @@ pub(super) mod tests {
         assert!(gap.unwrap().contains("credit events do not establish"));
     }
 
+    const WINDOW_METHODS: [&str; 14] = [
+        "eth_chainId",
+        "eth_getBlockByNumber",
+        "eth_getTransactionByHash",
+        "eth_getTransactionReceipt",
+        "eth_getBlockByNumber",
+        "eth_getBlockByNumber",
+        "eth_call",
+        "eth_call",
+        "eth_getLogs",
+        "eth_getLogs",
+        "eth_getLogs",
+        "eth_getBlockByNumber",
+        "eth_getBlockByNumber",
+        "eth_getBlockByNumber",
+    ];
+
     #[test]
     fn retained_base_transactions_reconcile_credit_and_claim_windows_without_token_attribution() {
-        let raw: Value = serde_json::from_str(include_str!(
-            "../../../docs/research/data/0072-base/clanker-block-window-rpc.json"
-        ))
-        .unwrap();
-        let methods = [
-            "eth_chainId",
-            "eth_getBlockByNumber",
-            "eth_getTransactionByHash",
-            "eth_getTransactionReceipt",
-            "eth_getBlockByNumber",
-            "eth_getBlockByNumber",
-            "eth_call",
-            "eth_call",
-            "eth_getLogs",
-            "eth_getLogs",
-            "eth_getLogs",
-            "eth_getBlockByNumber",
-            "eth_getBlockByNumber",
-            "eth_getBlockByNumber",
-        ];
-        for text in [
-            include_str!(
-                "../../../docs/research/data/0072-base/base-clanker-credit-balance-window.capture.json"
+        for (text, trace) in [
+            (
+                include_str!(
+                    "../../../docs/research/data/0073-base/base-clanker-deposit-funding.capture.json"
+                ),
+                include_str!(
+                    "../../../docs/research/data/0073-base/clanker-deposit-funding-rpc.json"
+                ),
             ),
-            include_str!(
-                "../../../docs/research/data/0072-base/base-clanker-claim-balance-window.capture.json"
+            (
+                include_str!(
+                    "../../../docs/research/data/0072-base/base-clanker-claim-balance-window.capture.json"
+                ),
+                include_str!("../../../docs/research/data/0072-base/clanker-block-window-rpc.json"),
             ),
         ] {
+            let raw: Value = serde_json::from_str(trace).unwrap();
             let capture: Value = serde_json::from_str(text).unwrap();
             let request: crate::cases::Investigation =
                 serde_json::from_value(capture["request"].clone()).unwrap();
@@ -1015,9 +1021,9 @@ pub(super) mod tests {
                 })
                 .unwrap()
                 - 2;
-            let responses = methods
+            let responses = WINDOW_METHODS
                 .iter()
-                .zip(&rows[offset..offset + methods.len()])
+                .zip(&rows[offset..offset + WINDOW_METHODS.len()])
                 .map(|(&method, row)| {
                     assert_eq!(row["method"], method);
                     (
@@ -1057,6 +1063,15 @@ pub(super) mod tests {
             {
                 assert_eq!(window["events"][0]["credited_delta"], "29478578528827");
                 assert!(result.value["fee_credits"][0]["credited_delta"].is_null());
+                assert_eq!(result.value["fee_credits"][0]["funding"]["log_index"], 106);
+                assert_eq!(
+                    result.value["fee_credits"][0]["funding"]["transfer"]["amount"],
+                    "29478578528827"
+                );
+                assert_eq!(
+                    result.value["fee_credits"][0]["financial_state"],
+                    "executed"
+                );
                 assert_eq!(result.value["fee_claims"], json!([]));
             } else {
                 assert_eq!(window["events"][0]["claimed_amount"], "3440630801955");

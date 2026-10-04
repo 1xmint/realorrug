@@ -4,6 +4,10 @@
 **Date:** 2026-10-04. **Status:** one-block reconciliation implemented with live
 credit/claim captures and offline reviews; wider history, attribution, backing,
 Flaunch balance windows and owner acceptance remain open.
+**Subsequent evidence:** [research 0073](0073-clanker-deposit-funding-provenance.md)
+adds receipt ingress matching and historical upstream qualification. The credit
+capture here preserves the earlier reader; current serialized-credit fidelity
+is checked against 0073, while this claim capture remains unchanged.
 **Direction:** [VISION](../../VISION.md), [ROADMAP](../../ROADMAP.md).
 **Previous evidence:** [research 0071](0071-base-fee-credits-and-balance-windows.md).
 

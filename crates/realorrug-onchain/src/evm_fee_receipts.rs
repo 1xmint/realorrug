@@ -199,12 +199,79 @@ fn report_credit(value: Value, out: &mut FeeReceipts) {
             value["reported_credit_amount"].as_str().unwrap_or("")
         )
     };
-    out.statements.push(statement(format!("{details}, for fee owner {owner} and asset {asset}. Credit events are not withdrawals or new treasury receipts; delivery, backing and individual-token revenue attribution remain unresolved.")));
+    out.statements.push(statement(format!("{details}, for fee owner {owner} and asset {asset}. Credit events are not withdrawals or new treasury receipts; net received amount, backing and individual-token revenue attribution remain unresolved by the credit event.")));
     out.related.extend([owner.to_owned(), asset.to_owned()]);
     if let Some(depositor) = value["depositor"].as_str() {
         out.related.push(depositor.to_owned());
     }
     out.credits.push(value);
+}
+
+fn funds(value: &Value, index: u64, log: &Value) -> bool {
+    if !log["address"]
+        .as_str()
+        .is_some_and(|s| s.eq_ignore_ascii_case(value["balance_asset"].as_str().unwrap_or("")))
+    {
+        return false;
+    }
+    let Ok(payment) = transfer(log) else {
+        return false;
+    };
+    index.cmp(&value["log_index"].as_u64().unwrap()) == std::cmp::Ordering::Less
+        && payment["from"] == value["depositor"]
+        && payment["to"] == value["escrow"]
+        && payment["amount"] == value["requested_amount"]
+}
+
+fn funding<'a>(
+    value: &Value,
+    credits: &[Value],
+    logs: &'a [(u64, &Value)],
+    complete: bool,
+) -> Result<(u64, &'a Value), &'static str> {
+    if !complete {
+        return Err("receipt log coverage is missing, truncated or inconsistent");
+    }
+    if value["protocol"] != "clanker_fee_locker" {
+        return Err("Flaunch deposit funding requires separate supported evidence");
+    }
+    if value["balance_asset"] == ZERO || value["requested_amount"] == "0" {
+        return Err("native or zero requested deposits do not establish ERC-20 funding");
+    }
+    if logs.iter().any(|(_, log)| {
+        log["address"]
+            .as_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case(value["balance_asset"].as_str().unwrap()))
+            && log["topics"][0].as_str() == Some(crate::evm_investigation::TRANSFER)
+            && transfer(log).is_err()
+    }) {
+        return Err("malformed transfer of the deposit asset prevents verification");
+    }
+    let candidates: Vec<_> = logs
+        .iter()
+        .filter(|(index, log)| funds(value, *index, log))
+        .collect();
+    if candidates.len() != 1 {
+        return Err("no unique preceding transfer matching the requested deposit");
+    }
+    let (index, log) = *candidates[0];
+    // The same ingress cannot fund two owners' credits, even with equal requests.
+    if credits.iter().filter(|c| funds(c, index, log)).count() != 1 {
+        return Err("the matching transfer is ambiguous across fee credits");
+    }
+    Ok((index, log))
+}
+
+fn report_funding(value: &mut Value, proof: Result<(u64, &Value), &str>, out: &mut FeeReceipts) {
+    value["funding"] = match proof {
+        Ok((index, log)) => {
+            out.statements.push(statement(format!("Clanker requested deposit {} base units of asset {} matches one preceding ERC-20 Transfer from depositor {} into the fee locker. This is receipt-level ingress evidence, not a measurement of net received credit, backing, upstream pool origin or this token's revenue; the credit and transfer are one deposit, not separate income.", value["requested_amount"].as_str().unwrap(), value["balance_asset"].as_str().unwrap(), value["depositor"].as_str().unwrap())));
+            json!({"verification_scope":"receipt_requested_transfer_match",
+                "log_index":index,"asset":value["balance_asset"],"transfer":transfer(log).unwrap(),
+                "pool_attribution":"unresolved","gap":null})
+        }
+        Err(gap) => json!({"verification_scope":"unavailable_deposit_funding","gap":gap}),
+    };
 }
 
 fn delivery<'a>(
@@ -280,6 +347,7 @@ pub(crate) fn read(chain: Network, receipt: &Value) -> FeeReceipts {
     let mut complete = logs.len() <= LIMIT;
     let mut indices = HashSet::new();
     let mut claims = Vec::new();
+    let mut credits = Vec::new();
     let mut observed = Vec::new();
     let mut refused = 0;
     for log in logs.iter().take(LIMIT) {
@@ -301,13 +369,22 @@ pub(crate) fn read(chain: Network, receipt: &Value) -> FeeReceipts {
             Ok(None) => {}
         }
         match credit(log, index) {
-            Ok(Some(value)) => report_credit(value, &mut out),
+            Ok(Some(value)) => credits.push(value),
             Err(_) => {
                 complete = false;
                 refused += 1;
             }
             Ok(None) => {}
         }
+    }
+    for value in &credits {
+        let mut reported = value.clone();
+        report_funding(
+            &mut reported,
+            funding(value, &credits, &observed, complete),
+            &mut out,
+        );
+        report_credit(reported, &mut out);
     }
     for claim in &claims {
         report(
@@ -408,6 +485,187 @@ mod tests {
                 format!("0x{:064x}{:064x}", 109, 42),
             )
         }
+    }
+
+    fn incoming(index: u64) -> Value {
+        log(
+            index,
+            ASSET,
+            json!([
+                TRANSFER,
+                format!("0x{}", addr(RECIPIENT)),
+                format!("0x{}", addr(CLANKER))
+            ]),
+            format!("0x{:064x}", 42),
+        )
+    }
+
+    #[test]
+    fn deposit_funding_matches_requested_transfer_without_inventing_net_credit_or_pool_revenue() {
+        // Array order is not execution order; only checked block-global indices count.
+        let out = read(Network::Base, &receipt(vec![stored(false), incoming(0)]));
+        let value = &out.credits[0];
+        let proof = &value["funding"];
+        assert_eq!(
+            proof["verification_scope"],
+            "receipt_requested_transfer_match"
+        );
+        assert_eq!(proof["log_index"], 0);
+        assert_eq!(proof["asset"], ASSET);
+        assert_eq!(proof["transfer"]["from"], RECIPIENT);
+        assert_eq!(proof["transfer"]["to"], CLANKER);
+        assert_eq!(proof["transfer"]["amount"], "42");
+        assert_eq!(proof["pool_attribution"], "unresolved");
+        assert!(proof["gap"].is_null());
+        assert_eq!(value["financial_state"], "executed");
+        assert_eq!(value["verification_scope"], "credit_event_only");
+        assert_eq!(value["reported_balance_after"], "109");
+        assert!(value["credited_delta"].is_null());
+        assert_eq!(out.claims, [] as [Value; 0]);
+        assert!(out.statements.iter().any(|s| {
+            s["text"]
+                .as_str()
+                .unwrap()
+                .contains("one deposit, not separate income")
+        }));
+        for change in 0..5 {
+            let mut wrong = incoming(0);
+            match change {
+                0 => wrong["address"] = json!(OWNER),
+                1 => wrong["topics"][1] = json!(format!("0x{}", addr(OWNER))),
+                2 => wrong["topics"][2] = json!(format!("0x{}", addr(OWNER))),
+                3 => wrong["data"] = json!(format!("0x{:064x}", 109)),
+                _ => wrong["logIndex"] = json!("0x3"),
+            }
+            let result = read(Network::Base, &receipt(vec![wrong, stored(false)]));
+            assert_eq!(
+                result.credits[0]["funding"]["verification_scope"],
+                "unavailable_deposit_funding"
+            );
+            assert!(result.credits[0]["funding"]["transfer"].is_null());
+        }
+        let mut upper = incoming(0);
+        upper["address"] = json!(ASSET.to_uppercase());
+        assert_eq!(
+            read(Network::Base, &receipt(vec![upper, stored(false)])).credits[0]["funding"]["log_index"],
+            0
+        );
+    }
+
+    #[test]
+    fn deposit_funding_refuses_ambiguous_incomplete_native_zero_and_unsupported_evidence() {
+        let check = |logs: Vec<Value>, gap: &str| {
+            let out = read(Network::Base, &receipt(logs));
+            assert!(
+                !out.credits.is_empty(),
+                "fixture must retain a decoded credit"
+            );
+            for c in out.credits {
+                assert_eq!(c["financial_state"], "executed");
+                assert_eq!(
+                    c["funding"]["verification_scope"],
+                    "unavailable_deposit_funding"
+                );
+                assert!(c["funding"]["transfer"].is_null());
+                assert!(
+                    c["funding"]["gap"].as_str().unwrap().contains(gap),
+                    "{}",
+                    c["funding"]
+                );
+            }
+        };
+        check(vec![stored(false)], "no unique preceding");
+        check(
+            vec![incoming(0), incoming(1), stored(false)],
+            "no unique preceding",
+        );
+        let mut second = stored(false);
+        second["logIndex"] = json!("0x3");
+        second["topics"][2] = json!(format!("0x{}", addr(RECIPIENT)));
+        check(
+            vec![incoming(0), stored(false), second],
+            "ambiguous across fee credits",
+        );
+        check(vec![incoming(0), stored(true)], "Flaunch");
+        for (asset, amount) in [(ZERO, 42), (ASSET, 0)] {
+            let mut c = stored(false);
+            c["topics"][3] = json!(format!("0x{}", addr(asset)));
+            c["data"] = json!(format!("0x{:064x}{amount:064x}", 109));
+            check(vec![incoming(0), c], "native or zero");
+        }
+        let mut malformed = incoming(1);
+        malformed["data"] = json!("0x");
+        check(
+            vec![incoming(0), malformed, stored(false)],
+            "malformed transfer",
+        );
+        for (asset, signature) in [(OWNER, TRANSFER), (ASSET, "0xother")] {
+            let unrelated = log(1, asset, json!([signature]), "0x".into());
+            assert_eq!(
+                read(
+                    Network::Base,
+                    &receipt(vec![incoming(0), stored(false), unrelated])
+                )
+                .credits[0]["funding"]["log_index"],
+                0
+            );
+        }
+        for field in [
+            "removed",
+            "transactionHash",
+            "blockHash",
+            "blockNumber",
+            "logIndex",
+        ] {
+            let mut wrong = incoming(0);
+            wrong[field] = Value::Null;
+            check(vec![wrong, stored(false)], "inconsistent");
+        }
+        check(
+            vec![incoming(0), incoming(0), stored(false)],
+            "inconsistent",
+        );
+        let mut malformed = stored(false);
+        malformed["logIndex"] = json!("0x3");
+        malformed["data"] = json!("0x");
+        check(vec![incoming(0), stored(false), malformed], "inconsistent");
+        for n in [128, 129] {
+            let mut logs = vec![incoming(0), stored(false)];
+            logs.extend((3..=n).map(|i| log(i, OWNER, json!([]), "0x".into())));
+            let out = read(Network::Base, &receipt(logs));
+            assert_eq!(out.coverage_complete, n == 128);
+            assert_eq!(
+                out.credits[0]["funding"]["verification_scope"],
+                if n == 128 {
+                    "receipt_requested_transfer_match"
+                } else {
+                    "unavailable_deposit_funding"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn retained_credit_receipt_links_ingress_but_not_the_investigated_token() {
+        let raw: Value = serde_json::from_str(include_str!(
+            "../../../docs/research/data/0071-base/clanker-credit-transaction.json"
+        ))
+        .unwrap();
+        let out = read(Network::Base, &raw["receipt"]);
+        assert!(out.coverage_complete);
+        assert_eq!(out.credits.len(), 1);
+        let c = &out.credits[0];
+        assert_eq!(c["log_index"], 107);
+        assert_eq!(c["funding"]["log_index"], 106);
+        assert_eq!(
+            c["funding"]["transfer"]["from"],
+            "0x63d2dfea64b3433f4071a98665bcd7ca14d93496"
+        );
+        assert_eq!(c["funding"]["transfer"]["amount"], "29478578528827");
+        assert_eq!(c["funding"]["pool_attribution"], "unresolved");
+        assert!(c["credited_delta"].is_null());
+        assert!(c["reported_pool_id"].is_null());
+        assert_eq!(out.claims, [] as [Value; 0]);
     }
 
     #[test]
