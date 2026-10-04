@@ -505,6 +505,56 @@ mod tests {
         }
     }
     #[test]
+    fn result_delivery_rolls_the_spend_day_before_charging_and_never_charges_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path().to_str().unwrap());
+        let memory = Memory::open(Path::new(&paths.memory)).unwrap();
+        let mut gate = Gate::new(crate::daemon::limits_from(&config), vec![]);
+        let at = 86_400 * 100 + 99;
+        let ready = mention(
+            "rollover",
+            "base 0x1111111111111111111111111111111111111111 fees",
+        );
+        intake(&ready, &memory, &mut gate, at, &config).unwrap();
+        let Resolved::Ready(request) = resolve(&ready, None) else {
+            panic!("ready");
+        };
+        memory.next_case_job(at).unwrap().unwrap();
+        let result = realorrug_onchain::cases::Assessment {
+            request_id: request.id.clone(),
+            level: "CantTell".into(),
+            reply: "partial".into(),
+            observations: vec![],
+            findings: vec![],
+            reused: vec![],
+            decisions: vec![],
+            rpc_calls: 0,
+            elapsed_ms: 0,
+            complete: false,
+        };
+        memory.finish_case(&request, &result, at).unwrap();
+        let mut spend = Spend::open(
+            crate::daemon::budget_from(&config),
+            crate::spend::Prices::from_vars(&config).unwrap(),
+            paths.ledger.clone(),
+            99,
+        );
+        let publish = |key: &str| match key {
+            "REALORRUG_INVESTIGATOR_PUBLISH" => Some("1".into()),
+            "REALORRUG_PUBLIC_ORIGIN" => Some("https://realorrug.example".into()),
+            _ => config(key),
+        };
+        let publisher = Published::default();
+        deliver(&memory, &paths, &mut spend, &publisher, at, &publish).unwrap();
+        deliver(&memory, &paths, &mut spend, &publisher, at + 1, &publish).unwrap();
+        assert_eq!(publisher.0.borrow().len(), 1);
+        let ledger: realorrug_provider::Ledger =
+            serde_json::from_str(&std::fs::read_to_string(&paths.ledger).unwrap()).unwrap();
+        assert_eq!(ledger.day, 100);
+        assert_eq!(ledger.spent, 1);
+        assert!(memory.next_case_delivery().unwrap().is_none());
+    }
+    #[test]
     fn clarification_delivery_charges_the_current_day_once_and_records_its_receipt() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path().to_str().unwrap());

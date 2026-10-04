@@ -91,6 +91,11 @@ transfer list remains separate from its paired-asset claim. Strict scoped
 Clippy and CLI capture/review dispatch pass locally. Full suites and mutation
 gates run on [PR 210](https://github.com/1xmint/realorrug/pull/210).
 
+An additional result-publication regression uses a fixed timestamp and a
+previous-day spend ledger to require rollover before charging and to prevent
+a second charge on repeat delivery. This checks the established runtime
+budget policy without changing its limits or adding a live publisher.
+
 This is an investigation evidence reader, not an implemented treasury ledger
 or spending mechanism. Next, reconcile contributing credits, claims and
 balances across explicit windows, publish unresolved attribution and avoid
