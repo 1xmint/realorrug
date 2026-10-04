@@ -1471,15 +1471,30 @@ mod tests {
         //
         // Re-apply by deleting "cabalhunter.org" from `OWN_NAMES`: the first
         // two assertions fail. The rest are what stops the mask being a hole.
-        assert!(check("Rule and leaderboard: cabalhunter.org/history").is_empty());
-        assert!(check("CabalHunter.org/leaderboard").is_empty());
+        assert_eq!(
+            check("Rule and leaderboard: cabalhunter.org/history"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check("CabalHunter.org/leaderboard"),
+            [] as [crate::forbidden::Violation; 0]
+        );
 
         // Every other cabal is still refused, including one dressed as a
         // hostname. The mask consumes the literal and the rest is scanned as
         // it stands, so the leading "a cabal" here is still found.
-        assert!(!check("a cabal ran it").is_empty());
-        assert!(!check("the cabal is cabalhunter.org").is_empty());
-        assert!(!check("cabalhunters.org").is_empty());
+        assert_ne!(
+            check("a cabal ran it"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check("the cabal is cabalhunter.org"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check("cabalhunters.org"),
+            [] as [crate::forbidden::Violation; 0]
+        );
         assert_eq!(check("a cabal ran it")[0].phrase, "cabal");
     }
 
@@ -1491,16 +1506,34 @@ mod tests {
         //
         // Re-apply by deleting "realorrug" from `OWN_NAMES`: the first four
         // assertions fail. The rest are what stops the mask being a hole.
-        assert!(check("Summoned by @realorrug").is_empty());
-        assert!(check("$REALORRUG has no price on this sheet").is_empty());
-        assert!(check("RealOrRug.com/history").is_empty());
-        assert!(check("Rule and leaderboard: cabalhunter.org -- ask @realorrug").is_empty());
+        assert_eq!(
+            check("Summoned by @realorrug"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check("$REALORRUG has no price on this sheet"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check("RealOrRug.com/history"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check("Rule and leaderboard: cabalhunter.org -- ask @realorrug"),
+            [] as [crate::forbidden::Violation; 0]
+        );
 
         // The mask consumes only the name, so a verdict beside it is found.
         assert_eq!(check("realorrug says: rug")[0].phrase, "rug");
         assert_eq!(check("@realorrug calls it a RUG")[0].phrase, "rug");
-        assert!(!check("real or rug? a rug.").is_empty());
-        assert!(!check("realorrug: scam").is_empty());
+        assert_ne!(
+            check("real or rug? a rug."),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check("realorrug: scam"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1513,15 +1546,30 @@ mod tests {
     fn reassurance_is_refused_as_readily_as_accusation() {
         // GOAL.md refuses a single safety score because a green shield is
         // "unknown rendered as safe". This is the sentence form of one.
-        assert!(!check("This one is safe.").is_empty());
-        assert!(!check("Looks legit to me.").is_empty());
+        assert_ne!(
+            check("This one is safe."),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check("Looks legit to me."),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
     fn advice_and_price_predictions_are_refused() {
-        assert!(!check("You should buy this.").is_empty());
-        assert!(!check("This is going to the moon.").is_empty());
-        assert!(!check("Guaranteed returns.").is_empty());
+        assert_ne!(
+            check("You should buy this."),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check("This is going to the moon."),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check("Guaranteed returns."),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1529,9 +1577,18 @@ mod tests {
         // 0012: a destination is an (owner, mint) token account, so recipient
         // sets cannot recur across mints and "six wallets" claims something the
         // data does not hold.
-        assert!(!check("Six wallets bought it in the launch block.").is_empty());
-        assert!(!check("All one person.").is_empty());
-        assert!(!check("The same group as last time.").is_empty());
+        assert_ne!(
+            check("Six wallets bought it in the launch block."),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check("All one person."),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check("The same group as last time."),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1540,7 +1597,10 @@ mod tests {
         // arguing about meaning; the cost of this false positive is the
         // deterministic template, and the cost of the false negative is a
         // public accusation.
-        assert!(!check("This is not a scam.").is_empty());
+        assert_ne!(
+            check("This is not a scam."),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1557,7 +1617,7 @@ mod tests {
         // and would look like it was working.
         for rule in RULES {
             assert_eq!(rule.phrase, rule.phrase.to_lowercase(), "{}", rule.phrase);
-            assert!(!rule.because.is_empty());
+            assert_ne!(rule.because, "");
         }
     }
 
@@ -1620,12 +1680,18 @@ mod tests {
 
     #[test]
     fn a_handle_beside_an_accusation_is_refused() {
-        assert!(!check_target("@some_dev is a scammer").is_empty());
+        assert_ne!(
+            check_target("@some_dev is a scammer"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
     fn a_capitalised_multiword_run_beside_an_accusation_is_refused() {
-        assert!(!check_target("Big Token Labs is a scam").is_empty());
+        assert_ne!(
+            check_target("Big Token Labs is a scam"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1634,26 +1700,50 @@ mod tests {
         // not the address. Re-apply the bug by deleting `has_address_subject`
         // from `check_target`'s `has_person` computation: the first assertion
         // starts passing when it must fail.
-        assert!(!check_target("0x1234abcd is a scammer").is_empty());
-        assert!(check_target("0x1234abcd sold everything in block 3").is_empty());
+        assert_ne!(
+            check_target("0x1234abcd is a scammer"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check_target("0x1234abcd sold everything in block 3"),
+            [] as [crate::forbidden::Violation; 0]
+        );
         // The worked example's own spelling, with the address trailing an
         // ellipsis rather than more hex digits.
-        assert!(!check_target("0x1234\u{2026} is a scammer").is_empty());
-        assert!(check_target("0x1234\u{2026} sold everything in block 3").is_empty());
+        assert_ne!(
+            check_target("0x1234\u{2026} is a scammer"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check_target("0x1234\u{2026} sold everything in block 3"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
     fn an_accusation_word_with_no_person_reference_is_not_a_target_violation() {
         // "this token looks rugged" is about the token, not a person -- the
         // level check, not the target check, is what has an opinion on it.
-        assert!(check_target("this token looks rugged so far").is_empty());
-        assert!(check_target("classic scam mechanics on this contract").is_empty());
+        assert_eq!(
+            check_target("this token looks rugged so far"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check_target("classic scam mechanics on this contract"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
     fn a_person_reference_with_no_accusation_word_is_not_a_target_violation() {
-        assert!(check_target("the creator has launched three tokens before").is_empty());
-        assert!(check_target("@some_dev posted the contract").is_empty());
+        assert_eq!(
+            check_target("the creator has launched three tokens before"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check_target("@some_dev posted the contract"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1661,7 +1751,10 @@ mod tests {
         // `RealOrRug` is the account's own capitalised handle; without the
         // case-preserving mask it would read as a two-word capitalised run
         // sitting next to whatever accusation word follows.
-        assert!(check_target("RealOrRug says: rugged").is_empty());
+        assert_eq!(
+            check_target("RealOrRug says: rugged"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1672,7 +1765,10 @@ mod tests {
         // two-word capitalised run, and this sentence's "scam" is refused
         // when it must not be. The existing own-name test cannot catch that:
         // its second word is lowercase, so there is no run either way.
-        assert!(check_target("no evidence of a scam here, RealOrRug Says").is_empty());
+        assert_eq!(
+            check_target("no evidence of a scam here, RealOrRug Says"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1680,15 +1776,24 @@ mod tests {
         // The character *after* the `@` decides it, so both halves of
         // `is_alphanumeric() || == '_'` have to hold: a name makes a handle,
         // a bare `@` in prose does not.
-        assert!(!check_target("@alice ran a scam").is_empty());
-        assert!(check_target("reply to @ if you think this is a scam").is_empty());
+        assert_ne!(
+            check_target("@alice ran a scam"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check_target("reply to @ if you think this is a scam"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
     fn one_capitalised_word_is_not_a_named_company() {
         // Two capitalised words back to back is the shape. One alone is not,
         // or every sentence would begin with a person.
-        assert!(check_target("Scam tokens exist on every chain").is_empty());
+        assert_eq!(
+            check_target("Scam tokens exist on every chain"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1696,8 +1801,9 @@ mod tests {
         // The worked-example test above has no accusation word in its allowed
         // half, so it cannot tell whether the verb check fires at all. This
         // one can: "rug" is in the same sentence, and it must still pass.
-        assert!(
-            check_target("0xdeadbeef sold everything in the last block before the rug").is_empty()
+        assert_eq!(
+            check_target("0xdeadbeef sold everything in the last block before the rug"),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -1705,14 +1811,20 @@ mod tests {
     fn a_bare_0x_with_no_hex_digits_is_not_an_address() {
         // `0x` alone is two characters of prose, not a subject -- the hex run
         // after it is what makes it an address.
-        assert!(check_target("0x is a scam").is_empty());
+        assert_eq!(
+            check_target("0x is a scam"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
     fn an_address_running_to_the_end_of_the_text_is_not_read_past() {
         // The hex scan's bound is what stops it walking off the end of the
         // string, and getting that wrong panics rather than answering wrongly.
-        assert!(check_target("nothing here looks like a scam at 0xdeadbeef").is_empty());
+        assert_eq!(
+            check_target("nothing here looks like a scam at 0xdeadbeef"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     // -----------------------------------------------------------------
@@ -1735,7 +1847,10 @@ mod tests {
             );
         }
         // An ordinary CantTell-appropriate sentence survives.
-        assert!(check_level("a required fact could not be read", Level::CantTell).is_empty());
+        assert_eq!(
+            check_level("a required fact could not be read", Level::CantTell),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1755,7 +1870,10 @@ mod tests {
             );
         }
         // Rugged is where the word is earned: no ceiling on it here.
-        assert!(check_level("this token got rugged", Level::Rugged).is_empty());
+        assert_eq!(
+            check_level("this token got rugged", Level::Rugged),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1785,8 +1903,14 @@ mod tests {
         }
         // Rugged is still where "rug"/"stole" are earned -- this row must not
         // turn into a second accusing-word ceiling by accident.
-        assert!(check_level("this token got rugged", Level::Rugged).is_empty());
-        assert!(check_level("the buyers were stolen from", Level::Rugged).is_empty());
+        assert_eq!(
+            check_level("this token got rugged", Level::Rugged),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check_level("the buyers were stolen from", Level::Rugged),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1811,14 +1935,17 @@ mod tests {
         // fact at all.
         let text = "the dev is a scam";
         assert!(!check(text).is_empty(), "the old ban must still catch this");
-        assert!(!check_target(text).is_empty());
+        assert_ne!(check_target(text), [] as [crate::forbidden::Violation; 0]);
     }
 
     #[test]
     fn a_reassurance_word_the_old_ban_caught_at_canttell_is_still_caught_by_the_new_pair() {
         let text = "looks safe to me";
         assert!(!check(text).is_empty(), "the old ban must still catch this");
-        assert!(!check_level(text, Level::CantTell).is_empty());
+        assert_ne!(
+            check_level(text, Level::CantTell),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1834,7 +1961,10 @@ mod tests {
             check_target(text).is_empty(),
             "no person-reference here -- check_target must stay silent"
         );
-        assert!(!check_level(text, Level::Sketchy).is_empty());
+        assert_ne!(
+            check_level(text, Level::Sketchy),
+            [] as [crate::forbidden::Violation; 0]
+        );
 
         // The mutation: disabling `check_level` (returning an empty vec, as
         // if the function always passed) would let this previously-refused
@@ -1871,13 +2001,22 @@ mod tests {
 
     #[test]
     fn honeypot_is_still_refused_unconditionally() {
-        assert!(!check_unconditional("classic honeypot mechanics").is_empty());
+        assert_ne!(
+            check_unconditional("classic honeypot mechanics"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
     fn exit_liquidity_and_dumped_on_are_still_refused_unconditionally() {
-        assert!(!check_unconditional("you are the exit liquidity here").is_empty());
-        assert!(!check_unconditional("the creator dumped on buyers").is_empty());
+        assert_ne!(
+            check_unconditional("you are the exit liquidity here"),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            check_unconditional("the creator dumped on buyers"),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1951,7 +2090,10 @@ mod tests {
             check(text).is_empty(),
             "the old ban has no opinion on \"fine\""
         );
-        assert!(!check_level(text, Level::CantTell).is_empty());
+        assert_ne!(
+            check_level(text, Level::CantTell),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     // -----------------------------------------------------------------
@@ -2025,26 +2167,26 @@ mod tests {
         // `check_required_canttell` that scans `sheet.unknown`: this starts
         // passing when it must fail.
         let sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "Can't tell on this one, nothing to go on.",
                 Level::CantTell,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
     #[test]
     fn a_canttell_reply_naming_a_thing_on_the_unknown_list_passes() {
         let sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
-        assert!(
+        assert_eq!(
             check_required(
                 "The launch block couldn't be pulled, so this one's a shrug.",
                 Level::CantTell,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2081,12 +2223,20 @@ mod tests {
         // ADR 0033 rule 1: price, market cap and liquidity may now be stated.
         // None of these sentences carries advice, a bare prediction or an
         // outcome hint, so `check` must find nothing wrong with any of them.
-        assert!(check("The price is 0.00042 SOL, read at slot 444007820.").is_empty());
-        assert!(check("Market cap: 69000 USD, read at slot 444007820.").is_empty());
-        assert!(check(
-            "The quote asset held in the bonding curve now, read at slot 444007820, is 6.1861 SOL."
-        )
-        .is_empty());
+        assert_eq!(
+            check("The price is 0.00042 SOL, read at slot 444007820."),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check("Market cap: 69000 USD, read at slot 444007820."),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            check(
+                "The quote asset held in the bonding curve now, read at slot 444007820, is 6.1861 SOL."
+            ),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -2160,7 +2310,10 @@ mod tests {
         // which reads the wrong or a non-offsetting index and misses) and
         // the `||` joining the two branches (mutated to `&&`, which needs
         // both true and also misses).
-        assert!(!hint_violations("just buy toast.", false).is_empty());
+        assert_ne!(
+            hint_violations("just buy toast.", false),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -2169,7 +2322,10 @@ mod tests {
         // preceding-word list, "now" (after "sell") is on the
         // following-word list. Pins `words[at + 1]` against `at - 1` or
         // `at * 1`, either of which misses.
-        assert!(!hint_violations("consider sell now.", false).is_empty());
+        assert_ne!(
+            hint_violations("consider sell now.", false),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -2179,21 +2335,21 @@ mod tests {
         // "hold" is followed by "it" (the third arm), even though the
         // subject is "addresses", not an implied "you". Reapplying the bug
         // (dropping the noun-subject exclusion) makes this fail.
-        assert!(
+        assert_eq!(
             hint_violations(
                 "5 addresses hold it, but the biggest balance -- 89.0% of it -- is still \
              unidentified.",
                 false
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
         // The bundled bullet line reads the same way and must also pass.
-        assert!(
+        assert_eq!(
             hint_violations(
                 "addresses holding the token, not counting the bonding curve: 5",
                 false
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2203,8 +2359,14 @@ mod tests {
         // after the subject noun, not the rest of the sentence. A real
         // instruction sitting next to descriptive prose about holders must
         // still be caught.
-        assert!(!hint_violations("5 addresses hold it. Buy this now.", false).is_empty());
-        assert!(!hint_violations("Holders should sell it.", false).is_empty());
+        assert_ne!(
+            hint_violations("5 addresses hold it. Buy this now.", false),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_ne!(
+            hint_violations("Holders should sell it.", false),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -2216,7 +2378,10 @@ mod tests {
         // between the digits check and the suffix check -- mutated to
         // `||`, the empty suffix alone would wrongly make a non-numeric
         // word "complex" read as a multiple.
-        assert!(hint_violations("the trend looks complex.", false).is_empty());
+        assert_eq!(
+            hint_violations("the trend looks complex.", false),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -2227,12 +2392,12 @@ mod tests {
         // phrase into `hedged`: mutated to `&&`, `hedged` requires all
         // three hedge phrases at once and is never true, so the hint is
         // wrongly refused.
-        assert!(
+        assert_eq!(
             hint_violations(
                 "it might double if the trend holds, because launches like this one continue.",
                 true
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2261,7 +2426,10 @@ mod tests {
         // `!has_rate || !hedged || !reasoned || certain` gate: mutated to
         // `&&` at either position, the missing-reasoning branch stops
         // being enough on its own and the hint is wrongly authorised.
-        assert!(!hint_violations("it could double this week.", true).is_empty());
+        assert_ne!(
+            hint_violations("it could double this week.", true),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -2291,13 +2459,13 @@ mod tests {
         // "the creator's history" needs both words, not the punctuation. A
         // reply writing "creator history" names the same thing.
         let sheet = required_sheet(vec!["the creator's history could not be read".to_owned()]);
-        assert!(
+        assert_eq!(
             check_required(
                 "Couldn't pull the creator history, so nothing to say there.",
                 Level::CantTell,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2327,13 +2495,13 @@ mod tests {
             "the launch block could not be read".to_owned(),
             "the bonding curve could not be read".to_owned(),
         ]);
-        assert!(
+        assert_eq!(
             check_required(
                 "The bonding curve came back empty, so no read here.",
                 Level::CantTell,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2403,13 +2571,13 @@ mod tests {
             check_required("Creator selling was not checked.", Level::CantTell, &sheet).len(),
             1
         );
-        assert!(
+        assert_eq!(
             check_required(
                 "What the creator bought and sold was not checked.",
                 Level::CantTell,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2462,7 +2630,10 @@ mod tests {
                       not concentrated enough by itself to settle the risk. The launch block and \
                       the funding of early buyers could not be read, so this remains CAN'T TELL \
                       rather than evidence that the launch was clean.";
-        assert!(!check_level(draft, Level::CantTell).is_empty());
+        assert_ne!(
+            check_level(draft, Level::CantTell),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     /// Both halves of "says the age is unknown", one at a time.
@@ -2475,13 +2646,13 @@ mod tests {
     #[test]
     fn an_ageless_reply_that_never_says_the_age_is_unknown_is_refused() {
         let sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "Eleven at birth, old or not, read at block 100. Nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2490,13 +2661,13 @@ mod tests {
         // "unknown" with no age word: the reply admits *something* was not
         // read without saying it was how long this token has existed.
         let sheet = required_sheet(vec!["the launch block could not be read".to_owned()]);
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "How far back this one goes is unknown, read at block 100.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2506,26 +2677,26 @@ mod tests {
         // arm's condition (or hard-coding it `true`): this starts passing
         // when it must fail.
         let sheet = required_sheet_with_age(Vec::new());
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "Nothing ugly here yet, clean so far.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
     #[test]
     fn a_nothinguglyyet_reply_with_the_sheets_age_passes() {
         let sheet = required_sheet_with_age(Vec::new());
-        assert!(
+        assert_eq!(
             check_required(
                 "Nothing ugly yet. Launched about 7.1 hours ago -- 63954 slots.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2538,13 +2709,13 @@ mod tests {
         // checking `sheet.read_at` instead of the age fact's values): this
         // starts passing when it must fail.
         let sheet = required_sheet_with_age(Vec::new());
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "Read at slot 444007820, nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2554,13 +2725,13 @@ mod tests {
         // word, or "11 accounts, nothing ugly yet" (an authorised figure
         // that has nothing to do with when the sheet was read) would pass.
         let sheet = required_sheet_with_age(Vec::new());
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "11 token accounts, nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2571,13 +2742,13 @@ mod tests {
         // `fidelity::check`'s own notion of "authorised" rather than a
         // second, looser one.
         let sheet = required_sheet_with_age(Vec::new());
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "1 hour ago, nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2588,13 +2759,13 @@ mod tests {
         // unknown is not safe, so the reply must say the age itself could not
         // be read.
         let sheet = required_sheet(Vec::new());
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "Read at block 100, nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
@@ -2603,26 +2774,26 @@ mod tests {
         // Saying the age is unknown is not enough either -- design 0020 §4
         // keeps the read point required too, on every sheet that has one.
         let sheet = required_sheet(Vec::new());
-        assert!(
-            !check_required(
+        assert_ne!(
+            check_required(
                 "How old this token is could not be read. Nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 
     #[test]
     fn a_nothinguglyyet_reply_on_an_ageless_sheet_stating_both_passes() {
         let sheet = required_sheet(Vec::new());
-        assert!(
+        assert_eq!(
             check_required(
                 "How old this token is could not be read. Read at block 100, nothing ugly yet.",
                 Level::NothingUglyYet,
                 &sheet
-            )
-            .is_empty()
+            ),
+            [] as [crate::forbidden::Violation; 0]
         );
     }
 

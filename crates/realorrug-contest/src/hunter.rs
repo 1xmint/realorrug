@@ -179,6 +179,6 @@ mod tests {
 
     #[test]
     fn an_empty_board_is_empty_rather_than_a_default_row() {
-        assert!(tally(&[], 3).is_empty());
+        assert_eq!(tally(&[], 3), [] as [crate::hunter::Placing; 0]);
     }
 }

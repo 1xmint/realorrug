@@ -435,7 +435,7 @@ mod tests {
         let sheet = sheet_with(Vec::new(), vec!["holders".to_owned()], Vec::new());
         let report = build(&sheet);
         assert_eq!(report.missing.unknown, vec!["holders".to_owned()]);
-        assert!(report.missing.skipped.is_empty());
+        assert_eq!(report.missing.skipped, [] as [std::string::String; 0]);
         // The rendered text says the fact is not known -- and, just as
         // important, contains none of the words that would turn that
         // absence into a reassurance.
@@ -469,7 +469,7 @@ mod tests {
     fn skipped_facts_are_missing_too_but_named_separately_from_unknown() {
         let sheet = sheet_with(Vec::new(), Vec::new(), vec!["market".to_owned()]);
         let report = build(&sheet);
-        assert!(report.missing.unknown.is_empty());
+        assert_eq!(report.missing.unknown, [] as [std::string::String; 0]);
         assert_eq!(report.missing.skipped, vec!["market".to_owned()]);
     }
 
@@ -635,7 +635,7 @@ mod tests {
         ];
         for signal in all {
             let _ = signal_kind(signal);
-            assert!(!would_resolve_text(signal).is_empty());
+            assert_ne!(would_resolve_text(signal), "");
         }
     }
 

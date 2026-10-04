@@ -300,7 +300,14 @@ mod tests {
         // assigned any `Role`.
         let c = concentration(&balances, &[]);
         assert_eq!(c.denominator, 1_000);
-        assert!(c.infrastructure.is_empty());
+        assert_eq!(
+            c.infrastructure,
+            [] as [(
+                crate::roles::RoleHolder,
+                crate::roles::Role,
+                crate::roles::Proof
+            ); 0]
+        );
         assert_eq!(c.unresolved_large.len(), 1);
         assert_eq!(c.unresolved_large[0].address, big);
         assert_eq!(c.unresolved_large[0].share_bps, 9_900);
@@ -323,7 +330,14 @@ mod tests {
         };
         let c = concentration(&balances, &[phantom]);
         assert_eq!(c.denominator, 100);
-        assert!(c.infrastructure.is_empty());
+        assert_eq!(
+            c.infrastructure,
+            [] as [(
+                crate::roles::RoleHolder,
+                crate::roles::Role,
+                crate::roles::Proof
+            ); 0]
+        );
     }
 
     #[test]
@@ -363,6 +377,6 @@ mod tests {
         let c = concentration(&[(pool, 1_000)], &proven);
         assert_eq!(c.denominator, 0);
         assert!(c.largest_non_infrastructure.is_none());
-        assert!(c.unresolved_large.is_empty());
+        assert_eq!(c.unresolved_large, [] as [crate::roles::RoleHolder; 0]);
     }
 }

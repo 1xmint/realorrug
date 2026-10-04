@@ -26,6 +26,8 @@ realorrug-robinhood.workspace = true
 realorrug-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+blake3.workspace = true
+sha3.workspace = true
 thiserror.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 # The read memory (design 0021 §4): one file, one writer, an index on the

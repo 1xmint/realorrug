@@ -3296,7 +3296,7 @@ mod tests {
         assert_eq!(s.candidates.len(), 2);
         assert_eq!(s.coverage_bps, 10_000);
         assert_eq!(select(&[]).coverage_bps, 0);
-        assert!(select(&[]).candidates.is_empty());
+        assert_eq!(select(&[]).candidates, [] as [crate::wallets::Buyer; 0]);
     }
 
     #[test]
@@ -3412,9 +3412,12 @@ mod tests {
                 },
             ]
         );
-        assert!(exchange_paid.is_empty());
+        assert_eq!(exchange_paid, [] as [crate::wallets::ExchangePaid; 0]);
         // Exactly one candidate funded is not shared.
-        assert!(shared_funders(&checked[..1]).0.is_empty());
+        assert_eq!(
+            shared_funders(&checked[..1]).0,
+            [] as [crate::wallets::SharedFunder; 0]
+        );
     }
 
     #[test]
@@ -3425,8 +3428,8 @@ mod tests {
             .collect();
         assert!(checked.iter().all(|c| !c.funders[0].material));
         let (shared, exchange_paid) = shared_funders(&checked);
-        assert!(shared.is_empty());
-        assert!(exchange_paid.is_empty());
+        assert_eq!(shared, [] as [crate::wallets::SharedFunder; 0]);
+        assert_eq!(exchange_paid, [] as [crate::wallets::ExchangePaid; 0]);
     }
 
     /// Replaces one candidate's material funder with a real address from
@@ -3475,7 +3478,7 @@ mod tests {
         const ETH: u128 = 1_000_000_000_000_000_000;
         let checked = [fund_from(candidate(1, ETH, &[(0xf0, ETH)]), BINANCE)];
         let (shared, exchange_paid) = shared_funders(&checked);
-        assert!(shared.is_empty());
+        assert_eq!(shared, [] as [crate::wallets::SharedFunder; 0]);
         assert_eq!(exchange_paid[0].funded, 1);
     }
 
@@ -3864,7 +3867,7 @@ mod tests {
         let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert_eq!(funding.buyers, 0);
-        assert!(funding.checked.is_empty());
+        assert_eq!(funding.checked, [] as [crate::wallets::Candidate; 0]);
         assert_eq!(funding.coverage_bps, None);
         assert!(
             funding
@@ -3925,7 +3928,7 @@ mod tests {
         let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
         assert_eq!(funding.buyers, 0);
-        assert!(funding.checked.is_empty());
+        assert_eq!(funding.checked, [] as [crate::wallets::Candidate; 0]);
         assert!(
             funding
                 .gaps
@@ -4018,7 +4021,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 1);
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(
             funding
                 .gaps
@@ -4058,7 +4064,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 1);
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(
             funding.gaps.iter().any(|g| g.contains(&buyer)
                 && g.contains("no signature at or before its first purchase")),
@@ -4201,7 +4210,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 1);
         assert!(funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(funding.gaps.is_empty(), "gaps: {:?}", funding.gaps);
     }
 
@@ -4231,7 +4243,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 1);
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(
             funding
                 .gaps
@@ -4275,7 +4290,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 1);
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(
             funding
                 .gaps
@@ -4460,7 +4478,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 1);
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(
             funding
                 .gaps
@@ -4535,7 +4556,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 1);
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(
             funding
                 .gaps
@@ -4582,7 +4606,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 1);
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(
             funding
                 .gaps
@@ -4619,7 +4646,10 @@ mod tests {
 
         assert_eq!(funding.checked.len(), 2);
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(funding.checked[1].funding_complete);
         assert_eq!(funding.checked[1].funders.len(), 1);
         assert_eq!(funding.checked[1].funders[0].address, funder);
@@ -5500,7 +5530,7 @@ mod tests {
         };
         tx.pre_token_balances.push(balance(100));
         tx.post_token_balances.push(balance(50));
-        assert!(buyers_in(&tx, "mint", None).is_empty());
+        assert_eq!(buyers_in(&tx, "mint", None), [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -5715,7 +5745,7 @@ mod tests {
         let mut budget = Budget::new(60, 0, std::time::Duration::from_secs(30));
         let funding = investigate_solana(&client, &mut budget, &mint, None).expect("a result");
 
-        assert!(funding.checked.is_empty());
+        assert_eq!(funding.checked, [] as [crate::wallets::Candidate; 0]);
         assert!(
             funding.gaps.iter().any(|g| g.contains("budget")),
             "{:?}",
@@ -6284,7 +6314,7 @@ mod tests {
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
         assert!(flow.trades_complete);
-        assert!(flow.trades.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
         assert_eq!(flow.transfers_out, 0);
     }
 
@@ -6351,8 +6381,8 @@ mod tests {
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
         assert!(flow.trades_complete);
-        assert!(flow.trades.is_empty());
-        assert!(flow.gaps.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
+        assert_eq!(flow.gaps, [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -6377,7 +6407,7 @@ mod tests {
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
         assert!(!flow.trades_complete);
-        assert!(flow.trades.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
         assert!(
             flow.gaps.iter().any(|g| g.contains("page budget")),
             "gaps: {:?}",
@@ -6406,7 +6436,7 @@ mod tests {
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
         assert!(!flow.trades_complete);
-        assert!(flow.trades.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
         assert!(
             flow.gaps.iter().any(|g| g.contains("more than")),
             "gaps: {:?}",
@@ -6441,7 +6471,7 @@ mod tests {
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
         assert!(!flow.trades_complete);
-        assert!(flow.trades.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
         assert!(
             flow.gaps
                 .iter()
@@ -6534,7 +6564,7 @@ mod tests {
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
         assert!(!flow.trades_complete);
-        assert!(flow.trades.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
         assert!(
             flow.gaps.iter().any(|g| g.contains("calls left")),
             "gaps: {:?}",
@@ -6566,7 +6596,7 @@ mod tests {
         // The client reports a null result as an unreadable response, so
         // the gap names the transaction rather than a fixed phrase.
         assert!(!flow.trades_complete);
-        assert!(flow.trades.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
         assert!(
             flow.gaps.iter().any(|g| g.contains("missing-sig")),
             "gaps: {:?}",
@@ -6595,7 +6625,7 @@ mod tests {
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
         assert!(!flow.trades_complete);
-        assert!(flow.trades.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
         assert!(
             flow.gaps.iter().any(|g| g.contains("rate limited")),
             "gaps: {:?}",
@@ -6715,7 +6745,7 @@ mod tests {
             creator_cash_flow_solana(&client, &mut budget, &mint, &creator).expect("a result");
 
         assert!(flow.trades_complete);
-        assert!(flow.trades.is_empty());
+        assert_eq!(flow.trades, [] as [crate::wallets::CreatorTrade; 0]);
         assert_eq!(flow.transfers_out, 2);
     }
 

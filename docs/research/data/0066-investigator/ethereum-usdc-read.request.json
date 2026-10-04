@@ -1,0 +1,15 @@
+{
+  "source": "operator read-only qualification capture",
+  "id": "ethereum-usdc-read",
+  "question": "Inspect token controls, liquidity and bounded transfers. Treat missing data as unknown.",
+  "case": {
+    "chain": "ethereum",
+    "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+  },
+  "window": null,
+  "transactions": [],
+  "wallets": [
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+  ],
+  "thread": null
+}

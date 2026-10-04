@@ -302,7 +302,10 @@ fn without_the_snapshot_the_reply_says_less_rather_than_guessing() {
     // The measured, per-token facts are still there.
     assert!(rendered.contains('6'));
     let reply = voice::write(&sheet, None);
-    assert!(forbidden::check(&reply.text).is_empty());
+    assert_eq!(
+        forbidden::check(&reply.text),
+        [] as [forbidden::Violation; 0]
+    );
 }
 
 #[test]
@@ -359,7 +362,10 @@ fn a_reply_calling_recipients_people_is_still_refused_by_the_old_ban() {
     // folds the cabal-identity rule into the new pair, not this one. What is
     // still true, and still worth pinning, is that `forbidden::check` itself
     // has not forgotten the rule.
-    assert!(!forbidden::check("Six wallets bought it in the launch block.").is_empty());
+    assert_ne!(
+        forbidden::check("Six wallets bought it in the launch block."),
+        [] as [forbidden::Violation; 0]
+    );
 }
 
 #[test]
@@ -411,8 +417,14 @@ fn a_fact_sheet_with_nothing_in_it_still_produces_a_reply() {
     let sheet = FactSheet::build(&empty, Some(&rates()), None, None, None);
     let reply = voice::write(&sheet, None);
     assert!(reply.text.contains("not known"));
-    assert!(forbidden::check(&reply.text).is_empty());
-    assert!(fidelity::check(&reply.text, &sheet.authorised()).is_empty());
+    assert_eq!(
+        forbidden::check(&reply.text),
+        [] as [forbidden::Violation; 0]
+    );
+    assert_eq!(
+        fidelity::check(&reply.text, &sheet.authorised()),
+        [] as [fidelity::Fabricated; 0]
+    );
 }
 
 #[test]
@@ -428,7 +440,10 @@ fn the_slot_is_authorised_so_a_citable_reply_is_not_refused() {
         None,
         None,
     );
-    assert!(fidelity::check("Read at slot 444007820.", &sheet.authorised()).is_empty());
+    assert_eq!(
+        fidelity::check("Read at slot 444007820.", &sheet.authorised()),
+        [] as [fidelity::Fabricated; 0]
+    );
 }
 
 /// A dossier where nothing could be read, recorded **both** ways.

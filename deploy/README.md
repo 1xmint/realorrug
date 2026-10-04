@@ -1,6 +1,14 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Deploying realorrug
 
+**Product and launch direction:** [VISION.md](../VISION.md) and
+[ROADMAP.md](../ROADMAP.md), recorded by
+[ADR 0043](../docs/adr/0043-the-public-library-and-compounding-intelligence.md).
+This runbook records deployment mechanics and dated observations; neither
+is proof that a new roadmap feature is live. Startup funding is capped at
+$200 total, with free options first. Existing runtime ceilings remain until
+a reviewed change, and production configuration must fit available funding.
+
 Two processes, each its own unit. **Installed on the box since 2026-09-14:
 `realorrug-serve`, as a user unit, and `realorrug-analyst`** (below). The old
 payout is retired (below).
@@ -86,7 +94,7 @@ committed. Use the test X app, not a live one.
 | `REALORRUG_X_CLIENT_ID` | the X app's OAuth2 client id | sign-in refuses |
 | `REALORRUG_X_REDIRECT_URI` | the callback the X app lists | sign-in refuses |
 | `REALORRUG_X_CLIENT_SECRET` | optional, for a confidential app | public-client PKCE only |
-| `REALORRUG_MONTHLY_USD` | the whole monthly ceiling ($90); serve's slice must fit under it | sign-in and the assistant refuse spending |
+| `REALORRUG_MONTHLY_USD` | the whole runtime monthly ceiling (existing $90 limit, not a recurring funding commitment); set within available funds, with serve's slice under it | sign-in and the assistant refuse spending |
 | `REALORRUG_FIXED_MONTHLY_USD` | the fixed part of that ceiling; the slice must fit in ceiling minus this | spending refused |
 | `REALORRUG_SERVE_MONTHLY_USD` | serve's own monthly spending stop (X reads), at most ceiling minus fixed | spending refused |
 | `REALORRUG_APP_ORIGINS` | exact origins granted credentialed CORS | no CORS header |

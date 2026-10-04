@@ -1,0 +1,61 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790878059,
+  "request": {
+    "id": "base-clanker-supported",
+    "case": {
+      "chain": "base",
+      "address": "0x1bbf51f3742c13d67fa89c56d09a979d40c891f1"
+    },
+    "question": "Inspect configured Clanker LP reward recipients and administrators. Distinguish allocation configuration from realized payments and permanent liquidity.",
+    "wallets": [],
+    "transactions": [],
+    "window": null,
+    "source": "https://www.clanker.world/api/tokens?chainId=8453&limit=20&sortBy=market-cap",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0x1bbf51f3742c13d67fa89c56d09a979d40c891f1",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": {
+        "id": "648ac82f34e82568bc651d0b9413a5bfd0baa276c50685bdf49cb6b84796e760",
+        "kind": "token",
+        "source": "base:Token:0x1bbf51f3742c13d67fa89c56d09a979d40c891f1",
+        "at": 1790878059,
+        "read_point": "base block 52044356 0x5276718bd38c9f7a8346e710b83ed3bde4970878e973ef47ad260234fc3c0daa",
+        "value": {
+          "code_hash": "b7b5f66d884c5227b173ee1bca3e1cf103f3ddebfe67123cdfae9db15d948513",
+          "related": [],
+          "statements": [
+            {
+              "text": "Contract code was observed at 0x1bbf51f3742c13d67fa89c56d09a979d40c891f1."
+            },
+            {
+              "text": "totalSupply() returned 100000000000000000000000000000 base units."
+            },
+            {
+              "text": "decimals() returned 18."
+            }
+          ]
+        },
+        "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0x1bbf51f3742c13d67fa89c56d09a979d40c891f1",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "no supported Uniswap v2/v3 WETH pool identified; custom protocols and quote assets remain unsupported"
+    }
+  ],
+  "plans": []
+}

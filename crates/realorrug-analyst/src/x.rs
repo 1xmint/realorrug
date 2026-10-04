@@ -1168,7 +1168,7 @@ mod tests {
     #[test]
     fn an_empty_page_is_not_an_error_because_it_is_most_polls() {
         let got = parse_mentions(r#"{"meta":{"result_count":0}}"#).expect("empty page");
-        assert!(got.is_empty());
+        assert_eq!(got, [] as [crate::x::Mention; 0]);
     }
 
     #[test]

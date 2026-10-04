@@ -1,0 +1,70 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790876093,
+  "request": {
+    "id": "base-clanker-live",
+    "case": {
+      "chain": "base",
+      "address": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07"
+    },
+    "question": "Inspect configured fees, recipients and administrative powers; distinguish configuration from realized payment and beneficial ownership.",
+    "wallets": [],
+    "transactions": [],
+    "window": null,
+    "source": "public Clanker API target discovery; chain qualification required",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "fees",
+        "subject": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "why": "test the allegation against fee configuration; distinguish configured shares from actual payments"
+      },
+      "observation": null,
+      "error": "no supported Uniswap v2/v3 WETH pool identified; custom protocols and quote assets remain unsupported"
+    },
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": {
+        "id": "2279d3635753a40b63e02764b2394dfe6cf16d226771b9e54c14478c8d1460b4",
+        "kind": "token",
+        "source": "base:Token:0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "at": 1790876093,
+        "read_point": "base block 52043373 0xed0eaf16aa89bf18e524319371f06d11fd8e0d440d0994fffab0ca87a3bf994c",
+        "value": {
+          "code_hash": "186d2e44c74fdbf535221cf1e183be881e84c5db41ec66198e4caa9ee7754cad",
+          "related": [],
+          "statements": [
+            {
+              "text": "Contract code was observed at 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07."
+            },
+            {
+              "text": "totalSupply() returned 100000000000000000000000000000 base units."
+            },
+            {
+              "text": "decimals() returned 18."
+            }
+          ]
+        },
+        "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "no supported Uniswap v2/v3 WETH pool identified; custom protocols and quote assets remain unsupported"
+    }
+  ],
+  "plans": []
+}

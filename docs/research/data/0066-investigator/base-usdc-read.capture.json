@@ -1,0 +1,95 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790875599,
+  "request": {
+    "id": "base-usdc-read",
+    "case": {
+      "chain": "base",
+      "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    },
+    "question": "Inspect token controls, liquidity and bounded transfers. Treat missing data as unknown.",
+    "wallets": [
+      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    ],
+    "transactions": [],
+    "window": null,
+    "source": "operator read-only qualification capture",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": {
+        "id": "7aef2ffcd482ba5774c76dfea4fb891254c5877cc10e770a14005795b6292dda",
+        "kind": "token",
+        "source": "base:Token:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "at": 1790875599,
+        "read_point": "base block 52043126 0x23041bd26bd9941b8f820d3b0657305d9bb121016fc981607a3045adc00515c0",
+        "value": {
+          "code_hash": "df99bae45a75a8927677a5ca4831ace584435f4bf4b580c547092495ad67797a",
+          "related": [
+            "0x3abd6f64a422225e61e435bae41db12096106df7"
+          ],
+          "statements": [
+            {
+              "text": "Contract code was observed at 0x833589fcd6edb6e08f4c7c32d4f71b54bda02913."
+            },
+            {
+              "text": "totalSupply() returned 4319824389190645 base units."
+            },
+            {
+              "text": "decimals() returned 6."
+            },
+            {
+              "text": "owner() returned 0x3abd6f64a422225e61e435bae41db12096106df7; this getter alone does not establish all powers."
+            }
+          ]
+        },
+        "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "history",
+        "subject": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "why": "inspect supplied wallet leads within bounded history"
+      },
+      "observation": {
+        "id": "9098fbc7c87d3a4d7f579740de4a85894d07b72cb7905a5e25c1f7da83b28d86",
+        "kind": "history",
+        "source": "base:History:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "at": 1790875599,
+        "read_point": "base block 52043126 0x23041bd26bd9941b8f820d3b0657305d9bb121016fc981607a3045adc00515c0",
+        "value": {
+          "related": [],
+          "signatures": [],
+          "statements": [
+            {
+              "text": "A bounded token-transfer log read covered blocks 52041126 through 52043126; it is not full wallet history."
+            }
+          ],
+          "transfers": []
+        },
+        "gap": "only this token's recent Transfer logs are covered; requested historical time coverage, native funding and internal calls are unresolved",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "eth_call: {\"code\":-32016,\"message\":\"over rate limit\"}"
+    }
+  ],
+  "plans": []
+}

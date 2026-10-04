@@ -44,7 +44,7 @@ describe("the live feed", () => {
       expect(screen.getByText("Rug mechanics live")).toBeTruthy();
     });
     const link = screen.getByText(shortAddress(TOKEN)).closest("a");
-    expect(link?.getAttribute("href")).toBe(`/check/${TOKEN}`);
+    expect(link?.getAttribute("href")).toBe(`/check/${TOKEN}?chain=robinhood`);
     const reply = screen.getByText("the reply").closest("a");
     expect(reply?.getAttribute("href")).toBe("https://x.com/i/web/status/123");
   });

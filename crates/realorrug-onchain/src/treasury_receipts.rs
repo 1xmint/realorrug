@@ -294,7 +294,7 @@ mod tests {
             }],
         );
 
-        assert!(unread.is_empty());
+        assert_eq!(unread, [] as [crate::treasury_receipts::Unread; 0]);
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].vault, VaultKind::PumpFun);
         assert_eq!(receipts[0].amount, 4_000_000_000);
@@ -363,7 +363,7 @@ mod tests {
             }],
         );
 
-        assert!(unread.is_empty());
+        assert_eq!(unread, [] as [crate::treasury_receipts::Unread; 0]);
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].vault, VaultKind::PumpSwap);
         assert_eq!(receipts[0].amount, 2_500_000);
@@ -418,8 +418,8 @@ mod tests {
             }],
         );
 
-        assert!(receipts.is_empty());
-        assert!(unread.is_empty());
+        assert_eq!(receipts, [] as [crate::treasury_receipts::Receipt; 0]);
+        assert_eq!(unread, [] as [crate::treasury_receipts::Unread; 0]);
     }
 
     #[test]
@@ -449,7 +449,7 @@ mod tests {
             }],
         );
 
-        assert!(receipts.is_empty());
+        assert_eq!(receipts, [] as [crate::treasury_receipts::Receipt; 0]);
         assert_eq!(unread.len(), 1);
         assert_eq!(unread[0].signature, "sig6");
     }
@@ -470,8 +470,8 @@ mod tests {
             }],
         );
 
-        assert!(receipts.is_empty());
-        assert!(unread.is_empty());
+        assert_eq!(receipts, [] as [crate::treasury_receipts::Receipt; 0]);
+        assert_eq!(unread, [] as [crate::treasury_receipts::Unread; 0]);
     }
 
     /// A transaction the node returned without `meta` has no balances, so
@@ -492,7 +492,7 @@ mod tests {
             }],
         );
 
-        assert!(receipts.is_empty());
+        assert_eq!(receipts, [] as [crate::treasury_receipts::Receipt; 0]);
         assert_eq!(
             unread,
             vec![Unread {

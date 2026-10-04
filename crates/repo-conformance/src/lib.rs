@@ -690,10 +690,10 @@ mod tests {
         );
         // A comment *outside* any run block, which is where the explanation for
         // the fix actually lives.
-        assert!(
+        assert_eq!(
             one("      # this step used to run npm ci inline
-      - uses: actions/checkout@v5")
-            .is_empty()
+      - uses: actions/checkout@v5"),
+            [] as [std::string::String; 0]
         );
         // A blank line inside a block does not end it. YAML block scalars
         // allow them and a long `run:` uses them to group commands, so reading
@@ -718,7 +718,7 @@ mod tests {
 "),
             vec!["npm ci"]
         );
-        assert!(one("").is_empty());
+        assert_eq!(one(""), [] as [std::string::String; 0]);
     }
 
     #[test]

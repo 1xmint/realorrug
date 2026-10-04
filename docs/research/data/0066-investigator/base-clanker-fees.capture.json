@@ -1,0 +1,107 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790878133,
+  "request": {
+    "id": "base-clanker-fees",
+    "case": {
+      "chain": "base",
+      "address": "0x1bbf51f3742c13d67fa89c56d09a979d40c891f1"
+    },
+    "question": "Inspect configured Clanker fees, LP reward recipients and administrators. Distinguish allocation configuration from realized payments and permanent liquidity.",
+    "wallets": [],
+    "transactions": [],
+    "window": null,
+    "source": "https://www.clanker.world/api/tokens?chainId=8453&limit=20&sortBy=market-cap",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "fees",
+        "subject": "0x1bbf51f3742c13d67fa89c56d09a979d40c891f1",
+        "why": "test the allegation against fee configuration; distinguish configured shares from actual payments"
+      },
+      "observation": {
+        "id": "be24f76eeb8394ac3dd541863b4587580c186cc7eb8d1b3f0e2718e7d981145c",
+        "kind": "fees",
+        "source": "base:Fees:0x1bbf51f3742c13d67fa89c56d09a979d40c891f1",
+        "at": 1790878133,
+        "read_point": "base block 52044393 0x37cb2625d1123d5eb316ec20946878b745766053a9c0261e4888e36936f0b659",
+        "value": {
+          "configuration": {
+            "num_positions": "1",
+            "position_id": "2931280",
+            "shares": [
+              {
+                "admin": "0x2a293c59e0c2bfdd5cc0312c7094be9cf6f9e164",
+                "bps": "10000",
+                "recipient": "0x2a293c59e0c2bfdd5cc0312c7094be9cf6f9e164"
+              }
+            ]
+          },
+          "locker": "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
+          "protocol": "clanker_v4_0",
+          "registry": "0xe85a59c628f7d27878aceb4bf3b35733630083a9",
+          "related": [
+            "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
+            "0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc",
+            "0x2a293c59e0c2bfdd5cc0312c7094be9cf6f9e164"
+          ],
+          "statements": [
+            {
+              "text": "Clanker v4 configured LP-reward share: \"10000\" basis points out of 10000 to 0x2a293c59e0c2bfdd5cc0312c7094be9cf6f9e164; reward administrator 0x2a293c59e0c2bfdd5cc0312c7094be9cf6f9e164."
+            },
+            {
+              "text": "Registered LP locker 0x63d2dfea64b3433f4071a98665bcd7ca14d93496 reports \"1\" position(s); this does not establish permanent liquidity."
+            }
+          ]
+        },
+        "gap": "configured LP-reward shares exclude factory/other fee bases; paid receipts, administrator changes, extensions, current hook fees and position withdrawal rights remain separate checks",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0x1bbf51f3742c13d67fa89c56d09a979d40c891f1",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": {
+        "id": "d691e31b61531f47c223cdc3f13a44776cf01d189d1bf8cecf58b6ab25f0b80d",
+        "kind": "token",
+        "source": "base:Token:0x1bbf51f3742c13d67fa89c56d09a979d40c891f1",
+        "at": 1790878133,
+        "read_point": "base block 52044393 0x37cb2625d1123d5eb316ec20946878b745766053a9c0261e4888e36936f0b659",
+        "value": {
+          "code_hash": "b7b5f66d884c5227b173ee1bca3e1cf103f3ddebfe67123cdfae9db15d948513",
+          "related": [],
+          "statements": [
+            {
+              "text": "Contract code was observed at 0x1bbf51f3742c13d67fa89c56d09a979d40c891f1."
+            },
+            {
+              "text": "totalSupply() returned 100000000000000000000000000000 base units."
+            },
+            {
+              "text": "decimals() returned 18."
+            }
+          ]
+        },
+        "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0x1bbf51f3742c13d67fa89c56d09a979d40c891f1",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "no supported Uniswap v2/v3 WETH pool identified; custom protocols and quote assets remain unsupported"
+    }
+  ],
+  "plans": []
+}

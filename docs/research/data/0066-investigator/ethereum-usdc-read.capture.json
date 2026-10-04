@@ -1,0 +1,125 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790875601,
+  "request": {
+    "id": "ethereum-usdc-read",
+    "case": {
+      "chain": "ethereum",
+      "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    },
+    "question": "Inspect token controls, liquidity and bounded transfers. Treat missing data as unknown.",
+    "wallets": [
+      "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    ],
+    "transactions": [],
+    "window": null,
+    "source": "operator read-only qualification capture",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": {
+        "id": "83fe64fd8e452c03827beb050b974ccfaf97406ea5b163915c33c13f3cd30cdf",
+        "kind": "token",
+        "source": "ethereum:Token:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "at": 1790875601,
+        "read_point": "ethereum block 26098951 0x58d4b72cf5d2f631481ca1d37064f031c7f28f32f0624c57a705c31fee10966d",
+        "value": {
+          "code_hash": "c6e9a082eaf7d03b4f3e5454826b7d01b3003b65dee2f2f63ddd7428a07ed1b4",
+          "related": [
+            "0xfcb19e6a322b27c06842a71e8c725399f049ae3a"
+          ],
+          "statements": [
+            {
+              "text": "Contract code was observed at 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48."
+            },
+            {
+              "text": "totalSupply() returned 49249773962700412 base units."
+            },
+            {
+              "text": "decimals() returned 6."
+            },
+            {
+              "text": "owner() returned 0xfcb19e6a322b27c06842a71e8c725399f049ae3a; this getter alone does not establish all powers."
+            }
+          ]
+        },
+        "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "history",
+        "subject": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "why": "inspect supplied wallet leads within bounded history"
+      },
+      "observation": {
+        "id": "3cb5a897d307854945152d541def00aab94f1349da1bc88ae0647484139ba66c",
+        "kind": "history",
+        "source": "ethereum:History:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "at": 1790875601,
+        "read_point": "ethereum block 26098951 0x58d4b72cf5d2f631481ca1d37064f031c7f28f32f0624c57a705c31fee10966d",
+        "value": {
+          "related": [],
+          "signatures": [],
+          "statements": [
+            {
+              "text": "A bounded token-transfer log read covered blocks 26096951 through 26098951; it is not full wallet history."
+            }
+          ],
+          "transfers": []
+        },
+        "gap": "only this token's recent Transfer logs are covered; requested historical time coverage, native funding and internal calls are unresolved",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": {
+        "id": "8e222d177364520780b7aaf8ac38a088e8d944b8b9e057ecfdc59a88889a0e9e",
+        "kind": "liquidity",
+        "source": "ethereum:Liquidity:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "at": 1790875601,
+        "read_point": "ethereum block 26098951 0x58d4b72cf5d2f631481ca1d37064f031c7f28f32f0624c57a705c31fee10966d",
+        "value": {
+          "lp_dead_balance": "75937780",
+          "lp_supply": "70920023893668414",
+          "lp_zero_balance": "98419474949",
+          "pool": "0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc",
+          "protocol": "uniswap_v2",
+          "related": [
+            "0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc",
+            "0xf38521f130fccf29db1961597bc5d2b60f995f85"
+          ],
+          "statements": [
+            {
+              "text": "Verified Uniswap v2 pair 0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc reports reserve0 10498194939073 and reserve1 3896564802660525590293 in base units."
+            },
+            {
+              "text": "Factory feeTo() returns 0xf38521f130fccf29db1961597bc5d2b60f995f85; this is configuration, not a payout receipt."
+            },
+            {
+              "text": "LP total supply is 70920023893668414 base units; zero address holds 98419474949, and the conventional dead address holds 75937780. These observations do not establish all withdrawal rights."
+            }
+          ]
+        },
+        "gap": "other pools, remaining LP ownership, locker expiry, position withdrawal rights and fee realization require additional reads",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    }
+  ],
+  "plans": []
+}

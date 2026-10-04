@@ -641,7 +641,7 @@ mod tests {
         let original_ids: Vec<CandidateId> = rank(&original).into_iter().map(|c| c.id).collect();
         let renamed_ids: Vec<CandidateId> = rank(&renamed).into_iter().map(|c| c.id).collect();
         assert_eq!(original_ids, renamed_ids);
-        assert!(!original_ids.is_empty());
+        assert_ne!(original_ids, [] as [crate::salience::CandidateId; 0]);
 
         // The rendered sentence is also unaffected: it is built from `kind`
         // and `rendered`, never from `label`.
@@ -757,7 +757,7 @@ mod tests {
     fn an_unfired_curve_liquidity_fact_does_not_lead() {
         let sheet = sheet_with(vec![curve_liquidity_fact()]);
         assert!(lead(&sheet).is_none());
-        assert!(rank(&sheet).is_empty());
+        assert_eq!(rank(&sheet), [] as [crate::salience::Candidate; 0]);
     }
 
     fn funding_sheet(funded: u32, checked: Option<u32>) -> FactSheet {
@@ -925,7 +925,7 @@ mod tests {
             "3",
         )]);
         assert!(lead(&sheet).is_none());
-        assert!(rank(&sheet).is_empty());
+        assert_eq!(rank(&sheet), [] as [crate::salience::Candidate; 0]);
     }
 
     /// The same recipient count, once the strongest-band signal has fired,
@@ -1036,7 +1036,7 @@ mod tests {
     fn a_dev_buy_fact_without_its_signal_does_not_rank() {
         let sheet = sheet_with(vec![dev_buy_fact()]);
         assert!(lead(&sheet).is_none());
-        assert!(rank(&sheet).is_empty());
+        assert_eq!(rank(&sheet), [] as [crate::salience::Candidate; 0]);
     }
 
     /// The 2026-09-24 replay's other case (creator-sale-hbull): `HolderConcentration`
@@ -1155,7 +1155,7 @@ mod tests {
     fn creator_cash_flow_facts_without_the_signal_do_not_rank() {
         let sheet = sheet_with(creator_cash_flow_facts());
         assert!(lead(&sheet).is_none());
-        assert!(rank(&sheet).is_empty());
+        assert_eq!(rank(&sheet), [] as [crate::salience::Candidate; 0]);
     }
 
     /// The sentence never says "holds none" or "empty" -- rule (3) of

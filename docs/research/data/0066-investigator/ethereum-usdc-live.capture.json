@@ -1,0 +1,58 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790874743,
+  "request": {
+    "id": "ethereum-usdc-live",
+    "case": {
+      "chain": "ethereum",
+      "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    },
+    "question": "Inspect fee routing, authorities, liquidity and gaps. A configured recipient does not prove a payment or common control.",
+    "wallets": [
+      "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    ],
+    "transactions": [],
+    "window": null,
+    "source": "operator read-only qualification capture",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "fees",
+        "subject": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "why": "test the allegation against fee configuration; distinguish configured shares from actual payments"
+      },
+      "observation": null,
+      "error": "protocol: missing a location header"
+    },
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": null,
+      "error": "timeout: global"
+    },
+    {
+      "read": {
+        "tool": "history",
+        "subject": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "why": "inspect supplied wallet leads within bounded history"
+      },
+      "observation": null,
+      "error": "read budget exhausted: Deadline"
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "read budget exhausted: Deadline"
+    }
+  ],
+  "plans": []
+}

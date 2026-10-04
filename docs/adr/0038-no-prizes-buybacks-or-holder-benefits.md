@@ -2,7 +2,9 @@
 # ADR 0038 — no prizes, buybacks or holder benefits
 
 **Date:** 2026-09-21
-**Status:** accepted. **Josh's decisions, recorded**, from his plan of
+**Status:** accepted, partially amended by
+[ADR 0043](0043-the-public-library-and-compounding-intelligence.md), 2026-09-30;
+see the amendment in Decision. **Josh's original decisions, recorded**, from his plan of
 2026-09-21.
 **Reasoning:** [design 0029](../design/0029-bot-quality-then-a-solana-launch.md).
 **Supersedes:** [ADR 0015](0015-the-prize-is-an-evidence-relay-and-a-winner-is-always-selected.md)
@@ -12,6 +14,15 @@ prize (the daily five stays, with nothing to win); ADR 0013 constraint 3
 **Keeps:** ADR 0034 decisions 2, 4, 5 and 6.
 
 ## Decision
+
+**Partially amended 2026-09-30 by [ADR 0043](0043-the-public-library-and-compounding-intelligence.md):**
+decision 2's permanent exclusion of evaluating buybacks is reopened. The
+25% burn / 25% permanent-liquidity idea remains proposed; nothing here
+implements or promises it. No prize, staking benefit, revenue share, yield,
+airdrop or preferential verdict is adopted. Forecasts/reputation remain
+available for later development but are not launch prerequisites. The table
+below preserves the original decisions; [VISION.md](../../VISION.md) and
+[ROADMAP.md](../../ROADMAP.md) carry current product/delivery direction.
 
 | # | decision |
 |---|---|

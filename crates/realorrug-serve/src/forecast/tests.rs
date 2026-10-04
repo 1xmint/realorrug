@@ -259,7 +259,10 @@ async fn a_coin_outside_the_round_is_refused_and_nothing_is_saved() {
     let bad_side = h.call(&a, "coinA", "moon").await;
     assert_eq!(bad_side.status, StatusCode::BAD_REQUEST);
     let mine = h.get("/forecast/mine?round=r1", Some(&a)).await.json();
-    assert!(mine["forecasts"].as_array().unwrap().is_empty());
+    assert_eq!(
+        mine["forecasts"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
 }
 
 #[tokio::test]
@@ -276,7 +279,10 @@ async fn a_forecast_needs_a_session_and_the_csrf_token() {
         .await;
     assert_eq!(no_csrf.status, StatusCode::FORBIDDEN);
     let mine = h.get("/forecast/mine?round=r1", Some(&a)).await.json();
-    assert!(mine["forecasts"].as_array().unwrap().is_empty());
+    assert_eq!(
+        mine["forecasts"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
 }
 
 #[tokio::test]
@@ -299,7 +305,10 @@ async fn a_hidden_call_changes_nothing_a_stranger_can_read_before_close() {
     assert_eq!(mine.json()["forecasts"].as_array().unwrap().len(), 1);
     let path = format!("/forecast/mine?round=r1&player={}", akey.as_str());
     let theirs = h.get(&path, Some(&b)).await;
-    assert!(theirs.json()["forecasts"].as_array().unwrap().is_empty());
+    assert_eq!(
+        theirs.json()["forecasts"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
     assert!(!theirs.body.contains(akey.as_str()));
     assert_eq!(
         h.get("/forecast/mine?round=r1", None).await.status,
@@ -582,7 +591,10 @@ async fn a_close_moved_after_calls_were_saved_is_a_503_and_saves_nothing() {
     let r = h.call(&b, "coinA", "real").await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{}", r.body);
     let mine = h.get("/forecast/mine?round=r1", Some(&b)).await.json();
-    assert!(mine["forecasts"].as_array().unwrap().is_empty());
+    assert_eq!(
+        mine["forecasts"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
 }
 
 /// A GET that arrives from `peer`, the way the server's `ConnectInfo` layer
