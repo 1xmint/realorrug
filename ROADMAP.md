@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # RealOrRug: development roadmap
 
-**Updated:** 2026-10-03. **Status:** active delivery direction derived from
+**Updated:** 2026-10-04. **Status:** active delivery direction derived from
 [VISION.md](VISION.md), recorded by [ADR 0043](docs/adr/0043-the-public-library-and-compounding-intelligence.md).
 
 This replaces [plan 0002](docs/plans/0002-bot-quality-then-a-solana-launch.md)
@@ -114,8 +114,11 @@ case as evidence rather than treating a user allegation as fact.
   adds current Clanker locker coverage and an actual wallet-level claim trace.
   [Research 0070](docs/research/0070-bounded-base-fee-delivery-matching.md)
   delivers bounded direct ERC-20 claim/receipt matching with duplicate and
-  ambiguity refusal. Native/conversion delivery, contributing credits,
-  balance reconciliation and per-token attribution remain the next boundaries.
+  ambiguity refusal. [Research 0071](docs/research/0071-base-fee-credits-and-balance-windows.md)
+  adds bounded credit-event observations and two reconciled research windows;
+  requested amounts, cumulative balances and untrusted pool labels retain their
+  separate roles. Automated window reconciliation, native/conversion delivery,
+  backing and per-token attribution remain the next boundaries.
   These readers do not establish a completed ledger or select the launchpad.
 - Use operator-managed operations/reserve spending as the launch default.
   The 25% burn / 25% liquidity idea remains a proposal. Do not advertise a
@@ -241,6 +244,8 @@ ledger follows measured routing, rather than an assumed platform configuration.
 [Research 0068](docs/research/0068-base-fee-routing-and-retained-controls.md)
 now qualifies a current Flaunch fee/escrow/NFT snapshot and demonstrates retained
 allocation/disable powers through read-only simulations, alongside a supported
-Clanker refresh. Next: beneficiary receipts, newer Clanker generation, custody/
-withdrawal powers and measured launch costs. No provider, pairing or financial
-allocation is selected by this evidence.
+Clanker refresh. Research 0069–0071 subsequently add the current Clanker locker,
+direct claim delivery, credit observations and measured wallet/asset windows.
+Next: automate bounded window reconciliation, establish funding provenance,
+qualify backing/native/conversion delivery and remaining custody powers, and
+measure launch costs. No provider, pairing or financial allocation is selected.

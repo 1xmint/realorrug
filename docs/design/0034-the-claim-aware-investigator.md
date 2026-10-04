@@ -39,6 +39,14 @@ conversion delivery remain gaps. [Research 0070](../research/0070-bounded-base-f
 records the scope and live evidence. Wallet-level receipt verification never
 implicitly attributes pooled revenue to the case token or implements a ledger.
 
+The same caller retains reviewed credit events separately from withdrawals.
+Clanker's requested amount and new cumulative balance remain separate;
+Flaunch's reported pool label remains untrusted attribution. No received delta,
+backing or treasury receipt is inferred from a deposit alone.
+[Research 0071](../research/0071-base-fee-credits-and-balance-windows.md) records
+the live credit and measured research windows. Automated window reconciliation
+is still a subsequent bounded read, not an existing ledger capability.
+
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook
 uses its global escrow getter; the current Base hook resolves escrow per pool.

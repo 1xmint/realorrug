@@ -321,10 +321,11 @@ fn transaction(
     related.extend(fees.related);
     Ok((json!({"statements":facts,"related":related,"transfers":transfers,
         "fee_claims":fees.claims,
+        "fee_credits":fees.credits,
         "fee_claim_receipt_coverage_complete":fees.coverage_complete,
         "transaction_block":receipt["blockNumber"],"transaction_block_hash":receipt["blockHash"],
         "receipt_logs_present":receipt["logs"].is_array(),"receipt_logs_truncated":receipt["logs"].as_array().is_some_and(|logs|logs.len()>128)}),
-        Some("only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification".into())))
+        Some("only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; credit events do not establish prior balances, credited deltas, backing or treasury receipts; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification".into())))
 }
 
 pub(crate) const TRANSFER: &str =
@@ -888,6 +889,70 @@ pub(super) mod tests {
             assert!(gap.unwrap().contains("individual-pool revenue attribution"));
         }
     }
+    #[test]
+    fn retained_clanker_credit_is_an_accrual_observation_not_a_treasury_receipt() {
+        let retained: Value = serde_json::from_str(include_str!(
+            "../../../docs/research/data/0071-base/clanker-credit-transaction.json"
+        ))
+        .unwrap();
+        let tx = retained["transaction"].clone();
+        let case = CaseKey::new(
+            crate::cases::Network::Base,
+            "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        )
+        .unwrap();
+        let read = Read {
+            tool: Tool::Transaction,
+            subject: tx["hash"].as_str().unwrap().to_owned(),
+            why: "retain a submitted credit without inferring its token origin".into(),
+        };
+        let (rpc, server) = endpoint(vec![
+            ("eth_getTransactionByHash", tx),
+            ("eth_getTransactionReceipt", retained["receipt"].clone()),
+            ("eth_getBlockByNumber", retained["canonical_block"].clone()),
+        ]);
+        let mut budget = Budget::default();
+        let (value, gap) = transaction(&rpc, &case, &read, &mut budget).unwrap();
+        server.join().unwrap();
+        assert_eq!(budget.calls_made(), 3);
+        assert_eq!(value["fee_claim_receipt_coverage_complete"], true);
+        assert_eq!(value["fee_claims"], json!([]));
+        assert_eq!(value["fee_credits"].as_array().unwrap().len(), 1);
+        let credit = &value["fee_credits"][0];
+        assert_eq!(credit["log_index"], 107);
+        assert_eq!(credit["requested_amount"], "29478578528827");
+        assert_eq!(credit["reported_balance_after"], "69398738209465");
+        assert_eq!(
+            credit["fee_owner"],
+            "0x8b4eb0cd07f398357657369a684e6e0685a76ae2"
+        );
+        assert_eq!(
+            credit["depositor"],
+            "0x63d2dfea64b3433f4071a98665bcd7ca14d93496"
+        );
+        assert_eq!(
+            credit["balance_asset"],
+            "0x4200000000000000000000000000000000000006"
+        );
+        assert_eq!(credit["verification_scope"], "credit_event_only");
+        assert_eq!(credit["financial_state"], "executed");
+        assert_eq!(credit["pool_attribution"], "unresolved");
+        assert!(credit["credited_delta"].is_null());
+        assert!(
+            value["related"]
+                .as_array()
+                .unwrap()
+                .contains(&credit["fee_owner"])
+        );
+        assert!(value["statements"].as_array().unwrap().iter().any(|s| {
+            s["text"]
+                .as_str()
+                .unwrap()
+                .contains("prior balance reconciliation")
+        }));
+        assert!(gap.unwrap().contains("credit events do not establish"));
+    }
+
     #[test]
     fn malformed_transfer_words_never_become_zero_or_an_owner_claim() {
         let good = json!({"topics":[TRANSFER,format!("0x{:0>64}","1"),format!("0x{:0>64}","2")],

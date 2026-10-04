@@ -40,6 +40,15 @@ adds current Flaunch pool/escrow/NFT snapshots, retained-control simulations
 and a supported Clanker refresh. Actual beneficiary receipts, newer locker
 qualification and owner reply acceptance remain subsequent work.
 
+[Research 0071](../research/0071-base-fee-credits-and-balance-windows.md) records
+the 2026-10-04 continuation: bounded credit decoding with a positive Clanker
+receipt, named role/checkpoint regressions, capture/replay and two measured
+wallet/asset balance windows. Full suites and mutation gates run on PR 210.
+Research windows are not yet automated investigator reads; per-token funding
+origin, backing, native/conversion delivery and the treasury ledger remain open.
+The current Clanker locker is now supported as recorded in research 0069;
+the unsupported-locker observation below describes the original qualification.
+
 **Do not equate delivery with launch readiness.** Summaries are intentionally
 partial `CantTell`. Complete claim resolution, historical interval coverage,
 broader LP/control semantics and representative deployed Clanker/Flaunch coverage

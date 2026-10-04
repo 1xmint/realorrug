@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Wallet-level claims from reviewed Base deployments, never pool attribution.
+//! Wallet-level fee events from reviewed Base deployments, never pool attribution.
 use crate::{
     cases::Network,
     evm_investigation::{address_word, hex_u64, transfer, word},
@@ -13,11 +13,14 @@ const FLAUNCH: &str = "0x17fbf54d6d15ebff82eee77e616f701952d08bb4";
 const CLAIM: &str = "0xf98eaa9c1f790e5c18b1f227bd5bade62600f9f3e3587c7644b90c50b9bf13c5";
 const WITHDRAWAL: &str = "0x87a38faaa35605e96a58e83a8fb6e2e1c7a77407ee979d73edef64461fa1756d";
 const ZERO: &str = "0x0000000000000000000000000000000000000000";
+const STORE: &str = "0xadf5da7301d0edbace5767201c524369b56f4040e2eafc873897493fc466e35d";
+const DEPOSIT: &str = "0xc95ddcaddf83340b68d0d44c01b1703f5d28d0611a3fd87e69d79ba7e2ac21d3";
 const LIMIT: usize = 128;
 
 #[derive(Default)]
 pub(crate) struct FeeReceipts {
     pub claims: Vec<Value>,
+    pub credits: Vec<Value>,
     pub statements: Vec<Value>,
     pub related: Vec<String>,
     pub coverage_complete: bool,
@@ -119,6 +122,89 @@ fn payment(claim: &Claim, log: &Value) -> bool {
         && value["amount"] == claim.amount.to_string()
 }
 
+fn credit(log: &Value, index: u64) -> Result<Option<Value>, String> {
+    let emitter = log["address"].as_str().unwrap_or("");
+    let signature = log["topics"][0].as_str().unwrap_or("");
+    let clanker = emitter.eq_ignore_ascii_case(CLANKER) && signature == STORE;
+    let flaunch = emitter.eq_ignore_ascii_case(FLAUNCH) && signature == DEPOSIT;
+    if !clanker && !flaunch {
+        return Ok(None);
+    }
+    let topics = log["topics"].as_array().ok_or("credit topics absent")?;
+    let data = log["data"].as_str().ok_or("credit data absent")?;
+    let digits = data.strip_prefix("0x").ok_or("credit ABI prefix absent")?;
+    let count = if clanker { 2 } else { 3 };
+    if topics.len() != if clanker { 4 } else { 2 } || digits.len() != count * 64 {
+        return Err("unsupported credit ABI layout".into());
+    }
+    let words: Vec<String> = digits
+        .as_bytes()
+        .as_chunks::<64>()
+        .0
+        .iter()
+        .map(|part| format!("0x{}", String::from_utf8_lossy(part)))
+        .collect();
+    let (protocol, escrow, depositor, owner, asset, pool, balance_after, amount) = if clanker {
+        (
+            "clanker_fee_locker",
+            CLANKER,
+            Some(address_word(topics[1].as_str().ok_or("depositor absent")?)?),
+            address_word(topics[2].as_str().ok_or("credit owner absent")?)?,
+            address_word(topics[3].as_str().ok_or("credit asset absent")?)?,
+            None,
+            Some(word(&words[0])?.to_string()),
+            word(&words[1])?,
+        )
+    } else {
+        let pool = topics[1].as_str().ok_or("pool label absent")?;
+        pool.parse::<realorrug_robinhood::Hash32>()
+            .map_err(|e| e.to_string())?;
+        (
+            "flaunch_paired_escrow",
+            FLAUNCH,
+            None,
+            address_word(&words[0])?,
+            address_word(&words[1])?,
+            Some(pool.to_lowercase()),
+            None,
+            word(&words[2])?,
+        )
+    };
+    // StoreTokens reports the requested transfer and the NEW cumulative balance,
+    // not the received delta. Deposit's pool label is permissionlessly supplied.
+    Ok(Some(
+        json!({"protocol":protocol,"escrow":escrow,"log_index":index,
+        "depositor":depositor,"fee_owner":owner,"balance_asset":asset,
+        "requested_amount":if clanker {Some(amount.to_string())} else {None},
+        "reported_credit_amount":if flaunch {Some(amount.to_string())} else {None},
+        "reported_balance_after":balance_after,"credited_delta":null,
+        "reported_pool_id":pool,"pool_attribution":"unresolved",
+        "financial_state":"executed","verification_scope":"credit_event_only"}),
+    ))
+}
+
+fn report_credit(value: Value, out: &mut FeeReceipts) {
+    let owner = value["fee_owner"].as_str().unwrap_or("");
+    let asset = value["balance_asset"].as_str().unwrap_or("");
+    let details = if let Some(balance) = value["reported_balance_after"].as_str() {
+        format!(
+            "Clanker credit event reports cumulative balance {balance} base units and requested transfer {} base units; received credit delta requires prior balance reconciliation",
+            value["requested_amount"].as_str().unwrap_or("")
+        )
+    } else {
+        format!(
+            "Flaunch credit event reports {} base units with a caller-supplied pool label; that label does not prove this token generated fees",
+            value["reported_credit_amount"].as_str().unwrap_or("")
+        )
+    };
+    out.statements.push(statement(format!("{details}, for fee owner {owner} and asset {asset}. Credit events are not withdrawals or new treasury receipts; delivery, backing and individual-token revenue attribution remain unresolved.")));
+    out.related.extend([owner.to_owned(), asset.to_owned()]);
+    if let Some(depositor) = value["depositor"].as_str() {
+        out.related.push(depositor.to_owned());
+    }
+    out.credits.push(value);
+}
+
 fn delivery<'a>(
     claim: &Claim,
     claims: &[Claim],
@@ -212,6 +298,14 @@ pub(crate) fn read(chain: Network, receipt: &Value) -> FeeReceipts {
             }
             Ok(None) => {}
         }
+        match credit(log, index) {
+            Ok(Some(value)) => report_credit(value, &mut out),
+            Err(_) => {
+                complete = false;
+                refused += 1;
+            }
+            Ok(None) => {}
+        }
     }
     for claim in &claims {
         report(
@@ -222,7 +316,7 @@ pub(crate) fn read(chain: Network, receipt: &Value) -> FeeReceipts {
     }
     out.coverage_complete = complete;
     if refused > 0 {
-        out.statements.push(statement(format!("{refused} allowlisted fee-claim log(s) could not be decoded; they do not establish payments.")));
+        out.statements.push(statement(format!("{refused} allowlisted fee-event log(s) could not be decoded; they do not establish credits or payments.")));
     }
     out
 }
@@ -289,6 +383,180 @@ mod tests {
         let mut value = json!({"transactionHash":format!("0x{:064x}",1),"blockHash":format!("0x{:064x}",2),"blockNumber":"0x10","status":"0x1"});
         value["logs"] = Value::Array(logs);
         value
+    }
+
+    fn stored(flaunch: bool) -> Value {
+        if flaunch {
+            log(
+                2,
+                FLAUNCH,
+                json!([DEPOSIT, format!("0x{:064x}", 7)]),
+                format!("0x{}{}{:064x}", addr(OWNER), addr(ASSET), 42),
+            )
+        } else {
+            log(
+                2,
+                CLANKER,
+                json!([
+                    STORE,
+                    format!("0x{}", addr(RECIPIENT)),
+                    format!("0x{}", addr(OWNER)),
+                    format!("0x{}", addr(ASSET))
+                ]),
+                format!("0x{:064x}{:064x}", 109, 42),
+            )
+        }
+    }
+
+    #[test]
+    fn credit_events_preserve_requested_cumulative_and_caller_supplied_roles() {
+        let out = read(Network::Base, &receipt(vec![stored(false), stored(true)]));
+        // Duplicate indices are never counted twice, even across protocols.
+        assert_eq!(out.credits.len(), 1);
+        assert!(!out.coverage_complete);
+        for flaunch in [false, true] {
+            let out = read(Network::Base, &receipt(vec![stored(flaunch)]));
+            assert!(out.coverage_complete);
+            assert!(out.claims.is_empty());
+            assert_eq!(out.credits.len(), 1);
+            let value = &out.credits[0];
+            assert_eq!(value["log_index"], 2);
+            assert_eq!(value["fee_owner"], OWNER);
+            assert_eq!(value["balance_asset"], ASSET);
+            assert_eq!(value["financial_state"], "executed");
+            assert_eq!(value["verification_scope"], "credit_event_only");
+            assert_eq!(value["pool_attribution"], "unresolved");
+            assert!(value["credited_delta"].is_null());
+            assert!(out.related.contains(&OWNER.into()));
+            assert!(out.related.contains(&ASSET.into()));
+            if flaunch {
+                assert_eq!(value["protocol"], "flaunch_paired_escrow");
+                assert_eq!(value["escrow"], FLAUNCH);
+                assert_eq!(value["reported_credit_amount"], "42");
+                assert_eq!(value["reported_pool_id"], format!("0x{:064x}", 7));
+                assert!(value["depositor"].is_null());
+                assert!(value["requested_amount"].is_null());
+                assert!(value["reported_balance_after"].is_null());
+                assert!(
+                    out.statements[0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("caller-supplied")
+                );
+            } else {
+                assert_eq!(value["protocol"], "clanker_fee_locker");
+                assert_eq!(value["escrow"], CLANKER);
+                assert_eq!(value["depositor"], RECIPIENT);
+                assert_eq!(value["requested_amount"], "42");
+                assert_eq!(value["reported_balance_after"], "109");
+                assert!(value["reported_credit_amount"].is_null());
+                assert!(value["reported_pool_id"].is_null());
+                assert!(out.related.contains(&RECIPIENT.into()));
+                assert!(
+                    out.statements[0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("prior balance reconciliation")
+                );
+            }
+            assert!(
+                out.statements[0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("not withdrawals")
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_credit_events_and_incomplete_receipts_cannot_verify_payments() {
+        for flaunch in [false, true] {
+            for mutation in [
+                "short", "extra", "address", "overflow", "hex", "pool", "topics",
+            ] {
+                if mutation == "pool" && !flaunch {
+                    continue;
+                }
+                let mut event = stored(flaunch);
+                match mutation {
+                    "short" => {
+                        event["data"] = json!("0x");
+                    }
+                    "extra" => {
+                        event["data"] =
+                            json!(format!("{}{:064x}", event["data"].as_str().unwrap(), 0));
+                    }
+                    "address" => {
+                        if flaunch {
+                            event["data"] =
+                                json!(format!("0x{}{}{:064x}", "f".repeat(64), addr(ASSET), 42));
+                        } else {
+                            event["topics"][2] = json!(format!("0x{}", "f".repeat(64)));
+                        }
+                    }
+                    "overflow" => {
+                        event["data"] = json!(format!(
+                            "{}{}",
+                            if flaunch {
+                                format!("0x{}{}", addr(OWNER), addr(ASSET))
+                            } else {
+                                format!("0x{:064x}", 109)
+                            },
+                            "f".repeat(64)
+                        ));
+                    }
+                    "hex" => {
+                        event["data"] = json!(event["data"].as_str().unwrap().replace("2a", "zz"));
+                    }
+                    "pool" => {
+                        event["topics"][1] = json!("0x7");
+                    }
+                    "topics" => {
+                        event["topics"].as_array_mut().unwrap().push(json!("0x0"));
+                    }
+                    _ => unreachable!(),
+                }
+                let out = read(
+                    Network::Base,
+                    &receipt(vec![event, paid(false), claim(false)]),
+                );
+                assert!(out.credits.is_empty(), "{flaunch} {mutation}");
+                assert!(!out.coverage_complete);
+                assert_eq!(out.claims[0]["financial_state"], "executed");
+                assert!(
+                    out.statements
+                        .iter()
+                        .any(|s| s["text"].as_str().unwrap().contains("could not be decoded"))
+                );
+            }
+            for field in ["removed", "blockHash", "transactionHash", "logIndex"] {
+                let mut event = stored(flaunch);
+                event[field] = Value::Null;
+                let out = read(Network::Base, &receipt(vec![event]));
+                assert!(out.credits.is_empty());
+                assert!(!out.coverage_complete);
+            }
+            let mut wrong = stored(flaunch);
+            wrong["address"] = json!(OWNER);
+            assert!(
+                read(Network::Base, &receipt(vec![wrong]))
+                    .credits
+                    .is_empty()
+            );
+            let mut failed = receipt(vec![stored(flaunch)]);
+            failed["status"] = json!("0x0");
+            assert!(read(Network::Base, &failed).credits.is_empty());
+            assert!(
+                read(Network::Ethereum, &receipt(vec![stored(flaunch)]))
+                    .credits
+                    .is_empty()
+            );
+        }
+        let mut logs = vec![json!({}); LIMIT];
+        logs.push(stored(false));
+        let out = read(Network::Base, &receipt(logs));
+        assert!(out.credits.is_empty());
+        assert!(!out.coverage_complete);
     }
 
     #[test]
