@@ -110,6 +110,11 @@ restoring closing-tuple attribution makes the end-to-end recipient test fail;
 restored reconstruction passes. Existing quiet-block refusal, historical
 collection and deposit/claim replay tests continue to apply. The transaction
 replay also reproduces the new live observation exactly from its RPC trace.
+Refusal fixtures also keep closing state reconcilable when the old event value
+is wrong, add trailing data and a no-op one-past admin slot that would otherwise
+alias an array length. Disabling the old-value or slot check, or accepting
+trailing data, makes the refusal test fail; restored validation passes. These
+cases isolate the intended guard from later reconciliation failures.
 Scoped strict Clippy, format and documentation checks run locally; full suites
 and mutation testing run on [PR 210](https://github.com/1xmint/realorrug/pull/210).
 

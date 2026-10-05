@@ -187,7 +187,7 @@ fn collection_links_the_event_time_recipient_instead_of_the_closing_recipient() 
 #[test]
 fn ordered_reward_history_refuses_incomplete_malformed_and_in_transaction_changes() {
     let (receipt, logs, opening, closing) = history();
-    for change in 0..22 {
+    for change in 0..25 {
         let mut events = logs.clone();
         let mut submitted = receipt.clone();
         let mut end = closing.clone();
@@ -217,19 +217,46 @@ fn ordered_reward_history_refuses_incomplete_malformed_and_in_transaction_change
             14 => events[0]["topics"][2] = json!(format!("0x{:064x}", 1)),
             15 => events[0]["data"] = json!("0x"),
             16 => events[0]["data"] = encoded(&[opening[15].clone()]),
-            17 => events[0]["data"] = encoded(&[format!("0x{:064x}", 1), opening[15].clone()]),
+            17 => events[0]["data"] = encoded(&[format!("0x{:064x}", 1), closing[15].clone()]),
             18 => end[15] = opening[15].clone(),
             19 => {
                 events.as_array_mut().unwrap().remove(2);
             }
             20 => submitted["logs"] = json!([]),
-            _ => {
+            21 => {
                 let mut missing_change = events[0].clone();
                 missing_change["transactionHash"] = submitted["transactionHash"].clone();
                 submitted["logs"]
                     .as_array_mut()
                     .unwrap()
                     .push(missing_change);
+            }
+            22 => {
+                events[0]["data"] = encoded(&[
+                    opening[15].clone(),
+                    closing[15].clone(),
+                    opening[15].clone(),
+                ]);
+            }
+            23 => {
+                // A one-past admin slot aliases the recipient vector length.
+                // A no-op would otherwise reconcile, masking a missing bound.
+                let count = format!("0x{:064x}", 1);
+                events
+                    .as_array_mut()
+                    .unwrap()
+                    .push(update(&logs[2], ADMIN, 111, 1, &count, &count));
+            }
+            _ => {
+                // A larger invalid admin slot can alias a recipient address.
+                events.as_array_mut().unwrap().push(update(
+                    &logs[2],
+                    ADMIN,
+                    111,
+                    2,
+                    &closing[17],
+                    &closing[17],
+                ));
             }
         }
         assert!(
