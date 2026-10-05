@@ -1000,24 +1000,34 @@ pub(super) mod tests {
 
     #[test]
     fn retained_base_transactions_reconcile_credit_and_claim_windows_without_token_attribution() {
-        let raw: Value = serde_json::from_str(include_str!(
-            "../../../docs/research/data/0075-base/clanker-configuration-rpc.json"
-        ))
-        .unwrap();
-        for (text, credit) in [
+        let previous =
+            include_str!("../../../docs/research/data/0075-base/clanker-configuration-rpc.json");
+        for (text, credit, trace) in [
             (
                 include_str!(
                     "../../../docs/research/data/0075-base/base-clanker-quiet-block-configuration.capture.json"
                 ),
                 true,
+                previous,
             ),
             (
                 include_str!(
                     "../../../docs/research/data/0075-base/base-clanker-claim-configuration-boundary.capture.json"
                 ),
                 false,
+                previous,
+            ),
+            (
+                include_str!(
+                    "../../../docs/research/data/0076-base/base-clanker-ordered-configuration-regression.capture.json"
+                ),
+                true,
+                include_str!(
+                    "../../../docs/research/data/0076-base/clanker-reward-history-rpc.json"
+                ),
             ),
         ] {
+            let raw: Value = serde_json::from_str(trace).unwrap();
             let capture: Value = serde_json::from_str(text).unwrap();
             let request: crate::cases::Investigation =
                 serde_json::from_value(capture["request"].clone()).unwrap();

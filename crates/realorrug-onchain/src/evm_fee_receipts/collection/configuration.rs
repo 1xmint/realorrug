@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! A quiet-block stability check, not reconstruction across configuration changes.
+//! Bounded reward history; changes inside the collection transaction stay unknown.
 use super::{COLLECTED, LOCKER, address_word, arg, call, number, query};
 use crate::{Budget, evm_fee_receipts::window::header, evm_investigation::hex_u64};
 use realorrug_robinhood::Rpc;
 use serde_json::{Value, json};
+
+mod history;
 
 pub(super) fn read(
     rpc: &Rpc,
@@ -62,11 +64,6 @@ fn qualify(
         &arg(&token),
         &tag,
     )?;
-    if tuple != closing_tuple {
-        return Err(
-            "parent and closing reward tuples differ; event-time configuration unresolved".into(),
-        );
-    }
     let logs = call(
         rpc,
         budget,
@@ -74,7 +71,18 @@ fn qualify(
         json!([{"address":LOCKER,
         "fromBlock":format!("0x{block:x}"),"toBlock":format!("0x{block:x}")}]),
     )?;
-    let anchor = only_collection(&logs, receipt)?;
+    let quiet = logs.as_array().is_some_and(|logs| logs.len() == 1);
+    let (anchor, reward_tuple, transitions) = if quiet {
+        let anchor = only_collection(&logs, receipt)?;
+        if tuple != closing_tuple {
+            return Err(
+                "parent and closing reward tuples differ without a supported event history".into(),
+            );
+        }
+        (anchor, tuple, json!([]))
+    } else {
+        history::reconstruct(&logs, receipt, &tuple, closing_tuple)?
+    };
     for (number, hash) in [
         (opening, opening_hash.as_str()),
         (block, closing_hash.as_str()),
@@ -89,6 +97,15 @@ fn qualify(
             return Err("reward configuration checkpoint changed during the read".into());
         }
     }
+    if !quiet {
+        return Ok(
+            json!({"qualified":true,"verification_scope":"provider_ordered_reward_configuration",
+        "opening_block":opening,"opening_block_hash":opening_hash,"closing_block":block,
+        "closing_block_hash":closing_hash,"collection_log_index":anchor,
+        "locker_events":logs.as_array().unwrap().len(),"reward_tuple":reward_tuple,
+        "transitions":transitions,"gap":"bounded provider event history reconciles parent and closing reward tuples; reviewed runtime/source imply recipient/admin writes emit events; no change in the collection transaction is admitted; this is not independent completeness proof, registry history, fee-preference history, conversion correctness, backing or per-token revenue"}),
+        );
+    }
     Ok(
         json!({"qualified":true,"verification_scope":"provider_quiet_block_reward_configuration",
         "opening_block":opening,"opening_block_hash":opening_hash,"closing_block":block,
@@ -99,8 +116,8 @@ fn qualify(
 
 fn only_collection(value: &Value, receipt: &Value) -> Result<u64, String> {
     let logs = value.as_array().ok_or("locker block events absent")?;
-    // Refuse all additional events, including a change followed by its reversal.
-    // Supporting busy blocks requires a separately qualified transition decoder.
+    // This helper anchors one collection. The history decoder separately checks
+    // additional updates, including a change followed by its reversal.
     if logs.len() != 1 {
         return Err("quiet-block check requires exactly one locker event; changes, additional collections or missing coverage remain unresolved".into());
     }
@@ -113,6 +130,20 @@ fn only_collection(value: &Value, receipt: &Value) -> Result<u64, String> {
         return Err("locker query returned a different emitter or signature".into());
     }
     let index = super::super::checkpoint(log, receipt)?;
+    if receipt["logs"]
+        .as_array()
+        .ok_or("receipt logs absent")?
+        .iter()
+        .filter(|log| {
+            log["address"]
+                .as_str()
+                .is_some_and(|a| a.eq_ignore_ascii_case(LOCKER))
+        })
+        .count()
+        > 1
+    {
+        return Err("additional locker events in the collection receipt remain unresolved".into());
+    }
     receipt["logs"]
         .as_array()
         .ok_or("receipt logs absent")?
@@ -141,7 +172,7 @@ mod tests {
     use super::*;
     use crate::evm_investigation::tests::endpoint_checked;
 
-    fn fixture() -> (Value, Value, Value, Vec<String>) {
+    pub(super) fn fixture() -> (Value, Value, Value, Vec<String>) {
         let trace: Value = serde_json::from_str(include_str!(
             "../../../../../docs/research/data/0075-base/clanker-configuration-qualification.json"
         ))
@@ -152,7 +183,7 @@ mod tests {
         (receipt, canonical, code, tuple)
     }
 
-    fn responses() -> Vec<(&'static str, Value, Option<Value>)> {
+    pub(super) fn responses() -> Vec<(&'static str, Value, Option<Value>)> {
         let trace: Value = serde_json::from_str(include_str!(
             "../../../../../docs/research/data/0075-base/clanker-configuration-qualification.json"
         ))
@@ -248,7 +279,7 @@ mod tests {
                             })
                             .collect::<String>()
                     ));
-                    (3, "tuples differ")
+                    (4, "tuples differ")
                 }
                 7 => {
                     rows[3].1 = Value::Null;
@@ -256,12 +287,12 @@ mod tests {
                 }
                 8 => {
                     rows[3].1 = json!([]);
-                    (4, "exactly one")
+                    (4, "missing coverage")
                 }
                 9 => {
                     let extra = rows[3].1[0].clone();
                     rows[3].1.as_array_mut().unwrap().push(extra);
-                    (4, "exactly one")
+                    (4, "repeated or out of order")
                 }
                 10 => {
                     rows[4].1["hash"] = json!(format!("0x{:064x}", 1));

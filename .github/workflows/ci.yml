@@ -69,7 +69,7 @@ jobs:
       - run: just cargo-deny
 
   mutants-shards:
-    # Sharded across eight runners. The set is split, not sampled: every mutant
+    # Sharded across sixteen runners. The set is split, not sampled: every mutant
     # is still tested, and a shard that finds a survivor fails its own job.
     #
     # Serial, this job was killed part-way on every run of a forty-commit branch
@@ -86,7 +86,9 @@ jobs:
         # reached the 30-minute limit twice, including a zero-survivor run
         # cancelled at completion. Smaller shards preserve the full set and
         # leave time for runner cleanup instead of relaxing the timeout.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        # At 963 mutants, an eight-way shard passed in 29m58s (run 37342752069).
+        # Rebalance before growth consumes the existing 30-minute limit.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     runs-on: ubuntu-latest
     # A wedged job should fail as a timeout rather than as an unexplained
     # cancellation, which is a distinction this workflow has already cost a
@@ -123,12 +125,12 @@ jobs:
         run: |
           df -h / | tail -1
           free -m | head -2
-      - run: just mutants origin/${{ github.base_ref }} ${{ matrix.shard }}/8
+      - run: just mutants origin/${{ github.base_ref }} ${{ matrix.shard }}/16
       - name: what is left of it
         if: always()
         run: df -h / | tail -1
 
-  # One check for all eight shards. A matrix job reports as `mutants-shards (0)`
+  # One check for all sixteen shards. A matrix job reports as `mutants-shards (0)`
   # and so on, which a branch rule cannot require as one name; this job is the
   # name to require if `main` is ever protected (it is not, 2026-09-13).
   #

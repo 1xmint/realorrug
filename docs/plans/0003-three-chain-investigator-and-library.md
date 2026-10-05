@@ -85,6 +85,15 @@ narrows the preceding timing gap for this one quiet-block scope; busy-block
 change histories, fee preferences, registry history, conversion/shared
 PositionManager/fee-origin proof and owner acceptance remain open.
 
+[Research 0076](../research/0076-clanker-ordered-reward-configuration-history.md)
+extends this to supported recipient/admin changes in other transactions in the
+same block. Replay checks old values and closing reconciliation, retains round
+trips and uses the reconstructed collection tuple for recipient linkage.
+Synthetic busy-block tests and a fresh quiet-block capture are retained; live
+busy-block qualification, same-transaction changes, fee preferences, registry
+history, conversions and per-token revenue remain open. CI distributes the
+complete mutation set over sixteen shards without relaxing limits.
+
 The credit slice is committed as `0bf05a3`. Named tests
 `credit_events_preserve_requested_cumulative_and_caller_supplied_roles`,
 `malformed_credit_events_and_incomplete_receipts_cannot_verify_payments` and

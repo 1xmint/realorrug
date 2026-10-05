@@ -173,18 +173,28 @@ fn qualify(
         &arg(&event.token),
         block,
     )?;
-    let context = link(receipt, credit, &event, &deployment, &data)?;
     let current = call(rpc, budget, "eth_getBlockByNumber", json!([block, false]))?;
     if current["number"] != block || current["hash"] != canonical["hash"] {
         return Err("collection context checkpoint changed during the read".into());
     }
     let configuration = configuration::read(rpc, receipt, canonical, &code, &data, budget);
+    let event_tuple: Vec<String> = if configuration["qualified"] == true {
+        serde_json::from_value(configuration["reward_tuple"].clone()).map_err(|e| e.to_string())?
+    } else {
+        data
+    };
+    let context = link(receipt, credit, &event, &deployment, &event_tuple)?;
+    let gap = if configuration["verification_scope"] == "provider_ordered_reward_configuration" {
+        "single supported collection and deposit only; recipient uses reconstructed event-time state under source/provider assumptions, registration remains block-end state; collection context does not prove asset backing, conversion correctness or per-token revenue; shared PositionManager transient balances and other transaction actions require separate analysis"
+    } else {
+        "single supported collection and deposit only; registration and recipients are block-end state, not proven at every intra-block event; collection context does not prove asset backing, conversion correctness or per-token revenue; shared PositionManager transient balances and other transaction actions require separate analysis"
+    };
     Ok(
         json!({"qualified":true,"verification_scope":"historical_collection_context",
         "lp_locker":LOCKER,"registry":FACTORY,"runtime_hash":hash,"collection_log_index":event.index,
         "reported_token":event.token,"case_token_matches":event.token==case.address,
         "block":block,"block_hash":canonical["hash"],"context":context,"reward_configuration":configuration,"pool_attribution":"unresolved",
-        "gap":"single supported collection and deposit only; registration and recipients are block-end state, not proven at every intra-block event; collection context does not prove asset backing, conversion correctness or per-token revenue; shared PositionManager transient balances and other transaction actions require separate analysis"}),
+        "gap":gap}),
     )
 }
 
@@ -287,7 +297,9 @@ fn positions(
 pub(crate) fn statements(contexts: &[Value], case: &CaseKey) -> Vec<Value> {
     contexts.iter().filter(|context| context["qualified"] == true).map(|context| {
         let relation = if context["case_token_matches"] == true {"matches"} else {"differs from"};
-        let timing = if context["reward_configuration"]["qualified"] == true {
+        let timing = if context["reward_configuration"]["verification_scope"] == "provider_ordered_reward_configuration" {
+            "Ordered recipient/admin events reconcile parent and closing reward tuples, with no admitted change in the collection transaction. The recipient slot uses the reconstructed collection tuple under reviewed-source/provider assumptions; registry history, fee preferences, conversion correctness, backing and per-token revenue remain unresolved."
+        } else if context["reward_configuration"]["qualified"] == true {
             "Parent and closing reward tuples and locker runtimes agree, and the provider reports this collection as the block's only locker event. This supports reward-configuration stability under reviewed-source/provider assumptions; registry history, fee preferences, conversion correctness, backing and per-token revenue remain unresolved."
         } else {
             "This is collection context using block-end configuration, not proof of this token's fee revenue, backing or configuration at the instant of the deposit."
@@ -347,7 +359,7 @@ mod tests {
         ));
     }
 
-    fn responses() -> Vec<(&'static str, Value, Option<Value>)> {
+    pub(super) fn responses() -> Vec<(&'static str, Value, Option<Value>)> {
         let trace: Value = serde_json::from_str(include_str!(
             "../../../../docs/research/data/0074-base/clanker-collection-rpc.json"
         ))
@@ -375,7 +387,7 @@ mod tests {
             .collect()
     }
 
-    fn case() -> CaseKey {
+    pub(super) fn case() -> CaseKey {
         CaseKey::new(Network::Base, "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07").unwrap()
     }
 

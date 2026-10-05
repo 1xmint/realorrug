@@ -82,6 +82,16 @@ event or failed check retains unresolved timing without erasing collection
 evidence. Configuration-change reconstruction, fee preferences, registry
 history, conversion correctness and per-token revenue remain separate work.
 
+[Research 0076](../research/0076-clanker-ordered-reward-configuration-history.md)
+adds a separate ordered-history scope for supported recipient/admin updates
+in other transactions in the collection block. Parent-state replay must
+reconcile closing state, and collection linkage uses the reconstructed tuple.
+Changes inside the collection transaction and unsupported or missing events
+remain unresolved. Positive busy-block coverage is synthetic; a live quiet-block
+regression and bounded search failures are retained. A representative live busy
+block, fee preferences, registration history, conversions and revenue proof
+remain subsequent work.
+
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook
 uses its global escrow getter; the current Base hook resolves escrow per pool.

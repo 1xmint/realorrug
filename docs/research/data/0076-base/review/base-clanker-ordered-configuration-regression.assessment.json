@@ -1,0 +1,314 @@
+{
+  "request_id": "base-clanker-ordered-configuration-regression",
+  "level": "CantTell",
+  "reply": "The allegation is not settled by these bounded reads. Clanker requested deposit 29478578528827 base units of asset 0x4200000000000000000000000000000000000006 matches one preceding ERC-20 Transfer from depositor 0x63d2dfea64b3433f4071a98665bcd7ca14d93496 into the fee locker for fee owner 0x8b4eb0cd07f398357657369a684e6e0685a76ae2. Independently reconciled received credit is 29478578528827 base units across the transaction block. This is provider/receipt evidence, not backing, upstream pool origin or this token's revenue; the credit and transfer are one deposit, not separate income. The reviewed LP locker reports a collection for token 0xad794ad19350a1755d90d53380102dc7213b8b07, which differs from case token 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07; historical registration and zero-liquidity position events agree with pool 0x787392934b75093f7e79e384410b4115b35265f72210020b43c9239d019a8992 and the deposit recipient slot. Parent and closing reward tuples and locker runtimes agree, and the provider reports this collection as the block's only locker event. This supports reward-configuration stability under reviewed-source/provider assumptions; registry history, fee preferences, conversion correctness, backing and per-token revenue remain unresolved. Contract code was observed at 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07. totalSupply() returned 100000000000000000000000000000 base units. Unresolved: only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; credit events do not establish prior balances, credited deltas, backing or treasury receipts; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification",
+  "observations": [
+    {
+      "id": "c058df624cc52690b3a6b4f143b96d85e351fd3b7ec4d2596ab904307af10d9b",
+      "kind": "transaction",
+      "source": "base:Transaction:0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f",
+      "at": 1791222790,
+      "read_point": "base block 52216721 0x311b1564c9a0663ed3420426ddc3e3a7a2badc8ce5dd1456fbdad3316c96104e",
+      "value": {
+        "fee_balance_windows": [
+          {
+            "balance_asset": "0x4200000000000000000000000000000000000006",
+            "closing_balance": "69398738209465",
+            "closing_block_hash": "0x4c6dae09ad2cb07837d8d83ecb9a9fb598460459394805a8218abfccf68cae9a",
+            "escrow": "0xf3622742b1e446d92e45e22923ef11c2fcd55d68",
+            "events": [
+              {
+                "balance_after": "69398738209465",
+                "balance_before": "39920159680638",
+                "credited_delta": "29478578528827",
+                "depositor": "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
+                "kind": "credit",
+                "log_index": 107,
+                "requested_amount": "29478578528827",
+                "transaction": "0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f"
+              }
+            ],
+            "fee_owner": "0x8b4eb0cd07f398357657369a684e6e0685a76ae2",
+            "from_block": 52139195,
+            "gap": "one wallet/asset and one block only; provider observations are not proof of complete history, backing, beneficial ownership or token revenue; opening balance origin is outside this window; claims and matching delivery are one withdrawal, never additional earnings",
+            "opening_balance": "39920159680638",
+            "opening_block": 52139194,
+            "opening_block_hash": "0xdc33981e028ca45eeade1d67f1f583509896720bf9c8171abddbb1cac0d3646c",
+            "pool_attribution": "unresolved",
+            "protocol": "clanker_fee_locker",
+            "reconciled": true,
+            "to_block": 52139195,
+            "verification_scope": "provider_balance_window"
+          }
+        ],
+        "fee_claim_receipt_coverage_complete": true,
+        "fee_claims": [],
+        "fee_collection_contexts": [
+          {
+            "block": "0x31b94bb",
+            "block_hash": "0x4c6dae09ad2cb07837d8d83ecb9a9fb598460459394805a8218abfccf68cae9a",
+            "case_token_matches": false,
+            "collection_log_index": 108,
+            "context": {
+              "currencies": [
+                "0x4200000000000000000000000000000000000006",
+                "0xad794ad19350a1755d90d53380102dc7213b8b07"
+              ],
+              "deposit_log_index": 107,
+              "funding_log_index": 106,
+              "hook": "0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc",
+              "pool_id": "0x787392934b75093f7e79e384410b4115b35265f72210020b43c9239d019a8992",
+              "positions": [
+                {
+                  "log_index": 99,
+                  "position_id": "897035"
+                },
+                {
+                  "log_index": 100,
+                  "position_id": "897036"
+                },
+                {
+                  "log_index": 101,
+                  "position_id": "897037"
+                },
+                {
+                  "log_index": 102,
+                  "position_id": "897038"
+                },
+                {
+                  "log_index": 103,
+                  "position_id": "897039"
+                }
+              ],
+              "recipient_slot": 0,
+              "reported_requested_reward": "29478578528827"
+            },
+            "gap": "single supported collection and deposit only; registration and recipients are block-end state, not proven at every intra-block event; collection context does not prove asset backing, conversion correctness or per-token revenue; shared PositionManager transient balances and other transaction actions require separate analysis",
+            "lp_locker": "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
+            "pool_attribution": "unresolved",
+            "qualified": true,
+            "registry": "0xe85a59c628f7d27878aceb4bf3b35733630083a9",
+            "reported_token": "0xad794ad19350a1755d90d53380102dc7213b8b07",
+            "reward_configuration": {
+              "closing_block": 52139195,
+              "closing_block_hash": "0x4c6dae09ad2cb07837d8d83ecb9a9fb598460459394805a8218abfccf68cae9a",
+              "collection_log_index": 108,
+              "gap": "provider reports exactly one locker event in this block; reviewed runtime/source imply reward writes emit events and existing positions prevent reinitialization; this is not independent completeness proof, registry history, fee-preference history, conversion correctness, backing or per-token revenue",
+              "locker_events": 1,
+              "opening_block": 52139194,
+              "opening_block_hash": "0xdc33981e028ca45eeade1d67f1f583509896720bf9c8171abddbb1cac0d3646c",
+              "qualified": true,
+              "reward_tuple": [
+                "0x0000000000000000000000000000000000000000000000000000000000000020",
+                "0x000000000000000000000000ad794ad19350a1755d90d53380102dc7213b8b07",
+                "0x0000000000000000000000004200000000000000000000000000000000000006",
+                "0x000000000000000000000000ad794ad19350a1755d90d53380102dc7213b8b07",
+                "0x0000000000000000000000000000000000000000000000000000000000800000",
+                "0x00000000000000000000000000000000000000000000000000000000000000c8",
+                "0x000000000000000000000000b429d62f8f3bffb98cdb9569533ea23bf0ba28cc",
+                "0x00000000000000000000000000000000000000000000000000000000000db00b",
+                "0x0000000000000000000000000000000000000000000000000000000000000005",
+                "0x0000000000000000000000000000000000000000000000000000000000000160",
+                "0x00000000000000000000000000000000000000000000000000000000000001a0",
+                "0x00000000000000000000000000000000000000000000000000000000000001e0",
+                "0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x0000000000000000000000000000000000000000000000000000000000002710",
+                "0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x0000000000000000000000008b4eb0cd07f398357657369a684e6e0685a76ae2",
+                "0x0000000000000000000000000000000000000000000000000000000000000001",
+                "0x0000000000000000000000008b4eb0cd07f398357657369a684e6e0685a76ae2"
+              ],
+              "verification_scope": "provider_quiet_block_reward_configuration"
+            },
+            "runtime_hash": "0x49a98b5202a1977a74052a1128c3e01793619d5fe0271bb3bf37276066499e60",
+            "verification_scope": "historical_collection_context"
+          }
+        ],
+        "fee_credits": [
+          {
+            "balance_asset": "0x4200000000000000000000000000000000000006",
+            "credited_delta": null,
+            "depositor": "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
+            "escrow": "0xf3622742b1e446d92e45e22923ef11c2fcd55d68",
+            "fee_owner": "0x8b4eb0cd07f398357657369a684e6e0685a76ae2",
+            "financial_state": "executed",
+            "funding": {
+              "asset": "0x4200000000000000000000000000000000000006",
+              "gap": null,
+              "log_index": 106,
+              "pool_attribution": "unresolved",
+              "transfer": {
+                "amount": "29478578528827",
+                "from": "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
+                "to": "0xf3622742b1e446d92e45e22923ef11c2fcd55d68",
+                "transaction": "0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f"
+              },
+              "verification_scope": "receipt_requested_transfer_match"
+            },
+            "log_index": 107,
+            "pool_attribution": "unresolved",
+            "protocol": "clanker_fee_locker",
+            "reported_balance_after": "69398738209465",
+            "reported_credit_amount": null,
+            "reported_pool_id": null,
+            "requested_amount": "29478578528827",
+            "verification_scope": "credit_event_only"
+          }
+        ],
+        "receipt_logs_present": true,
+        "receipt_logs_truncated": false,
+        "related": [
+          "0x36767aef8387d95a1b171cada27f28a8c2bcda13",
+          "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be",
+          "0x8b4eb0cd07f398357657369a684e6e0685a76ae2",
+          "0x4200000000000000000000000000000000000006",
+          "0x63d2dfea64b3433f4071a98665bcd7ca14d93496"
+        ],
+        "statements": [
+          {
+            "text": "Clanker requested deposit 29478578528827 base units of asset 0x4200000000000000000000000000000000000006 matches one preceding ERC-20 Transfer from depositor 0x63d2dfea64b3433f4071a98665bcd7ca14d93496 into the fee locker for fee owner 0x8b4eb0cd07f398357657369a684e6e0685a76ae2. Independently reconciled received credit is 29478578528827 base units across the transaction block. This is provider/receipt evidence, not backing, upstream pool origin or this token's revenue; the credit and transfer are one deposit, not separate income."
+          },
+          {
+            "text": "The reviewed LP locker reports a collection for token 0xad794ad19350a1755d90d53380102dc7213b8b07, which differs from case token 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07; historical registration and zero-liquidity position events agree with pool 0x787392934b75093f7e79e384410b4115b35265f72210020b43c9239d019a8992 and the deposit recipient slot. Parent and closing reward tuples and locker runtimes agree, and the provider reports this collection as the block's only locker event. This supports reward-configuration stability under reviewed-source/provider assumptions; registry history, fee preferences, conversion correctness, backing and per-token revenue remain unresolved."
+          },
+          {
+            "text": "The submitted transaction's Clanker wallet/asset balance reconciles across its block against provider observations. This is not new treasury income, asset backing, full wallet history or evidence of this token's fee revenue."
+          },
+          {
+            "text": "Clanker credit event reports cumulative balance 69398738209465 base units and requested transfer 29478578528827 base units; received credit delta requires prior balance reconciliation, for fee owner 0x8b4eb0cd07f398357657369a684e6e0685a76ae2 and asset 0x4200000000000000000000000000000000000006. Credit events are not withdrawals or new treasury receipts; net received amount, backing and individual-token revenue attribution remain unresolved by the credit event."
+          },
+          {
+            "text": "Successful transaction 0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f from 0x36767aef8387d95a1b171cada27f28a8c2bcda13 to 0xccc88a9d1b4ed6b0eaba998850414b24f1c315be has native value 0x0 (hex wei)."
+          }
+        ],
+        "transaction_block": "0x31b94bb",
+        "transaction_block_hash": "0x4c6dae09ad2cb07837d8d83ecb9a9fb598460459394805a8218abfccf68cae9a",
+        "transfers": []
+      },
+      "gap": "only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; credit events do not establish prior balances, credited deltas, backing or treasury receipts; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification",
+      "version": "investigation-read-v1"
+    },
+    {
+      "id": "5e5139ee4a9db6fc1fb464ed53cd77024b6872bbbf3d9cd4581043e8836ceaec",
+      "kind": "token",
+      "source": "base:Token:0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+      "at": 1791222790,
+      "read_point": "base block 52216728 0x2360cbae55a101351a956a29854d6f7b00ae889d35aadb5a5b8f6520f37da38f",
+      "value": {
+        "code_hash": "186d2e44c74fdbf535221cf1e183be881e84c5db41ec66198e4caa9ee7754cad",
+        "related": [],
+        "statements": [
+          {
+            "text": "Contract code was observed at 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07."
+          },
+          {
+            "text": "totalSupply() returned 100000000000000000000000000000 base units."
+          },
+          {
+            "text": "decimals() returned 18."
+          }
+        ]
+      },
+      "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+      "version": "investigation-read-v1"
+    },
+    {
+      "id": "83200f72a51dcbd4108ef8458a38d037e4784af79e933a0f1f3d1b84a55d0625",
+      "kind": "liquidity",
+      "source": "base:Liquidity:0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+      "at": 1791222790,
+      "read_point": null,
+      "value": {
+        "related": [],
+        "statements": []
+      },
+      "gap": "timeout: global",
+      "version": "investigation-read-v1"
+    }
+  ],
+  "findings": [
+    {
+      "kind": "transaction",
+      "text": "Clanker requested deposit 29478578528827 base units of asset 0x4200000000000000000000000000000000000006 matches one preceding ERC-20 Transfer from depositor 0x63d2dfea64b3433f4071a98665bcd7ca14d93496 into the fee locker for fee owner 0x8b4eb0cd07f398357657369a684e6e0685a76ae2. Independently reconciled received credit is 29478578528827 base units across the transaction block. This is provider/receipt evidence, not backing, upstream pool origin or this token's revenue; the credit and transfer are one deposit, not separate income.",
+      "evidence": [
+        "c058df624cc52690b3a6b4f143b96d85e351fd3b7ec4d2596ab904307af10d9b"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "transaction",
+      "text": "The reviewed LP locker reports a collection for token 0xad794ad19350a1755d90d53380102dc7213b8b07, which differs from case token 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07; historical registration and zero-liquidity position events agree with pool 0x787392934b75093f7e79e384410b4115b35265f72210020b43c9239d019a8992 and the deposit recipient slot. Parent and closing reward tuples and locker runtimes agree, and the provider reports this collection as the block's only locker event. This supports reward-configuration stability under reviewed-source/provider assumptions; registry history, fee preferences, conversion correctness, backing and per-token revenue remain unresolved.",
+      "evidence": [
+        "c058df624cc52690b3a6b4f143b96d85e351fd3b7ec4d2596ab904307af10d9b"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "transaction",
+      "text": "The submitted transaction's Clanker wallet/asset balance reconciles across its block against provider observations. This is not new treasury income, asset backing, full wallet history or evidence of this token's fee revenue.",
+      "evidence": [
+        "c058df624cc52690b3a6b4f143b96d85e351fd3b7ec4d2596ab904307af10d9b"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "transaction",
+      "text": "Clanker credit event reports cumulative balance 69398738209465 base units and requested transfer 29478578528827 base units; received credit delta requires prior balance reconciliation, for fee owner 0x8b4eb0cd07f398357657369a684e6e0685a76ae2 and asset 0x4200000000000000000000000000000000000006. Credit events are not withdrawals or new treasury receipts; net received amount, backing and individual-token revenue attribution remain unresolved by the credit event.",
+      "evidence": [
+        "c058df624cc52690b3a6b4f143b96d85e351fd3b7ec4d2596ab904307af10d9b"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "transaction",
+      "text": "Successful transaction 0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f from 0x36767aef8387d95a1b171cada27f28a8c2bcda13 to 0xccc88a9d1b4ed6b0eaba998850414b24f1c315be has native value 0x0 (hex wei).",
+      "evidence": [
+        "c058df624cc52690b3a6b4f143b96d85e351fd3b7ec4d2596ab904307af10d9b"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "token",
+      "text": "Contract code was observed at 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07.",
+      "evidence": [
+        "5e5139ee4a9db6fc1fb464ed53cd77024b6872bbbf3d9cd4581043e8836ceaec"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "token",
+      "text": "totalSupply() returned 100000000000000000000000000000 base units.",
+      "evidence": [
+        "5e5139ee4a9db6fc1fb464ed53cd77024b6872bbbf3d9cd4581043e8836ceaec"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "token",
+      "text": "decimals() returned 18.",
+      "evidence": [
+        "5e5139ee4a9db6fc1fb464ed53cd77024b6872bbbf3d9cd4581043e8836ceaec"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    }
+  ],
+  "reused": [],
+  "decisions": [
+    "Transaction 0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f: inspect the supplied transaction before broader reads",
+    "Token 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07: validate the target and inspect available controls",
+    "Liquidity 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07: inspect supported liquidity without treating graduation as a drain",
+    "planning unavailable: no captured model selection; deterministic fallback",
+    "writer unavailable: no captured model selection; deterministic fallback"
+  ],
+  "rpc_calls": 3,
+  "elapsed_ms": 3,
+  "complete": false
+}

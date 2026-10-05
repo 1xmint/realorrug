@@ -274,3 +274,15 @@ registration or conversion proof. Live captures retain rate-limit and deadline
 gaps. Next: configuration-change histories and fee preferences, then conversion
 and shared PositionManager/fee-origin qualification and owner-reviewed replies
 before the ledger. No provider, pairing or financial allocation is selected.
+
+[Research 0076](docs/research/0076-clanker-ordered-reward-configuration-history.md)
+adds bounded recipient/admin history reconstruction across other transactions
+in a collection block. Ordered old/new values must reconcile the closing tuple;
+the recipient check uses the reconstructed collection tuple. Same-transaction
+changes, unsupported events and incomplete histories retain gaps. Synthetic
+busy-block tests and a fresh live quiet-block regression are retained; a live
+busy-block collection remains to be qualified. Mutation CI now covers the full
+set over sixteen shards, preserving existing limits. Next: representative live
+history, fee preferences, conversion/shared PositionManager and fee origin,
+plus owner reply review before the ledger. Financial status and authority are
+unchanged.

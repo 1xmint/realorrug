@@ -115,3 +115,9 @@ owner-reviewed replies before a treasury ledger projection. Wider histories,
 Flaunch funding/balances, backing, native delivery, custody and measured launch
 costs remain open. Base is preferred; launchpad, pairing and economics remain
 unselected. Current runtime limits and model authority remain unchanged.
+
+**Subsequent implementation:** [research 0076](0076-clanker-ordered-reward-configuration-history.md)
+adds bounded recipient/admin reconstruction across other transactions in the
+collection block. This note and its captures retain the earlier quiet-block
+scope. Busy-block positives are synthetic pending a representative live case;
+same-transaction changes, fee preferences and revenue proof remain unresolved.
