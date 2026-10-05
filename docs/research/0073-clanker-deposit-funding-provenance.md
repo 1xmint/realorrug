@@ -7,6 +7,11 @@ Automatic pool attribution, backing, owner acceptance and ledger remain open.
 **Direction:** [VISION](../../VISION.md), [ROADMAP](../../ROADMAP.md).
 **Previous evidence:** [research 0072](0072-clanker-transaction-balance-windows.md).
 
+**Subsequent implementation:** [research 0074](0074-clanker-historical-collection-context-and-replies.md)
+adds bounded automatic historical collection context and deposit-specific
+reply prioritization. The capture and open status below describe this earlier
+slice; context still does not settle per-token revenue attribution.
+
 ## Caller and evidence boundary
 
 The successful canonical Base transaction reader now attaches `funding` to its

@@ -12,7 +12,7 @@ use sha3::{Digest, Keccak256};
 use std::fmt::Write as _;
 
 const ZERO: &str = "0x0000000000000000000000000000000000000000";
-const CLANKER: &str = "0xe85a59c628f7d27878aceb4bf3b35733630083a9";
+pub(super) const CLANKER: &str = "0xe85a59c628f7d27878aceb4bf3b35733630083a9";
 const LOCKERS: [&str; 3] = [
     "0x29d17c1a8d851d7d4ca97fae97acadb398d9cce0",
     "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
@@ -26,7 +26,7 @@ fn selector(signature: &str) -> String {
         hash[0], hash[1], hash[2], hash[3]
     )
 }
-fn query(
+pub(super) fn query(
     rpc: &Rpc,
     budget: &mut Budget,
     address: &str,
@@ -42,7 +42,7 @@ fn query(
         block,
     )?)
 }
-fn words(hex: &str) -> Result<Vec<String>, String> {
+pub(super) fn words(hex: &str) -> Result<Vec<String>, String> {
     let digits = hex.strip_prefix("0x").ok_or("ABI prefix missing")?;
     if digits.is_empty()
         || digits.len() % 64 != 0
@@ -59,13 +59,13 @@ fn words(hex: &str) -> Result<Vec<String>, String> {
         .map(|part| format!("0x{}", String::from_utf8_lossy(part)))
         .collect())
 }
-fn number(data: &[String], index: usize) -> Result<u128, String> {
+pub(super) fn number(data: &[String], index: usize) -> Result<u128, String> {
     word(data.get(index).ok_or("ABI integer absent")?)
 }
-fn address(data: &[String], index: usize) -> Result<String, String> {
+pub(super) fn address(data: &[String], index: usize) -> Result<String, String> {
     address_word(data.get(index).ok_or("ABI address absent")?)
 }
-fn arg(address: &str) -> String {
+pub(super) fn arg(address: &str) -> String {
     format!("{:0>64}", address.trim_start_matches("0x"))
 }
 fn dynamic(data: &[String], base: usize, index: usize) -> Result<Vec<String>, String> {
@@ -161,7 +161,7 @@ fn clanker(
         Some("configured LP-reward shares exclude factory/other fee bases; paid receipts, administrator changes, extensions, current hook fees and position withdrawal rights remain separate checks".into())))
 }
 
-fn clanker_rewards(data: &[String], token: &str) -> Result<Value, String> {
+pub(super) fn clanker_rewards(data: &[String], token: &str) -> Result<Value, String> {
     if number(data, 0)? != 32 || address(data, 1)? != token {
         return Err("reward tuple target mismatch".into());
     }
@@ -216,7 +216,7 @@ fn flaunch(
         {
             continue;
         }
-        let pool_id = flaunch_pool_id(&key)?;
+        let pool_id = pool_key_hash(&key)?;
         let config = query(
             rpc,
             budget,
@@ -294,7 +294,7 @@ fn flaunch(
     Err("no supported normal Flaunch pool identified".into())
 }
 
-fn flaunch_pool_id(key: &[String]) -> Result<String, String> {
+pub(super) fn pool_key_hash(key: &[String]) -> Result<String, String> {
     let raw = key
         .iter()
         .map(|s| s.trim_start_matches("0x"))
@@ -458,7 +458,7 @@ fn quoted_split(split: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn hex_bytes(digits: &str) -> Result<Vec<u8>, String> {
+pub(super) fn hex_bytes(digits: &str) -> Result<Vec<u8>, String> {
     if !digits.len().is_multiple_of(2) || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("malformed bytes".into());
     }
@@ -468,7 +468,7 @@ fn hex_bytes(digits: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-fn encode_hex(bytes: &[u8]) -> String {
+pub(super) fn encode_hex(bytes: &[u8]) -> String {
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         let _ = write!(encoded, "{byte:02x}");

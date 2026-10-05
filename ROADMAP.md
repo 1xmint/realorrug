@@ -254,9 +254,14 @@ live credit/claim captures and canonical balance checkpoints.
 [Research 0073](docs/research/0073-clanker-deposit-funding-provenance.md) now adds
 unique preceding Clanker deposit-transfer matches and a historical upstream
 qualification showing why this live deposit cannot be assigned to the case
-token. The proof is retained in the dossier; short reply prioritization remains
-open. Next: qualify bounded pool/collection attribution and surface the
-deposit-specific proof in replies ahead of the ledger, qualify
-backing/native/conversion delivery and remaining custody powers, and measure
-launch costs. Wider windows and Flaunch balance/funding reconciliation remain open.
+token. [Research 0074](docs/research/0074-clanker-historical-collection-context-and-replies.md)
+now adds bounded automatic historical collection context for one reviewed LP
+locker and makes deposit-specific proof, independently measured credit and the
+different-token context lead public replies. Context uses block-end state and
+does not settle per-token revenue or upgrade financial status. Live captures,
+provider failures and partial offline reviews are retained. Next: qualify
+event-time configuration, fee origin, conversion/shared PositionManager limits
+and representative owner-reviewed replies ahead of the ledger; qualify backing,
+native delivery and remaining custody powers, and measure launch costs. Wider
+windows and Flaunch balance/funding reconciliation remain open.
 No provider, pairing or financial allocation is selected.

@@ -8,6 +8,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
+pub(crate) mod collection;
 pub(crate) mod window;
 
 const CLANKER: &str = "0xf3622742b1e446d92e45e22923ef11c2fcd55d68";
@@ -262,16 +263,33 @@ fn funding<'a>(
     Ok((index, log))
 }
 
-fn report_funding(value: &mut Value, proof: Result<(u64, &Value), &str>, out: &mut FeeReceipts) {
+fn report_funding(value: &mut Value, proof: Result<(u64, &Value), &str>) {
     value["funding"] = match proof {
         Ok((index, log)) => {
-            out.statements.push(statement(format!("Clanker requested deposit {} base units of asset {} matches one preceding ERC-20 Transfer from depositor {} into the fee locker. This is receipt-level ingress evidence, not a measurement of net received credit, backing, upstream pool origin or this token's revenue; the credit and transfer are one deposit, not separate income.", value["requested_amount"].as_str().unwrap(), value["balance_asset"].as_str().unwrap(), value["depositor"].as_str().unwrap())));
             json!({"verification_scope":"receipt_requested_transfer_match",
                 "log_index":index,"asset":value["balance_asset"],"transfer":transfer(log).unwrap(),
                 "pool_attribution":"unresolved","gap":null})
         }
         Err(gap) => json!({"verification_scope":"unavailable_deposit_funding","gap":gap}),
     };
+}
+
+/// Rank by the checked funding role, never by matching words in a statement.
+pub(crate) fn deposit_statements(
+    fees: &FeeReceipts,
+    windows: &[Value],
+    transaction: &Value,
+) -> Vec<Value> {
+    fees.credits.iter().filter(|credit| credit["funding"]["verification_scope"] == "receipt_requested_transfer_match")
+        .map(|credit| {
+            let received = windows.iter().filter(|window| window["reconciled"] == true
+                && window["fee_owner"] == credit["fee_owner"] && window["balance_asset"] == credit["balance_asset"])
+                .flat_map(|window| window["events"].as_array().into_iter().flatten())
+                .find(|event| event["kind"] == "credit" && event["transaction"] == *transaction && event["log_index"] == credit["log_index"])
+                .and_then(|event| event["credited_delta"].as_str());
+            let measurement = received.map_or_else(|| "Net received credit is unresolved.".into(), |delta| format!("Independently reconciled received credit is {delta} base units across the transaction block."));
+            statement(format!("Clanker requested deposit {} base units of asset {} matches one preceding ERC-20 Transfer from depositor {} into the fee locker for fee owner {}. {measurement} This is provider/receipt evidence, not backing, upstream pool origin or this token's revenue; the credit and transfer are one deposit, not separate income.", credit["requested_amount"].as_str().unwrap(), credit["balance_asset"].as_str().unwrap(), credit["depositor"].as_str().unwrap(), credit["fee_owner"].as_str().unwrap()))
+        }).collect()
 }
 
 fn delivery<'a>(
@@ -379,11 +397,7 @@ pub(crate) fn read(chain: Network, receipt: &Value) -> FeeReceipts {
     }
     for value in &credits {
         let mut reported = value.clone();
-        report_funding(
-            &mut reported,
-            funding(value, &credits, &observed, complete),
-            &mut out,
-        );
+        report_funding(&mut reported, funding(value, &credits, &observed, complete));
         report_credit(reported, &mut out);
     }
     for claim in &claims {
@@ -522,7 +536,7 @@ mod tests {
         assert_eq!(value["reported_balance_after"], "109");
         assert!(value["credited_delta"].is_null());
         assert_eq!(out.claims, [] as [Value; 0]);
-        assert!(out.statements.iter().any(|s| {
+        assert!(deposit_statements(&out, &[], &json!("tx")).iter().any(|s| {
             s["text"]
                 .as_str()
                 .unwrap()
@@ -666,6 +680,42 @@ mod tests {
         assert!(c["credited_delta"].is_null());
         assert!(c["reported_pool_id"].is_null());
         assert_eq!(out.claims, [] as [Value; 0]);
+    }
+
+    #[test]
+    fn deposit_reply_uses_only_the_matching_reconciled_anchor_and_preserves_unknowns() {
+        let out = read(Network::Base, &receipt(vec![incoming(0), stored(false)]));
+        let window = json!({"reconciled":true,"fee_owner":OWNER,"balance_asset":ASSET,
+            "events":[{"kind":"credit","transaction":"tx","log_index":2,"credited_delta":"5"}]});
+        let text = |windows: &[Value]| {
+            deposit_statements(&out, windows, &json!("tx"))[0]["text"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert!(text(std::slice::from_ref(&window)).contains("received credit is 5 base units"));
+        assert!(text(&[]).contains("Net received credit is unresolved"));
+        for field in ["reconciled", "fee_owner", "balance_asset"] {
+            let mut wrong = window.clone();
+            wrong[field] = json!("foreign");
+            assert!(text(&[wrong]).contains("Net received credit is unresolved"));
+        }
+        for field in ["kind", "transaction", "log_index", "credited_delta"] {
+            let mut wrong = window.clone();
+            wrong["events"][0][field] = Value::Null;
+            assert!(text(&[wrong]).contains("Net received credit is unresolved"));
+        }
+        let mut wrong = window.clone();
+        wrong["events"] = Value::Null;
+        assert!(text(&[wrong]).contains("Net received credit is unresolved"));
+        assert_eq!(
+            deposit_statements(
+                &read(Network::Base, &receipt(vec![stored(false)])),
+                &[window],
+                &json!("tx")
+            ),
+            [] as [Value; 0]
+        );
     }
 
     #[test]

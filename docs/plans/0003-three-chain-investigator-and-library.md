@@ -65,6 +65,17 @@ credit remains independently measured, and the inspected collection concerns
 a different token. Automatic historical pool attribution and deposit-specific
 short reply prioritization remain the next boundary ahead of the ledger.
 
+[Research 0074](../research/0074-clanker-historical-collection-context-and-replies.md)
+implements the next bounded slice: deposit ingress and independently reconciled
+credit lead replies, followed by qualified historical collection context for
+one reviewed Base LP locker. Seven shared-budget calls verify runtime,
+dependencies, registration, recipient and position linkage; block-end state
+and unresolved fee origin remain explicit. Live deposit/claim captures,
+retained rate-limit failures and offline reviews supersede the preceding
+paragraph's open reply-prioritization status. Per-token revenue attribution,
+event-time configuration, conversion/shared PositionManager analysis and owner
+acceptance remain open before a ledger projection.
+
 The credit slice is committed as `0bf05a3`. Named tests
 `credit_events_preserve_requested_cumulative_and_caller_supplied_roles`,
 `malformed_credit_events_and_incomplete_receipts_cannot_verify_payments` and

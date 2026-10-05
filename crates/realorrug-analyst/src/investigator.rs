@@ -828,6 +828,71 @@ mod tests {
     }
 
     #[test]
+    fn retained_collection_evidence_leads_the_public_reply_without_settling_token_revenue() {
+        struct Captured(Value);
+        impl Reader for Captured {
+            fn read(
+                &mut self,
+                _: &CaseKey,
+                read: &Read,
+                _: Option<&realorrug_onchain::cases::TimeWindow>,
+                budget: &mut Budget,
+                _: u64,
+            ) -> Result<Observation, String> {
+                budget.take_call().map_err(|e| format!("{e:?}"))?;
+                let row = self.0["reads"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|r| {
+                        r["read"]["tool"] == serde_json::to_value(read.tool).unwrap()
+                            && r["read"]["subject"] == read.subject
+                    })
+                    .ok_or("read absent")?;
+                if row["observation"].is_null() {
+                    return Err(row["error"].as_str().unwrap().into());
+                }
+                serde_json::from_value(row["observation"].clone()).map_err(|e| e.to_string())
+            }
+        }
+        let capture: Value = serde_json::from_str(include_str!(
+            "../../../docs/research/data/0074-base/base-clanker-historical-collection.capture.json"
+        ))
+        .unwrap();
+        let mut request: Investigation =
+            serde_json::from_value(capture["request"].clone()).unwrap();
+        request.question = "Someone says 95% of fees were stolen; inspect this deposit.".into();
+        let at = capture["at"].as_u64().unwrap();
+        let result = investigate(&request, &mut Captured(capture), None, None, at);
+        assert_eq!(result.level, "CantTell");
+        assert!(!result.complete);
+        assert!(
+            result
+                .reply
+                .contains("Clanker requested deposit 29478578528827")
+        );
+        assert!(
+            result
+                .reply
+                .contains("Independently reconciled received credit is 29478578528827")
+        );
+        assert!(result.reply.contains("which differs from case token"));
+        assert!(
+            result
+                .reply
+                .contains("using block-end configuration, not proof of this token's fee revenue")
+        );
+        assert!(!result.reply.contains("95%"));
+        assert!(!result.reply.contains("Successful transaction"));
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|f| f.text.contains("Successful transaction"))
+        );
+    }
+
+    #[test]
     fn historical_relationships_change_the_next_read_but_do_not_become_current_facts() {
         struct Related;
         impl Reader for Related {

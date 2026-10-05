@@ -61,8 +61,16 @@ depositor, escrow and amount, with complete coverage and no ambiguous reuse.
 Its proof remains separate from received credit, backing and token/pool origin;
 the credit's financial state is not upgraded. Live historical upstream
 qualification demonstrates a different-token collection context. The dossier
-retains this proof; deposit-specific short reply prioritization and automated
-historical collection attribution remain subsequent work before the ledger.
+retains this proof. [Research 0074](../research/0074-clanker-historical-collection-context-and-replies.md)
+now prioritizes deposit ingress and independently matched received credit in
+short replies. Seven additional shared-budget calls qualify one reviewed LP
+locker's historical runtime, dependencies, registration, pool, recipient slot
+and zero-liquidity position events, while preserving the outer checkpoint.
+The qualified context names its reported token and case-token relationship;
+block-end configuration does not establish event-time configuration, backing,
+conversion correctness or per-token revenue. Unsupported/multiple collections
+or deposits retain gaps. Historical fee-origin and shared PositionManager
+boundaries, representative owner review and the ledger remain subsequent work.
 
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook
