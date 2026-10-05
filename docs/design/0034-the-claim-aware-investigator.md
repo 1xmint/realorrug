@@ -72,6 +72,16 @@ conversion correctness or per-token revenue. Unsupported/multiple collections
 or deposits retain gaps. Historical fee-origin and shared PositionManager
 boundaries, representative owner review and the ledger remain subsequent work.
 
+[Research 0075](../research/0075-clanker-quiet-block-reward-configuration.md)
+adds an optional quiet-block reward-configuration check to that qualified
+collection. Parent/closing tuples and runtime must agree, headers must be
+parent-linked and rechecked, and the block-wide locker query must return only
+the exact submitted collection. Six additional shared-budget calls reserve the
+final checkpoint. Source/provider assumptions stay visible; any additional
+event or failed check retains unresolved timing without erasing collection
+evidence. Configuration-change reconstruction, fee preferences, registry
+history, conversion correctness and per-token revenue remain separate work.
+
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook
 uses its global escrow getter; the current Base hook resolves escrow per pool.

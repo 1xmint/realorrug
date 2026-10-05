@@ -856,7 +856,7 @@ mod tests {
             }
         }
         let capture: Value = serde_json::from_str(include_str!(
-            "../../../docs/research/data/0074-base/base-clanker-historical-collection.capture.json"
+            "../../../docs/research/data/0075-base/base-clanker-quiet-block-configuration.capture.json"
         ))
         .unwrap();
         let mut request: Investigation =
@@ -878,10 +878,11 @@ mod tests {
         );
         assert!(result.reply.contains("which differs from case token"));
         assert!(
-            result
-                .reply
-                .contains("using block-end configuration, not proof of this token's fee revenue")
+            result.reply.contains(
+                "reward-configuration stability under reviewed-source/provider assumptions"
+            )
         );
+        assert!(result.reply.contains("per-token revenue remain unresolved"));
         assert!(!result.reply.contains("95%"));
         assert!(!result.reply.contains("Successful transaction"));
         assert!(

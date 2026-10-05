@@ -76,6 +76,15 @@ paragraph's open reply-prioritization status. Per-token revenue attribution,
 event-time configuration, conversion/shared PositionManager analysis and owner
 acceptance remain open before a ledger projection.
 
+[Research 0075](../research/0075-clanker-quiet-block-reward-configuration.md)
+implements a bounded quiet-block reward-configuration stability check, with
+six shared-budget reads, exact anchor coverage and parent/closing rechecks.
+Live qualification, positive deposit/claim captures, failed provider runs and
+offline reviews retain source/provider assumptions and deadline gaps. This
+narrows the preceding timing gap for this one quiet-block scope; busy-block
+change histories, fee preferences, registry history, conversion/shared
+PositionManager/fee-origin proof and owner acceptance remain open.
+
 The credit slice is committed as `0bf05a3`. Named tests
 `credit_events_preserve_requested_cumulative_and_caller_supplied_roles`,
 `malformed_credit_events_and_incomplete_receipts_cannot_verify_payments` and

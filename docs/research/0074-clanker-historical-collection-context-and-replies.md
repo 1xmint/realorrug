@@ -7,6 +7,11 @@ reviews retained. Per-token revenue, backing, owner acceptance and ledger open.
 **Direction:** [VISION](../../VISION.md), [ROADMAP](../../ROADMAP.md).
 **Previous evidence:** [research 0073](0073-clanker-deposit-funding-provenance.md).
 
+**Subsequent implementation:** [research 0075](0075-clanker-quiet-block-reward-configuration.md)
+adds a separate quiet-block reward-configuration stability check. The earlier
+captures below retain block-end-only context; broader configuration and
+per-token revenue attribution remain unresolved.
+
 ## Caller and evidence boundary
 
 The existing successful canonical Base transaction reader can now qualify one

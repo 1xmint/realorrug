@@ -69,7 +69,7 @@ pub(crate) fn read(
     })]
 }
 
-fn header(value: &Value, block: u64) -> Result<String, String> {
+pub(super) fn header(value: &Value, block: u64) -> Result<String, String> {
     if hex_u64(value["number"].as_str().ok_or("header number absent")?)? != block {
         return Err("balance window header number disagrees".into());
     }

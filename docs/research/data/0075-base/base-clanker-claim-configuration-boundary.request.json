@@ -1,0 +1,15 @@
+{
+  "id": "base-clanker-claim-configuration-boundary",
+  "case": {
+    "chain": "base",
+    "address": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07"
+  },
+  "question": "Inspect the claim delivery and reconciled wallet balance. Lead with measured fee evidence while preserving unknown pool revenue attribution.",
+  "wallets": [],
+  "transactions": [
+    "0xfe327960aff5839e02ef4a52f8bccdb90e0dfa3bd4278ed3a8ec7361be829c09"
+  ],
+  "window": null,
+  "source": "https://base.blockscout.com/tx/0xfe327960aff5839e02ef4a52f8bccdb90e0dfa3bd4278ed3a8ec7361be829c09",
+  "thread": null
+}

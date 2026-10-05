@@ -264,4 +264,13 @@ event-time configuration, fee origin, conversion/shared PositionManager limits
 and representative owner-reviewed replies ahead of the ledger; qualify backing,
 native delivery and remaining custody powers, and measure launch costs. Wider
 windows and Flaunch balance/funding reconciliation remain open.
-No provider, pairing or financial allocation is selected.
+[Research 0075](docs/research/0075-clanker-quiet-block-reward-configuration.md)
+adds a separate reward-configuration stability result for a reviewed quiet
+block: parent/closing tuple and runtime agreement, exact collection anchor in
+the block's sole reported locker event, and canonical boundary rechecks. Six
+additional shared-budget calls preserve the final checkpoint. This supports
+stability under source/provider assumptions, without completing revenue,
+registration or conversion proof. Live captures retain rate-limit and deadline
+gaps. Next: configuration-change histories and fee preferences, then conversion
+and shared PositionManager/fee-origin qualification and owner-reviewed replies
+before the ledger. No provider, pairing or financial allocation is selected.

@@ -16,6 +16,8 @@ use serde_json::{Value, json};
 use sha3::{Digest, Keccak256};
 use std::collections::HashSet;
 
+mod configuration;
+
 const LOCKER: &str = "0x63d2dfea64b3433f4071a98665bcd7ca14d93496";
 const POOL_MANAGER: &str = "0x498581ff718922c3f8e6a244956af099b2652b2b";
 const POSITION_MANAGER: &str = "0x7c5f5a4bbd8fd63184577525326123b519429bdc";
@@ -176,11 +178,12 @@ fn qualify(
     if current["number"] != block || current["hash"] != canonical["hash"] {
         return Err("collection context checkpoint changed during the read".into());
     }
+    let configuration = configuration::read(rpc, receipt, canonical, &code, &data, budget);
     Ok(
         json!({"qualified":true,"verification_scope":"historical_collection_context",
         "lp_locker":LOCKER,"registry":FACTORY,"runtime_hash":hash,"collection_log_index":event.index,
         "reported_token":event.token,"case_token_matches":event.token==case.address,
-        "block":block,"block_hash":canonical["hash"],"context":context,"pool_attribution":"unresolved",
+        "block":block,"block_hash":canonical["hash"],"context":context,"reward_configuration":configuration,"pool_attribution":"unresolved",
         "gap":"single supported collection and deposit only; registration and recipients are block-end state, not proven at every intra-block event; collection context does not prove asset backing, conversion correctness or per-token revenue; shared PositionManager transient balances and other transaction actions require separate analysis"}),
     )
 }
@@ -284,7 +287,12 @@ fn positions(
 pub(crate) fn statements(contexts: &[Value], case: &CaseKey) -> Vec<Value> {
     contexts.iter().filter(|context| context["qualified"] == true).map(|context| {
         let relation = if context["case_token_matches"] == true {"matches"} else {"differs from"};
-        statement(format!("The reviewed LP locker reports a collection for token {}, which {relation} case token {}; historical registration and zero-liquidity position events agree with pool {} and the deposit recipient slot. This is collection context using block-end configuration, not proof of this token's fee revenue, backing or configuration at the instant of the deposit.", context["reported_token"].as_str().unwrap(), case.address, context["context"]["pool_id"].as_str().unwrap()))
+        let timing = if context["reward_configuration"]["qualified"] == true {
+            "Parent and closing reward tuples and locker runtimes agree, and the provider reports this collection as the block's only locker event. This supports reward-configuration stability under reviewed-source/provider assumptions; registry history, fee preferences, conversion correctness, backing and per-token revenue remain unresolved."
+        } else {
+            "This is collection context using block-end configuration, not proof of this token's fee revenue, backing or configuration at the instant of the deposit."
+        };
+        statement(format!("The reviewed LP locker reports a collection for token {}, which {relation} case token {}; historical registration and zero-liquidity position events agree with pool {} and the deposit recipient slot. {timing}", context["reported_token"].as_str().unwrap(), case.address, context["context"]["pool_id"].as_str().unwrap()))
     }).collect()
 }
 
@@ -301,7 +309,7 @@ mod tests {
         })
     }
 
-    fn fixture() -> (Value, FeeReceipts, Vec<String>, Vec<String>) {
+    pub(super) fn fixture() -> (Value, FeeReceipts, Vec<String>, Vec<String>) {
         let raw: Value = serde_json::from_str(include_str!(
             "../../../../docs/research/data/0071-base/clanker-credit-transaction.json"
         ))

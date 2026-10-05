@@ -1001,19 +1001,19 @@ pub(super) mod tests {
     #[test]
     fn retained_base_transactions_reconcile_credit_and_claim_windows_without_token_attribution() {
         let raw: Value = serde_json::from_str(include_str!(
-            "../../../docs/research/data/0074-base/clanker-collection-rpc.json"
+            "../../../docs/research/data/0075-base/clanker-configuration-rpc.json"
         ))
         .unwrap();
         for (text, credit) in [
             (
                 include_str!(
-                    "../../../docs/research/data/0074-base/base-clanker-historical-collection.capture.json"
+                    "../../../docs/research/data/0075-base/base-clanker-quiet-block-configuration.capture.json"
                 ),
                 true,
             ),
             (
                 include_str!(
-                    "../../../docs/research/data/0074-base/base-clanker-claim-prioritized.capture.json"
+                    "../../../docs/research/data/0075-base/base-clanker-claim-configuration-boundary.capture.json"
                 ),
                 false,
             ),
@@ -1044,6 +1044,12 @@ pub(super) mod tests {
                         "eth_call",
                         "eth_call",
                         "eth_getBlockByNumber",
+                        "eth_getBlockByNumber",
+                        "eth_getCode",
+                        "eth_call",
+                        "eth_getLogs",
+                        "eth_getBlockByNumber",
+                        "eth_getBlockByNumber",
                     ],
                 );
             }
@@ -1071,7 +1077,7 @@ pub(super) mod tests {
             )
             .unwrap();
             server.join().unwrap();
-            assert_eq!(budget.calls_made(), if credit { 21 } else { 14 });
+            assert_eq!(budget.calls_made(), if credit { 27 } else { 14 });
             assert_eq!(
                 serde_json::to_value(&result).unwrap(),
                 recorded["observation"]
@@ -1101,6 +1107,10 @@ pub(super) mod tests {
             assert_eq!(value["fee_claims"], json!([]));
             assert_eq!(value["fee_collection_contexts"][0]["qualified"], true);
             assert_eq!(
+                value["fee_collection_contexts"][0]["reward_configuration"]["qualified"],
+                true
+            );
+            assert_eq!(
                 value["fee_collection_contexts"][0]["case_token_matches"],
                 false
             );
@@ -1115,6 +1125,12 @@ pub(super) mod tests {
                     .as_str()
                     .unwrap()
                     .contains("differs from case token")
+            );
+            assert!(
+                value["statements"][1]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reviewed-source/provider assumptions")
             );
         } else {
             assert_eq!(window["events"][0]["claimed_amount"], "3440630801955");
