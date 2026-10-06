@@ -92,6 +92,10 @@ state when the optional preference read fails, and check public wording.
 Temporarily removing parent/closing preference agreement makes the named refusal
 regression fail by continuing past the changed-value boundary; restored checks
 pass.
+Initial mutation CI exposed an equivalent currency predicate: with exactly two
+currencies, counting one match and counting one non-match have the same result.
+The reader now checks distinctness and token membership explicitly. Inverting
+membership makes the admission regression fail; no mutation exclusion is added.
 The fresh 31-call transaction observation replays exactly from its trace.
 Older captures replay their recorded prefixes with capacity limited to 28 calls
 for credits and 15 for claims; these are replay constraints, not the original
@@ -99,6 +103,11 @@ captures' configured capacities. They contain no preference responses.
 
 Scoped strict Clippy, formatting and named documentation checks run locally;
 full suites and mutation testing run on [PR 210](https://github.com/1xmint/realorrug/pull/210).
+The initial site's audit also flagged existing `source-map-js` 1.2.1.
+The lockfile advances only that entry to the patched 1.2.2 release identified by
+[GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q).
+Local install, audit, type checking and build pass with the patch; CI retains
+the existing audit and frontend test gates.
 Next: representative live configuration-change evidence, preference-change
 histories and conversion/shared PositionManager boundaries, then fee origin and
 owner-reviewed replies before a treasury ledger. Wider windows, Flaunch

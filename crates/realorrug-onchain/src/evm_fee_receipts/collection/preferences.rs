@@ -55,7 +55,10 @@ fn qualify(
                 .map_err(|e| e.to_string())
         })
         .collect::<Result<_, _>>()?;
-    if currencies.len() != 2 || currencies.iter().filter(|a| a.as_str() == token).count() != 1 {
+    if currencies.len() != 2
+        || currencies[0] == currencies[1]
+        || !currencies.iter().any(|a| a == token)
+    {
         return Err("fee preference requires one token and one distinct paired currency".into());
     }
     let opening = configuration["opening_block"]
