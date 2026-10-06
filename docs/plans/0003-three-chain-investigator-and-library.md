@@ -94,6 +94,15 @@ busy-block qualification, same-transaction changes, fee preferences, registry
 history, conversions and per-token revenue remain open. CI distributes the
 complete mutation set over sixteen shards without relaxing limits.
 
+[Research 0077](../research/0077-clanker-single-slot-fee-preference-stability.md)
+adds selected-slot denomination stability within four additional shared-budget
+calls, preserving the final checkpoint. Supported reward histories must exclude
+preference changes; both getters and checkpoint headers must agree. A live
+quiet-block capture, exact replay, partial offline review and failed explorer
+discovery are retained. This resolves only that bounded preference scope, not
+unexamined slots, preference changes, swaps, backing or per-token revenue.
+Live busy-block qualification and owner acceptance remain open before the ledger.
+
 The credit slice is committed as `0bf05a3`. Named tests
 `credit_events_preserve_requested_cumulative_and_caller_supplied_roles`,
 `malformed_credit_events_and_incomplete_receipts_cannot_verify_payments` and

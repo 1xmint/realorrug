@@ -286,3 +286,14 @@ set over sixteen shards, preserving existing limits. Next: representative live
 history, fee preferences, conversion/shared PositionManager and fee origin,
 plus owner reply review before the ledger. Financial status and authority are
 unchanged.
+
+[Research 0077](docs/research/0077-clanker-single-slot-fee-preference-stability.md)
+adds an optional four-call denomination-preference check for the selected
+recipient slot, with a final checkpoint reserved. Parent/closing enum values and
+headers must agree under an already qualified reward history that excludes
+preference writes. A live quiet-block capture requests the paired asset, WETH;
+public wording distinguishes that preference from swap or revenue proof.
+Failed optional reads preserve collection evidence and financial state. The
+partial capture, deadline gap, exact replay and failed explorer discovery are
+retained. Next: live change histories, preference changes, conversion/shared
+PositionManager and fee origin, plus owner reply review before the ledger.

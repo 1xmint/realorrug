@@ -1026,74 +1026,134 @@ pub(super) mod tests {
                     "../../../docs/research/data/0076-base/clanker-reward-history-rpc.json"
                 ),
             ),
+            (
+                include_str!(
+                    "../../../docs/research/data/0077-base/base-clanker-single-slot-fee-preference.capture.json"
+                ),
+                true,
+                include_str!(
+                    "../../../docs/research/data/0077-base/clanker-fee-preference-rpc.json"
+                ),
+            ),
         ] {
-            let raw: Value = serde_json::from_str(trace).unwrap();
-            let capture: Value = serde_json::from_str(text).unwrap();
-            let request: crate::cases::Investigation =
-                serde_json::from_value(capture["request"].clone()).unwrap();
-            let recorded = &capture["reads"][0];
-            let selected: Read = serde_json::from_value(recorded["read"].clone()).unwrap();
-            let rows = raw["records"].as_array().unwrap();
-            let offset = rows
-                .iter()
-                .position(|row| {
-                    row["method"] == "eth_getTransactionByHash"
-                        && row["params"][0] == selected.subject
-                })
-                .unwrap()
-                - 2;
-            let mut methods = WINDOW_METHODS.to_vec();
-            if credit {
-                methods.splice(
-                    13..13,
-                    [
-                        "eth_getCode",
-                        "eth_call",
-                        "eth_call",
-                        "eth_call",
-                        "eth_call",
-                        "eth_call",
-                        "eth_getBlockByNumber",
-                        "eth_getBlockByNumber",
-                        "eth_getCode",
-                        "eth_call",
-                        "eth_getLogs",
-                        "eth_getBlockByNumber",
-                        "eth_getBlockByNumber",
-                    ],
-                );
-            }
-            let responses = methods
-                .iter()
-                .zip(&rows[offset..offset + methods.len()])
-                .map(|(&method, row)| {
-                    assert_eq!(row["method"], method);
-                    (
-                        method,
-                        row["response"]["result"].clone(),
-                        Some(row["params"].clone()),
-                    )
-                })
-                .collect();
-            let (rpc, server) = endpoint_checked(responses);
-            let mut budget = Budget::default();
-            let result = read(
-                &rpc,
-                &request.case,
-                &selected,
-                None,
-                &mut budget,
-                capture["at"].as_u64().unwrap(),
-            )
-            .unwrap();
-            server.join().unwrap();
-            assert_eq!(budget.calls_made(), if credit { 27 } else { 14 });
-            assert_eq!(
-                serde_json::to_value(&result).unwrap(),
-                recorded["observation"]
-            );
-            assert_fee_capture(&result.value, credit);
+            replay_fee_capture(text, credit, trace);
         }
+    }
+
+    fn replay_fee_capture(text: &str, credit: bool, trace: &str) {
+        let raw: Value = serde_json::from_str(trace).unwrap();
+        let capture: Value = serde_json::from_str(text).unwrap();
+        let request: crate::cases::Investigation =
+            serde_json::from_value(capture["request"].clone()).unwrap();
+        let recorded = &capture["reads"][0];
+        let preference =
+            recorded["observation"]["value"]["fee_collection_contexts"][0]["fee_preference"]
+                .is_object();
+        let selected: Read = serde_json::from_value(recorded["read"].clone()).unwrap();
+        let rows = raw["records"].as_array().unwrap();
+        let offset = rows
+            .iter()
+            .position(|row| {
+                row["method"] == "eth_getTransactionByHash" && row["params"][0] == selected.subject
+            })
+            .unwrap()
+            - 2;
+        let methods = fee_capture_methods(credit, preference);
+        let responses = methods
+            .iter()
+            .zip(&rows[offset..offset + methods.len()])
+            .map(|(&method, row)| {
+                assert_eq!(row["method"], method);
+                (
+                    method,
+                    row["response"]["result"].clone(),
+                    Some(row["params"].clone()),
+                )
+            })
+            .collect();
+        let (rpc, server) = endpoint_checked(responses);
+        // Historical captures have no preference responses. Replay their
+        // recorded transaction prefix with only the final checkpoint left.
+        let mut budget = if preference {
+            Budget::default()
+        } else {
+            Budget::with_compute_units(
+                if credit { 28 } else { 15 },
+                3,
+                std::time::Duration::from_secs(20),
+                2000,
+            )
+        };
+        let result = read(
+            &rpc,
+            &request.case,
+            &selected,
+            None,
+            &mut budget,
+            capture["at"].as_u64().unwrap(),
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            budget.calls_made(),
+            if preference {
+                31
+            } else if credit {
+                27
+            } else {
+                14
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            recorded["observation"]
+        );
+        assert_fee_capture(&result.value, credit);
+        if preference {
+            let selected = &result.value["fee_collection_contexts"][0]["fee_preference"];
+            assert_eq!(selected["qualified"], true);
+            assert_eq!(selected["mode"], "paired");
+            assert_eq!(
+                selected["requested_assets"],
+                json!(["0x4200000000000000000000000000000000000006"])
+            );
+        }
+    }
+
+    fn fee_capture_methods(credit: bool, preference: bool) -> Vec<&'static str> {
+        let mut methods = WINDOW_METHODS.to_vec();
+        if credit {
+            methods.splice(
+                13..13,
+                [
+                    "eth_getCode",
+                    "eth_call",
+                    "eth_call",
+                    "eth_call",
+                    "eth_call",
+                    "eth_call",
+                    "eth_getBlockByNumber",
+                    "eth_getBlockByNumber",
+                    "eth_getCode",
+                    "eth_call",
+                    "eth_getLogs",
+                    "eth_getBlockByNumber",
+                    "eth_getBlockByNumber",
+                ],
+            );
+        }
+        if preference {
+            methods.splice(
+                26..26,
+                [
+                    "eth_call",
+                    "eth_call",
+                    "eth_getBlockByNumber",
+                    "eth_getBlockByNumber",
+                ],
+            );
+        }
+        methods
     }
 
     fn assert_fee_capture(value: &Value, credit: bool) {

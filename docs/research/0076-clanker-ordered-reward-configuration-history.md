@@ -130,3 +130,9 @@ owner-reviewed replies ahead of the treasury ledger. Wider histories, Flaunch
 funding/balances, backing, native delivery, custody powers and measured launch
 costs remain open. Base is preferred; launchpad, pairing and economics remain
 unselected.
+
+Subsequent [research 0077](0077-clanker-single-slot-fee-preference-stability.md)
+adds single-slot preference stability for these supported histories when no
+preference writes are reported. It retains a live quiet-block positive; preference
+changes, representative live busy-block qualification and conversion proof remain
+open. The preceding capture and historical limitations are preserved.

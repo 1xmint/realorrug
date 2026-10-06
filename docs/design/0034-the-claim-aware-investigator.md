@@ -92,6 +92,15 @@ regression and bounded search failures are retained. A representative live busy
 block, fee preferences, registration history, conversions and revenue proof
 remain subsequent work.
 
+[Research 0077](../research/0077-clanker-single-slot-fee-preference-stability.md)
+now qualifies one recipient slot's requested denomination when the supported
+reward history excludes preference writes and parent/closing getters and headers
+agree. Four shared-budget calls reserve the final checkpoint. A live quiet-block
+capture requests WETH; failed optional reads preserve collection evidence.
+This narrows the preceding preference gap for that single stability scope.
+Preference changes, unexamined slots, conversions and revenue remain separate
+proof obligations; financial state is unchanged.
+
 Normal Flaunch fee observations also record pool currencies and a route snapshot
 after token/hook/NFT registration and current ownership agree. The legacy hook
 uses its global escrow getter; the current Base hook resolves escrow per pool.

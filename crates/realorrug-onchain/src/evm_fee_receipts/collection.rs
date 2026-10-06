@@ -17,6 +17,7 @@ use sha3::{Digest, Keccak256};
 use std::collections::HashSet;
 
 mod configuration;
+mod preferences;
 
 const LOCKER: &str = "0x63d2dfea64b3433f4071a98665bcd7ca14d93496";
 const POOL_MANAGER: &str = "0x498581ff718922c3f8e6a244956af099b2652b2b";
@@ -189,13 +190,16 @@ fn qualify(
     } else {
         "single supported collection and deposit only; registration and recipients are block-end state, not proven at every intra-block event; collection context does not prove asset backing, conversion correctness or per-token revenue; shared PositionManager transient balances and other transaction actions require separate analysis"
     };
-    Ok(
-        json!({"qualified":true,"verification_scope":"historical_collection_context",
+    let preference = preferences::read(rpc, &configuration, &event.token, &context, budget);
+    let mut result = json!({"qualified":true,"verification_scope":"historical_collection_context",
         "lp_locker":LOCKER,"registry":FACTORY,"runtime_hash":hash,"collection_log_index":event.index,
         "reported_token":event.token,"case_token_matches":event.token==case.address,
         "block":block,"block_hash":canonical["hash"],"context":context,"reward_configuration":configuration,"pool_attribution":"unresolved",
-        "gap":gap}),
-    )
+        "gap":gap});
+    if let Some(preference) = preference {
+        result["fee_preference"] = preference;
+    }
+    Ok(result)
 }
 
 fn link(
@@ -304,7 +308,18 @@ pub(crate) fn statements(contexts: &[Value], case: &CaseKey) -> Vec<Value> {
         } else {
             "This is collection context using block-end configuration, not proof of this token's fee revenue, backing or configuration at the instant of the deposit."
         };
-        statement(format!("The reviewed LP locker reports a collection for token {}, which {relation} case token {}; historical registration and zero-liquidity position events agree with pool {} and the deposit recipient slot. {timing}", context["reported_token"].as_str().unwrap(), case.address, context["context"]["pool_id"].as_str().unwrap()))
+        let preference = if context["fee_preference"]["qualified"] == true {
+            let mode = match context["fee_preference"]["mode"].as_str() {
+                Some("both") => "both pool assets",
+                Some("paired") => "the paired pool asset",
+                _ => "the collection token",
+            };
+            format!(" The selected recipient slot requests fees in {mode}; parent/closing preference getters agree under the same source/provider assumptions. This is a denomination preference, not proof of a realized swap, conversion correctness or revenue; unexamined slots remain unresolved.")
+        } else {String::new()};
+        let timing = if context["fee_preference"]["qualified"] == true {
+            timing.replace("fee preferences, ", "")
+        } else {timing.to_owned()};
+        statement(format!("The reviewed LP locker reports a collection for token {}, which {relation} case token {}; historical registration and zero-liquidity position events agree with pool {} and the deposit recipient slot. {timing}{preference}", context["reported_token"].as_str().unwrap(), case.address, context["context"]["pool_id"].as_str().unwrap()))
     }).collect()
 }
 
