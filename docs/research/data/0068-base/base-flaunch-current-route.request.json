@@ -1,0 +1,13 @@
+{
+  "case": {
+    "address": "0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149",
+    "chain": "base"
+  },
+  "thread": null,
+  "source": "https://github.com/flayerlabs/flaunchgg-contracts/tree/77d7d23cd7c8c947e7f63d2c2da95cc766c093ea",
+  "window": null,
+  "wallets": [],
+  "id": "base-flaunch-current-route",
+  "question": "Inspect configured Flaunch fees, revenue ownership, escrow and bid-wall controls. Distinguish quoted allocation from beneficiary receipts, buybacks, supply burns and permanent liquidity.",
+  "transactions": []
+}

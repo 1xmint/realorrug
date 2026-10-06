@@ -533,7 +533,10 @@ mod tests {
             .collect();
         assert_eq!(order, ["early-high", "late-high", "low"]);
         assert_eq!(ranking.winner().expect("a winner").entry.summoner, "b");
-        assert!(ranking.excluded.is_empty());
+        assert_eq!(
+            ranking.excluded,
+            [] as [(crate::score::Entry, crate::score::Excluded); 0]
+        );
     }
 
     #[test]
@@ -685,7 +688,7 @@ mod tests {
     fn a_week_with_nothing_counted_has_no_winner_rather_than_a_default_one() {
         let ranking = rank(WEEK, &[], &BTreeMap::new(), &Rules::published(["radar"]));
         assert!(ranking.winner().is_none());
-        assert!(ranking.ranked.is_empty());
+        assert_eq!(ranking.ranked, [] as [crate::score::Ranked; 0]);
     }
 
     #[test]

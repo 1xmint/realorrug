@@ -105,6 +105,7 @@ pub struct Budget {
     cu_spent: u32,
     retries: u32,
     paused: Duration,
+    model_wait: Duration,
 }
 
 impl Default for Budget {
@@ -134,6 +135,7 @@ impl Budget {
             cu_spent: 0,
             retries: 0,
             paused: Duration::ZERO,
+            model_wait: Duration::ZERO,
         }
     }
 
@@ -180,7 +182,7 @@ impl Budget {
     ///
     /// [`Exhausted`] when the deadline has passed or no call allowance remains.
     pub fn take_call(&mut self) -> Result<(), Exhausted> {
-        if self.started.elapsed() >= self.deadline {
+        if self.elapsed() >= self.deadline {
             return Err(Exhausted::Deadline);
         }
         if self.calls_left == 0 {
@@ -294,10 +296,25 @@ impl Budget {
         self.calls_left
     }
 
+    /// Remaining active read time, excluding explicitly paused model work.
+    #[must_use]
+    pub fn time_left(&self) -> Duration {
+        self.deadline.saturating_sub(self.elapsed())
+    }
+
     /// How long the read has been running.
     #[must_use]
     pub fn elapsed(&self) -> Duration {
-        self.started.elapsed()
+        self.started.elapsed().saturating_sub(self.model_wait)
+    }
+
+    /// Model deliberation uses the outer request deadline, not the active RPC
+    /// deadline. Call/page/CU allowances are never reset while waiting.
+    pub fn without_read_time<T>(&mut self, wait: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        let result = wait();
+        self.model_wait += started.elapsed();
+        result
     }
 
     /// Records one HTTP 429 retry and the time slept waiting for it, so a
@@ -376,6 +393,24 @@ impl std::fmt::Display for Count {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn model_wait_is_accumulated_without_resetting_active_read_allowances() {
+        let mut budget = Budget::new(5, 3, Duration::from_secs(20));
+        budget.take_call().unwrap();
+        budget.take_cu(10).unwrap();
+        let returned = budget.without_read_time(|| {
+            std::thread::sleep(Duration::from_millis(2));
+            42
+        });
+        assert_eq!(returned, 42);
+        let first = budget.model_wait;
+        assert!(first >= Duration::from_millis(2));
+        budget.without_read_time(|| std::thread::sleep(Duration::from_millis(2)));
+        assert!(budget.model_wait >= first + Duration::from_millis(2));
+        assert_eq!(budget.calls_left(), 4);
+        assert_eq!(budget.calls_made(), 1);
+        assert_eq!(budget.cu_spent(), 10);
+    }
 
     #[test]
     fn a_budget_stops_at_its_call_allowance() {

@@ -925,7 +925,10 @@ pub(crate) mod tests {
         sheet.signals.push(Signal::LaunchBlockInStrongestBand);
         let headline = headline(&sheet).expect("the launch block is still about this coin");
         assert!(headline.contains("launch block"), "{headline}");
-        assert!(crate::fidelity::check(&headline, &sheet.authorised()).is_empty());
+        assert_eq!(
+            crate::fidelity::check(&headline, &sheet.authorised()),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]
@@ -1133,7 +1136,10 @@ pub(crate) mod tests {
     #[test]
     fn the_template_passes_the_forbidden_check() {
         let text = template(&sheet());
-        assert!(crate::forbidden::check(&text).is_empty());
+        assert_eq!(
+            crate::forbidden::check(&text),
+            [] as [crate::forbidden::Violation; 0]
+        );
     }
 
     #[test]
@@ -1187,8 +1193,14 @@ pub(crate) mod tests {
         };
         let text = template(&empty);
         assert!(text.contains("not known"));
-        assert!(crate::forbidden::check(&text).is_empty());
-        assert!(crate::fidelity::check(&text, &empty.authorised()).is_empty());
+        assert_eq!(
+            crate::forbidden::check(&text),
+            [] as [crate::forbidden::Violation; 0]
+        );
+        assert_eq!(
+            crate::fidelity::check(&text, &empty.authorised()),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     /// A sheet carrying only signals and unknowns, for the level-function

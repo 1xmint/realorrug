@@ -714,7 +714,10 @@ mod tests {
         let reply = write(&sheet(), Some(&Says(good)));
         assert!(!reply.is_template(), "{:?}", reply.fellback);
         assert_eq!(reply.text, good);
-        assert!(fidelity::check(&reply.text, &sheet().authorised()).is_empty());
+        assert_eq!(
+            fidelity::check(&reply.text, &sheet().authorised()),
+            [] as [crate::fidelity::Fabricated; 0]
+        );
     }
 
     #[test]

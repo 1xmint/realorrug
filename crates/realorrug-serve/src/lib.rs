@@ -12,6 +12,7 @@ pub mod card;
 pub mod check;
 pub mod facts;
 mod forecast;
+mod library;
 pub mod public;
 mod record;
 
@@ -62,6 +63,7 @@ pub fn app() -> Router {
 /// them. One function so the tests drive the same layering the server runs.
 fn session_routes(auth: Arc<auth::AuthState>) -> Router {
     auth::router(Arc::clone(&auth))
+        .merge(library::router(Arc::clone(&auth)))
         .merge(forecast::router(Arc::clone(&auth)))
         .layer(axum::middleware::from_fn_with_state(auth, auth::cors))
 }

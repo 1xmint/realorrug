@@ -648,7 +648,7 @@ mod tests {
     #[test]
     fn an_empty_page_keeps_the_cursor_and_a_refusal_is_not_an_empty_page() {
         let page = parse_updates(r#"{"ok":true,"result":[]}"#).expect("empty");
-        assert!(page.mentions.is_empty());
+        assert_eq!(page.mentions, [] as [crate::x::Mention; 0]);
         assert_eq!(page.next_offset, None);
 
         let refused =

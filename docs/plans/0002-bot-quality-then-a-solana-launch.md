@@ -2,7 +2,17 @@
 # Plan 0002 — bot quality, then a Solana launch, then a research community
 
 **Date:** 2026-09-21
-**Status:** open. Replaces the Robinhood launch path of
+**Status:** superseded as delivery direction on 2026-09-30 by
+[ROADMAP.md](../../ROADMAP.md), derived from [VISION.md](../../VISION.md) and
+recorded in [ADR 0043](../adr/0043-the-public-library-and-compounding-intelligence.md).
+The phase details and decision log below remain historical evidence.
+Forecasts/reputation are no longer launch prerequisites; the public Library
+and claim-specific investigator are. Economic proposals and startup funding
+follow the new direction, while current runtime and signing controls remain.
+
+## Historical baseline
+
+This plan replaced the Robinhood launch path of
 [plan 0001](0001-after-the-split.md). Reasoning in
 [design 0029](../design/0029-bot-quality-then-a-solana-launch.md); decisions in
 ADRs 0037, 0038 and 0039. Phase 1 and phase 2's engineering are done (main at

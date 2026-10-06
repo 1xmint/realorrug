@@ -311,7 +311,10 @@ mod tests {
         ];
         let five = pick(&launches, 0, 100);
         assert_eq!(five.picks.len(), 2);
-        assert!(five.not_picked.is_empty());
+        assert_eq!(
+            five.not_picked,
+            [] as [(crate::daily::Launch, crate::daily::NotPicked); 0]
+        );
     }
 
     #[test]

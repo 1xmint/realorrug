@@ -138,8 +138,8 @@ mutants base="origin/main" shard="":
     # a check can have because it looks identical to a real finding.
     #
     # `--shard k/n` splits the *set*, so every mutant is still tested; the work
-    # is spread across parallel jobs rather than dropped. `--jobs 2` inside each
-    # shard rather than the runner's four cores: each job builds the workspace,
+    # is spread across parallel jobs rather than dropped. `--jobs 1` inside each
+    # shard limits memory pressure: each job builds the workspace,
     # so the limit is memory, and a job that OOMs intermittently fails in a way
     # that looks like a finding too.
     shard_arg=""

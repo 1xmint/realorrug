@@ -359,7 +359,7 @@ fn the_happy_path_claims_then_pays_exactly_what_the_escrow_paid_and_records_both
     assert_eq!((claim.tx.nonce, transfer.tx.nonce), (0, 1));
     assert_eq!(transfer.tx.to, RECIPIENT);
     assert_eq!(transfer.tx.value, PRIZE);
-    assert!(transfer.tx.data.is_empty());
+    assert_eq!(transfer.tx.data, [] as [u8; 0]);
     assert_eq!(transfer.tx.gas_limit, 26_250);
 
     assert_eq!(

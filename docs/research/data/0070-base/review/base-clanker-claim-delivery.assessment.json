@@ -1,0 +1,236 @@
+{
+  "request_id": "base-clanker-claim-delivery",
+  "level": "CantTell",
+  "reply": "The allegation is not settled by these bounded reads. Successful transaction 0xfe327960aff5839e02ef4a52f8bccdb90e0dfa3bd4278ed3a8ec7361be829c09 from 0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa to 0xf3622742b1e446d92e45e22923ef11c2fcd55d68 has native value 0x0 (hex wei). clanker_fee_locker claim event reports 3440630801955 base units of asset 0x4200000000000000000000000000000000000006 for recipient 0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa; delivery check: one matching ERC-20 Transfer event from the escrow. This is wallet-level evidence with individual-token revenue attribution unresolved. Clanker v4 configured LP-reward share: 10000 basis points out of 10000 to 0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8; reward administrator 0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8. Registered LP locker 0xffa37784d619f228d8b379d287a4d7282e500762 reports 5 position(s); this does not establish permanent liquidity. Contract code was observed at 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07. totalSupply() returned 100000000000000000000000000000 base units. Unresolved: only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification",
+  "observations": [
+    {
+      "id": "ab89d5bda25a390f230cdc0dc1a5d517dacaf4232eab1c74a649fd8b2deb87dd",
+      "kind": "transaction",
+      "source": "base:Transaction:0xfe327960aff5839e02ef4a52f8bccdb90e0dfa3bd4278ed3a8ec7361be829c09",
+      "at": 1791077561,
+      "read_point": "base block 52144108 0xaef6bdec0e4acd038c65fc470bd8014272030274075879c71704b4d65f329d22",
+      "value": {
+        "fee_claim_receipt_coverage_complete": true,
+        "fee_claims": [
+          {
+            "amount": "3440630801955",
+            "balance_asset": "0x4200000000000000000000000000000000000006",
+            "delivered_asset": "0x4200000000000000000000000000000000000006",
+            "delivery": {
+              "asset": "0x4200000000000000000000000000000000000006",
+              "log_index": 325,
+              "transfer": {
+                "amount": "3440630801955",
+                "from": "0xf3622742b1e446d92e45e22923ef11c2fcd55d68",
+                "to": "0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa",
+                "transaction": "0xfe327960aff5839e02ef4a52f8bccdb90e0dfa3bd4278ed3a8ec7361be829c09"
+              }
+            },
+            "escrow": "0xf3622742b1e446d92e45e22923ef11c2fcd55d68",
+            "fee_owner": "0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa",
+            "financial_state": "verified",
+            "gap": null,
+            "log_index": 326,
+            "pool_attribution": "unresolved",
+            "protocol": "clanker_fee_locker",
+            "recipient": "0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa",
+            "verification_scope": "receipt_event_match"
+          }
+        ],
+        "receipt_logs_present": true,
+        "receipt_logs_truncated": false,
+        "related": [
+          "0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa",
+          "0xf3622742b1e446d92e45e22923ef11c2fcd55d68",
+          "0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa",
+          "0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa",
+          "0x4200000000000000000000000000000000000006",
+          "0x4200000000000000000000000000000000000006"
+        ],
+        "statements": [
+          {
+            "text": "Successful transaction 0xfe327960aff5839e02ef4a52f8bccdb90e0dfa3bd4278ed3a8ec7361be829c09 from 0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa to 0xf3622742b1e446d92e45e22923ef11c2fcd55d68 has native value 0x0 (hex wei)."
+          },
+          {
+            "text": "clanker_fee_locker claim event reports 3440630801955 base units of asset 0x4200000000000000000000000000000000000006 for recipient 0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa; delivery check: one matching ERC-20 Transfer event from the escrow. This is wallet-level evidence with individual-token revenue attribution unresolved."
+          }
+        ],
+        "transaction_block": "0x31b94c2",
+        "transaction_block_hash": "0x74b622c72ae5f9abb3ad5414d680a9b1aeb95089ce749cab849cad87a395a91e",
+        "transfers": []
+      },
+      "gap": "only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification",
+      "version": "investigation-read-v1"
+    },
+    {
+      "id": "80df8f217ff66833f7600b5763351e4fd0ee4832b3cfafe7cf207ec9cd501cc2",
+      "kind": "fees",
+      "source": "base:Fees:0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+      "at": 1791077561,
+      "read_point": "base block 52144108 0xaef6bdec0e4acd038c65fc470bd8014272030274075879c71704b4d65f329d22",
+      "value": {
+        "configuration": {
+          "num_positions": "5",
+          "position_id": "3104096",
+          "shares": [
+            {
+              "admin": "0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8",
+              "bps": "10000",
+              "recipient": "0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8"
+            }
+          ]
+        },
+        "currencies": [
+          "0x4200000000000000000000000000000000000006",
+          "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07"
+        ],
+        "locker": "0xffa37784d619f228d8b379d287a4d7282e500762",
+        "protocol": "clanker_v4_0",
+        "registry": "0xe85a59c628f7d27878aceb4bf3b35733630083a9",
+        "related": [
+          "0xffa37784d619f228d8b379d287a4d7282e500762",
+          "0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc",
+          "0x4200000000000000000000000000000000000006",
+          "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+          "0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8"
+        ],
+        "statements": [
+          {
+            "text": "Clanker v4 configured LP-reward share: 10000 basis points out of 10000 to 0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8; reward administrator 0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8."
+          },
+          {
+            "text": "Registered LP locker 0xffa37784d619f228d8b379d287a4d7282e500762 reports 5 position(s); this does not establish permanent liquidity."
+          },
+          {
+            "text": "Registered Clanker reward pool currencies are 0x4200000000000000000000000000000000000006 and 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07; asset denomination, realized fees and conversion preferences require separate checks."
+          }
+        ]
+      },
+      "gap": "configured LP-reward shares exclude factory/other fee bases; paid receipts, administrator changes, extensions, current hook fees and position withdrawal rights remain separate checks",
+      "version": "investigation-read-v1"
+    },
+    {
+      "id": "975041faa5712919cfd5a35c359c1380f9d6e69d3c123d23d0f6f87dc23511b6",
+      "kind": "token",
+      "source": "base:Token:0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+      "at": 1791077561,
+      "read_point": "base block 52144109 0x44a8ab426d1b9ad2dd73602dd1b1f9ef12e0871521765bd7619f55a94dd1df36",
+      "value": {
+        "code_hash": "186d2e44c74fdbf535221cf1e183be881e84c5db41ec66198e4caa9ee7754cad",
+        "related": [],
+        "statements": [
+          {
+            "text": "Contract code was observed at 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07."
+          },
+          {
+            "text": "totalSupply() returned 100000000000000000000000000000 base units."
+          },
+          {
+            "text": "decimals() returned 18."
+          }
+        ]
+      },
+      "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+      "version": "investigation-read-v1"
+    },
+    {
+      "id": "f9a223315ce86ba00bcaa7110624c11852cf56312cdb40542a9525e3fea6d385",
+      "kind": "liquidity",
+      "source": "base:Liquidity:0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+      "at": 1791077561,
+      "read_point": null,
+      "value": {
+        "related": [],
+        "statements": []
+      },
+      "gap": "no supported Uniswap v2/v3 WETH pool identified; custom protocols and quote assets remain unsupported",
+      "version": "investigation-read-v1"
+    }
+  ],
+  "findings": [
+    {
+      "kind": "transaction",
+      "text": "Successful transaction 0xfe327960aff5839e02ef4a52f8bccdb90e0dfa3bd4278ed3a8ec7361be829c09 from 0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa to 0xf3622742b1e446d92e45e22923ef11c2fcd55d68 has native value 0x0 (hex wei).",
+      "evidence": [
+        "ab89d5bda25a390f230cdc0dc1a5d517dacaf4232eab1c74a649fd8b2deb87dd"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "transaction",
+      "text": "clanker_fee_locker claim event reports 3440630801955 base units of asset 0x4200000000000000000000000000000000000006 for recipient 0xce165ce10c2f1bac8bc6b1e4009e87b84ddd8eaa; delivery check: one matching ERC-20 Transfer event from the escrow. This is wallet-level evidence with individual-token revenue attribution unresolved.",
+      "evidence": [
+        "ab89d5bda25a390f230cdc0dc1a5d517dacaf4232eab1c74a649fd8b2deb87dd"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "fees",
+      "text": "Clanker v4 configured LP-reward share: 10000 basis points out of 10000 to 0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8; reward administrator 0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8.",
+      "evidence": [
+        "80df8f217ff66833f7600b5763351e4fd0ee4832b3cfafe7cf207ec9cd501cc2"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "fees",
+      "text": "Registered LP locker 0xffa37784d619f228d8b379d287a4d7282e500762 reports 5 position(s); this does not establish permanent liquidity.",
+      "evidence": [
+        "80df8f217ff66833f7600b5763351e4fd0ee4832b3cfafe7cf207ec9cd501cc2"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "fees",
+      "text": "Registered Clanker reward pool currencies are 0x4200000000000000000000000000000000000006 and 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07; asset denomination, realized fees and conversion preferences require separate checks.",
+      "evidence": [
+        "80df8f217ff66833f7600b5763351e4fd0ee4832b3cfafe7cf207ec9cd501cc2"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "token",
+      "text": "Contract code was observed at 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07.",
+      "evidence": [
+        "975041faa5712919cfd5a35c359c1380f9d6e69d3c123d23d0f6f87dc23511b6"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "token",
+      "text": "totalSupply() returned 100000000000000000000000000000 base units.",
+      "evidence": [
+        "975041faa5712919cfd5a35c359c1380f9d6e69d3c123d23d0f6f87dc23511b6"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    },
+    {
+      "kind": "token",
+      "text": "decimals() returned 18.",
+      "evidence": [
+        "975041faa5712919cfd5a35c359c1380f9d6e69d3c123d23d0f6f87dc23511b6"
+      ],
+      "counterevidence": [],
+      "status": "measured"
+    }
+  ],
+  "reused": [],
+  "decisions": [
+    "Transaction 0xfe327960aff5839e02ef4a52f8bccdb90e0dfa3bd4278ed3a8ec7361be829c09: inspect the supplied transaction before broader reads",
+    "Fees 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07: test the allegation against fee configuration; distinguish configured shares from actual payments",
+    "Token 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07: validate the target and inspect available controls",
+    "Liquidity 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07: inspect supported liquidity without treating graduation as a drain",
+    "planning unavailable: no captured model selection; deterministic fallback",
+    "writer unavailable: no captured model selection; deterministic fallback"
+  ],
+  "rpc_calls": 4,
+  "elapsed_ms": 2,
+  "complete": false
+}

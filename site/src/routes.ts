@@ -68,6 +68,7 @@ export const MOVED = [
 
 export const ROUTES = [
   { path: "/", label: "Home", inNav: true },
+  { path: "/library", label: "Library", inNav: true },
   // The live contest and its prize pool are gone (ADR 0037, ADR 0038). What
   // is left at the same address is the historical record: the weeks that
   // closed while the prize ran, kept rather than deleted.

@@ -1,0 +1,111 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790874698,
+  "request": {
+    "id": "solana-pump-live",
+    "case": {
+      "chain": "solana",
+      "address": "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump"
+    },
+    "question": "Inspect fee routing, authorities, liquidity and gaps. A configured recipient does not prove a payment or common control.",
+    "wallets": [
+      "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump"
+    ],
+    "transactions": [],
+    "window": null,
+    "source": "operator read-only qualification capture",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "fees",
+        "subject": "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump",
+        "why": "test the allegation against fee configuration; distinguish configured shares from actual payments"
+      },
+      "observation": null,
+      "error": "curve owner mismatch"
+    },
+    {
+      "read": {
+        "tool": "token",
+        "subject": "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": {
+        "id": "cc6f9ec24f9d83c9fd5b8ae8ece103eb988fffc910a6015111595051b58d0394",
+        "kind": "token",
+        "source": "solana:Token:JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump",
+        "at": 1790874698,
+        "read_point": "452350908",
+        "value": {
+          "related": [],
+          "statements": [
+            {
+              "text": "Account JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump is owned by TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb."
+            },
+            {
+              "text": "Mint authority: revoked. Freeze authority: revoked."
+            }
+          ]
+        },
+        "gap": "Token-2022 extension controls require separate decoding",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "history",
+        "subject": "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump",
+        "why": "inspect supplied wallet leads within bounded history"
+      },
+      "observation": {
+        "id": "5209542a0479cb400cac7d9da15de6038bf0c41127ac474e2d8827f865dc951c",
+        "kind": "history",
+        "source": "solana:History:JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump",
+        "at": 1790874698,
+        "read_point": null,
+        "value": {
+          "related": [],
+          "signatures": [
+            "KhmtXbMZiSaQTPM55sRvWnne7fK5LTjHSAzty44qLYFMj4rNHrrMD9VjmJWzndCrJzWiZuutdVtjSpV47aBWuqH",
+            "2pxhQfZ3ekYYZD5QDThSkhqjZu4rtnibdBYifgFsn3ZwLpafLTSRiuzqrNnqfQh7h99KAGVx5kNaW58n3NwDqcNY",
+            "3M4vz4vfAfCC3NYQR33oxFYtLMMcBdU1ZunxaiLyqF9Sb6fV1gWzRCYwf8bX6nMhYg8tUovGTsZfTbrG9wMF5f69",
+            "5B5Nuy5i8wNtgbmQfQFCrFoVkLq1jPMvoEKjyyemdMHhc3kG1xdgSQVbZgF3zBbEBa7N4Ud3n2vw7RrVueD7eis9",
+            "56KJ3mZ8mCLhDCgQGmE5T5KoUncVqfktgvRZct4kDYf7hD5gCsNUJwrp6xHy3QvP2HP2tM7XLDm83MvpTimZtEZv",
+            "4aZ8DKVXC6BcmMh5Uskr9dWuCb9bgZrxTdPpsWt3ZrMbBvUZVFS8ErDsqtys4zV3EAJkQWeGAZG27vXaPbkU8r9o",
+            "2YShgvMPy5Z7QZJtcMprSR4DXrCZbiRUdmnvWeBj7594CtsRCKqNiomRo266nfBbTXvyv4VrCScZ7fJK9UttgKom",
+            "2AErfpB7bUADJAMnUbh6U6jgBuHgesNbPa1jhLZTXXFUPmiZ1YkUkSqh6gLHE9g9xjLjURGa9GD2kZxaZAvvxS25",
+            "2wgby22TUXg2iAsBWYTqMLoH2gn6VtMoe7pNq7MkgfDGG93jcqWLSw2T6CYriZc7h1NWzWfZSmeMJ8H7aA9c5xbA",
+            "2q5mWxHvabZ4tQaVtpNKLLhtFRLLaKyqGsVU9ndGJ1NkapmGan1Rmm84LjzPsTcPXoL1qzE9SjtrzXdGJij3oN4L",
+            "542xE7zYDMuPH4H5v3jFkMzGZM57MvVSfzst7Hv64HshswaVomVuGKfKoYuuZy7EWeirJtapihFzEKZHQoCW9t9M",
+            "5cA9Axz9gy4uNUhRGhePVJSpxiTSiU7J1QTELWgTbzSYKRLuGMYgR2JXUBZJKCrtMB4i1cL9xneju8kRTxMNW2Hr",
+            "2DVHtaJwBHTynpWvya12E5e67yyKJUq63drYSMo4GtvkLAixDNHCZzVtZWHD4GnkNU2XtwpDhX8sgeMzbU8K74Le",
+            "3tAVrgkAWM5EfAip8Sk5jLZ17RoRH3wcTdmJxNjzmZti1aBPUmNdiZTziiPu1GhSj3WWmTr8SsTUPvDZNFp7sQ6K",
+            "5Ky21qHLAtVRpNfcj6KPfwkpPeWRauhezaYpqXAEqKYDJ6ZCHYRjQLEQGSn6zQRK46r4YsNSbjmGKYzRU4fWZ4Wx",
+            "y3YzqXhveJdr77gzUvGqeJo2EkoBvY8czR89AXHbxxuZUngPmZBKwfEjTxpPqz5gjYjffurWNUkdft2feAAs6r1"
+          ],
+          "statements": [
+            {
+              "text": "A bounded recent signature page was read; it is not the wallet's complete history."
+            }
+          ]
+        },
+        "gap": "history is limited to a recent page and retained transaction leads; missing times cannot establish interval coverage",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "curve program identity mismatch"
+    }
+  ],
+  "plans": []
+}

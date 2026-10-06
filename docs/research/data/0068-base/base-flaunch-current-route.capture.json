@@ -1,0 +1,137 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790974693,
+  "request": {
+    "id": "base-flaunch-current-route",
+    "case": {
+      "chain": "base",
+      "address": "0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149"
+    },
+    "question": "Inspect configured Flaunch fees, revenue ownership, escrow and bid-wall controls. Distinguish quoted allocation from beneficiary receipts, buybacks, supply burns and permanent liquidity.",
+    "wallets": [],
+    "transactions": [],
+    "window": null,
+    "source": "https://github.com/flayerlabs/flaunchgg-contracts/tree/77d7d23cd7c8c947e7f63d2c2da95cc766c093ea",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "fees",
+        "subject": "0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149",
+        "why": "test the allegation against fee configuration; distinguish configured shares from actual payments"
+      },
+      "observation": {
+        "id": "5762ddaa92ac02dd45554e7f756f3791ac3eeaa76ec567832382770e1d84b446",
+        "kind": "fees",
+        "source": "base:Fees:0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149",
+        "at": 1790974693,
+        "read_point": "base block 52092673 0x41405d4bfa5ee59b1583b79014ea6e05e835a14bbc8ccd78bced46804f639e4a",
+        "value": {
+          "currencies": [
+            "0xb2000000000000000000008501b13360000cb2ec",
+            "0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149"
+          ],
+          "distributed_events": [],
+          "fee_distribution_words": [
+            "0x0000000000000000000000000000000000000000000000000000000000000064",
+            "0x00000000000000000000000000000000000000000000000000000000000003e8",
+            "0x00000000000000000000000000000000000000000000000000000000000003e8",
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+          ],
+          "hook": "0x588c683ecc450f8b2aadb13d7f63792b840425dc",
+          "pool_id": "0x2f7fb39fff8d1ec013557c5663c57e6dcd32af3c6c4a2ea680e4f94883a264bd",
+          "protocol": "flaunch_normal",
+          "quoted_split": [
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "0x0000000000000000000000000000000000000000000000000000000000002328",
+            "0x00000000000000000000000000000000000000000000000000000000000003e8"
+          ],
+          "receipt_gap": null,
+          "related": [
+            "0x588c683ecc450f8b2aadb13d7f63792b840425dc",
+            "0x8aa48dfe58f84d85d41706543432e5d8511e90da",
+            "0xb8a70b4d1547bf6193bd67a73f4f98ea9fd0a973",
+            "0xdbc2f399bbac8cd766f20c9b917a9a6ecad5bc4b",
+            "0xb2000000000000000000008501b13360000cb2ec",
+            "0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149",
+            "0x475a09618bfd00fa4cb03b8504e95b62075e6f7d",
+            "0x17fbf54d6d15ebff82eee77e616f701952d08bb4",
+            "0x0dae90b70f62ce3b1d5278f4763bd1f595d6a687"
+          ],
+          "route": {
+            "bid_wall": "0x0dae90b70f62ce3b1d5278f4763bd1f595d6a687",
+            "bid_wall_enabled": true,
+            "fee_escrow": "0x17fbf54d6d15ebff82eee77e616f701952d08bb4",
+            "nft": "0x475a09618bfd00fa4cb03b8504e95b62075e6f7d",
+            "owner": "0x8aa48dfe58f84d85d41706543432e5d8511e90da",
+            "token_id": "2010"
+          },
+          "route_gap": null,
+          "statements": [
+            {
+              "text": "Flaunch feeSplit() on a 10000-unit post-referral fee input quotes 0 bid-wall units, 9000 creator units and 1000 protocol units; this is configuration, not receipts."
+            },
+            {
+              "text": "Flaunch creator() returns 0x8aa48dfe58f84d85d41706543432e5d8511e90da; hook owner() returns 0xb8a70b4d1547bf6193bd67a73f4f98ea9fd0a973; fee calculator is 0xdbc2f399bbac8cd766f20c9b917a9a6ecad5bc4b."
+            },
+            {
+              "text": "Flaunch revenue NFT 0x475a09618bfd00fa4cb03b8504e95b62075e6f7d token id 2010 reports owner 0x8aa48dfe58f84d85d41706543432e5d8511e90da; token, NFT and hook registration agree at this read."
+            },
+            {
+              "text": "Flaunch hook reports fee escrow 0x17fbf54d6d15ebff82eee77e616f701952d08bb4 and bid wall 0x0dae90b70f62ce3b1d5278f4763bd1f595d6a687; isBidWallEnabled() returns true for this pool. Enabled state does not establish a purchase, burn or permanent liquidity."
+            },
+            {
+              "text": "Registered Flaunch pool currencies are 0xb2000000000000000000008501b13360000cb2ec and 0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149; asset addresses alone do not establish quote value or backing."
+            }
+          ]
+        },
+        "gap": "feeSplit excludes referral waterfall and is not total trade fees; distribution events can accrue to escrow rather than reach a beneficiary; custom managers, dynamic fees, bid-wall liquidity, administrative changes and full historical receipts remain unresolved",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": {
+        "id": "bd5ae0368d2ea41b7c96ad3c19ec128db1ade1ac816559453bae7eff9960de0a",
+        "kind": "token",
+        "source": "base:Token:0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149",
+        "at": 1790974693,
+        "read_point": "base block 52092674 0x61a0159dc27e8e589e92d069914b7e6327b3be78e6b44001ff34917b8ea2dddb",
+        "value": {
+          "code_hash": "7f6e13fce0fb89e35b277ad6ca733dad4226fd4fd346c28b3422332e9ec9fdeb",
+          "related": [],
+          "statements": [
+            {
+              "text": "Contract code was observed at 0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149."
+            },
+            {
+              "text": "totalSupply() returned 100000000000000000000000000000 base units."
+            },
+            {
+              "text": "decimals() returned 18."
+            }
+          ]
+        },
+        "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0xb28ad96e19b0cdbfe5705b5948223c74ac1f8149",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "no supported Uniswap v2/v3 WETH pool identified; custom protocols and quote assets remain unsupported"
+    }
+  ],
+  "plans": []
+}

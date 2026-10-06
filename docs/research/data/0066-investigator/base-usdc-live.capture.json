@@ -1,0 +1,76 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1790874743,
+  "request": {
+    "id": "base-usdc-live",
+    "case": {
+      "chain": "base",
+      "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    },
+    "question": "Inspect fee routing, authorities, liquidity and gaps. A configured recipient does not prove a payment or common control.",
+    "wallets": [
+      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    ],
+    "transactions": [],
+    "window": null,
+    "source": "operator read-only qualification capture",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "fees",
+        "subject": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "why": "test the allegation against fee configuration; distinguish configured shares from actual payments"
+      },
+      "observation": null,
+      "error": "eth_call: {\"code\":-32016,\"message\":\"over rate limit\"}"
+    },
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": null,
+      "error": "eth_call: {\"code\":-32016,\"message\":\"over rate limit\"}"
+    },
+    {
+      "read": {
+        "tool": "history",
+        "subject": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "why": "inspect supplied wallet leads within bounded history"
+      },
+      "observation": {
+        "id": "5393c8c3cb4667e87a7ef8264c003d9b0fa7d87f072a7bb0ea153d669809aff0",
+        "kind": "history",
+        "source": "base:History:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "at": 1790874743,
+        "read_point": "base block 52042698 0x59e5928d0865ca6df59ed33735eb202408e459ebf30805f4f3cdfdab8a7e0f8c",
+        "value": {
+          "related": [],
+          "signatures": [],
+          "statements": [
+            {
+              "text": "A bounded token-transfer log read covered blocks 52040698 through 52042698; it is not full wallet history."
+            }
+          ],
+          "transfers": []
+        },
+        "gap": "only this token's recent Transfer logs are covered; requested historical time coverage, native funding and internal calls are unresolved",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "eth_call: {\"code\":-32016,\"message\":\"over rate limit\"}"
+    }
+  ],
+  "plans": []
+}

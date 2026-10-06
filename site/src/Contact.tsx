@@ -70,7 +70,7 @@ export function Contact() {
             The whole system is <Out href={SOURCE}>published</Out>. A bug on this
             site, a figure that does not add up, a page that contradicts another
             one: open an issue at{" "}
-            <Out href={ISSUES}>github.com/hey-vera/radar/issues</Out>. Issues are
+            <Out href={ISSUES}>github.com/1xmint/realorrug/issues</Out>. Issues are
             public, which is the point — so is the answer.
           </p>
         </Block>

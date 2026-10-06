@@ -1640,7 +1640,7 @@ mod tests {
         // session cookie or the CSRF token are made of.
         assert!(!contains(&h.store_bytes(), FAKE_TOKEN));
         let ledger = std::fs::read(h.dir.path().join("store.db.spend.json")).unwrap();
-        assert!(!ledger.is_empty());
+        assert_ne!(ledger, [] as [u8; 0]);
         assert!(!contains(&ledger, FAKE_TOKEN));
         assert!(!session.contains(FAKE_TOKEN));
         let (_, _, me) = h
@@ -2010,7 +2010,7 @@ mod tests {
         ] {
             assert!(app_origins_from(&get(bad)).is_empty(), "{bad}");
         }
-        assert!(app_origins_from(&|_| None).is_empty());
+        assert_eq!(app_origins_from(&|_| None), [] as [std::string::String; 0]);
     }
 
     // ---- Boundaries the mutation run found unpinned (CI, PR #207). --------

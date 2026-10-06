@@ -185,7 +185,10 @@ mod tests {
 
     #[test]
     fn nothing_but_gap_words_and_ordinary_prose_is_clean() {
-        assert!(check("").is_empty());
-        assert!(check("This launch graduated three days ago.").is_empty());
+        assert_eq!(check(""), [] as [crate::unknown::Violation; 0]);
+        assert_eq!(
+            check("This launch graduated three days ago."),
+            [] as [crate::unknown::Violation; 0]
+        );
     }
 }

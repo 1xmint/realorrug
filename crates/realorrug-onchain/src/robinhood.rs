@@ -2426,9 +2426,12 @@ pub(crate) mod tests {
             1,
             "the investigation stopped at the first refusal"
         );
-        assert!(funding.checked[0].funders.is_empty());
+        assert_eq!(
+            funding.checked[0].funders,
+            [] as [crate::wallets::Funder; 0]
+        );
         assert!(!funding.checked[0].funding_complete);
-        assert!(funding.shared.is_empty());
+        assert_eq!(funding.shared, [] as [crate::wallets::SharedFunder; 0]);
         assert!(
             funding
                 .gaps
@@ -3490,7 +3493,7 @@ pub(crate) mod tests {
         let mut b = budget();
         let why = pair_quote_asset(&mut b, &client, &pair, None, None)
             .expect_err("no server means no read");
-        assert!(!why.is_empty());
+        assert_ne!(why, "");
     }
 
     #[test]
@@ -3633,7 +3636,7 @@ pub(crate) mod tests {
         let result =
             pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
         assert_eq!(result, None);
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// A genuinely pending recipient reads back as that address, not as
@@ -3647,7 +3650,7 @@ pub(crate) mod tests {
         let result =
             pending_creator_fee_recipient(&mut b, &client, &token(), None, &mut unavailable);
         assert_eq!(result, Some(pending));
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// A malformed return (not exactly one word) is refused outright, not
@@ -3697,7 +3700,7 @@ pub(crate) mod tests {
         let mut unavailable = Vec::new();
         let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
         assert_eq!(result, Some(Vec::new()));
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// A launch that declared two wallets decodes to exactly those two, in
@@ -3712,7 +3715,7 @@ pub(crate) mod tests {
         let mut unavailable = Vec::new();
         let result = declared_exemptions(&mut b, &client, &powers_transaction(), &mut unavailable);
         assert_eq!(result, Some(vec![one, two]));
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// Calldata that does not decode under `launchToken`'s confirmed shape
@@ -3792,7 +3795,7 @@ pub(crate) mod tests {
             confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
         assert_eq!(exemptions.len(), 1);
         assert_eq!(exemptions[0].source, powers::Source::FirstParty);
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// An address the launcher declared, and that is not first-party
@@ -3822,7 +3825,7 @@ pub(crate) mod tests {
         );
         assert_eq!(exemptions.len(), 1);
         assert_eq!(exemptions[0].source, powers::Source::Declared);
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// An exempt address on neither list, with a fully read declared list,
@@ -3853,7 +3856,7 @@ pub(crate) mod tests {
         );
         assert_eq!(exemptions.len(), 1);
         assert_eq!(exemptions[0].source, powers::Source::Undeclared);
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// When the declared list itself could not be read, a non-first-party
@@ -3876,7 +3879,7 @@ pub(crate) mod tests {
         let mut unavailable = Vec::new();
         let exemptions =
             confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
-        assert!(exemptions.is_empty());
+        assert_eq!(exemptions, [] as [crate::dossier::Exemption; 0]);
         assert!(
             unavailable
                 .iter()
@@ -3904,8 +3907,8 @@ pub(crate) mod tests {
         let mut unavailable = Vec::new();
         let exemptions =
             confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
-        assert!(exemptions.is_empty());
-        assert!(unavailable.is_empty());
+        assert_eq!(exemptions, [] as [crate::dossier::Exemption; 0]);
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// A confirmation call that fails at the transport is named, not
@@ -3926,7 +3929,7 @@ pub(crate) mod tests {
         let mut unavailable = Vec::new();
         let exemptions =
             confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
-        assert!(exemptions.is_empty());
+        assert_eq!(exemptions, [] as [crate::dossier::Exemption; 0]);
         assert!(unavailable.iter().any(|u| u.fact == "snipe tax exemption"));
     }
 
@@ -3955,7 +3958,7 @@ pub(crate) mod tests {
         let exemptions =
             confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
         assert_eq!(exemptions.len(), 1);
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
         assert_eq!(b.calls_made(), 1);
     }
 
@@ -3982,8 +3985,8 @@ pub(crate) mod tests {
         let mut unavailable = Vec::new();
         let exemptions =
             confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
-        assert!(exemptions.is_empty());
-        assert!(unavailable.is_empty());
+        assert_eq!(exemptions, [] as [crate::dossier::Exemption; 0]);
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
         assert_eq!(b.calls_made(), 0);
     }
 
@@ -4012,8 +4015,8 @@ pub(crate) mod tests {
         let mut unavailable = Vec::new();
         let exemptions =
             confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
-        assert!(exemptions.is_empty());
-        assert!(unavailable.is_empty());
+        assert_eq!(exemptions, [] as [crate::dossier::Exemption; 0]);
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
         assert_eq!(b.calls_made(), 0);
     }
 
@@ -4034,8 +4037,8 @@ pub(crate) mod tests {
         let mut unavailable = Vec::new();
         let exemptions =
             confirmed_snipe_tax_exemptions(&mut b, &client, &launch, None, None, &mut unavailable);
-        assert!(exemptions.is_empty());
-        assert!(unavailable.is_empty());
+        assert_eq!(exemptions, [] as [crate::dossier::Exemption; 0]);
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// `powers_facts` end to end: creator tax comes straight off the launch
@@ -4068,7 +4071,7 @@ pub(crate) mod tests {
         );
         assert_eq!(powers.exemptions.len(), 1);
         assert_eq!(powers.exemptions[0].source, powers::Source::FirstParty);
-        assert!(unavailable.is_empty());
+        assert_eq!(unavailable, [] as [crate::dossier::Unavailable; 0]);
     }
 
     /// A failed sub-read does not erase the rest: the pending recipient

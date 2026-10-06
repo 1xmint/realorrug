@@ -1,0 +1,15 @@
+{
+  "provenance": "bounded explorer discovery; first page of up to ten results per signature; not a complete history or RPC qualification",
+  "records": [
+    {
+      "at": "2026-10-06T19:27:39.446763+00:00",
+      "url": "https://base.blockscout.com/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=0x63d2dfea64b3433f4071a98665bcd7ca14d93496&topic0=0x189a28a3be2ec38788a4a7ff2146b2d9f4f852de2353c9287fed2564845a05d8&page=1&offset=10",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "at": "2026-10-06T19:27:39.672620+00:00",
+      "url": "https://base.blockscout.com/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address=0x63d2dfea64b3433f4071a98665bcd7ca14d93496&topic0=0x2aad5ba8634f3d476ba298c3c089253d053106f0dd2caac6bae480ed9db420bf&page=1&offset=10",
+      "error": "HTTP Error 403: Forbidden"
+    }
+  ]
+}

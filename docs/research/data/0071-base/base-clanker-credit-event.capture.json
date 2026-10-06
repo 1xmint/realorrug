@@ -1,0 +1,177 @@
+{
+  "provenance": "live reader capture; no model call",
+  "at": 1791135310,
+  "request": {
+    "id": "base-clanker-credit-event",
+    "case": {
+      "chain": "base",
+      "address": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07"
+    },
+    "question": "Inspect this submitted fee-deposit transaction. Preserve requested amount and cumulative balance separately; do not count an escrow credit as a withdrawal or attribute a pooled credit to this case token.",
+    "wallets": [],
+    "transactions": [
+      "0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f"
+    ],
+    "window": null,
+    "source": "https://base.blockscout.com/tx/0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f",
+    "thread": null
+  },
+  "reads": [
+    {
+      "read": {
+        "tool": "transaction",
+        "subject": "0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f",
+        "why": "inspect the supplied transaction before broader reads"
+      },
+      "observation": {
+        "id": "4211e5bd60a7e19b72cb7deaf2c5e9755176da84e4754e52f86ca8d68f126d15",
+        "kind": "transaction",
+        "source": "base:Transaction:0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f",
+        "at": 1791135310,
+        "read_point": "base block 52172982 0x045f0c6c541fe825a451766d6ce98e1c0443120706b904a54635e8e38ce0b83a",
+        "value": {
+          "fee_claim_receipt_coverage_complete": true,
+          "fee_claims": [],
+          "fee_credits": [
+            {
+              "balance_asset": "0x4200000000000000000000000000000000000006",
+              "credited_delta": null,
+              "depositor": "0x63d2dfea64b3433f4071a98665bcd7ca14d93496",
+              "escrow": "0xf3622742b1e446d92e45e22923ef11c2fcd55d68",
+              "fee_owner": "0x8b4eb0cd07f398357657369a684e6e0685a76ae2",
+              "financial_state": "executed",
+              "log_index": 107,
+              "pool_attribution": "unresolved",
+              "protocol": "clanker_fee_locker",
+              "reported_balance_after": "69398738209465",
+              "reported_credit_amount": null,
+              "reported_pool_id": null,
+              "requested_amount": "29478578528827",
+              "verification_scope": "credit_event_only"
+            }
+          ],
+          "receipt_logs_present": true,
+          "receipt_logs_truncated": false,
+          "related": [
+            "0x36767aef8387d95a1b171cada27f28a8c2bcda13",
+            "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be",
+            "0x8b4eb0cd07f398357657369a684e6e0685a76ae2",
+            "0x4200000000000000000000000000000000000006",
+            "0x63d2dfea64b3433f4071a98665bcd7ca14d93496"
+          ],
+          "statements": [
+            {
+              "text": "Successful transaction 0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f from 0x36767aef8387d95a1b171cada27f28a8c2bcda13 to 0xccc88a9d1b4ed6b0eaba998850414b24f1c315be has native value 0x0 (hex wei)."
+            },
+            {
+              "text": "Clanker credit event reports cumulative balance 69398738209465 base units and requested transfer 29478578528827 base units; received credit delta requires prior balance reconciliation, for fee owner 0x8b4eb0cd07f398357657369a684e6e0685a76ae2 and asset 0x4200000000000000000000000000000000000006. Credit events are not withdrawals or new treasury receipts; delivery, backing and individual-token revenue attribution remain unresolved."
+            }
+          ],
+          "transaction_block": "0x31b94bb",
+          "transaction_block_hash": "0x4c6dae09ad2cb07837d8d83ecb9a9fb598460459394805a8218abfccf68cae9a",
+          "transfers": []
+        },
+        "gap": "only the first 128 receipt logs are considered; unavailable, removed or malformed logs do not establish token payments; fee delivery verification matches receipt events, not beneficial ownership or individual-pool revenue attribution; credit events do not establish prior balances, credited deltas, backing or treasury receipts; internal native transfers, wrapped-asset conversions and custom token semantics require separate verification",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "fees",
+        "subject": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "why": "test the allegation against fee configuration; distinguish configured shares from actual payments"
+      },
+      "observation": {
+        "id": "82fcde6eb096c47024c6a5ee5f57977ffeda67ecafa7ec8cab6c2c067e714eed",
+        "kind": "fees",
+        "source": "base:Fees:0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "at": 1791135310,
+        "read_point": "base block 52172982 0x045f0c6c541fe825a451766d6ce98e1c0443120706b904a54635e8e38ce0b83a",
+        "value": {
+          "configuration": {
+            "num_positions": "5",
+            "position_id": "3104096",
+            "shares": [
+              {
+                "admin": "0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8",
+                "bps": "10000",
+                "recipient": "0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8"
+              }
+            ]
+          },
+          "currencies": [
+            "0x4200000000000000000000000000000000000006",
+            "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07"
+          ],
+          "locker": "0xffa37784d619f228d8b379d287a4d7282e500762",
+          "protocol": "clanker_v4_0",
+          "registry": "0xe85a59c628f7d27878aceb4bf3b35733630083a9",
+          "related": [
+            "0xffa37784d619f228d8b379d287a4d7282e500762",
+            "0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc",
+            "0x4200000000000000000000000000000000000006",
+            "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+            "0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8"
+          ],
+          "statements": [
+            {
+              "text": "Clanker v4 configured LP-reward share: 10000 basis points out of 10000 to 0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8; reward administrator 0x9d390d90c8e4346f296b76fd366a5c6ce3beacd8."
+            },
+            {
+              "text": "Registered LP locker 0xffa37784d619f228d8b379d287a4d7282e500762 reports 5 position(s); this does not establish permanent liquidity."
+            },
+            {
+              "text": "Registered Clanker reward pool currencies are 0x4200000000000000000000000000000000000006 and 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07; asset denomination, realized fees and conversion preferences require separate checks."
+            }
+          ]
+        },
+        "gap": "configured LP-reward shares exclude factory/other fee bases; paid receipts, administrator changes, extensions, current hook fees and position withdrawal rights remain separate checks",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "token",
+        "subject": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "why": "validate the target and inspect available controls"
+      },
+      "observation": {
+        "id": "19ca02f5d158b6efe96145a39a513d266da8e63f2d1f4ebf98c84d1814fceed2",
+        "kind": "token",
+        "source": "base:Token:0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "at": 1791135310,
+        "read_point": "base block 52172982 0x045f0c6c541fe825a451766d6ce98e1c0443120706b904a54635e8e38ce0b83a",
+        "value": {
+          "code_hash": "186d2e44c74fdbf535221cf1e183be881e84c5db41ec66198e4caa9ee7754cad",
+          "related": [],
+          "statements": [
+            {
+              "text": "Contract code was observed at 0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07."
+            },
+            {
+              "text": "totalSupply() returned 100000000000000000000000000000 base units."
+            },
+            {
+              "text": "decimals() returned 18."
+            }
+          ]
+        },
+        "gap": "getters and standard slots do not prove absence of mint, pause, blacklist or nonstandard upgrade powers; verify implementation semantics",
+        "version": "investigation-read-v1"
+      },
+      "error": null
+    },
+    {
+      "read": {
+        "tool": "liquidity",
+        "subject": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07",
+        "why": "inspect supported liquidity without treating graduation as a drain"
+      },
+      "observation": null,
+      "error": "no supported Uniswap v2/v3 WETH pool identified; custom protocols and quote assets remain unsupported"
+    }
+  ],
+  "plans": []
+}

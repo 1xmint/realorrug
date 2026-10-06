@@ -1,0 +1,15 @@
+{
+  "id": "base-clanker-historical-collection",
+  "case": {
+    "chain": "base",
+    "address": "0xbc8a7388c6cba5ad74b24627f58f9bd3affd5b07"
+  },
+  "question": "Trace the deposit and independently received credit. Does this transaction establish fees from the case token, or a collection context for another registered pool? Keep historical block-end configuration separate from per-token revenue attribution.",
+  "wallets": [],
+  "transactions": [
+    "0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f"
+  ],
+  "window": null,
+  "source": "https://base.blockscout.com/tx/0x362fbb0a65298739c72e82ec9ba4c335ce9a36136b9818cfcc0eda54be4db46f",
+  "thread": null
+}

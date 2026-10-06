@@ -1334,6 +1334,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "tempfile",
  "thiserror",
  "ureq",
 ]
@@ -1354,6 +1355,7 @@ dependencies = [
  "realorrug-types",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1404,6 +1406,7 @@ dependencies = [
 name = "realorrug-onchain"
 version = "0.0.1"
 dependencies = [
+ "blake3",
  "realorrug-decode",
  "realorrug-pumpfun",
  "realorrug-robinhood",
@@ -1411,6 +1414,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha3",
  "tempfile",
  "thiserror",
  "ureq",

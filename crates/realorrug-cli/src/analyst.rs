@@ -316,8 +316,11 @@ mod tests {
         assert_eq!(found.len(), 2, "two real lines among four blank ones");
 
         // Blank input is not an error, and it is not two mentions either.
-        assert!(mentions_in("").is_empty());
-        assert!(mentions_in("\n  \n\t\n").is_empty());
+        assert_eq!(mentions_in(""), [] as [realorrug_analyst::Mention; 0]);
+        assert_eq!(
+            mentions_in("\n  \n\t\n"),
+            [] as [realorrug_analyst::Mention; 0]
+        );
 
         // A line that does not parse is dropped, not fatal.
         let with_junk = format!("not json\n{}", r#"{"id":"3","author":"c","text":"$GHI"}"#);

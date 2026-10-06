@@ -1,27 +1,69 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # realorrug
 
-An X account you summon about a memecoin. It answers with what the chain
-shows — who launched it, what was bought in the launch block, what the curve
-holds — and a check after generation refuses any number that is not on the fact
-sheet. **Real or rug? It shows the facts. You decide.**
+A public forensic investigator for tokens, summoned on X and supported by a
+website. The direction is claim-specific research and a free Library of
+living token dossiers that people can extend with evidence. Verified
+observations, relationships, patterns, outcomes and corrections should make
+subsequent investigations better. **Real or rug? It shows the facts. You decide.**
 
-A community token, realorrug, will launch through pump.fun on Solana, paired
-with SOL. Its creator fees go to a disclosed treasury and pay the project's
-disclosed operating costs and a reserve. Holders get nothing from the project:
-no revenue share, yield, buyback, airdrop, prize or better verdicts. The bot
-holds some of the token in public and trades none of it.
-[ADR 0037](docs/adr/0037-the-token-launches-on-pump-fun-and-its-fees-pay-for-operations.md)
-has the launch, [ADR 0038](docs/adr/0038-no-prizes-buybacks-or-holder-benefits.md)
-what holders do not get, and [ADR 0039](docs/adr/0039-the-launch-gates-and-the-monthly-ceiling.md)
-what must happen first. The order of work is
-[plan 0002](docs/plans/0002-bot-quality-then-a-solana-launch.md).
+Start with [VISION.md](VISION.md), the product source of truth, then
+[ROADMAP.md](ROADMAP.md), the current delivery order and acceptance criteria.
+[AGENTS.md](AGENTS.md) governs engineering and evidence;
+[ADR 0043](docs/adr/0043-the-public-library-and-compounding-intelligence.md)
+records the product direction; [ADR 0044](docs/adr/0044-three-chain-investigations-and-shared-cases.md)
+and [plan 0003](docs/plans/0003-three-chain-investigator-and-library.md) track
+three-chain investigation delivery. [ADR 0045](docs/adr/0045-base-is-the-preferred-launch-chain.md)
+records the preferred Base launch chain and open launchpad comparison. Earlier
+plans remain history.
 
-**Nothing is launched.** The token does not exist yet. It launches after the
-bot's Solana replies pass the owner's review, the research features of
-plan 0002 phase 4 are built, and every finding of Claude's legal and tax
-review of [the review packet](docs/design/0030-launch-review-packet.md) is
-fixed or ruled on by the owner ([ADR 0042](docs/adr/0042-claudes-review-replaces-counsel-at-gate-two.md)).
+The investigator and community token will launch together with the free
+Library. Base is the preferred token launch chain; launchpad and pairing
+remain open. [The comparison](docs/research/0067-base-launch-platform-comparison.md)
+recommends qualifying Flaunch first and comparing Clanker for funding simplicity.
+The paid investigation portal follows launch. Treasury spending remains
+operator-managed for disclosed operations and a bounded reserve; 25%
+buy-and-burn plus 25% permanent liquidity is a proposal, not an adopted split.
+Holding or paying never buys a favorable verdict. Model judgment has no
+spending authority, and no prize, yield or airdrop is adopted.
+
+**The token is not launched.** Existing readers, reply checks, memory, research
+storage, launch/treasury checks and paid facts code are foundations. The new
+bounded investigator, shared cases and Library are implemented behind opt-in
+configuration. Initial summaries remain partial `CantTell` assessments; live
+protocol qualification and reply-quality acceptance remain open. Launch waits
+for representative quality acceptance, Library readiness and the current
+review/X/configuration/signing gates in ROADMAP. Forecasts and reputation are
+preserved outside the critical launch path.
+
+Initial founder funding is $100–$200, capped at $200 total, using free options
+first, with no recurring commitment. Existing runtime spending limits remain
+unchanged until a reviewed implementation changes them. This documentation
+work does not deploy, launch, sign or post, and no paid model call is used for
+the initial capture/review evidence.
+
+## Investigator and Library
+
+The `/library` website browses chain-qualified cases without sign-in. Existing
+X authentication and CSRF protect public contributions. Submitted allegations
+remain unverified; observations retain their read point and corrections mark
+dependent findings for review. Base and Ethereum addresses require a network.
+The legacy Robinhood checker remains available with an explicit network choice.
+
+The worker shares the existing spending ledger and request limits. Enable only
+after reviewing [coverage and capture evidence](docs/research/0066-the-investigator-and-library-qualification.md)
+and [the environment example](deploy/analyst.env.example). Missing storage,
+budget, prices or a live worker refuses new website work. Interrupted jobs and
+uncertain publication attempts never retry silently. Production delivery has
+an additional opt-in gate. Idle queue checks run at most ten seconds apart,
+independently of X polling backoff; this does not increase paid mention reads.
+No paid portal or financial automation is added.
+
+Operator commands: `investigation-capture` freezes bounded live observations
+without a model call; `case-review` produces offline owner-review reports;
+`case-store` verifies/backs up history or appends a correction. Run the binary
+without arguments for their syntax. Captures are reader output, not complete
+raw RPC recordings or proof of full protocol coverage.
 
 ## What is here
 

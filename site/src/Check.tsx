@@ -15,7 +15,7 @@
 //!   person next to the stamp.
 
 import { useEffect, useState } from "react";
-import { useRoute } from "wouter";
+import { Link, useRoute, useSearch } from "wouter";
 
 import { type CheckResult, check } from "./api";
 import { account, evmShaped, mintShaped } from "./honesty";
@@ -29,7 +29,9 @@ type Seen = { readonly kind: "loading" } | { readonly kind: "done"; readonly res
 export function Check() {
   const [, params] = useRoute("/check/:address");
   const address = (params?.address ?? "").trim();
-  const shaped = evmShaped(address) || mintShaped(address);
+  const search=useSearch();
+  const ambiguous=evmShaped(address)&&new URLSearchParams(search).get("chain")!=="robinhood";
+  const shaped = (evmShaped(address) || mintShaped(address))&&!ambiguous;
   const [seen, setSeen] = useState<Seen>({ kind: "loading" });
 
   useTitle("Check a token");
@@ -48,6 +50,9 @@ export function Check() {
     };
   }, [address, shaped]);
 
+  if(ambiguous)return <Section><Heading kicker="Network required">Choose this contract’s network</Heading>
+    <p className="font-mono break-all">{address}</p><p className="my-5">The same EVM address can exist on different networks. Select one before requesting a read.</p>
+    <div className="flex gap-5"><Link href={`/library/base/${address}`}>Base dossier</Link><Link href={`/library/ethereum/${address}`}>Ethereum dossier</Link><Link href={`/check/${address}?chain=robinhood`}>Robinhood checker</Link></div></Section>;
   return (
     <Section>
       <Heading kicker="Case file">Check a token</Heading>

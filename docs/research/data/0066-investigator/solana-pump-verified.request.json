@@ -1,0 +1,15 @@
+{
+  "source": "operator read-only qualification capture",
+  "id": "solana-pump-verified",
+  "question": "Inspect fee routing, authorities, liquidity and gaps. A configured recipient does not prove a payment or common control.",
+  "case": {
+    "chain": "solana",
+    "address": "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump"
+  },
+  "window": null,
+  "transactions": [],
+  "wallets": [
+    "JB2rSPb4W4bnnr5HwQ17JPTi7gMbvdhjgJUE2oQbpump"
+  ],
+  "thread": null
+}

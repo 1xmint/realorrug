@@ -26,11 +26,14 @@ export default defineConfig({
     port: 5373,
     strictPort: true,
     // The public endpoints, when a local `realorrug-serve` is running on its
-    // default port. The site works without them: every page falls back to its
-    // committed fixture and says when a figure was measured, which is the
-    // behaviour in production too if the endpoint is unreachable.
+    // default port. Legacy pages can fall back to dated committed fixtures;
+    // Library pages disclose unavailable service and never invent case data.
     proxy: {
       "/v1/public": "http://127.0.0.1:8090",
+      "/v1/library": "http://127.0.0.1:8090",
+      "/v1/cases": "http://127.0.0.1:8090",
+      "/v1/investigations": "http://127.0.0.1:8090",
+      "/auth": "http://127.0.0.1:8090",
     },
   },
 });
